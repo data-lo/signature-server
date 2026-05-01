@@ -1,7 +1,8 @@
-import { DocumentStatus } from "../lib/document-status";
+
 import { SignatureCoordinates } from "../interfaces/signature-coordinates";
 import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { UserEntity } from "src/user/entities/user.entity";
+import { DocumentStatus } from "../lib/document-status";
 
 // document.entity.ts
 @Entity('documents')

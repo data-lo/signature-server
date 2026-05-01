@@ -9,7 +9,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { DocumentStatus } from '../../document/entities/document.entity';
+import { DocumentStatus } from '../lib/document-status';
+
 
 export class DocumentCoordDto {
   @IsNumber()

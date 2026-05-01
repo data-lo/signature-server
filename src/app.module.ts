@@ -11,16 +11,12 @@ import { AppService } from './app.service';
 import { AppController } from './app.controller';
 
 // Modules
-
-import { DocumentModule } from './document/document.module';
 import { UserModule } from './user/user.module';
 import { AuditModule } from './audit/audit.module';
+import { IpInterceptor } from './ip/ip.interceptor';
+import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
-import { IpInterceptor } from './ip/ip.interceptor';
-import { SharedModule } from './shared/shared.module';
-
-
 
 @Module({
   imports: [
