@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { SignatureService } from './signature.service';
+import { describe, beforeEach, it } from 'node:test';
 
 describe('SignatureService', () => {
   let service: SignatureService;
@@ -16,3 +17,14 @@ describe('SignatureService', () => {
     expect(service).toBeDefined();
   });
 });
+
+function expect(service: SignatureService) {
+  return {
+    toBeDefined(): void {
+      if (service === undefined || service === null) {
+        throw new Error('Expected service to be defined');
+      }
+    },
+  };
+}
+

@@ -1,1 +1,2 @@
-export class Signature {}
+export class Signature {
+}
