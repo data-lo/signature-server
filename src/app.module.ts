@@ -13,49 +13,41 @@ import { AppController } from './app.controller';
 import { SignatureModule } from './signature/signature.module';
 import { DocumentModule } from './document/document.module';
 import { UserModule } from './user/user.module';
+import { AuditModule } from './audit/audit.module';
 
 
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
+      name: 'default',
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const databaseUrl = config.get<string>('DATABASE_URL');
-        
-        if (databaseUrl) {
-          return {
-            type: 'postgres',
-            url: databaseUrl,
-            autoLoadEntities: true,
-            synchronize: false,
-          } as const;
-        }
+      useFactory: (config: ConfigService) => ({
+        url: config.get('POSTGRES_DB_URL'),
+        type: 'postgres',
+        autoLoadEntities: true,
+        synchronize: false,
+      }),
+    }),
 
-        const host = config.get<string>('DB_HOST') || 'localhost';
-        const port = parseInt(config.get<string>('DB_PORT') || '5432', 10);
-        const username = config.get<string>('DB_USER') || 'postgres';
-        const password = config.get<string>('DB_PASSWORD') || 'postgres';
-        const database = config.get<string>('DB_NAME') || 'postgres';
-
-        return {
-          type: 'postgres',
-          host,
-          port,
-          username,
-          password,
-          database,
-          autoLoadEntities: true,
-          synchronize: false,
-        } as const;
-      },
+    TypeOrmModule.forRootAsync({
+      name: 'mongo',
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        url: config.get('MONGO_DB_URL'),
+        type: 'mongodb',
+        autoLoadEntities: true,
+        synchronize: false,
+      }),
     }),
 
     SignatureModule,
     DocumentModule,
     UserModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }
