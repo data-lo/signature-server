@@ -15,6 +15,7 @@ import { DocumentModule } from './document/document.module';
 import { UserModule } from './user/user.module';
 import { AuditModule } from './audit/audit.module';
 import { SignatureModule } from './signature/signature.module';
+import { VerificationCodeModule } from './verification-code/verification-code.module';
 
 
 @Module({
@@ -47,6 +48,7 @@ import { SignatureModule } from './signature/signature.module';
     UserModule,
     AuditModule,
     SignatureModule,
+    VerificationCodeModule,
   ],
   controllers: [AppController],
   providers: [AppService],

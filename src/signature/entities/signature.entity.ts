@@ -4,37 +4,27 @@ import { Column, CreateDateColumn, Entity, JoinColumn, OneToOne, PrimaryGenerate
 @Entity('signatures')
 export class SignatureEntity {
 
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @Column()
-    firstName: string;
+  @Column({ name: 'signature_object_key' })
+  signatureObjectKey: string;
 
-    @Column()
-    lastName: string;
+  @Column({ name: 'official_card_object_key' })
+  officialCardObjectKey: string;
 
-    @Column({ nullable: true })
-    createdBy: string | null;
+  @Column({ nullable: true, name: 'created_by' })
+  createdBy: string | null;
 
-    @Column()
-    signatureObjectKey: string;
+  @Column({ default: true, name: 'is_active' })
+  isActive: boolean;
 
-    @Column()
-    officialCardObjectKey: string;
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 
-    @Column({ default: true })
-    isActive: boolean;
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
 
-    @CreateDateColumn({
-        utc: true
-    })
-    createdAt: Date;
-
-    @UpdateDateColumn({
-        utc: true
-    })
-    updatedAt: Date;
-
-    @OneToOne(() => UserEntity, (user) => user.signature)
-    user: UserEntity
+  @OneToOne(() => UserEntity, (user) => user.signature)
+  user: UserEntity;
 }
