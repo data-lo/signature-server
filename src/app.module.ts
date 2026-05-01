@@ -17,6 +17,7 @@ import { IpInterceptor } from './ip/ip.interceptor';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
+import { SharedModule } from './shared/shared.module';
 
 @Module({
   imports: [
