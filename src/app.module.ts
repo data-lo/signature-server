@@ -18,6 +18,7 @@ import { AuditModule } from './audit/audit.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
 import { IpInterceptor } from './ip/ip.interceptor';
+import { SharedModule } from './shared/shared.module';
 
 
 
@@ -52,11 +53,12 @@ import { IpInterceptor } from './ip/ip.interceptor';
     AuditModule,
     SignatureModule,
     VerificationCodeModule,
+    SharedModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
     provide: APP_INTERCEPTOR,
     useClass: IpInterceptor,
-  }],
+  }, SharedModule],
 })
 export class AppModule { }
