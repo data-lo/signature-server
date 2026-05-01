@@ -1,5 +1,6 @@
+import { DocumentEntity } from "src/document/entities/document.entity";
 import { SignatureEntity } from "src/signature/entities/signature.entity";
-import { Column, CreateDateColumn, Entity, JoinColumn, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { Column, CreateDateColumn, Entity, JoinColumn, OneToMany, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 
 @Entity('users')
 export class UserEntity {
@@ -40,4 +41,10 @@ export class UserEntity {
     @OneToOne(() => SignatureEntity)
     @JoinColumn({ name: 'signature_id' })
     signature: SignatureEntity;
+
+    @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
+    createdDocuments: DocumentEntity[];
+
+    @OneToMany(() => DocumentEntity, (document) => document.signer)
+    documentsToSign: DocumentEntity[];
 }
