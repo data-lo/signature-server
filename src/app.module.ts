@@ -14,6 +14,7 @@ import { AppController } from './app.controller';
 import { UserModule } from './user/user.module';
 import { AuditModule } from './audit/audit.module';
 import { IpInterceptor } from './ip/ip.interceptor';
+import { SharedModule } from './shared/shared.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
