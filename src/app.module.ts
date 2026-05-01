@@ -1,20 +1,54 @@
+// Core NestJS
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
+
+// Config & Database
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+
+// App
 import { AppService } from './app.service';
-import { SignatureModule } from './signature/signature.module';
-import { UserModule } from './user/user.module';
+import { AppController } from './app.controller';
+
+// Modules
+
 import { DocumentModule } from './document/document.module';
-import { EmailModule } from './email/email.module';
-import { ConfigModule} from '@nestjs/config';
-import { APP_INTERCEPTOR } from '@nestjs/core';
-import { IpInterceptor } from './ip/ip.interceptor';
+import { UserModule } from './user/user.module';
+import { AuditModule } from './audit/audit.module';
+import { SignatureModule } from './signature/signature.module';
+import { VerificationCodeModule } from './verification-code/verification-code.module';
+
 
 @Module({
-  imports: [SignatureModule, UserModule, DocumentModule, EmailModule,
-    ConfigModule.forRoot({
-      envFilePath: '.env',
-      isGlobal: true,
+  imports: [
+    TypeOrmModule.forRootAsync({
+      name: 'default',
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        url: config.get('POSTGRES_DB_URL'),
+        type: 'postgres',
+        autoLoadEntities: true,
+        synchronize: false,
+      }),
     }),
+
+    TypeOrmModule.forRootAsync({
+      name: 'mongo',
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        url: config.get('MONGO_DB_URL'),
+        type: 'mongodb',
+        autoLoadEntities: true,
+        synchronize: false,
+      }),
+    }),
+
+    DocumentModule,
+    UserModule,
+    AuditModule,
+    SignatureModule,
+    VerificationCodeModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
@@ -22,4 +56,4 @@ import { IpInterceptor } from './ip/ip.interceptor';
     useClass: IpInterceptor,
   }],
 })
-export class AppModule {}
+export class AppModule { }
