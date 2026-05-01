@@ -10,10 +10,11 @@ import { AppService } from './app.service';
 import { AppController } from './app.controller';
 
 // Modules
-import { SignatureModule } from './signature/signature.module';
+
 import { DocumentModule } from './document/document.module';
 import { UserModule } from './user/user.module';
 import { AuditModule } from './audit/audit.module';
+import { SignatureModule } from './signature/signature.module';
 
 
 @Module({
@@ -42,10 +43,10 @@ import { AuditModule } from './audit/audit.module';
       }),
     }),
 
-    SignatureModule,
     DocumentModule,
     UserModule,
     AuditModule,
+    SignatureModule,
   ],
   controllers: [AppController],
   providers: [AppService],

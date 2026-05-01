@@ -1,4 +1,5 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { SignatureEntity } from "src/signature/entities/signature.entity";
+import { Column, CreateDateColumn, Entity, JoinColumn, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 
 @Entity('users')
 export class UserEntity {
@@ -6,39 +7,37 @@ export class UserEntity {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column()
+    @Column({ name: 'first_name' })
     firstName: string;
 
-    @Column()
+    @Column({ name: 'last_name' })
     lastName: string;
 
-    @Column({ unique: true })
+    @Column({ unique: true, name: 'email' })
     email: string;
 
-    @Column({ nullable: true })
+    @Column({ nullable: true, name: 'position' })
     position: string;
 
-    @Column()
-    signatureId: string;
-
-    @Column('simple-array')
+    @Column({ name: 'roles', type: 'simple-array' })
     roles: string[];
 
-    @Column({ default: true })
+    @Column({ default: true, name: 'is_active' })
     isActive: boolean;
 
-    @CreateDateColumn({
-        utc: true
-    })
+    @Column({ length: 18, name: 'national_id' })
+    nationalId: string;
+
+    @Column({ nullable: true, name: 'signature_id' })
+    signatureId: string;
+
+    @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
-    @UpdateDateColumn({
-        utc: true
-    })
+    @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
 
-    @Column({
-        length: 18
-    })
-    nationalId: string;
+    @OneToOne(() => SignatureEntity)
+    @JoinColumn({ name: 'signature_id' })
+    signature: SignatureEntity;
 }
