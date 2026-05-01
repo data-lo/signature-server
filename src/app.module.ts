@@ -45,6 +45,9 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
       }),
     }),
 
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
     DocumentModule,
     UserModule,
     AuditModule,
