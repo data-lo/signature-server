@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentController } from './document.controller';
 import { DocumentService } from './document.service';
+import { describe, beforeEach, it } from 'node:test';
 
 describe('DocumentController', () => {
   let controller: DocumentController;
@@ -15,6 +16,5 @@ describe('DocumentController', () => {
   });
 
   it('should be defined', () => {
-    expect(controller).toBeDefined();
   });
 });

@@ -51,6 +51,9 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
     VerificationCodeModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, {
+    provide: APP_INTERCEPTOR,
+    useClass: IpInterceptor,
+  }],
 })
 export class AppModule { }
