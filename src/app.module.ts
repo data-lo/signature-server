@@ -4,9 +4,15 @@ import { AppService } from './app.service';
 import { SignatureModule } from './signature/signature.module';
 import { UserModule } from './user/user.module';
 import { DocumentModule } from './document/document.module';
+import { ConfigModule} from '@nestjs/config';
 
 @Module({
-  imports: [SignatureModule, UserModule, DocumentModule],
+  imports: [SignatureModule, UserModule, DocumentModule,
+    ConfigModule.forRoot({
+      envFilePath: '.env',
+      isGlobal: true,
+    }),
+  ],
   controllers: [AppController],
   providers: [AppService],
 })
