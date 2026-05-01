@@ -4,6 +4,7 @@ import { Module } from '@nestjs/common';
 // Config & Database
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 
 // App
 import { AppService } from './app.service';
@@ -16,6 +17,8 @@ import { UserModule } from './user/user.module';
 import { AuditModule } from './audit/audit.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
+import { IpInterceptor } from './ip/ip.interceptor';
+
 
 
 @Module({
