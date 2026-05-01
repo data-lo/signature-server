@@ -5,6 +5,8 @@ import { SignatureModule } from './signature/signature.module';
 import { UserModule } from './user/user.module';
 import { DocumentModule } from './document/document.module';
 import { ConfigModule} from '@nestjs/config';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { IpInterceptor } from './ip/ip.interceptor';
 
 @Module({
   imports: [SignatureModule, UserModule, DocumentModule,
@@ -14,6 +16,9 @@ import { ConfigModule} from '@nestjs/config';
     }),
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, {
+    provide: APP_INTERCEPTOR,
+    useClass: IpInterceptor,
+  }],
 })
 export class AppModule {}
