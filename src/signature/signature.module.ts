@@ -1,8 +1,9 @@
 import { Module } from '@nestjs/common';
 import { SignatureService } from './signature.service';
+import { SignatureController } from './signature.controller';
 
 @Module({
-    providers: [SignatureService],
-    exports: [SignatureService]
+  controllers: [SignatureController],
+  providers: [SignatureService],
 })
-export class SignatureModule { }
+export class SignatureModule {}
