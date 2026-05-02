@@ -13,11 +13,11 @@ import { UserRoles } from '../interfaces/user.roles.enum';
 export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
-  name: string;
+  firstName: string;
 
   @IsString()
   @IsNotEmpty()
-  lastname: string;
+  lastName: string;
 
   @IsEmail()
   @IsNotEmpty()

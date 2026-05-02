@@ -13,7 +13,15 @@ export class UserService {
   ) {}
 
   async create(createUserDto: CreateUserDto): Promise<UserEntity> {
-    const user = this.userRepository.create(createUserDto);
+    const { firstName, lastName, email, position, rol, curp } = createUserDto;
+    const user = this.userRepository.create({
+      firstName: firstName.toUpperCase(),
+      lastName: lastName.toUpperCase(),
+      email: email.toLowerCase(),
+      position: position ? position.toUpperCase() : null,
+      roles: rol,
+      nationalId: curp.toUpperCase(),
+    });
     return this.userRepository.save(user);
   }
 
