@@ -1,0 +1,18 @@
+import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+
+/**
+ * Módulo de autenticación.
+ * Registra JwtAuthGuard como guard global: todos los endpoints requieren
+ * autenticación Bearer por defecto, salvo los marcados con @Public().
+ */
+@Module({
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+  ],
+})
+export class AuthModule {}

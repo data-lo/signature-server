@@ -13,6 +13,7 @@ import { AppController } from './app.controller';
 // Modules
 import { UserModule } from './user/user.module';
 import { AuditModule } from './audit/audit.module';
+import { AuthModule } from './auth/auth.module';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
 import { DocumentModule } from './document/document.module';
@@ -49,6 +50,7 @@ import { RedisModule } from './shared/redis/redis.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    AuthModule,
     DocumentModule,
     UserModule,
     AuditModule,
