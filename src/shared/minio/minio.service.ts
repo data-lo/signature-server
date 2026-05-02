@@ -3,6 +3,8 @@ import * as Minio from 'minio';
 import { MinioFileI } from './interfaces/minio.file.interface';
 import { FILE_STATUS_ENUM } from './enums/file-status-enum';
 import { v4 as uuid4 } from 'uuid';
+import { GetFileResponse } from './interfaces/minio.get-file-response.interface';
+
 
 @Injectable()
 export class MinioService {
@@ -14,6 +16,10 @@ export class MinioService {
   MINIO_HOST: any;
   MINIO_PORT: any;
   MINIO_API: any;
+
+  constructor() {
+    this.setMinioClient();
+  }
 
   private getMinioClient() {
     if (!this.minioClient) {
@@ -83,30 +89,25 @@ export class MinioService {
     }
   }
 
-  checkFileObjects(files: Array<Express.Multer.File>) {
-    
+  checkSignatureFileObjects(files: Array<Express.Multer.File>) {
     let signatureFile;
     let oficialCardPdfFile;
-    try{
+    try {
       signatureFile = files.find((f) => f.mimetype === 'image/png');
-    }    
-    catch(error){
+    } catch (error) {
       console.log('Signature file not found in the uploaded files.');
     }
 
     try {
-      oficialCardPdfFile = files.find(
-      (f) => f.mimetype == 'application/pdf',
-    );}
-    catch(error){
+      oficialCardPdfFile = files.find((f) => f.mimetype == 'application/pdf');
+    } catch (error) {
       console.log('Official card PDF file not found in the uploaded files.');
     }
 
     return {
-        signatureFile,
-        oficialCardPdfFile
+      signatureFile,
+      oficialCardPdfFile,
     };
-    
   }
 
   async uploadObject(
@@ -116,7 +117,12 @@ export class MinioService {
       | 'signed_documents'
       | 'oficial_cards'
       | 'signatures_images',
-  ): Promise<{ status: FILE_STATUS_ENUM; fileId: string, bucket: string; fileType: string }> {
+  ): Promise<{
+    status: FILE_STATUS_ENUM;
+    fileId: string;
+    bucket: string;
+    fileType: string;
+  }> {
     try {
       const minioClient = this.getMinioClient();
       const bucketName = this.getBucketByType(type);
@@ -142,7 +148,7 @@ export class MinioService {
         fileBuffer,
         fileBuffer.length, // ✅ IMPORTANTE: pasar la longitud
         { 'Content-Type': file.file.mimetype }, // ✅ Metadatos opcionales
-        function (err, etag) {}
+        function (err, etag) {},
       );
 
       return {
@@ -151,9 +157,63 @@ export class MinioService {
         status: FILE_STATUS_ENUM.FILE_CREATED,
         fileId: fileName,
       };
-
     } catch (error) {
       throw new Error(`Error al subir archivos a MinIO: ${error}`);
     }
+  }
+
+  async getFile(
+    fileId: string,
+    bucketType:
+      | 'created_documents'
+      | 'signed_documents'
+      | 'oficial_cards'
+      | 'signatures_images',
+    expiresIn: number = 3600,
+  ): Promise<GetFileResponse> {
+    try {
+        
+      const minioClient = this.getMinioClient();
+      const bucketName = this.getBucketByType(bucketType);
+ 
+      const exists = await new Promise<boolean>((resolve, reject) => {
+        minioClient.bucketExists(bucketName, (err, result) => {
+          if (err) reject(err);
+          else resolve(result);
+        });
+      });
+
+      const fileExists = await new Promise<boolean>((resolve, reject) => {
+        minioClient.statObject(bucketName, fileId, (err, stat) => {
+          if (err && err.code === 'NotFound') {
+            resolve(false);
+          } else if (err) {
+            reject(err);
+          } else {
+            resolve(true);
+          }
+        });
+      });
+
+
+      if(!fileExists){
+        throw new Error('Archivo no encontrado en el bucket')
+      }
+      
+      const secureUrl = await new Promise<string>((resolve, reject) => {
+        minioClient.presignedGetObject(bucketName, fileId, expiresIn, (err, url) => {
+          if (err) reject(err);
+          else resolve(url);
+        });
+      });
+
+      return {
+        fileId,
+        bucket: bucketName,
+        bucketType,
+        secureUrl,
+        expiresIn,
+      }
+    } catch (error) {}
   }
 }

@@ -31,7 +31,7 @@ export class SignatureController {
 
     let responses = [];
     const { signatureFile, oficialCardPdfFile } =
-      this.minioService.checkFileObjects(files);
+      this.minioService.checkSignatureFileObjects(files);
 
     if (signatureFile) {
       responses.push(
@@ -53,6 +53,15 @@ export class SignatureController {
     return responses;
     //return this.signatureService.create(createSignatureDto);
   }
+
+  @Get('get-files/:fileId')
+  async getFiles(
+    @Param('fileId') fileId: string,
+    @Body() bucketType: 'signatures_images' | 'created_documents' | 'oficial_cards' | 'signed_documents',
+  ) {
+    return await this.minioService.getFile(fileId, bucketType);
+  }
+
 
   @Get()
   findAll() {
