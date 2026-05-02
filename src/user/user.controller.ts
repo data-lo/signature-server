@@ -13,14 +13,19 @@ export class UserController {
     return this.userService.create(createUserDto);
   }
 
+  @Get('email')
+  findOneByEmail(@Body() email: string) {
+    return this.userService.findOneByEmail(email);
+  }
+
   @Get()
-  findAll() {
-    return this.userService.findAll();
+  findAllActiveUsers() {
+    return this.userService.findAllActiveUsers();
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.userService.findOne(id);
+  findOneActiveUser(@Param('id') id: string) {
+    return this.userService.findOneActiveUser(id);
   }
 
   @Patch(':id')

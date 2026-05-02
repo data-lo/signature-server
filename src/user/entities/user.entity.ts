@@ -26,6 +26,9 @@ export class UserEntity {
     @Column({ default: true, name: 'is_active' })
     isActive: boolean;
 
+    @Column({ default: false, name: 'is_deleted' })
+    isDeleted: boolean;
+
     @Column({ length: 18, name: 'national_id' })
     nationalId: string;
 
