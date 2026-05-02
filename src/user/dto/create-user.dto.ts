@@ -1,12 +1,14 @@
 import {
   ArrayNotEmpty,
   IsArray,
-  IsBoolean,
   IsEmail,
+  IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
 } from 'class-validator';
+
+import { UserRoles } from '../interfaces/user.roles.enum';
 
 export class CreateUserDto {
   @IsString()
@@ -25,16 +27,10 @@ export class CreateUserDto {
   @IsString()
   position?: string;
 
-  @IsString()
-  @IsNotEmpty()
-  signatureId: string;
-
-  @IsBoolean()
-  isActive: boolean;
-
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
+  @IsEnum(UserRoles, { each: true })
   rol: string[];
 
   @IsString()
