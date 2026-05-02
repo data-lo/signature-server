@@ -29,7 +29,7 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',
         autoLoadEntities: true,
-        synchronize: false,
+        synchronize: true,
       }),
     }),
 
