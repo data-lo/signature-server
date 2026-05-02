@@ -1,34 +1,31 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
+import { Request } from 'express';
 import { VerificationCodeService } from './verification-code.service';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
-import { UpdateVerificationCodeDto } from './dto/update-verification-code.dto';
+import { VerifyVerificationCodeDto } from './dto/verify-verification-code.dto';
 
 @Controller('verification-code')
 export class VerificationCodeController {
   constructor(private readonly verificationCodeService: VerificationCodeService) {}
 
   @Post()
-  create(@Body() createVerificationCodeDto: CreateVerificationCodeDto) {
-    return this.verificationCodeService.create(createVerificationCodeDto);
+  create(@Body() dto: CreateVerificationCodeDto) {
+    return this.verificationCodeService.create(dto);
   }
 
-  @Get()
-  findAll() {
-    return this.verificationCodeService.findAll();
+  @Post('verify')
+  verify(@Body() dto: VerifyVerificationCodeDto, @Req() req: Request) {
+    const ipAddress = req['ipAddress'] ?? req.ip;
+    return this.verificationCodeService.verifyCode(dto, ipAddress);
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.verificationCodeService.findOne(+id);
+  @Get('signer/:signerId')
+  findBySigner(@Param('signerId') signerId: string) {
+    return this.verificationCodeService.findBySigner(signerId);
   }
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateVerificationCodeDto: UpdateVerificationCodeDto) {
-    return this.verificationCodeService.update(+id, updateVerificationCodeDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.verificationCodeService.remove(+id);
+  @Get('document/:documentId')
+  findByDocument(@Param('documentId') documentId: string) {
+    return this.verificationCodeService.findByDocument(documentId);
   }
 }
