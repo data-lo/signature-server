@@ -12,6 +12,7 @@ import { AppController } from './app.controller';
 
 // Modules
 import { UserModule } from './user/user.module';
+import { MongooseModule } from '@nestjs/mongoose';
 import { AuditModule } from './audit/audit.module';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
@@ -33,15 +34,11 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
       }),
     }),
 
-    TypeOrmModule.forRootAsync({
-      name: 'mongo',
+    MongooseModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        url: config.get('MONGO_DB_URL'),
-        type: 'mongodb',
-        autoLoadEntities: true,
-        synchronize: false,
+        uri: config.get('MONGO_DB_URL'),
       }),
     }),
 

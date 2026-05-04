@@ -64,7 +64,6 @@ export class DocumentEntity {
     @Column({ name: 'created_by' })
     createdBy: string;
 
-
     @Column({ name: 'signer_id' })
     signerId: string;
 
