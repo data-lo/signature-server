@@ -15,11 +15,10 @@ async function bootstrap() {
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Signature Server API')
-    .setDescription('API para gestión de firmas digitales, documentos y verificación OTP')
+    .setDescription('API para gestión de firmas digitales y documentos')
     .setVersion('1.0')
-    .addBearerAuth(
-      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-      'access-token',
+    .addApiKey(
+      { type: 'apiKey', name: 'API_KEY', in: 'header' },
     )
     .build();
 
