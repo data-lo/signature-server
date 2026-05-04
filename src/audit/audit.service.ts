@@ -27,4 +27,8 @@ export class AuditService {
     });
 
   }
+
+  async findAll() {
+
+  }
 }

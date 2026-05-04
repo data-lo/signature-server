@@ -27,31 +27,31 @@ export class AuditController {
     return this.auditService.findAll();
   }
 
-  @Public()
-  @Get(':id')
-  @ApiOperation({ summary: 'Obtener registro de auditoría por ID' })
-  @ApiParam({ name: 'id', description: 'ID del registro de auditoría' })
-  @ApiResponse({ status: 200, description: 'Registro encontrado' })
-  @ApiResponse({ status: 404, description: 'Registro no encontrado' })
-  findOne(@Param('id') id: string) {
-    return this.auditService.findOne(+id);
-  }
+  // @Public()
+  // @Get(':id')
+  // @ApiOperation({ summary: 'Obtener registro de auditoría por ID' })
+  // @ApiParam({ name: 'id', description: 'ID del registro de auditoría' })
+  // @ApiResponse({ status: 200, description: 'Registro encontrado' })
+  // @ApiResponse({ status: 404, description: 'Registro no encontrado' })
+  // findOne(@Param('id') id: string) {
+  //   return this.auditService.findOne(+id);
+  // }
 
-  @Public()
-  @Patch(':id')
-  @ApiOperation({ summary: 'Actualizar registro de auditoría' })
-  @ApiParam({ name: 'id', description: 'ID del registro de auditoría' })
-  @ApiResponse({ status: 200, description: 'Registro actualizado correctamente' })
-  update(@Param('id') id: string, @Body() updateAuditDto: UpdateAuditDto) {
-    return this.auditService.update(+id, updateAuditDto);
-  }
+  // @Public()
+  // @Patch(':id')
+  // @ApiOperation({ summary: 'Actualizar registro de auditoría' })
+  // @ApiParam({ name: 'id', description: 'ID del registro de auditoría' })
+  // @ApiResponse({ status: 200, description: 'Registro actualizado correctamente' })
+  // update(@Param('id') id: string, @Body() updateAuditDto: UpdateAuditDto) {
+  //   return this.auditService.update(+id, updateAuditDto);
+  // }
 
-  @Public()
-  @Delete(':id')
-  @ApiOperation({ summary: 'Eliminar registro de auditoría' })
-  @ApiParam({ name: 'id', description: 'ID del registro de auditoría' })
-  @ApiResponse({ status: 200, description: 'Registro eliminado correctamente' })
-  remove(@Param('id') id: string) {
-    return this.auditService.remove(+id);
-  }
+  // @Public()
+  // @Delete(':id')
+  // @ApiOperation({ summary: 'Eliminar registro de auditoría' })
+  // @ApiParam({ name: 'id', description: 'ID del registro de auditoría' })
+  // @ApiResponse({ status: 200, description: 'Registro eliminado correctamente' })
+  // remove(@Param('id') id: string) {
+  //   return this.auditService.remove(+id);
+  // }
 }
