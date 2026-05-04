@@ -4,6 +4,7 @@ import { VerificationCodeService } from './verification-code.service';
 import { VerificationCodeController } from './verification-code.controller';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { OtpModule } from '../shared/otp/otp.module';
+import { RedisService } from 'src/shared/redis/redis.service';
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { OtpModule } from '../shared/otp/otp.module';
     OtpModule,
   ],
   controllers: [VerificationCodeController],
-  providers: [VerificationCodeService],
+  providers: [VerificationCodeService, RedisService],
   exports: [VerificationCodeService],
 })
 export class VerificationCodeModule {}

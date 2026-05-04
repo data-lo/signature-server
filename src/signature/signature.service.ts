@@ -90,6 +90,7 @@ export class SignatureService {
       officialCardObjectKey: officialCardObjectKeyResponse.fileId,
       createdBy: dto.createdBy ?? null,
       isActive: true,
+      userId: dto.userId,
     });
 
     const saved = await this.signatureRepository.save(signature);
