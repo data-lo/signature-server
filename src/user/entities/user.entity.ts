@@ -41,9 +41,9 @@ export class UserEntity {
     @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
 
-    @OneToOne(() => SignatureEntity)
-    @JoinColumn({ name: 'signature_id' })
+    @OneToOne(() => SignatureEntity, (signature) => signature.user)
     signature: SignatureEntity;
+
 
     @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
     createdDocuments: DocumentEntity[];
