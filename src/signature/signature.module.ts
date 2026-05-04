@@ -14,8 +14,6 @@ import { SharedModule } from 'src/shared/shared.module';
   ],
   controllers: [SignatureController],
   providers: [SignatureService, MinioService],
-  imports: [TypeOrmModule.forFeature([SignatureEntity, UserEntity])],
-  providers: [SignatureService],
   exports: [SignatureService],
 })
 export class SignatureModule {}
