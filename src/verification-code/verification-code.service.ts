@@ -22,6 +22,8 @@ export class VerificationCodeService {
   async create(dto: CreateVerificationCodeDto): Promise<string> {
     const code = await this.otpService.generateAndStore(dto.signerId);
 
+    // Guardar en redis
+
     const expiredAt = new Date();
     expiredAt.setSeconds(expiredAt.getSeconds() + 900);
 

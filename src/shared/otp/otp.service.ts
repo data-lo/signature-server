@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
 import { TOTP } from 'otplib';
+import { Injectable } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 
 @Injectable()
