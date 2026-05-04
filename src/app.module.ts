@@ -13,11 +13,13 @@ import { AppController } from './app.controller';
 // Modules
 import { UserModule } from './user/user.module';
 import { AuditModule } from './audit/audit.module';
+import { AuthModule } from './auth/auth.module';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
+import { RedisModule } from './shared/redis/redis.module';
 
 @Module({
   imports: [
@@ -48,12 +50,14 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    AuthModule,
     DocumentModule,
     UserModule,
     AuditModule,
     SignatureModule,
     VerificationCodeModule,
     SharedModule,
+    RedisModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
