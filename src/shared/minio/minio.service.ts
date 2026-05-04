@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as Minio from 'minio';
 import { MinioFileI } from './interfaces/minio.file.interface';
 import { FILE_STATUS_ENUM } from './enums/file-status-enum';
@@ -18,6 +18,8 @@ export class MinioService {
   MINIO_HOST: any;
   MINIO_PORT: any;
   MINIO_API: any;
+
+  logger = new Logger();
 
   constructor() {
     this.setMinioClient();
@@ -109,6 +111,21 @@ export class MinioService {
     };
   }
 
+  checkSignatureFileObject(file: Express.Multer.File){
+    try{  
+      switch (file.mimetype){
+        case 'image/png':
+          return BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+        case 'application/pdf':
+          return BUCKET_TYPES_ENUM.OFICIAL_CARDS
+        default:
+          throw new Error('Formato de archivo no esperado');
+      }
+    }catch(error){
+      throw new Error('El archivo no corresponde al formato')
+    }
+  }
+
   async uploadObject(
     file: MinioFileI,
     type:
@@ -145,9 +162,7 @@ export class MinioService {
         bucketName,
         fileName,
         fileBuffer,
-        fileBuffer.length,
-        { 'Content-Type': file.file.mimetype },
-        function (err, etag) {},
+        { 'Content-Type': file.file.mimetype }
       );
 
       return {
@@ -196,10 +211,8 @@ export class MinioService {
     }
   }
 
-
-
   async replaceFile(
-    fileId:string,
+    fileName:string,
     file: MinioFileI,
     type: BUCKET_TYPES_ENUM
   ): Promise<{
@@ -210,24 +223,39 @@ export class MinioService {
   }> {
     try {
       const minioClient = this.getMinioClient();
-      const fileName = this.addFileExtension(fileId, type);
+      this.logger.debug(fileName);
+
       const bucketName = this.getBucketByType(type);
+      this.logger.debug(bucketName);
       try{
         const fileData = await minioClient.statObject(bucketName, fileName);
-        console.log(fileData);
+        this.logger.log(fileData)
+
       }catch(error){
-        throw new Error(`El archivo con ID ${fileId} no existe en el bucket ${bucketName}`);
+        throw new Error(`El archivo con ID ${fileName} no existe en el bucket ${bucketName}`);
       }
       
       await minioClient.removeObject(bucketName, fileName)
-      await minioClient.putObject(
+      this.logger.debug(`Archivo ${fileName} eliminado del bucket ${bucketName}`);
+      const fileBuffer = file.file.buffer;
+      if (!fileBuffer) {
+        throw new Error('El archivo no contiene datos válidos');
+      }
+
+      try{
+        await minioClient.putObject(
         bucketName,
         fileName,
-        file.file.buffer,
-        file.file.buffer.length,
-        { 'Content-Type': file.file.mimetype },
-        function (err, etag) {},
-      );
+        fileBuffer,
+        { 
+          'Content-Type': file.file.mimetype,
+        }
+      )}catch(error){
+        this.logger.error(`Error al subir el nuevo archivo a MinIO: ${error}`);
+        throw new Error(`Error al subir el nuevo archivo a MinIO: ${error}`);
+      }
+
+      this.logger.log(`Archivo ${fileName} subido al bucket ${bucketName} con éxito`);
 
         return {
         fileType: file.file.mimetype,
