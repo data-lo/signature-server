@@ -26,7 +26,7 @@ export class UserController {
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
   @ApiResponse({ status: 200, description: 'Lista de usuarios' })
   findAll() {
-    return this.userService.findAll();
+    return this.userService.findAllActiveUsers();
   }
 
   @Public()
@@ -36,7 +36,7 @@ export class UserController {
   @ApiResponse({ status: 200, description: 'Usuario encontrado' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
   findOne(@Param('id') id: string) {
-    return this.userService.findOne(id);
+    return this.userService.findOneActiveUser(id);
   }
 
   @Public()

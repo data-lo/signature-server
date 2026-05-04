@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SignatureEntity } from './entities/signature.entity';
@@ -6,6 +11,8 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { CreateSignatureDto } from './dto/create-signature.dto';
 import { MinioService } from 'src/shared/minio/minio.service';
 import 'multer';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { sign } from 'crypto';
 
 @Injectable()
 export class SignatureService {
@@ -14,6 +21,7 @@ export class SignatureService {
     private readonly signatureRepository: Repository<SignatureEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
+
     private readonly minioService: MinioService,
   ) {}
 
@@ -35,26 +43,51 @@ export class SignatureService {
    * Al finalizar, actualiza el signatureId del usuario con el UUID de la firma creada.
    * La imagen de INE queda pendiente hasta que se llame al método update.
    */
+
   async create(
     dto: CreateSignatureDto,
-    signatureFile: Express.Multer.File,
+    files: Array<Express.Multer.File>,
   ): Promise<SignatureEntity> {
-    if (!signatureFile) {
-      throw new BadRequestException('La imagen de firma (imagen_firma) es requerida');
-    }
-
-    const user = await this.userRepository.findOne({ where: { id: dto.userId } });
+    const user = await this.userRepository.findOne({
+      where: { id: dto.userId },
+    });
     if (!user) {
       throw new NotFoundException(`Usuario con id ${dto.userId} no encontrado`);
     }
 
-    // TODO: subir imagen a Minio cuando MinioService esté implementado
-    // const signatureObjectKey = await this.minioService.upload(signatureFile, 'signatures');
-    const signatureObjectKey = `signatures/${dto.userId}/${Date.now()}.png`;
+    let signatureObjectKeyResponse = null;
+    let officialCardObjectKeyResponse = null;
+
+    const { signatureFile, oficialCardPdfFile } =
+      this.minioService.checkSignatureFileObjects(files);
+
+    if (signatureFile) {
+      signatureObjectKeyResponse = await this.minioService.uploadObject(
+        { file: signatureFile, name: signatureFile.originalname },
+        'signature_images',
+      );
+    }
+
+    if (oficialCardPdfFile) {
+      officialCardObjectKeyResponse = await this.minioService.uploadObject(
+        { file: oficialCardPdfFile, name: oficialCardPdfFile.originalname },
+        'oficial_cards',
+      );
+    }
+
+    if (signatureObjectKeyResponse.status !== 'FILE_CREATED') {
+      throw new Error('Error al subir la imagen de firma a Minio');
+    }
+
+    if (officialCardObjectKeyResponse.status !== 'FILE_CREATED') {
+      throw new Error(
+        'Error al subir la imagen de identificación oficial a Minio',
+      );
+    }
 
     const signature = this.signatureRepository.create({
-      signatureObjectKey,
-      officialCardObjectKey: null,
+      signatureObjectKey: signatureObjectKeyResponse.fileId,
+      officialCardObjectKey: officialCardObjectKeyResponse.fileId,
       createdBy: dto.createdBy ?? null,
       isActive: true,
     });
@@ -75,25 +108,39 @@ export class SignatureService {
   async update(
     id: string,
     files: {
-      imagen_firma?: Express.Multer.File[];
-      imagen_ine?: Express.Multer.File[];
+      imagen_firma?: Express.Multer.File;
+      imagen_ine?: Express.Multer.File;
     },
   ): Promise<SignatureEntity> {
-    const signature = await this.findOne(id);
+    const signatureData = await this.findOne(id);
 
-    if (files.imagen_firma?.[0]) {
-      // TODO: subir imagen de firma a Minio cuando MinioService esté implementado
-      // signature.signatureObjectKey = await this.minioService.upload(files.imagen_firma[0], 'signatures');
-      signature.signatureObjectKey = `signatures/${id}/${Date.now()}.png`;
+    if (!signatureData) {
+      throw new NotFoundException(`Firma con id ${id} no encontrada`);
     }
 
-    if (files.imagen_ine?.[0]) {
-      // TODO: subir imagen de INE a Minio cuando MinioService esté implementado
-      // signature.officialCardObjectKey = await this.minioService.upload(files.imagen_ine[0], 'official-cards');
-      signature.officialCardObjectKey = `official-cards/${id}/${Date.now()}.png`;
+    if (files.imagen_firma) {
+      await this.minioService.replaceFile(
+        signatureData.signatureObjectKey,
+        {
+          file: files.imagen_firma,
+          name: files.imagen_firma.fieldname,
+        },
+        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+      );
     }
 
-    return this.signatureRepository.save(signature);
+    if(files.imagen_ine){
+      await this.minioService.replaceFile(
+        signatureData.officialCardObjectKey,
+        {
+          file: files.imagen_ine,
+          name: files.imagen_ine.filename
+        },
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS
+      )
+    }
+
+    return await this.findOne(id);
   }
 
   /**
@@ -108,5 +155,9 @@ export class SignatureService {
 
     signature.isActive = false;
     return this.signatureRepository.save(signature);
+  }
+
+  async getFile(fileId: string, bucketType:BUCKET_TYPES_ENUM){
+    return await this.minioService.getFile(fileId, bucketType);
   }
 }
