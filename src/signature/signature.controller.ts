@@ -26,11 +26,20 @@ export class SignatureController {
   @Get('files/:fileId')
   async getFile(
     @Param('fileId') fileId: string,
-    @Body('bucketType') bucketType:BUCKET_TYPES_ENUM,
+    @Body('documentType') bucketType:BUCKET_TYPES_ENUM,
   ) {
     return await this.minioService.getFile(fileId, bucketType); 
   }
-
+  
+  @Patch(':id')
+  @UseInterceptors(FileInterceptor('file'))
+  updateFile(
+    @Param('id') id: string,
+    @Body() updateSignatureDto: UpdateSignatureDto,
+  ) {
+    return this.signatureService.update(+id, updateSignatureDto);
+  }
+  
   @Post()
   @UseInterceptors(FilesInterceptor('files',2))
   async create(
@@ -62,6 +71,8 @@ export class SignatureController {
     return responses;
     //return this.signatureService.create(createSignatureDto);
   }
+
+
 
 
   @Get()

@@ -6,7 +6,6 @@ import { v4 as uuid4 } from 'uuid';
 import { GetFileResponse } from './interfaces/minio.get-file-response.interface';
 import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 
-
 @Injectable()
 export class MinioService {
   minioClient: any;
@@ -146,8 +145,8 @@ export class MinioService {
         bucketName,
         fileName,
         fileBuffer,
-        fileBuffer.length, // ✅ IMPORTANTE: pasar la longitud
-        { 'Content-Type': file.file.mimetype }, // ✅ Metadatos opcionales
+        fileBuffer.length,
+        { 'Content-Type': file.file.mimetype },
         function (err, etag) {},
       );
 
@@ -197,6 +196,51 @@ export class MinioService {
     }
   }
 
+
+
+  async replaceFile(
+    fileId:string,
+    file: MinioFileI,
+    type: BUCKET_TYPES_ENUM
+  ): Promise<{
+    status: FILE_STATUS_ENUM;
+    fileId: string;
+    bucket: string;
+    fileType: string;
+  }> {
+    try {
+      const minioClient = this.getMinioClient();
+      const fileName = this.addFileExtension(fileId, type);
+      const bucketName = this.getBucketByType(type);
+      try{
+        const fileData = await minioClient.statObject(bucketName, fileName);
+        console.log(fileData);
+      }catch(error){
+        throw new Error(`El archivo con ID ${fileId} no existe en el bucket ${bucketName}`);
+      }
+      
+      await minioClient.removeObject(bucketName, fileName)
+      await minioClient.putObject(
+        bucketName,
+        fileName,
+        file.file.buffer,
+        file.file.buffer.length,
+        { 'Content-Type': file.file.mimetype },
+        function (err, etag) {},
+      );
+
+        return {
+        fileType: file.file.mimetype,
+        bucket: bucketName,
+        status: FILE_STATUS_ENUM.FILE_CREATED,
+        fileId: fileName,
+      };
+      
+      ;
+    } catch(error){
+      throw new Error(`Error al reemplazar el archivo en MinIO: ${error}`);
+    }
+  }
 
   private addFileExtension(fileId, bucketType){
       switch (bucketType) {
