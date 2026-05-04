@@ -1,33 +1,86 @@
 import {
-  Body,
   Controller,
   Get,
-  Param,
-  Patch,
   Post,
-  UploadedFile,
-  UploadedFiles,
+  Body,
+  Patch,
+  Param,
+  Delete,
   UseInterceptors,
+  UploadedFiles,
 } from '@nestjs/common';
-import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
-import {
-  ApiBearerAuth,
-  ApiBody,
-  ApiConsumes,
-  ApiOperation,
-  ApiParam,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
-import { Public } from 'src/auth/decorators/public.decorator';
 import { SignatureService } from './signature.service';
 import { CreateSignatureDto } from './dto/create-signature.dto';
+import { UpdateSignatureDto } from './dto/update-signature.dto';
+import { MinioService } from 'src/shared/minio/minio.service';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 
 @ApiTags('Signature')
 @ApiBearerAuth('access-token')
 @Controller('signature')
 export class SignatureController {
-  constructor(private readonly signatureService: SignatureService) {}
+  constructor(
+    private readonly signatureService: SignatureService,
+    private readonly minioService: MinioService,
+  ) {}
+
+  @Get('files/:fileId')
+  async getFile(
+    @Param('fileId') fileId: string,
+    @Body('documentType') bucketType:BUCKET_TYPES_ENUM,
+  ) {
+    return await this.minioService.getFile(fileId, bucketType); 
+  }
+  
+  @Patch(':id')
+  @UseInterceptors(FileInterceptor('file'))
+  updateFile(
+    @Param('id') id: string,
+    @Body() updateSignatureDto: UpdateSignatureDto,
+  ) {
+    return this.signatureService.update(+id, updateSignatureDto);
+  }
+  
+  @Post()
+  @UseInterceptors(FilesInterceptor('files',2))
+  async create(
+    @UploadedFiles() files: Array<Express.Multer.File>,
+    @Body() createSignatureDto: CreateSignatureDto,
+  ) {
+
+    let responses = [];
+    const { signatureFile, oficialCardPdfFile } =
+      this.minioService.checkSignatureFileObjects(files);
+
+    if (signatureFile) {
+      responses.push(
+        await this.minioService.uploadObject(
+          { file: signatureFile, name: signatureFile.originalname },
+          'signature_images',
+        ),
+      );
+    }
+
+    if (oficialCardPdfFile) {
+      responses.push(
+        await this.minioService.uploadObject(
+          { file: oficialCardPdfFile, name: oficialCardPdfFile.originalname },
+          'oficial_cards',
+        ),
+      );
+    }
+    return responses;
+    //return this.signatureService.create(createSignatureDto);
+  }
+
+
+
+
+  @Get()
+  findAll() {
+    return this.signatureService.findAll();
+  }
 
   @Public()
   @Get(':id')
@@ -67,6 +120,11 @@ export class SignatureController {
 
   @Public()
   @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() updateSignatureDto: UpdateSignatureDto,
+  ) {
+    return this.signatureService.update(+id, updateSignatureDto);
   @ApiOperation({ summary: 'Actualizar imagen de firma y/o INE' })
   @ApiParam({ name: 'id', description: 'UUID de la firma a actualizar', format: 'uuid' })
   @ApiConsumes('multipart/form-data')

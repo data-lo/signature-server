@@ -4,6 +4,7 @@ import { SignatureService } from './signature.service';
 import { SignatureController } from './signature.controller';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { MinioService } from 'src/shared/minio/minio.service';
 import { SharedModule } from 'src/shared/shared.module';
 
 @Module({
@@ -12,6 +13,8 @@ import { SharedModule } from 'src/shared/shared.module';
     SharedModule,
   ],
   controllers: [SignatureController],
+  providers: [SignatureService, MinioService],
+  imports: [TypeOrmModule.forFeature([SignatureEntity, UserEntity])],
   providers: [SignatureService],
   exports: [SignatureService],
 })
