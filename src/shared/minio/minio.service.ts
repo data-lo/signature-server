@@ -232,7 +232,7 @@ export class MinioService {
         return {
         fileType: file.file.mimetype,
         bucket: bucketName,
-        status: FILE_STATUS_ENUM.FILE_CREATED,
+        status: FILE_STATUS_ENUM.FILE_OVERWRITTEN,
         fileId: fileName,
       };
       
