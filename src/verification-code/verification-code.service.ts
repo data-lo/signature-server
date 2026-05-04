@@ -5,27 +5,29 @@ import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
 import { VerifyVerificationCodeDto } from './dto/verify-verification-code.dto';
 import { OtpService } from '../shared/otp/otp.service';
+import { RedisService } from '../shared/redis/redis.service';
 
 @Injectable()
 export class VerificationCodeService {
+  // TTL de 15 minutos para los OTPs en Redis
+  private readonly OTP_TTL = 900;
+  private readonly KEY_PREFIX = 'otp:';
+
   constructor(
     @InjectRepository(VerificationCodeEntity)
     private readonly verificationCodeRepository: Repository<VerificationCodeEntity>,
     private readonly otpService: OtpService,
+    private readonly redisService: RedisService,
   ) {}
 
-  /**
-   * Genera un nuevo código OTP para el firmante y lo almacena en Redis con TTL de 15 minutos.
-   * Registra el evento en la base de datos como auditoría (código, tipo, expiración, firmante, documento).
-   * Retorna el código de 6 dígitos que debe enviarse al usuario por correo.
-   */
+  // Genera un nuevo OTP, lo almacena en Redis con TTL y persiste el registro en BD.
+  // Retorna el código generado para que el llamador lo envíe al firmante.
   async create(dto: CreateVerificationCodeDto): Promise<string> {
-    const code = await this.otpService.generateAndStore(dto.signerId);
-
-    // Guardar en redis
+    const code = await this.otpService.generate();
+    await this.redisService.set(`${this.KEY_PREFIX}${dto.signerId}`, code, this.OTP_TTL);
 
     const expiredAt = new Date();
-    expiredAt.setSeconds(expiredAt.getSeconds() + 900);
+    expiredAt.setSeconds(expiredAt.getSeconds() + this.OTP_TTL);
 
     await this.verificationCodeRepository.save({
       code,
@@ -39,18 +41,19 @@ export class VerificationCodeService {
     return code;
   }
 
-  /**
-   * Verifica el token OTP ingresado por el firmante consultando el secreto en Redis.
-   * Si es válido, marca el registro en base de datos como usado, registrando fecha y dirección IP.
-   * Retorna true si el token es correcto, false si expiró o no coincide.
-   */
+  // Verifica que el token enviado por el firmante coincida con el OTP activo en Redis.
+  // Si es válido, elimina el OTP de Redis (uso único) y marca el registro en BD como usado.
   async verifyCode(
     dto: VerifyVerificationCodeDto,
     ipAddress?: string,
   ): Promise<boolean> {
-    const isValid = await this.otpService.verify(dto.signerId, dto.token);
+    const storedCode = await this.redisService.get(`${this.KEY_PREFIX}${dto.signerId}`);
+    if (!storedCode) return false;
+
+    const isValid = this.otpService.verify(dto.token, storedCode);
 
     if (isValid) {
+      await this.redisService.del(`${this.KEY_PREFIX}${dto.signerId}`);
       await this.verificationCodeRepository.update(
         { signerId: dto.signerId, isUsed: false },
         { isUsed: true, usedAt: new Date(), ipAddress },
@@ -60,10 +63,17 @@ export class VerificationCodeService {
     return isValid;
   }
 
-  /**
-   * Retorna el historial de códigos OTP generados para un firmante específico,
-   * ordenados del más reciente al más antiguo.
-   */
+  // Invalida manualmente el OTP activo de un firmante eliminándolo de Redis.
+  async revoke(signerId: string): Promise<void> {
+    await this.redisService.del(`${this.KEY_PREFIX}${signerId}`);
+  }
+
+  // Indica si el firmante tiene un OTP vigente en Redis (no expirado ni revocado).
+  async hasActive(signerId: string): Promise<boolean> {
+    return (await this.redisService.exists(`${this.KEY_PREFIX}${signerId}`)) > 0;
+  }
+
+  // Retorna todos los registros de códigos de verificación asociados a un firmante, del más reciente al más antiguo.
   async findBySigner(signerId: string): Promise<VerificationCodeEntity[]> {
     return this.verificationCodeRepository.find({
       where: { signerId },
@@ -71,10 +81,7 @@ export class VerificationCodeService {
     });
   }
 
-  /**
-   * Retorna el historial de códigos OTP asociados a un documento específico,
-   * ordenados del más reciente al más antiguo.
-   */
+  // Retorna todos los registros de códigos de verificación asociados a un documento, del más reciente al más antiguo.
   async findByDocument(documentId: string): Promise<VerificationCodeEntity[]> {
     return this.verificationCodeRepository.find({
       where: { documentId },
