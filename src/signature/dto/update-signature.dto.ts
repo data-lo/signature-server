@@ -1,4 +1,7 @@
-import { PartialType } from '@nestjs/mapped-types';
-import { CreateSignatureDto } from './create-signature.dto';
-
-export class UpdateSignatureDto extends PartialType(CreateSignatureDto) {}
+/**
+ * DTO para la actualización de firma e INE.
+ * Los archivos (imagen_firma, imagen_ine) se reciben como multipart/form-data
+ * a través de los decoradores @UploadedFiles() en el controlador,
+ * por lo que este DTO no necesita campos de cuerpo adicionales.
+ */
+export class UpdateSignatureDto {}

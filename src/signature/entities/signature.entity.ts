@@ -11,8 +11,8 @@ export class SignatureEntity {
   @Column({ name: 'signature_object_key' })
   signatureObjectKey: string;
 
-  @Column({ name: 'official_card_object_key' })
-  officialCardObjectKey: string;
+  @Column({ nullable: true, name: 'official_card_object_key' })
+  officialCardObjectKey: string | null;
 
   @Column({ nullable: true, name: 'created_by' })
   createdBy: string | null;
