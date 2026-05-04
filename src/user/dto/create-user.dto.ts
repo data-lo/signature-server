@@ -4,21 +4,24 @@ import {
   IsArray,
   IsBoolean,
   IsEmail,
+  IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
 } from 'class-validator';
 
+import { UserRoles } from '../interfaces/user.roles.enum';
+
 export class CreateUserDto {
   @ApiProperty({ example: 'Juan', description: 'Nombre(s) del usuario' })
   @IsString()
   @IsNotEmpty()
-  name: string;
+  firstName: string;
 
   @ApiProperty({ example: 'Pérez López', description: 'Apellidos del usuario' })
   @IsString()
   @IsNotEmpty()
-  lastname: string;
+  lastName: string;
 
   @ApiProperty({ example: 'juan.perez@empresa.com', description: 'Correo electrónico único del usuario' })
   @IsEmail()
@@ -43,6 +46,7 @@ export class CreateUserDto {
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
+  @IsEnum(UserRoles, { each: true })
   rol: string[];
 
   @ApiProperty({ example: 'PELJ850101HDFRNN08', description: 'CURP del usuario (18 caracteres)' })

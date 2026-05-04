@@ -17,6 +17,7 @@ export class UserController {
   @ApiResponse({ status: 201, description: 'Usuario creado correctamente' })
   @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
   create(@Body() createUserDto: CreateUserDto) {
+    console.log('Creating user with data:', createUserDto);
     return this.userService.create(createUserDto);
   }
 
