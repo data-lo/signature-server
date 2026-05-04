@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PDFDocument, PDFImage } from 'pdf-lib';
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
 
@@ -14,8 +14,7 @@ const DEFAULT_COORDINATES: SignatureCoordinates = {
 export class PdfSignatureService {
   /**
    * Incrusta la imagen de firma en el documento PDF en las coordenadas indicadas.
-   *
-   * Proceso:
+   * 
    *  1. Carga el PDF original desde el Buffer recibido para poder modificarlo en memoria.
    * 
    *  2. Detecta el formato de la imagen (PNG o JPG) leyendo los primeros 4 bytes del Buffer,
@@ -44,11 +43,11 @@ export class PdfSignatureService {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
 
-    // Paso 2: detectar el formato de la imagen mediante los magic bytes del Buffer.
-    // PNG comienza con los bytes: 0x89 0x50 0x4E 0x47 (\x89PNG)
+    // Paso 2: detectar el formato de la imagen mediante los bytes del Buffer
     let signatureImage: PDFImage;
     const signatureBytes: Uint8Array = new Uint8Array(signatureBuffer);
 
+    // Identificar PNG por su firma de bytes: 89 50 4E 47 (hexadecimal)
     const isPng: boolean =
       signatureBytes[0] === 0x89 &&
       signatureBytes[1] === 0x50 &&
@@ -59,7 +58,7 @@ export class PdfSignatureService {
     if (isPng) {
       signatureImage = await pdfDoc.embedPng(signatureBuffer);
     } else {
-      signatureImage = await pdfDoc.embedJpg(signatureBuffer);
+        throw new BadRequestException('FORMATO DE IMAGEN NO SOPORTADO. SOLO SE PERMITEN PNG');
     }
 
     // Paso 4: seleccionar la última página del documento como destino de la firma
@@ -90,8 +89,6 @@ export class PdfSignatureService {
 //      imports: [DocumentSigningModule],
 //    })
 //    export class DocumentModule {}
-//
-// -----------------------------------------------------------------------------
 //
 // 2. Inyectar PdfSignatureService en el servicio o controlador destino:
 //
