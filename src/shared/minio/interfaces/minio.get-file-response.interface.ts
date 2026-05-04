@@ -12,13 +12,6 @@ export interface FileMetadata {
 
 export interface GetFileResponse {
   fileId: string;
-  bucket: string;
-  bucketType:
-    | 'signatures_images'
-    | 'created_documents'
-    | 'signed_documents'
-    | 'oficial_cards';
   secureUrl: string;
   expiresIn: number;
-  originalName?: string;
 }

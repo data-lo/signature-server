@@ -14,6 +14,7 @@ import { CreateSignatureDto } from './dto/create-signature.dto';
 import { UpdateSignatureDto } from './dto/update-signature.dto';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 
 @Controller('signature')
 export class SignatureController {
@@ -21,6 +22,14 @@ export class SignatureController {
     private readonly signatureService: SignatureService,
     private readonly minioService: MinioService,
   ) {}
+
+  @Get('files/:fileId')
+  async getFile(
+    @Param('fileId') fileId: string,
+    @Body('bucketType') bucketType:BUCKET_TYPES_ENUM,
+  ) {
+    return await this.minioService.getFile(fileId, bucketType); 
+  }
 
   @Post()
   @UseInterceptors(FilesInterceptor('files',2))
@@ -37,7 +46,7 @@ export class SignatureController {
       responses.push(
         await this.minioService.uploadObject(
           { file: signatureFile, name: signatureFile.originalname },
-          'signatures_images',
+          'signature_images',
         ),
       );
     }
@@ -52,14 +61,6 @@ export class SignatureController {
     }
     return responses;
     //return this.signatureService.create(createSignatureDto);
-  }
-
-  @Get('get-files/:fileId')
-  async getFiles(
-    @Param('fileId') fileId: string,
-    @Body() bucketType: 'signatures_images' | 'created_documents' | 'oficial_cards' | 'signed_documents',
-  ) {
-    return await this.minioService.getFile(fileId, bucketType);
   }
 
 

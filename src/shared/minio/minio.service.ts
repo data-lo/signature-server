@@ -4,15 +4,18 @@ import { MinioFileI } from './interfaces/minio.file.interface';
 import { FILE_STATUS_ENUM } from './enums/file-status-enum';
 import { v4 as uuid4 } from 'uuid';
 import { GetFileResponse } from './interfaces/minio.get-file-response.interface';
+import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 
 
 @Injectable()
 export class MinioService {
   minioClient: any;
+
   MINIO_CREATED_DOCUMENTS_BUCKET: any;
   MINIO_SIGNED_DOCUMENTS_BUCKET: any;
   MINIO_OFICIAL_CARDS_BUCKET: any;
-  MINIO_SIGNATURES_IMAGES_BUCKET: any;
+  MINIO_SIGNATURE_IMAGES_BUCKET: any;
+  
   MINIO_HOST: any;
   MINIO_PORT: any;
   MINIO_API: any;
@@ -48,7 +51,7 @@ export class MinioService {
       !process.env.MINIO_CREATED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_SIGNED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_OFICIAL_CARDS_BUCKET ||
-      !process.env.MINIO_SIGNATURES_IMAGES_BUCKET
+      !process.env.MINIO_SIGNATURE_IMAGES_BUCKET
     ) {
       throw new Error(
         '¡Los buckets de MinIO no están definidos en las variables de entorno!',
@@ -60,8 +63,8 @@ export class MinioService {
     this.MINIO_SIGNED_DOCUMENTS_BUCKET =
       process.env.MINIO_SIGNED_DOCUMENTS_BUCKET;
     this.MINIO_OFICIAL_CARDS_BUCKET = process.env.MINIO_OFICIAL_CARDS_BUCKET;
-    this.MINIO_SIGNATURES_IMAGES_BUCKET =
-      process.env.MINIO_SIGNATURES_IMAGES_BUCKET;
+    this.MINIO_SIGNATURE_IMAGES_BUCKET =
+      process.env.MINIO_SIGNATURE_IMAGES_BUCKET;
     this.MINIO_HOST = process.env.MINIO_HOST;
     this.MINIO_PORT = process.env.MINIO_PORT;
     this.MINIO_API = process.env.MINIO_API;
@@ -69,11 +72,8 @@ export class MinioService {
   }
 
   private getBucketByType(
-    type:
-      | 'created_documents'
-      | 'signed_documents'
-      | 'oficial_cards'
-      | 'signatures_images',
+    type: 'created_documents' | 'signed_documents' | 'oficial_cards' | 'signature_images',
+
   ) {
     switch (type) {
       case 'created_documents':
@@ -82,8 +82,8 @@ export class MinioService {
         return this.MINIO_SIGNED_DOCUMENTS_BUCKET;
       case 'oficial_cards':
         return this.MINIO_OFICIAL_CARDS_BUCKET;
-      case 'signatures_images':
-        return this.MINIO_SIGNATURES_IMAGES_BUCKET;
+      case 'signature_images':
+        return this.MINIO_SIGNATURE_IMAGES_BUCKET;
       default:
         throw new Error('Tipo de bucket no reconocido');
     }
@@ -116,7 +116,7 @@ export class MinioService {
       | 'created_documents'
       | 'signed_documents'
       | 'oficial_cards'
-      | 'signatures_images',
+      | 'signature_images',
   ): Promise<{
     status: FILE_STATUS_ENUM;
     fileId: string;
@@ -164,56 +164,52 @@ export class MinioService {
 
   async getFile(
     fileId: string,
-    bucketType:
-      | 'created_documents'
-      | 'signed_documents'
-      | 'oficial_cards'
-      | 'signatures_images',
-    expiresIn: number = 3600,
+    bucketType:BUCKET_TYPES_ENUM,
+    expiresIn: number = 24 * 60 * 60,
   ): Promise<GetFileResponse> {
     try {
         
       const minioClient = this.getMinioClient();
       const bucketName = this.getBucketByType(bucketType);
- 
-      const exists = await new Promise<boolean>((resolve, reject) => {
-        minioClient.bucketExists(bucketName, (err, result) => {
-          if (err) reject(err);
-          else resolve(result);
-        });
-      });
-
-      const fileExists = await new Promise<boolean>((resolve, reject) => {
-        minioClient.statObject(bucketName, fileId, (err, stat) => {
-          if (err && err.code === 'NotFound') {
-            resolve(false);
-          } else if (err) {
-            reject(err);
-          } else {
-            resolve(true);
-          }
-        });
-      });
-
-
-      if(!fileExists){
-        throw new Error('Archivo no encontrado en el bucket')
-      }
+      console.log(bucketName);
+      const exists = await minioClient.bucketExists(bucketName);
       
-      const secureUrl = await new Promise<string>((resolve, reject) => {
-        minioClient.presignedGetObject(bucketName, fileId, expiresIn, (err, url) => {
-          if (err) reject(err);
-          else resolve(url);
-        });
-      });
+      if(!exists){
+        throw new Error(`El bucket ${bucketName} no existe en MinIO`);
+      }
+
+      const fileName = this.addFileExtension(fileId, bucketType);
+      try{
+        console.log(await minioClient.statObject(bucketName, fileName));
+      }catch(error){
+        throw new Error(`El archivo con ID ${fileId} no existe en el bucket ${bucketName}`);
+      }      
+      
+      const secureUrl = await minioClient.presignedGetObject(bucketName, fileName, expiresIn)
 
       return {
         fileId,
-        bucket: bucketName,
-        bucketType,
         secureUrl,
         expiresIn,
       }
-    } catch (error) {}
+    } catch (error) {
+      throw new Error(`Error al obtener el archivo de MinIO: ${error}`);
+    }
+  }
+
+
+  private addFileExtension(fileId, bucketType){
+      switch (bucketType) {
+        case 'created_documents':
+          return `${fileId}.pdf`;
+        case 'signed_documents':
+          return `${fileId}.pdf`;
+        case 'oficial_cards':
+          return `${fileId}.pdf`;
+        case 'signature_images':
+          return `${fileId}.png`;
+        default:
+          throw new Error('Tipo de bucket no reconocido');
+      }
   }
 }
