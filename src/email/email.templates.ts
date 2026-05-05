@@ -11,9 +11,56 @@ export const passwordResetTemplate = (resetUrl: string): string => `
   <p>Este enlace expirará en 1 hora.</p>
 `;
 
-export const signatureNotificationTemplate = (documentName: string, signerName: string): string => `
-  <h1>Documento pendiente de firma</h1>
-  <p>El documento "${documentName}" está listo para tu firma.</p>
-  <p>Firmado por: ${signerName}</p>
-  <p>Por favor, accede a tu cuenta para completar el proceso de firma.</p>
+export const signatureRequestTemplate = (
+  documentName: string,
+  signerName: string,
+  verificationCode: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+    
+    <h2 style="color: #333333;">Solicitud de firma de documento</h2>
+    
+    <p style="color: #555555;">Hola <strong>${signerName}</strong>,</p>
+    
+    <p style="color: #555555;">
+      Se ha solicitado tu firma para el siguiente documento:
+    </p>
+
+    <div style="background-color: #f4faf4; border-left: 4px solid #2E7D32; padding: 16px; margin: 24px 0;">
+      <p style="margin: 0; color: #333333;"><strong>${documentName}</strong></p>
+    </div>
+
+    <p style="color: #555555;">
+      Usa el siguiente código para completar la firma:
+    </p>
+
+    <div style="text-align: center; margin: 32px 0;">
+      <span style="
+        font-size: 32px;
+        font-weight: bold;
+        letter-spacing: 8px;
+        color: #2E7D32;
+        background-color: #f0faf0;
+        padding: 16px 32px;
+        border-radius: 8px;
+      ">
+        ${verificationCode}
+      </span>
+    </div>
+
+    <p style="color: #999999; font-size: 12px;">
+      Este código es de un solo uso y expirará en 15 minutos. 
+      Si no solicitaste esta firma, ignora este mensaje.
+    </p>
+
+  </div>
+</body>
+</html>
 `;

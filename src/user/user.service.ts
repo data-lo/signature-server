@@ -10,7 +10,7 @@ export class UserService {
   constructor(
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
-  ) {}
+  ) { }
 
   async create(createUserDto: CreateUserDto): Promise<UserEntity> {
     const { firstName, lastName, email, position, rol, curp } = createUserDto;
@@ -19,7 +19,7 @@ export class UserService {
       lastName: lastName.toUpperCase(),
       email: email.toLowerCase(),
       position: position ? position.toUpperCase() : null,
-      roles: rol!= null ? rol : ['signer'],
+      roles: rol != null ? rol : ['signer'],
       nationalId: curp.toUpperCase(),
     });
     const new_user = await this.userRepository.save(user);
@@ -57,9 +57,9 @@ export class UserService {
     console.log(dbUser);
     console.log('Updating user with data:', updateUserDto);
     const { position, rol, firstName, lastName, curp, email } = updateUserDto;
-    
+
     console.log(rol);
-    await this.userRepository.update(id,{
+    await this.userRepository.update(id, {
       firstName: firstName ? firstName.toUpperCase() : dbUser.firstName,
       lastName: lastName ? lastName.toUpperCase() : dbUser.lastName,
       email: email ? email.toLowerCase() : dbUser.email,
