@@ -1,5 +1,5 @@
 import { OnEvent } from "@nestjs/event-emitter";
-import { EmailService } from "src/email/email.service";
+import { EmailService } from "src/shared/email/email.service";
 import { VerificationCodeEmailPayload } from "./interfaces/verification-code-email.payload";
 
 export class VerificationCodeEventService {

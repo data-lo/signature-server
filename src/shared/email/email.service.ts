@@ -6,7 +6,7 @@ import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common
 import * as sgMail from '@sendgrid/mail';
 
 // Internal modules
-import { signatureRequestTemplate } from './email.templates';
+import { signatureRequestTemplate } from './templates/email.templates';
 import { EmailType } from 'src/verification-code/enums/email-type';
 import { EmailSubject } from 'src/verification-code/enums/subject-type';
 

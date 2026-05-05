@@ -1,18 +1,18 @@
 // 1. NestJS (framework)
-import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 // 2. Third-party libraries
 import { Repository } from 'typeorm';
 // 3. Internal modules
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
 import { VerifyVerificationCodeDto } from './dto/verify-verification-code.dto';
-import { DocumentService } from 'src/document/document.service';
+
+import { UserService } from 'src/user/user.service';
 import { OTPService } from 'src/shared/otp/otp.service';
 import { RedisService } from 'src/shared/redis/redis.service';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import { UserService } from 'src/user/user.service';
-import { last } from 'rxjs';
+import { DocumentService } from 'src/document/document.service';
 
 @Injectable()
 export class VerificationCodeService {
