@@ -9,6 +9,6 @@ import { SignatureEntity } from 'src/signature/entities/signature.entity';
   exports: [UserService],
   providers: [UserService],
   controllers: [UserController],
-  imports: [TypeOrmModule.forFeature([UserEntity,SignatureEntity])],
+  imports: [TypeOrmModule.forFeature([UserEntity])],
 })
 export class UserModule { }

@@ -35,7 +35,7 @@ export class DocumentController {
   @ApiResponse({ status: 200, description: 'Documento encontrado' })
   @ApiResponse({ status: 404, description: 'Documento no encontrado' })
   findOne(@Param('id') id: string) {
-    return this.documentService.findOne(+id);
+    return this.documentService.findOne(id);
   }
 
   @Public()

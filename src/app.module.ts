@@ -21,9 +21,14 @@ import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
 import { RedisModule } from './shared/redis/redis.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
+    EventEmitterModule.forRoot({
+      delimiter: '.'
+    }),
+
     TypeOrmModule.forRootAsync({
       name: 'default',
       imports: [ConfigModule],

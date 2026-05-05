@@ -1,32 +1,58 @@
-import { Injectable } from '@nestjs/common';
+// 1. NestJS (framework)
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+// 2. Third-party libraries
 import { Repository } from 'typeorm';
+// 3. Internal modules
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
 import { VerifyVerificationCodeDto } from './dto/verify-verification-code.dto';
-import { OtpService } from '../shared/otp/otp.service';
-import { RedisService } from '../shared/redis/redis.service';
+import { DocumentService } from 'src/document/document.service';
+import { OTPService } from 'src/shared/otp/otp.service';
+import { RedisService } from 'src/shared/redis/redis.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { UserService } from 'src/user/user.service';
+import { last } from 'rxjs';
 
 @Injectable()
 export class VerificationCodeService {
-  // TTL de 15 minutos para los OTPs en Redis
   private readonly OTP_TTL = 900;
-  private readonly KEY_PREFIX = 'otp:';
+  private readonly KEY_PREFIX = 'OTP:';
 
   constructor(
     @InjectRepository(VerificationCodeEntity)
     private readonly verificationCodeRepository: Repository<VerificationCodeEntity>,
-    private readonly otpService: OtpService,
+    private readonly eventEmitter: EventEmitter2,
+    private readonly otpService: OTPService,
+    private readonly userService: UserService,
     private readonly redisService: RedisService,
-  ) {}
+    private readonly documentService: DocumentService,
+  ) { }
 
-  // Genera un nuevo OTP, lo almacena en Redis con TTL y persiste el registro en BD.
-  // Retorna el código generado para que el llamador lo envíe al firmante.
-  async create(dto: CreateVerificationCodeDto): Promise<string> {
+  /**
+   * Genera y envía un código OTP al firmante del documento.
+   *
+   * - Valida que el firmante esté asociado al documento
+   * - Almacena el código en Redis con un TTL de 15 minutos
+   * - Emite un evento para enviar el código por correo
+   *
+   * @param dto - Datos del firmante y documento
+   * @returns Mensaje de confirmación y código generado
+   * @throws ForbiddenException - Si el firmante no está asociado al documento
+   */
+  async create(dto: CreateVerificationCodeDto) {
+    const document = await this.documentService.findOne(dto.documentId);
+
+    if (dto.signerId !== document.signerId) {
+      throw new ForbiddenException('El firmante no está asociado a este documento');
+    }
+
+    const user = await this.userService.findOne(dto.signerId);
+
     const code = await this.otpService.generate();
-    await this.redisService.set(`${this.KEY_PREFIX}${dto.signerId}`, code, this.OTP_TTL);
 
     const expiredAt = new Date();
+
     expiredAt.setSeconds(expiredAt.getSeconds() + this.OTP_TTL);
 
     await this.verificationCodeRepository.save({
@@ -38,7 +64,18 @@ export class VerificationCodeService {
       documentId: dto.documentId,
     });
 
-    return code;
+    await this.redisService.set(`${this.KEY_PREFIX}${dto.documentId}`, code, this.OTP_TTL);
+
+    this.eventEmitter.emit('send.verification.code.email', {
+      to: user.email,
+      documentName: document.fileName,
+      signerName: `${user.firstName} ${user.lastName}`,
+      code,
+    });
+
+    return {
+      message: 'Código enviado al correo del firmante',
+    }
   }
 
   // Verifica que el token enviado por el firmante coincida con el OTP activo en Redis.

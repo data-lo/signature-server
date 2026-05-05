@@ -13,17 +13,17 @@ async function bootstrap() {
     transform: true,
   }));
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Signature Server API')
-    .setDescription('API para gestión de firmas digitales y documentos')
-    .setVersion('1.0')
-    .addApiKey(
-      { type: 'apiKey', name: 'API_KEY', in: 'header' },
-    )
-    .build();
+  // const swaggerConfig = new DocumentBuilder()
+  //   .setTitle('Signature Server API')
+  //   .setDescription('API para gestión de firmas digitales y documentos')
+  //   .setVersion('1.0')
+  //   .addApiKey(
+  //     { type: 'apiKey', name: 'API_KEY', in: 'header' },
+  //   )
+  //   .build();
 
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api/docs', app, document);
+  // const document = SwaggerModule.createDocument(app, swaggerConfig);
+  // SwaggerModule.setup('api/docs', app, document);
 
   app.useGlobalFilters();
   app.useGlobalInterceptors();

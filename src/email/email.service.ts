@@ -1,54 +1,70 @@
-import { Injectable } from '@nestjs/common';
+// NestJS (framework)
 import { ConfigService } from '@nestjs/config';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+
+// Third-party libraries
 import * as sgMail from '@sendgrid/mail';
-import {
-  passwordResetTemplate,
-  signatureNotificationTemplate,
-  welcomeTemplate,
-} from './email.templates';
+
+// Internal modules
+import { signatureRequestTemplate } from './email.templates';
+import { EmailType } from 'src/verification-code/enums/email-type';
+import { EmailSubject } from 'src/verification-code/enums/subject-type';
 
 @Injectable()
 export class EmailService {
-  constructor(private configService: ConfigService) {
+  private readonly logger = new Logger(EmailService.name);
+
+  constructor(private readonly configService: ConfigService) {
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+
     if (!apiKey) {
-      throw new Error('SENDGRID_API_KEY is not defined');
+      throw new InternalServerErrorException('SENDGRID_API_KEY is not defined');
     }
+
     sgMail.setApiKey(apiKey);
+    this.logger.log('SendGrid initialized');
   }
+  /**
+  * Envía un correo electrónico mediante SendGrid.
+  * Método base utilizado internamente por los demás métodos de notificación.
+  */
+  async sendEmail(
+    to: string,
+    subject: string,
+    html: string,
+    emailType: EmailType,
+    from?: string,
+  ): Promise<void> {
+    const senderEmail = from ?? this.configService.get<string>('SENDGRID_FROM_EMAIL');
 
-  /** Envía un correo genérico usando SendGrid. Usado internamente por los demás métodos. */
-  async sendEmail(to: string, subject: string, html: string, from?: string): Promise<void> {
-    const defaultFrom = this.configService.get<string>('SENDGRID_FROM_EMAIL') || 'noreply@yourdomain.com';
-
-    const msg = {
+    const message: sgMail.MailDataRequired = {
       to,
-      from: from || defaultFrom,
+      from: senderEmail,
       subject,
       html,
     };
 
     try {
-      await sgMail.send(msg);
+      await sgMail.send(message);
+      this.logger.log(`Email sent successfully to ${to} (${emailType})`);
     } catch (error) {
-      console.error('Error sending email:', error);
-      throw new Error('Failed to send email');
+      this.logger.error(`Failed to send email to ${to} (${emailType})`, error);
+      throw new InternalServerErrorException('Failed to send email');
     }
   }
 
-  /** Envía un correo de bienvenida al usuario recién registrado. */
-  async sendWelcomeEmail(to: string, userName: string): Promise<void> {
-    await this.sendEmail(to, 'Bienvenido a Signature Server', welcomeTemplate(userName));
-  }
+  async sendVerificationCodeEmail(
+    to: string,
+    documentName: string,
+    signerName: string,
+    verificationCode: string
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.VERIFICATION,
+      signatureRequestTemplate(documentName, signerName, verificationCode),
+      EmailType.VERIFICATION,
 
-  /** Envía un correo con el enlace para restablecer la contraseña del usuario. */
-  async sendPasswordResetEmail(to: string, resetToken: string): Promise<void> {
-    const resetUrl = `${this.configService.get<string>('FRONTEND_URL')}/reset-password?token=${resetToken}`;
-    await this.sendEmail(to, 'Restablecer contraseña', passwordResetTemplate(resetUrl));
-  }
-
-  /** Notifica al usuario que un documento está pendiente de su firma. */
-  async sendSignatureNotification(to: string, documentName: string, signerName: string): Promise<void> {
-    await this.sendEmail(to, 'Documento listo para firma', signatureNotificationTemplate(documentName, signerName));
+    );
   }
 }

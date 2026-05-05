@@ -2,7 +2,7 @@ import { TOTP } from 'otplib';
 import { Injectable } from '@nestjs/common';
 
 @Injectable()
-export class OtpService {
+export class OTPService {
   private readonly totp: TOTP;
 
   constructor() {
