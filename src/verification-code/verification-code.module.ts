@@ -5,8 +5,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserModule } from 'src/user/user.module';
 import { OTPModule } from 'src/shared/otp/otp.module';
 import { DocumentModule } from 'src/document/document.module';
-
-import { EmailService } from 'src/email/email.service';
 import { RedisModule } from 'src/shared/redis/redis.module';
 
 import { VerificationCodeService } from './verification-code.service';
@@ -26,6 +24,6 @@ import { EmailModule } from 'src/email/email.module';
   ],
   controllers: [VerificationCodeController],
   providers: [VerificationCodeService],
-  exports: [VerificationCodeService, UserModule],
+  exports: [VerificationCodeService],
 })
 export class VerificationCodeModule { }
