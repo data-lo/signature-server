@@ -1,18 +1,74 @@
 import { Type } from 'class-transformer';
-import { IsString, IsDate, IsNumber, IsOptional } from 'class-validator';
+import {
+  IsArray,
+  IsDate,
+  IsEnum,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { TypeOfOperation } from '../schema/audit-document';
 
+/** Par usuario-acción que se registra dentro de un evento de auditoría. */
+class UserActionDto {
+  @ApiProperty()
+  @IsString()
+  userId: string;
+
+  @ApiProperty({ enum: TypeOfOperation })
+  @IsEnum(TypeOfOperation)
+  action: TypeOfOperation;
+}
+
+/**
+ * DTO para crear un registro de auditoría.
+ *
+ * Campos mínimos obligatorios: documentId, operation e ipAddress.
+ * Los campos verificationCodeId y signedAt son opcionales en el DTO pero pueden
+ * volverse obligatorios dependiendo de la operación (validados en AuditService).
+ * Los campos de hash (integrityHash, cipher, chainHash) los calcula el servicio
+ * internamente; no se reciben desde el cliente.
+ */
 export class CreateAuditDto {
-    @IsString()
-    documentId: string;
+  /** ID del documento sobre el que se registra el evento. */
+  @ApiProperty()
+  @IsString()
+  documentId: string;
 
-    @IsString()
-    verificationCodeId: string;
+  /** Tipo de operación que origina este registro. Determina qué campos son requeridos. */
+  @ApiProperty({ enum: TypeOfOperation })
+  @IsEnum(TypeOfOperation)
+  operation: TypeOfOperation;
 
-    @IsOptional()
-    @IsDate()
-    @Type(() => Date)
-    signedAt: Date;
+  /** IP del cliente que realiza la operación. Obligatoria en todos los casos. */
+  @ApiProperty({ description: 'IP del cliente que realiza la operación' })
+  @IsString()
+  ipAddress: string;
 
-    @IsString()
-    integrityHash: string;
+  /**
+   * ID del código de verificación (OTP) consumido en la operación.
+   * El servicio lo exigirá si la operación es SIGN, APPROVE o REJECT.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  verificationCodeId?: string;
+
+  /**
+   * Fecha y hora de la firma. El servicio lo exigirá si la operación es SIGN.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDate()
+  @Type(() => Date)
+  signedAt?: Date;
+
+  /** Usuarios involucrados en el evento y la acción que cada uno realizó. */
+  @ApiPropertyOptional({ type: [UserActionDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UserActionDto)
+  users?: UserActionDto[];
 }
