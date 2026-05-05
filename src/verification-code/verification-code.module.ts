@@ -6,11 +6,11 @@ import { UserModule } from 'src/user/user.module';
 import { OTPModule } from 'src/shared/otp/otp.module';
 import { DocumentModule } from 'src/document/document.module';
 import { RedisModule } from 'src/shared/redis/redis.module';
+import { EmailModule } from 'src/email/email.module';
 
 import { VerificationCodeService } from './verification-code.service';
 import { VerificationCodeController } from './verification-code.controller';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
-import { OtpModule } from '../shared/otp/otp.module';
 import { RedisService } from 'src/shared/redis/redis.service';
 
 @Module({

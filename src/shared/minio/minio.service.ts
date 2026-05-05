@@ -143,8 +143,8 @@ export class MinioService {
     fileType: string;
   }> {
     try {
-      const minioClient = this.getMinioClient();
-      const bucketName = this.getBucketByType(type);
+      const minioClient = await this.getMinioClient();
+      const bucketName = await this.getBucketByType(type);
 
       await minioClient.bucketExists(bucketName, (err, exists) => {
         if (err) {
@@ -154,8 +154,13 @@ export class MinioService {
         }
       });
 
+      this.logger.log(file.name);
       const extension = file.name.split('.').pop()?.toLowerCase();
+      this.logger.log(`Extension Document ${extension}`);
+
       const fileName = `${uuid4()}.${extension}`;
+      this.logger.log(`Nombre Documento ${fileName}`)
+
       const fileBuffer = file.file.buffer;
       if (!fileBuffer) {
         throw new Error('El archivo no contiene datos válidos');

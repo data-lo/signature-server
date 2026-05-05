@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from 'src/auth/decorators/public.decorator';
 import { DocumentService } from './document.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
@@ -13,11 +14,17 @@ export class DocumentController {
 
   @Public()
   @Post()
-  @ApiOperation({ summary: 'Registrar nuevo documento firmado' })
-  @ApiResponse({ status: 201, description: 'Documento registrado correctamente' })
+  @ApiOperation({ summary: 'Registrar nuevo documento para firmar' })
+  @ApiConsumes('multipart/form-data')
+  @ApiResponse({ status: 201, description: 'Documento registrado para firmar correctamente' })
   @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
-  create(@Body() createDocumentDto: CreateDocumentDto) {
-    return this.documentService.create(createDocumentDto);
+  @UseInterceptors(FileInterceptor('document'))
+  async create(
+    @Body() createDocumentDto: CreateDocumentDto,
+    @UploadedFile() document: Express.Multer.File,
+  ) {
+    console.log(document.filename, document.mimetype);
+    return await this.documentService.create(createDocumentDto, document);
   }
 
   @Public()
