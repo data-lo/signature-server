@@ -35,18 +35,19 @@ export class CreateUserDto {
 
   @ApiProperty({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID de la firma asociada al usuario', format: 'uuid' })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   signatureId: string;
 
   @ApiProperty({ example: true, description: 'Indica si el usuario está activo en el sistema' })
   @IsBoolean()
+  @IsOptional()
   isActive: boolean;
 
   @ApiProperty({ example: ['admin', 'signer'], description: 'Lista de roles asignados al usuario', type: [String] })
   @IsArray()
-  @ArrayNotEmpty()
   @IsString({ each: true })
   @IsEnum(UserRoles, { each: true })
+  @IsOptional()
   rol: string[];
 
   @ApiProperty({ example: 'PELJ850101HDFRNN08', description: 'CURP del usuario (18 caracteres)' })

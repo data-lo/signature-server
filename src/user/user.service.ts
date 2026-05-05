@@ -22,7 +22,8 @@ export class UserService {
       roles: rol != null ? rol : ['signer'],
       nationalId: curp.toUpperCase(),
     });
-    return this.userRepository.save(user);
+    const new_user = await this.userRepository.save(user);
+    return this.removeSensitiveData(new_user);
   }
 
   async findAllActiveUsers(): Promise<UserEntity[]> {
@@ -32,10 +33,12 @@ export class UserService {
     if (!users || users.length === 0) {
       return [];
     }
+    const secure_users = [];
     users.forEach(user => {
-      this.removeSensitiveData(user);
+      const secure_user = this.removeSensitiveData(user);
+      secure_users.push(secure_user);
     });
-    return users;
+    return secure_users;
   }
 
   async findOneActiveUser(id: string): Promise<UserEntity> {
@@ -69,11 +72,6 @@ export class UserService {
 
   async findOne(id: string): Promise<UserEntity> {
     return this.userRepository.findOne({ where: { id } });
-  }
-
-
-  async findAll(): Promise<UserEntity[]> {
-    return this.userRepository.find();
   }
 
   async findOneByEmail(email: string): Promise<UserEntity> {

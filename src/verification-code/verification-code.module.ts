@@ -10,8 +10,8 @@ import { RedisModule } from 'src/shared/redis/redis.module';
 import { VerificationCodeService } from './verification-code.service';
 import { VerificationCodeController } from './verification-code.controller';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
-import { EmailModule } from 'src/email/email.module';
-
+import { OtpModule } from '../shared/otp/otp.module';
+import { RedisService } from 'src/shared/redis/redis.service';
 
 @Module({
   imports: [
@@ -23,7 +23,7 @@ import { EmailModule } from 'src/email/email.module';
     DocumentModule,
   ],
   controllers: [VerificationCodeController],
-  providers: [VerificationCodeService],
+  providers: [VerificationCodeService, RedisService],
   exports: [VerificationCodeService],
 })
 export class VerificationCodeModule { }
