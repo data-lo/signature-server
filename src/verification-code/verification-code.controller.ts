@@ -2,7 +2,7 @@ import { Body, Controller, ForbiddenException, Get, Param, Post, Req } from '@ne
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { Public } from 'src/auth/decorators/public.decorator';
-import { EmailService } from 'src/email/email.service';
+import { EmailService } from 'src/shared/email/email.service';
 import { VerificationCodeService } from './verification-code.service';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
 import { VerifyVerificationCodeDto } from './dto/verify-verification-code.dto';

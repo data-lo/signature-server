@@ -1,5 +1,10 @@
+// NestJS (framework)
 import { BadRequestException, Injectable } from '@nestjs/common';
+
+// Third party
 import { PDFDocument, PDFImage } from 'pdf-lib';
+
+// Local
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
 
 // Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
@@ -11,7 +16,7 @@ const DEFAULT_COORDINATES: SignatureCoordinates = {
 };
 
 @Injectable()
-export class PdfSignatureService {
+export class DocumentSigningService {
   /**
    * Incrusta la imagen de firma en el documento PDF en las coordenadas indicadas.
    * 
