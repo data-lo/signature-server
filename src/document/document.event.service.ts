@@ -1,8 +1,9 @@
-import { Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { DocumentService } from './document.service';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
 
+@Injectable()
 export class DocumentEventService {
     private readonly logger = new Logger(DocumentEventService.name);
 

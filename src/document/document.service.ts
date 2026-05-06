@@ -20,10 +20,9 @@ import { DocumentSigningService } from 'src/shared/document-signing/document-sig
 import { SignatureService } from 'src/signature/signature.service';
 import { FILE } from 'dns';
 
-
 @Injectable()
 export class DocumentService {
-  logger = new Logger();
+  logger = new Logger(__dirname);
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -200,48 +199,61 @@ export class DocumentService {
 
   async mergeSignatureAndSave(payload: DocumentSignEventPayload) {
     try {
+      console.log('IN MERGE AND SIGNATURE AND SAVE METHOD')
       const { signerId, documentId } = payload;
       const signerUser = await this.UserService.findOne(signerId);
       const document = await this.findOne(documentId);
       const coordinates = document.signatureCoordinates;
 
+      console.log(signerUser);
+
       const signatureId = signerUser.signatureId;
       const signature = await this.signatureService.findOne(signatureId);
+      let signedDocument = null;
 
+      try {
+        const signatureObjectBuffer =
+          await this.minioService.getFileInBytesFormat(
+            signature.signatureObjectKey,
+            BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+          );
 
-      const signatureObjectBuffer = await this.minioService.getFileInBytesFormat(
-        signature.signatureObjectKey,
-        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
-      );
+        this.logger.debug('Signature buffer Obtenido');
 
-      const documentObjectBuffer = await this.minioService.getFileInBytesFormat(
-        document.objectKey,
-        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS
-      );
+        const documentObjectBuffer =
+          await this.minioService.getFileInBytesFormat(
+            document.objectKey,
+            BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+          );
 
-      const signedDocument = await this.documentSigningSerivice.mergeSignatureIntoPdf(
-        documentObjectBuffer,
-        signatureObjectBuffer,
-        coordinates
-      );
+        this.logger.debug('Document To Sign Obtendio');
+
+        signedDocument =
+          await this.documentSigningSerivice.mergeSignatureIntoPdf(
+            documentObjectBuffer,
+            signatureObjectBuffer,
+            coordinates,
+          );
+      } catch (error) {
+        this.logger.error('ERROR');
+      }
 
       await this.minioService.uploadObject(
         {
-          file:signedDocument,
-          name:document.fileName,
-          mimetype:'application/pdf'
+          file: signedDocument,
+          name: document.fileName,
+          mimetype: 'application/pdf',
         },
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
       );
-      
-      const signedHash = await this.hashService.generateFileHash(signedDocument);
-      document.signedHash = signedHash,
-      document.signedAt = new Date(),
-      document.status = DOCUMENT_STATUS_ENUM.SIGNED,
-      
-      await this.documentRepository.save(document);
-      return this.findOne(document.id);
 
+      const signedHash =
+        await this.hashService.generateFileHash(signedDocument);
+        ((document.signedHash = signedHash),
+        (document.signedAt = new Date()),
+        (document.status = DOCUMENT_STATUS_ENUM.SIGNED),
+        await this.documentRepository.save(document));
+      return await this.findOne(document.id);
     } catch (error) {
       throw new Error('Error estampando el documento');
     }
