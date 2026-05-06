@@ -7,7 +7,7 @@ import { Repository } from 'typeorm';
 // 3. Internal modules
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 
-import { validateCodeDto } from './dto/verify-verification-code.dto';
+import { validateCodeDto } from './dto/validate-code.dto';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
 
 import { UserService } from 'src/user/user.service';

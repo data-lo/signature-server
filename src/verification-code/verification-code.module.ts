@@ -8,6 +8,7 @@ import { DocumentModule } from 'src/document/document.module';
 
 import { VerificationCodeService } from './verification-code.service';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
+import { VerificationCodeController } from './verification-code.controller';
 
 @Module({
   imports: [
@@ -18,5 +19,6 @@ import { VerificationCodeEntity } from './entities/verification-code.entity';
   ],
   exports: [VerificationCodeService],
   providers: [VerificationCodeService],
+  controllers: [VerificationCodeController],
 })
 export class VerificationCodeModule { }
