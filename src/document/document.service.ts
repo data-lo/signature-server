@@ -155,6 +155,8 @@ export class DocumentService {
           throw new Error('Error remplazando el documento ')
         }
       }
+      //TO DO DESAGREGAR DEL UPDATE DOCUMENT DTO LOS CAMPOS
+      //QUE SON INTERNOS
       await this.documentRepository.update(id,updateDocumentDto)
       return await this.findOne(id);
     }catch(error){
