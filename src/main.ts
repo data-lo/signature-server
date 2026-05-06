@@ -17,7 +17,7 @@ async function bootstrap() {
     .setTitle('Signature Server API')
     .setDescription('API para gestión de firmas digitales y documentos')
     .setVersion('1.0')
-    .addApiKey(
+        .addApiKey(
       { type: 'apiKey', name: 'API_KEY', in: 'header' },
     )
     .build();

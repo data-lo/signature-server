@@ -11,7 +11,7 @@ import {
 import { SignatureService } from './signature.service';
 import { CreateSignatureDto } from './dto/create-signature.dto';
 import { FileFieldsInterceptor, FilesInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiResponse, ApiTags, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { Public } from 'src/auth/decorators/public.decorator';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 
@@ -24,16 +24,22 @@ export class SignatureController {
     private readonly signatureService: SignatureService,
   ) {}
 
- @Public()
- @Get('files/:fileId')
+  @Public()
+  @ApiExcludeEndpoint()
+  @Get('files/:fileId')
+  @ApiOperation({ summary: 'Obtener archivo de firma o identificación desde MinIO' })
+  @ApiParam({ name: 'fileId', description: 'Clave del objeto en MinIO (object key)' })
+  @ApiResponse({ status: 200, description: 'URL del archivo generada correctamente' })
+  @ApiResponse({ status: 404, description: 'Archivo no encontrado' })
   async getFile(
     @Param('fileId') fileId: string,
-    @Body('bucketType') bucketType:BUCKET_TYPES_ENUM,
+    @Body('bucketType') bucketType: BUCKET_TYPES_ENUM,
   ) {
-    return await this.signatureService.getFile(fileId, bucketType); 
+    return await this.signatureService.getFile(fileId, bucketType);
   }
 
   @Public()
+  @ApiExcludeEndpoint()
   @Get(':id')
   @ApiOperation({ summary: 'Obtener firma por UUID' })
   @ApiParam({ name: 'id', description: 'UUID de la firma', format: 'uuid' })
