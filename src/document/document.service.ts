@@ -16,6 +16,7 @@ import { UserService } from '../user/user.service';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { min } from 'class-validator';
 
 @Injectable()
 export class DocumentService {
@@ -134,8 +135,31 @@ export class DocumentService {
     return document;
   }
 
-  async update(id: string, updateDocumentDto: UpdateDocumentDto) {
-    return `This action updates a #${id} document`;
+  async update(id: string, updateDocumentDto: UpdateDocumentDto, fileToReplace?: Express.Multer.File) {
+    try{
+      const documentDb = await this.findOne(id);
+      if(documentDb.status !== DOCUMENT_STATUS_ENUM.CREATED){
+        throw new BadRequestException(`Solo es posible actualizar documentos con Estatus Created`)
+      }
+      if(fileToReplace){
+        const objectKey = documentDb.objectKey
+        const minioResponse = await this.minioService.replaceFile(
+          objectKey,
+          {
+            file:fileToReplace,
+            name:fileToReplace.originalname    
+          },
+          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS
+        );
+        if(minioResponse.status !== FILE_STATUS_ENUM.FILE_OVERWRITTEN){
+          throw new Error('Error remplazando el documento ')
+        }
+      }
+      await this.documentRepository.update(id,updateDocumentDto)
+      return await this.findOne(id);
+    }catch(error){
+      throw new Error(`Error actualizando documento`)
+    }
   }
 
   async remove(documentId: string) {
