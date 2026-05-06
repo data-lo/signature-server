@@ -14,6 +14,8 @@ import { UserService } from 'src/user/user.service';
 import { OTPService } from 'src/shared/otp/otp.service';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { DocumentService } from 'src/document/document.service';
+import { VerificationCodeObject } from './interfaces/verification-code-object';
+import { CodeType } from './enums/code-type.enum';
 
 @Injectable()
 export class VerificationCodeService {
@@ -38,10 +40,10 @@ export class VerificationCodeService {
    * - Emite un evento para enviar el código por correo
    *
    * @param dto - Datos del firmante y documento
-   * @returns Mensaje de confirmación y código generado
+   * @returns Mensaje de confirmación
    * @throws ForbiddenException - Si el firmante no está asociado al documento
    */
-  async create(dto: CreateVerificationCodeDto) {
+  async create(dto: CreateVerificationCodeDto): Promise<{}> {
     const document = await this.documentService.findOne(dto.documentId);
 
     if (dto.signerId !== document.signerId) {
@@ -78,37 +80,66 @@ export class VerificationCodeService {
     }
   }
 
-  // Verifica que el código OTP enviado por el firmante coincida con el registrado en Redis.
-  // Si es válido:
-  //   - Elimina el OTP de Redis (uso único)
-  //   - Persiste el registro en DB
-  //   - Marca el registro como usado
+  /**
+   * Verifica el código OTP enviado por el firmante y registra su uso.
+   *
+   * - Valida que el código OTP coincida con el registrado en Redis
+   * - Verifica que el firmante esté asociado al documento
+   * - Elimina el OTP de Redis garantizando uso único
+   * - Persiste y marca el registro como usado en base de datos
+   *
+   * @param dto - Datos de validación: código OTP, firmante y documento
+   * @param ipAddress - Dirección IP desde donde se realiza la validación
+   * @returns Mensaje de confirmación del procesamiento del documento
+   * @throws NotFoundException - Si el código OTP no existe o ha expirado
+   * @throws ForbiddenException - Si el firmante no está asociado al documento
+   * @throws UnauthorizedException - Si el código OTP es inválido
+   */
   async validateAndSaveCode(
     dto: validateCodeDto,
     ipAddress: string,
-  ): Promise<boolean> {
+  ): Promise<{ message: string }> {
 
-    const storedCode = await this.redisService.get(`${this.KEY_PREFIX}${dto.documentId}`);
+    let verificationCodeString = await this.redisService.get(`${this.KEY_PREFIX}${dto.documentId}`);
 
-    if (!storedCode) throw new NotFoundException('Verification code not found or expired');
+    if (!verificationCodeString) {
+      throw new NotFoundException('Código de verificación no encontrado o expirado');
+    }
 
-    const isValid = this.otpService.verify(dto.code, storedCode);
+    const verificationCode = JSON.parse(verificationCodeString) as VerificationCodeObject;
 
-    if (!isValid) throw new UnauthorizedException('Invalid verification code');
+    if (dto.signerId !== verificationCode.signerId) {
+      throw new ForbiddenException('El firmante no está asociado a este documento');
+    }
 
-    await this.redisService.del(`${this.KEY_PREFIX}${dto.signerId}`);
+    const isValid = this.otpService.verify(dto.code, verificationCode.code);
+
+    if (!isValid) {
+      throw new UnauthorizedException('Código de verificación inválido');
+    }
+
+    await this.redisService.del(`${this.KEY_PREFIX}${dto.documentId}`);
 
     await this.verificationCodeRepository.update(
-      { signerId: dto.signerId, isUsed: false },
-      { isUsed: true, usedAt: new Date(), ipAddress },
+      { documentId: dto.documentId },
+      {
+        ipAddress,
+        isUsed: true,
+        usedAt: new Date(),
+        code: verificationCode.code,
+        signerId: verificationCode.signerId,
+        documentId: verificationCode.documentId,
+        type: CodeType.VERIFICATION
+      },
     );
 
+    // Agregar aquí evento que dispara la unión (Firma-Documento)
 
-    return isValid;
+    return {
+      message: 'Documento enviado a procesamiento, la firma será estampada en breve',
+    };
   }
 
-
-  
 
   // Invalida manualmente el OTP activo de un firmante eliminándolo de Redis.
   async revoke(signerId: string): Promise<void> {
