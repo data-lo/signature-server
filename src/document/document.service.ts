@@ -9,7 +9,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DocumentEntity } from './entities/document.entity';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
-import { DocumentEntity } from './entities/document.entity';
 import { Repository } from 'typeorm';
 import { MinioService } from '../shared/minio/minio.service';
 import { HashService } from '../shared/hash/hash.service';

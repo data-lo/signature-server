@@ -14,8 +14,9 @@ export class DocumentController {
 
   @Public()
   @Get('file/:id')
-  @ApiOperation({ summary: 'Obtener todos los documentos' })
-  @ApiResponse({ status: 200, description: 'Lista de documentos' })
+  @ApiOperation({ summary: 'Obtener un documento' })
+  @ApiResponse({ status: 200, description: 'Documento encontrado' })
+  @ApiResponse({ status: 404, description: 'Documento no encontrado' })
   getDocumentUrl(
     @Param(':id') id:string
   ) {
