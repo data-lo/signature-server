@@ -34,8 +34,9 @@ export class HashService {
     }
   }
 
-  async generateFileHash(file: Express.Multer.File): Promise<string> {
-    const hash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+  async generateFileHash(file: Express.Multer.File | Buffer): Promise<string> {
+    const buffer = Buffer.isBuffer(file) ? file: file.buffer;
+    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     return hash;
   }
 

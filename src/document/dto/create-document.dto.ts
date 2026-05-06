@@ -12,11 +12,11 @@ import { Type } from 'class-transformer';
 export class DocumentCoordDto {
   @ApiProperty({ example: 50, description: 'Coordenada izquierda de la firma en el documento (px)' })
   @IsNumber()
-  left: number;
+  x: number;
 
   @ApiProperty({ example: 250, description: 'Coordenada derecha de la firma en el documento (px)' })
   @IsNumber()
-  right: number;
+  y: number;
 
   @ApiProperty({ example: 700, description: 'Coordenada superior de la firma en el documento (px)' })
   @IsNumber()

@@ -4,15 +4,15 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 // Third party
 import { PDFDocument, PDFImage } from 'pdf-lib';
 
-// Local
-import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
+import { SignatureCoordinates } from 'src/document/interfaces/signature-coordinates';
+
 
 // Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
 const DEFAULT_COORDINATES: SignatureCoordinates = {
-  x: 0,
-  y: 0,
+  x:   0,
+  y:  0,
   width: 0,
-  height: 0,
+  height: 0
 };
 
 @Injectable()

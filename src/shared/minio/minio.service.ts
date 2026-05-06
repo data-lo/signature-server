@@ -161,17 +161,17 @@ export class MinioService {
       const fileName = `${uuid4()}.${extension}`;
       this.logger.log(`Nombre Documento ${fileName}`)
 
-      const fileBuffer = file.file.buffer;
+      const {buffer:fileBuffer,mimetype} = this.resolveFileData(file);
       if (!fileBuffer) {
         throw new Error('El archivo no contiene datos válidos');
       }
 
       await minioClient.putObject(bucketName, fileName, fileBuffer, {
-        'Content-Type': file.file.mimetype,
+        'Content-Type': mimetype,
       });
 
       return {
-        fileType: file.file.mimetype,
+        fileType: mimetype,
         bucket: bucketName,
         status: FILE_STATUS_ENUM.FILE_CREATED,
         fileId: fileName,
@@ -254,14 +254,14 @@ export class MinioService {
       this.logger.debug(
         `Archivo ${fileName} eliminado del bucket ${bucketName}`,
       );
-      const fileBuffer = file.file.buffer;
+      const {buffer: fileBuffer, mimetype} = this.resolveFileData(file);
       if (!fileBuffer) {
         throw new Error('El archivo no contiene datos válidos');
       }
 
       try {
         await minioClient.putObject(bucketName, fileName, fileBuffer, {
-          'Content-Type': file.file.mimetype,
+          'Content-Type': mimetype,
         });
       } catch (error) {
         this.logger.error(`Error al subir el nuevo archivo a MinIO: ${error}`);
@@ -273,7 +273,7 @@ export class MinioService {
       );
 
       return {
-        fileType: file.file.mimetype,
+        fileType: mimetype,
         bucket: bucketName,
         status: FILE_STATUS_ENUM.FILE_OVERWRITTEN,
         fileId: fileName,
@@ -318,7 +318,7 @@ export class MinioService {
   }
 
 
-  async getFileInBytesFormat(fileName: string, bucketType: BUCKET_TYPES_ENUM) {
+  async getFileInBytesFormat(fileName: string, bucketType: BUCKET_TYPES_ENUM): Promise<Buffer<ArrayBufferLike>> {
     try{
       
       const bucketName = this.getBucketByType(bucketType);
@@ -359,5 +359,17 @@ export class MinioService {
       default:
         throw new Error('Tipo de bucket no reconocido');
     }
+  }
+
+  private resolveFileData(file:MinioFileI):{buffer:Buffer;mimetype:string}{
+    if(Buffer.isBuffer(
+      file.file
+    )){
+      if(!file.mimetype){
+        throw new Error('mimetype necesarry cuando se pasa un Buffer');
+      }
+      return {buffer: file.file, mimetype:file.mimetype}
+    }
+    return { buffer:file.file.buffer, mimetype: file.file.mimetype}
   }
 }
