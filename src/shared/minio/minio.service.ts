@@ -187,8 +187,9 @@ export class MinioService {
     expiresIn: number = 24 * 60 * 60,
   ): Promise<GetFileResponse> {
     try {
-      const minioClient = this.getMinioClient();
-      const bucketName = this.getBucketByType(bucketType);
+      let fileName = fileId;
+      const minioClient = await this.getMinioClient();
+      const bucketName = await this.getBucketByType(bucketType);
       console.log(bucketName);
       const exists = await minioClient.bucketExists(bucketName);
 
@@ -196,7 +197,10 @@ export class MinioService {
         throw new Error(`El bucket ${bucketName} no existe en MinIO`);
       }
 
-      const fileName = this.addFileExtension(fileId, bucketType);
+      if(!fileName.includes('.')){
+        fileName = this.addFileExtension(fileId, bucketType);
+      }
+
       try {
         console.log(await minioClient.statObject(bucketName, fileName));
       } catch (error) {
@@ -278,6 +282,41 @@ export class MinioService {
       throw new Error(`Error al reemplazar el archivo en MinIO: ${error}`);
     }
   }
+
+  async deleteFile(fileName,bucketType:BUCKET_TYPES_ENUM){
+    try{
+      const minioClient = this.getMinioClient();
+      this.logger.debug(fileName);
+
+      this.logger.warn('SOLO SE DEBERÍA PODER BORRAR ARCHIVOS EN STATUS CREATED');
+      const bucketName = this.getBucketByType(bucketType);
+      this.logger.debug(bucketName);
+      try {
+        const fileData = await minioClient.statObject(bucketName, fileName);
+        this.logger.log(fileData);
+      } catch (error) {
+        throw new Error(
+          `El archivo con ID ${fileName} no existe en el bucket ${bucketName}`,
+        );
+      }
+
+      await minioClient.removeObject(bucketName, fileName);
+      this.logger.warn(
+        `Archivo ${fileName} eliminado del bucket ${bucketName}`,
+      );
+      return {
+        message:{
+          status:FILE_STATUS_ENUM.FILE_DELETED,
+          fileId:fileName
+        }
+      }
+
+    }catch(error){
+      throw new Error(`Error eliminando un documento del bucket ${error}`)
+    }
+
+  }
+
 
   async getFileInBytesFormat(fileName: string, bucketType: BUCKET_TYPES_ENUM) {
     try{

@@ -13,6 +13,17 @@ export class DocumentController {
   constructor(private readonly documentService: DocumentService) {}
 
   @Public()
+  @Get('file/:id')
+  @ApiOperation({ summary: 'Obtener todos los documentos' })
+  @ApiResponse({ status: 200, description: 'Lista de documentos' })
+  getDocumentUrl(
+    @Param(':id') id:string
+  ) {
+    return this.documentService.getDocumentMinioURL(id);
+  }
+  
+  
+  @Public()
   @Post()
   @ApiOperation({ summary: 'Registrar nuevo documento para firmar' })
   @ApiConsumes('multipart/form-data')
@@ -26,6 +37,7 @@ export class DocumentController {
     console.log(document.filename, document.mimetype);
     return await this.documentService.create(createDocumentDto, document);
   }
+
 
   @Public()
   @Get()
@@ -52,7 +64,7 @@ export class DocumentController {
   @ApiResponse({ status: 200, description: 'Documento actualizado correctamente' })
   @ApiResponse({ status: 404, description: 'Documento no encontrado' })
   update(@Param('id') id: string, @Body() updateDocumentDto: UpdateDocumentDto) {
-    return this.documentService.update(+id, updateDocumentDto);
+    return this.documentService.update(id, updateDocumentDto);
   }
 
   @Public()
@@ -62,6 +74,6 @@ export class DocumentController {
   @ApiResponse({ status: 200, description: 'Documento eliminado correctamente' })
   @ApiResponse({ status: 404, description: 'Documento no encontrado' })
   remove(@Param('id') id: string) {
-    return this.documentService.remove(+id);
+    return this.documentService.remove(id);
   }
 }
