@@ -133,37 +133,15 @@ export class VerificationCodeService {
       },
     );
 
-    // Agregar aquí evento que dispara la unión (Firma-Documento)
+    this.eventEmitter.emit('send.verification.code.email', {
+      // to: user.email,
+      // documentName: document.fileName,
+      // signerName: `${user.firstName} ${user.lastName}`,
+      // code,
+    });
 
     return {
       message: 'Documento enviado a procesamiento, la firma será estampada en breve',
     };
-  }
-
-
-  // Invalida manualmente el OTP activo de un firmante eliminándolo de Redis.
-  async revoke(signerId: string): Promise<void> {
-    await this.redisService.del(`${this.KEY_PREFIX}${signerId}`);
-  }
-
-  // Indica si el firmante tiene un OTP vigente en Redis (no expirado ni revocado).
-  async hasActive(signerId: string): Promise<boolean> {
-    return (await this.redisService.exists(`${this.KEY_PREFIX}${signerId}`)) > 0;
-  }
-
-  // Retorna todos los registros de códigos de verificación asociados a un firmante, del más reciente al más antiguo.
-  async findBySigner(signerId: string): Promise<VerificationCodeEntity[]> {
-    return this.verificationCodeRepository.find({
-      where: { signerId },
-      order: { createdAt: 'DESC' },
-    });
-  }
-
-  // Retorna todos los registros de códigos de verificación asociados a un documento, del más reciente al más antiguo.
-  async findByDocument(documentId: string): Promise<VerificationCodeEntity[]> {
-    return this.verificationCodeRepository.find({
-      where: { documentId },
-      order: { createdAt: 'DESC' },
-    });
   }
 }
