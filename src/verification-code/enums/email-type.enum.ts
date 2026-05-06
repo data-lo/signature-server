@@ -1,0 +1,4 @@
+export enum EmailType {
+    VERIFICATION = 'VERIFICATION',
+    NOTIFICATION = 'NOTIFICATION',
+}

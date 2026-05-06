@@ -11,8 +11,8 @@ export class SignatureEntity {
   @Column({ name: 'signature_object_key' })
   signatureObjectKey: string;
 
-  @Column({ name: 'official_card_object_key' })
-  officialCardObjectKey: string;
+  @Column({ nullable: true, name: 'official_card_object_key' })
+  officialCardObjectKey: string | null;
 
   @Column({ nullable: true, name: 'created_by' })
   createdBy: string | null;
@@ -26,6 +26,10 @@ export class SignatureEntity {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @OneToOne(() => UserEntity, (user) => user.signature)
+  @Column({ nullable: false, name: 'user_id', unique: true })
+  userId: string;
+
+  @OneToOne(() => UserEntity)
+  @JoinColumn({ name: 'user_id' })
   user: UserEntity;
 }

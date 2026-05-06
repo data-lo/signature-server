@@ -26,6 +26,9 @@ export class UserEntity {
     @Column({ default: true, name: 'is_active' })
     isActive: boolean;
 
+    @Column({ default: false, name: 'is_deleted' })
+    isDeleted: boolean;
+
     @Column({ length: 18, name: 'national_id' })
     nationalId: string;
 
@@ -38,9 +41,9 @@ export class UserEntity {
     @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
 
-    @OneToOne(() => SignatureEntity)
-    @JoinColumn({ name: 'signature_id' })
+    @OneToOne(() => SignatureEntity, (signature) => signature.user)
     signature: SignatureEntity;
+
 
     @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
     createdDocuments: DocumentEntity[];

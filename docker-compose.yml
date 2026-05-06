@@ -1,13 +1,13 @@
 services:
   minio:
     image: minio/minio@sha256:ea2c70cda70860c7d10f04ce1df640d3abb995784cb7aeedef8d4baa53a5a113
-    container_name: MINIO_DEVELOPMENT
+    name: signature_minio_development
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9010:9000"
+      - "9011:9001"
     volumes:
       - minio_data_v2:/data
     command: server /data --console-address ":9001"
@@ -20,9 +20,10 @@ services:
       start_period: 30s
   postgres:
     image: postgres:15
+    name: signature_postgres_development
     restart: unless-stopped
     ports:
-      - "5431:5432"
+      - "5434:5432"
     env_file:
       - .env
     environment:
@@ -38,15 +39,15 @@ services:
       retries: 5
 
   mongodb:
-    image: mongo:7
+    image: mongo:8
+    name: signature_mongodb_development
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "27018:27017"
     environment:
-      - MONGO_USER=${MONGO_USERNAME}
-      - MONGO_PASSWORD=${MONGO_PASSWORD}
-      - MONGO_DB=${MONGO_DB_NAME}
-      # Agregar más variables de entorno segun sean necesarias
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
+      - MONGO_INITDB_DATABASE=${MONGO_DB_NAME}
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -57,11 +58,15 @@ services:
 
   redis:
     image: redis:7-alpine
+    name: signature_redis_development
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT}:6379"
     volumes:
       - redis_data:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

@@ -1,26 +1,34 @@
+import { Model } from 'mongoose';
 import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+
 import { CreateAuditDto } from './dto/create-audit.dto';
-import { UpdateAuditDto } from './dto/update-audit.dto';
+import { AuditDocument } from './schema/audit-document';
 
 @Injectable()
 export class AuditService {
-  create(createAuditDto: CreateAuditDto) {
-    return 'This action adds a new audit';
+  constructor(
+    @InjectModel(AuditDocument.name)
+    private readonly auditModel: Model<AuditDocument>,
+  ) { }
+
+  async create(createAuditDto: CreateAuditDto) {
+    const previousDocument = await this.auditModel.findOne({
+      documentId: createAuditDto.documentId
+    });
+
+    let chainIndex: number = 1;
+
+    if (previousDocument) chainIndex = previousDocument.chainIndex + 1;
+
+    return this.auditModel.create({
+      ...createAuditDto,
+      chainIndex
+    });
+
   }
 
-  findAll() {
-    return `This action returns all audit`;
-  }
+  async findAll() {
 
-  findOne(id: number) {
-    return `This action returns a #${id} audit`;
-  }
-
-  update(id: number, updateAuditDto: UpdateAuditDto) {
-    return `This action updates a #${id} audit`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} audit`;
   }
 }

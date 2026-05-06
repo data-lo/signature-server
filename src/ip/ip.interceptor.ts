@@ -5,8 +5,6 @@ import { Observable } from 'rxjs';
 export class IpInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const request = context.switchToHttp().getRequest();
-    
-
     const ip = this.getClientIp(request);
     request.clientIp = ip;
     return next.handle();
@@ -14,7 +12,7 @@ export class IpInterceptor implements NestInterceptor {
 
 
   private getClientIp(request: any): string {
-    if(request.heaaders['x-forwarded-for']) {
+    if(request.headers['x-forwarded-for']) {
       return request.headers['x-forwarded-for'].split(',')[0].trim();
     }
     if (request.headers['x-client-ip']){
