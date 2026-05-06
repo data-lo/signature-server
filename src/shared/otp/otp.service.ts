@@ -20,7 +20,7 @@ export class OTPService {
 
   /**
    * Verifica si el token proporcionado coincide con el código OTP almacenado.
-   * @param token El código OTP que se desea verificar.
+   * @param token El código OTP que se va a verificar.
    * @param storedCode El código OTP almacenado que se espera que coincida con el token.
    * @returns true si el token es válido, false en caso contrario.
    */

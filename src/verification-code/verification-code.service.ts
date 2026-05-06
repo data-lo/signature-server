@@ -1,18 +1,21 @@
 // 1. NestJS (framework)
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 // 2. Third-party libraries
 import { Repository } from 'typeorm';
 // 3. Internal modules
 import { VerificationCodeEntity } from './entities/verification-code.entity';
+
+import { validateCodeDto } from './dto/validate-code.dto';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
-import { VerifyVerificationCodeDto } from './dto/verify-verification-code.dto';
 
 import { UserService } from 'src/user/user.service';
 import { OTPService } from 'src/shared/otp/otp.service';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { DocumentService } from 'src/document/document.service';
+import { VerificationCodeObject } from './interfaces/verification-code-object';
+import { CodeType } from './enums/code-type.enum';
 
 @Injectable()
 export class VerificationCodeService {
@@ -37,10 +40,10 @@ export class VerificationCodeService {
    * - Emite un evento para enviar el código por correo
    *
    * @param dto - Datos del firmante y documento
-   * @returns Mensaje de confirmación y código generado
+   * @returns Mensaje de confirmación
    * @throws ForbiddenException - Si el firmante no está asociado al documento
    */
-  async create(dto: CreateVerificationCodeDto) {
+  async create(dto: CreateVerificationCodeDto): Promise<{}> {
     const document = await this.documentService.findOne(dto.documentId);
 
     if (dto.signerId !== document.signerId) {
@@ -55,16 +58,15 @@ export class VerificationCodeService {
 
     expiredAt.setSeconds(expiredAt.getSeconds() + this.OTP_TTL);
 
-    await this.verificationCodeRepository.save({
+    const verificationCodeObject = {
       code,
-      type: dto.type ?? 'document_signing',
-      isUsed: false,
       expiredAt,
+      type: dto.type,
       signerId: dto.signerId,
       documentId: dto.documentId,
-    });
+    }
 
-    await this.redisService.set(`${this.KEY_PREFIX}${dto.documentId}`, code, this.OTP_TTL);
+    await this.redisService.set(`${this.KEY_PREFIX}${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
     this.eventEmitter.emit('send.verification.code.email', {
       to: user.email,
@@ -78,51 +80,68 @@ export class VerificationCodeService {
     }
   }
 
-  // Verifica que el token enviado por el firmante coincida con el OTP activo en Redis.
-  // Si es válido, elimina el OTP de Redis (uso único) y marca el registro en BD como usado.
-  async verifyCode(
-    dto: VerifyVerificationCodeDto,
-    ipAddress?: string,
-  ): Promise<boolean> {
-    const storedCode = await this.redisService.get(`${this.KEY_PREFIX}${dto.signerId}`);
-    if (!storedCode) return false;
+  /**
+   * Verifica el código OTP enviado por el firmante y registra su uso.
+   *
+   * - Valida que el código OTP coincida con el registrado en Redis
+   * - Verifica que el firmante esté asociado al documento
+   * - Elimina el OTP de Redis garantizando uso único
+   * - Persiste y marca el registro como usado en base de datos
+   *
+   * @param dto - Datos de validación: código OTP, firmante y documento
+   * @param ipAddress - Dirección IP desde donde se realiza la validación
+   * @returns Mensaje de confirmación del procesamiento del documento
+   * @throws NotFoundException - Si el código OTP no existe o ha expirado
+   * @throws ForbiddenException - Si el firmante no está asociado al documento
+   * @throws UnauthorizedException - Si el código OTP es inválido
+   */
+  async validateAndSaveCode(
+    dto: validateCodeDto,
+    ipAddress: string,
+  ): Promise<{ message: string }> {
 
-    const isValid = this.otpService.verify(dto.token, storedCode);
+    let verificationCodeString = await this.redisService.get(`${this.KEY_PREFIX}${dto.documentId}`);
 
-    if (isValid) {
-      await this.redisService.del(`${this.KEY_PREFIX}${dto.signerId}`);
-      await this.verificationCodeRepository.update(
-        { signerId: dto.signerId, isUsed: false },
-        { isUsed: true, usedAt: new Date(), ipAddress },
-      );
+    if (!verificationCodeString) {
+      throw new NotFoundException('Código de verificación no encontrado o expirado');
     }
 
-    return isValid;
-  }
+    const verificationCode = JSON.parse(verificationCodeString) as VerificationCodeObject;
 
-  // Invalida manualmente el OTP activo de un firmante eliminándolo de Redis.
-  async revoke(signerId: string): Promise<void> {
-    await this.redisService.del(`${this.KEY_PREFIX}${signerId}`);
-  }
+    if (dto.signerId !== verificationCode.signerId) {
+      throw new ForbiddenException('El firmante no está asociado a este documento');
+    }
 
-  // Indica si el firmante tiene un OTP vigente en Redis (no expirado ni revocado).
-  async hasActive(signerId: string): Promise<boolean> {
-    return (await this.redisService.exists(`${this.KEY_PREFIX}${signerId}`)) > 0;
-  }
+    const isValid = this.otpService.verify(dto.code, verificationCode.code);
 
-  // Retorna todos los registros de códigos de verificación asociados a un firmante, del más reciente al más antiguo.
-  async findBySigner(signerId: string): Promise<VerificationCodeEntity[]> {
-    return this.verificationCodeRepository.find({
-      where: { signerId },
-      order: { createdAt: 'DESC' },
+    if (!isValid) {
+      throw new UnauthorizedException('Código de verificación inválido');
+    }
+
+    await this.redisService.del(`${this.KEY_PREFIX}${dto.documentId}`);
+
+    await this.verificationCodeRepository.update(
+      { documentId: dto.documentId },
+      {
+        ipAddress,
+        isUsed: true,
+        usedAt: new Date(),
+        code: verificationCode.code,
+        signerId: verificationCode.signerId,
+        documentId: verificationCode.documentId,
+        type: CodeType.VERIFICATION
+      },
+    );
+
+    this.eventEmitter.emit('send.verification.code.email', {
+      // to: user.email,
+      // documentName: document.fileName,
+      // signerName: `${user.firstName} ${user.lastName}`,
+      // code,
     });
-  }
 
-  // Retorna todos los registros de códigos de verificación asociados a un documento, del más reciente al más antiguo.
-  async findByDocument(documentId: string): Promise<VerificationCodeEntity[]> {
-    return this.verificationCodeRepository.find({
-      where: { documentId },
-      order: { createdAt: 'DESC' },
-    });
+    return {
+      message: 'Documento enviado a procesamiento, la firma será estampada en breve',
+    };
   }
 }
