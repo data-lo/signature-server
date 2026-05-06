@@ -4,6 +4,7 @@ import { Public } from 'src/auth/decorators/public.decorator';
 import { DocumentService } from './document.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
+import { DocumentResponseDto } from './dto/document-response.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @ApiTags('Document')
@@ -46,7 +47,7 @@ export class DocumentController {
       },
     },
   })
-  @ApiResponse({ status: 201, description: 'Documento registrado para firmar correctamente' })
+  @ApiResponse({ status: 201, description: 'Documento registrado para firmar correctamente', type: DocumentResponseDto })
   @ApiResponse({ status: 400, description: 'Datos de entrada inválidos o archivo no proporcionado' })
   @ApiResponse({ status: 404, description: 'Firmante o creador no encontrado' })
   @UseInterceptors(FileInterceptor('document'))
@@ -68,7 +69,7 @@ export class DocumentController {
   @Get(':id')
   @ApiOperation({ summary: 'Obtener documento por UUID' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Documento encontrado' })
+  @ApiResponse({ status: 200, description: 'Documento encontrado', type: DocumentResponseDto })
   @ApiResponse({ status: 404, description: 'Documento no encontrado' })
   findOne(@Param('id') id: string) {
     return this.documentService.findOne(id);

@@ -9,6 +9,7 @@ import { Public } from 'src/auth/decorators/public.decorator';
 
 // DTOs
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
+import { VerificationCodeResponseDto } from './dto/verification-code-response.dto';
 
 // Services
 import { VerificationCodeService } from './verification-code.service';
@@ -27,7 +28,7 @@ export class VerificationCodeController {
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({ summary: 'Genera y envía un código OTP al firmante del documento' })
     @ApiBody({ type: CreateVerificationCodeDto })
-    @ApiResponse({ status: 201, description: 'Código OTP generado y enviado correctamente' })
+    @ApiResponse({ status: 201, description: 'Código OTP generado y enviado correctamente', type: VerificationCodeResponseDto })
     @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
     @ApiResponse({ status: 403, description: 'El firmante no está asociado al documento' })
     generate(@Body() dto: CreateVerificationCodeDto) {

@@ -14,6 +14,7 @@ import { FileFieldsInterceptor, FilesInterceptor } from '@nestjs/platform-expres
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiResponse, ApiTags, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { Public } from 'src/auth/decorators/public.decorator';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { SignatureResponseDto } from './dto/signature-response.dto';
 
 
 @ApiTags('Signature')
@@ -43,7 +44,7 @@ export class SignatureController {
   @Get(':id')
   @ApiOperation({ summary: 'Obtener firma por UUID' })
   @ApiParam({ name: 'id', description: 'UUID de la firma', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Firma encontrada' })
+  @ApiResponse({ status: 200, description: 'Firma encontrada', type: SignatureResponseDto })
   @ApiResponse({ status: 404, description: 'Firma no encontrada' })
   findOne(@Param('id') id: string) {
     return this.signatureService.findOne(id);
@@ -65,7 +66,7 @@ export class SignatureController {
       },
     },
   })
-  @ApiResponse({ status: 201, description: 'Firma creada y asignada al usuario correctamente' })
+  @ApiResponse({ status: 201, description: 'Firma creada y asignada al usuario correctamente', type: SignatureResponseDto })
   @ApiResponse({ status: 400, description: 'Imagen de firma requerida o datos inválidos' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
   @UseInterceptors(FilesInterceptor('files',2))
@@ -90,7 +91,7 @@ export class SignatureController {
       },
     },
   })
-  @ApiResponse({ status: 200, description: 'Firma actualizada correctamente' })
+  @ApiResponse({ status: 200, description: 'Firma actualizada correctamente', type: SignatureResponseDto })
   @ApiResponse({ status: 404, description: 'Firma no encontrada' })
   @UseInterceptors(
     FileFieldsInterceptor([
@@ -115,10 +116,9 @@ export class SignatureController {
   @Patch(':id/deactivate')
   @ApiOperation({ summary: 'Desactivar firma (reemplaza imagen con PNG en blanco, conserva INE)' })
   @ApiParam({ name: 'id', description: 'UUID de la firma a desactivar', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Firma desactivada correctamente' })
+  @ApiResponse({ status: 200, description: 'Firma desactivada correctamente', type: SignatureResponseDto })
   @ApiResponse({ status: 404, description: 'Firma no encontrada' })
   deactivate(@Param('id') id: string) {
     return this.signatureService.deactivate(id);
   }
 }
-
