@@ -1,22 +1,25 @@
-import { OnEvent } from "@nestjs/event-emitter";
-import { DocumentService } from "./document.service";
+import { Logger } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
+import { DocumentService } from './document.service';
+import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
 
-export class VerificationCodeEventService {
-    constructor(
-        private readonly documentService: DocumentService
-    ) { }
+export class DocumentEventService {
+    private readonly logger = new Logger(DocumentEventService.name);
 
-    @OnEvent('send.verification.code.email', { async: true })
-    async doc(){
-        
+    constructor(private readonly documentService: DocumentService) { }
+
+    @OnEvent('document.sign', { async: true })
+    async handleDocumentSign(payload: DocumentSignEventPayload) {
+        this.logger.log(`[document.sign] Iniciando estampado de firma | documentId: ${payload.documentId} | signerId: ${payload.signerId}`);
+
+        try {
+            await this.documentService.mergeSignatureAndSave(payload);
+            this.logger.log(`[document.sign] Firma estampada correctamente | documentId: ${payload.documentId}`);
+        } catch (error) {
+            this.logger.error(
+                `[document.sign] error al estampar la firma | documentId: ${payload.documentId} | mensaje: ${error}`,
+                error,
+            );
+        }
     }
-    // async sendVerificationCodeEmailEvent(payload: VerificationCodeEmailPayload) {
-    //     await this.emailService.sendVerificationCodeEmail(
-    //         payload.to,
-    //         payload.documentName,
-    //         payload.signerName,
-    //         payload.code,
-    //     );
-    // }
-
 }

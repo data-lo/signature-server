@@ -7,7 +7,7 @@ import { Repository } from 'typeorm';
 // 3. Internal modules
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 
-import { validateCodeDto } from './dto/validate-code.dto';
+import { ValidateCodeDto } from './dto/validate-code.dto';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
 
 import { UserService } from 'src/user/user.service';
@@ -66,7 +66,7 @@ export class VerificationCodeService {
       documentId: dto.documentId,
     }
 
-    await this.redisService.set(`${this.KEY_PREFIX}${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
+    await this.redisService.set(`${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
     this.eventEmitter.emit('send.verification.code.email', {
       to: user.email,
@@ -96,11 +96,11 @@ export class VerificationCodeService {
    * @throws UnauthorizedException - Si el código OTP es inválido
    */
   async validateAndSaveCode(
-    dto: validateCodeDto,
+    dto: ValidateCodeDto,
     ipAddress: string,
   ): Promise<{ message: string }> {
 
-    let verificationCodeString = await this.redisService.get(`${this.KEY_PREFIX}${dto.documentId}`);
+    let verificationCodeString = await this.redisService.get(`${dto.documentId}`);
 
     if (!verificationCodeString) {
       throw new NotFoundException('Código de verificación no encontrado o expirado');
@@ -133,11 +133,9 @@ export class VerificationCodeService {
       },
     );
 
-    this.eventEmitter.emit('send.verification.code.email', {
-      // to: user.email,
-      // documentName: document.fileName,
-      // signerName: `${user.firstName} ${user.lastName}`,
-      // code,
+    this.eventEmitter.emit('document.sign', {
+      signerId: dto.signerId,
+      documentId: dto.documentId
     });
 
     return {

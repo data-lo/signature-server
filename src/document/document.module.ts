@@ -8,7 +8,7 @@ import { UserModule } from 'src/user/user.module';
 
 @Module({
   controllers: [DocumentController],
-  providers: [DocumentService],
+  providers: [DocumentService,],
   imports: [TypeOrmModule.forFeature([DocumentEntity]),SharedModule,UserModule],
   exports: [DocumentService]
 })

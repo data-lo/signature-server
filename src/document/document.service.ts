@@ -1,23 +1,32 @@
+// NestJS Core
 import {
-  BadGatewayException,
   BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+
+// TypeORM
 import { InjectRepository } from '@nestjs/typeorm';
-import { DocumentEntity } from './entities/document.entity';
-import { CreateDocumentDto } from './dto/create-document.dto';
-import { UpdateDocumentDto } from './dto/update-document.dto';
-import { DocumentEntity } from './entities/document.entity';
 import { Repository } from 'typeorm';
-import { MinioService } from '../shared/minio/minio.service';
-import { HashService } from '../shared/hash/hash.service';
-import { UserService } from '../user/user.service';
+
+// Enums
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
-import { min } from 'class-validator';
+
+// Services
+import { MinioService } from '../shared/minio/minio.service';
+import { HashService } from '../shared/hash/hash.service';
+import { UserService } from '../user/user.service';
+
+// DTOs
+import { CreateDocumentDto } from './dto/create-document.dto';
+import { UpdateDocumentDto } from './dto/update-document.dto';
+
+// Entities
+import { DocumentEntity } from './entities/document.entity';
+import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
 
 @Injectable()
 export class DocumentService {
@@ -29,7 +38,7 @@ export class DocumentService {
     private readonly minioService: MinioService,
     private readonly hashService: HashService,
     private readonly UserService: UserService,
-  ) {}
+  ) { }
   async create(
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
@@ -103,16 +112,16 @@ export class DocumentService {
       this.logger.log(document.objectKey);
       this.logger.log(document.status);
 
-      try{
+      try {
         if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
-        this.logger.log('here')
-        const fileResponse = await this.minioService.getFile(
-          document.objectKey,
-          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-        );
-        return fileResponse.secureUrl;
-      }
-      }catch(error){
+          this.logger.log('here')
+          const fileResponse = await this.minioService.getFile(
+            document.objectKey,
+            BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+          );
+          return fileResponse.secureUrl;
+        }
+      } catch (error) {
         throw new Error(`Error obteniendo URL ${error}`)
       }
 
@@ -137,30 +146,30 @@ export class DocumentService {
   }
 
   async update(id: string, updateDocumentDto: UpdateDocumentDto, fileToReplace?: Express.Multer.File) {
-    try{
+    try {
       const documentDb = await this.findOne(id);
-      if(documentDb.status !== DOCUMENT_STATUS_ENUM.CREATED){
+      if (documentDb.status !== DOCUMENT_STATUS_ENUM.CREATED) {
         throw new BadRequestException(`Solo es posible actualizar documentos con Estatus Created`)
       }
-      if(fileToReplace){
+      if (fileToReplace) {
         const objectKey = documentDb.objectKey
         const minioResponse = await this.minioService.replaceFile(
           objectKey,
           {
-            file:fileToReplace,
-            name:fileToReplace.originalname    
+            file: fileToReplace,
+            name: fileToReplace.originalname
           },
           BUCKET_TYPES_ENUM.CREATED_DOCUMENTS
         );
-        if(minioResponse.status !== FILE_STATUS_ENUM.FILE_OVERWRITTEN){
+        if (minioResponse.status !== FILE_STATUS_ENUM.FILE_OVERWRITTEN) {
           throw new Error('Error remplazando el documento ')
         }
       }
       //TO DO DESAGREGAR DEL UPDATE DOCUMENT DTO LOS CAMPOS
       //QUE SON INTERNOS
-      await this.documentRepository.update(id,updateDocumentDto)
+      await this.documentRepository.update(id, updateDocumentDto)
       return await this.findOne(id);
-    }catch(error){
+    } catch (error) {
       throw new Error(`Error actualizando documento`)
     }
   }
@@ -179,13 +188,17 @@ export class DocumentService {
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
 
-      if(response.message.status === FILE_STATUS_ENUM.FILE_DELETED){
-        await this.documentRepository.delete({id:documentId});
+      if (response.message.status === FILE_STATUS_ENUM.FILE_DELETED) {
+        await this.documentRepository.delete({ id: documentId });
         return `document deleted`;
       }
 
     } catch (error) {
       throw new Error(`error eliminano un Documento: ${error}`);
     }
+  }
+
+  async mergeSignatureAndSave(dto: DocumentSignEventPayload) {
+
   }
 }

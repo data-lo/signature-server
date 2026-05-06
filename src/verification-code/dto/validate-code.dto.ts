@@ -1,5 +1,7 @@
+import { IsString } from 'class-validator';
 import { CreateVerificationCodeDto } from './create-verification-code.dto';
 
-export class validateCodeDto extends CreateVerificationCodeDto {
-  code: string
+export class ValidateCodeDto extends CreateVerificationCodeDto {
+  @IsString()
+  code: string;
 }
