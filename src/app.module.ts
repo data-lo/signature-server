@@ -15,6 +15,7 @@ import { UserModule } from './user/user.module';
 import { AuthModule } from './auth/auth.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuditModule } from './audit/audit.module';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
@@ -46,6 +47,15 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
       useFactory: (config: ConfigService) => ({
         uri: config.get('MONGO_DB_URL'),
       }),
+    }),
+
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60000,
+          limit: 10,
+        },
+      ],
     }),
 
     ConfigModule.forRoot({

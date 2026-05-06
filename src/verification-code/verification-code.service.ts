@@ -46,6 +46,10 @@ export class VerificationCodeService {
   async create(dto: CreateVerificationCodeDto): Promise<{}> {
     const document = await this.documentService.findOne(dto.documentId);
 
+    if (!document) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+
     if (dto.signerId !== document.signerId) {
       throw new ForbiddenException('El firmante no está asociado a este documento');
     }
