@@ -1,4 +1,4 @@
-export enum DocumentStatus {
+export enum DOCUMENT_STATUS_ENUM {
     PENDING = 'pending',
     SIGNED = 'signed',
     REJECTED = 'rejected',

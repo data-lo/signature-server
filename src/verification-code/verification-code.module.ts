@@ -5,7 +5,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserModule } from 'src/user/user.module';
 import { SharedModule } from 'src/shared/shared.module';
 import { DocumentModule } from 'src/document/document.module';
-
 import { VerificationCodeService } from './verification-code.service';
 import { VerificationCodeController } from './verification-code.controller';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
