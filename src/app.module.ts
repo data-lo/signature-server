@@ -17,6 +17,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
+import { DocumentSigningModule } from './shared/document-signing/document-signing.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
@@ -55,6 +56,7 @@ import { RedisModule } from './shared/redis/redis.module';
     VerificationCodeModule,
     SharedModule,
     RedisModule,
+    DocumentSigningModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
