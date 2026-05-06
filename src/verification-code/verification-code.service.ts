@@ -1,13 +1,14 @@
 // 1. NestJS (framework)
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 // 2. Third-party libraries
 import { Repository } from 'typeorm';
 // 3. Internal modules
 import { VerificationCodeEntity } from './entities/verification-code.entity';
+
+import { validateCodeDto } from './dto/verify-verification-code.dto';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
-import { VerifyVerificationCodeDto } from './dto/verify-verification-code.dto';
 
 import { UserService } from 'src/user/user.service';
 import { OTPService } from 'src/shared/otp/otp.service';
@@ -55,16 +56,15 @@ export class VerificationCodeService {
 
     expiredAt.setSeconds(expiredAt.getSeconds() + this.OTP_TTL);
 
-    await this.verificationCodeRepository.save({
+    const verificationCodeObject = {
       code,
-      type: dto.type ?? 'document_signing',
-      isUsed: false,
       expiredAt,
+      type: dto.type,
       signerId: dto.signerId,
       documentId: dto.documentId,
-    });
+    }
 
-    await this.redisService.set(`${this.KEY_PREFIX}${dto.documentId}`, code, this.OTP_TTL);
+    await this.redisService.set(`${this.KEY_PREFIX}${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
     this.eventEmitter.emit('send.verification.code.email', {
       to: user.email,
@@ -78,27 +78,37 @@ export class VerificationCodeService {
     }
   }
 
-  // Verifica que el token enviado por el firmante coincida con el OTP activo en Redis.
-  // Si es válido, elimina el OTP de Redis (uso único) y marca el registro en BD como usado.
-  async verifyCode(
-    dto: VerifyVerificationCodeDto,
-    ipAddress?: string,
+  // Verifica que el código OTP enviado por el firmante coincida con el registrado en Redis.
+  // Si es válido:
+  //   - Elimina el OTP de Redis (uso único)
+  //   - Persiste el registro en DB
+  //   - Marca el registro como usado
+  async validateAndSaveCode(
+    dto: validateCodeDto,
+    ipAddress: string,
   ): Promise<boolean> {
-    const storedCode = await this.redisService.get(`${this.KEY_PREFIX}${dto.signerId}`);
-    if (!storedCode) return false;
 
-    const isValid = this.otpService.verify(dto.token, storedCode);
+    const storedCode = await this.redisService.get(`${this.KEY_PREFIX}${dto.documentId}`);
 
-    if (isValid) {
-      await this.redisService.del(`${this.KEY_PREFIX}${dto.signerId}`);
-      await this.verificationCodeRepository.update(
-        { signerId: dto.signerId, isUsed: false },
-        { isUsed: true, usedAt: new Date(), ipAddress },
-      );
-    }
+    if (!storedCode) throw new NotFoundException('Verification code not found or expired');
+
+    const isValid = this.otpService.verify(dto.code, storedCode);
+
+    if (!isValid) throw new UnauthorizedException('Invalid verification code');
+
+    await this.redisService.del(`${this.KEY_PREFIX}${dto.signerId}`);
+
+    await this.verificationCodeRepository.update(
+      { signerId: dto.signerId, isUsed: false },
+      { isUsed: true, usedAt: new Date(), ipAddress },
+    );
+
 
     return isValid;
   }
+
+
+  
 
   // Invalida manualmente el OTP activo de un firmante eliminándolo de Redis.
   async revoke(signerId: string): Promise<void> {

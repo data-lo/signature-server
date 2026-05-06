@@ -7,8 +7,8 @@ import * as sgMail from '@sendgrid/mail';
 
 // Internal modules
 import { signatureRequestTemplate } from './templates/email.templates';
-import { EmailType } from 'src/verification-code/enums/email-type';
-import { EmailSubject } from 'src/verification-code/enums/subject-type';
+import { EmailType } from 'src/verification-code/enums/email-type.enum';
+import { EmailSubject } from 'src/verification-code/enums/subject-type.enum';
 
 @Injectable()
 export class EmailService {
