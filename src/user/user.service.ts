@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserEntity } from './entities/user.entity';
+import { NotFoundError } from 'rxjs';
 
 @Injectable()
 export class UserService {
@@ -71,7 +72,14 @@ export class UserService {
   }
 
   async findOne(id: string): Promise<UserEntity> {
-    return this.userRepository.findOne({ where: { id } });
+    const user = await this.userRepository.findOne({where:{id}});
+    if(!user){
+      throw new Error('Usuario no encontrado');
+    }
+    if(!user.isActive){
+      throw new Error('Usuario no activo, no asignar a firmas');
+    }
+    return user;
   }
 
   async findOneByEmail(email: string): Promise<UserEntity> {

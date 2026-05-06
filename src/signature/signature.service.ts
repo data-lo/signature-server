@@ -12,7 +12,6 @@ import { CreateSignatureDto } from './dto/create-signature.dto';
 import { MinioService } from 'src/shared/minio/minio.service';
 import 'multer';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
-import { sign } from 'crypto';
 
 @Injectable()
 export class SignatureService {
