@@ -18,8 +18,8 @@ import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
-import { FILE } from 'dns';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
+import { EmailService } from 'src/shared/email/email.service';
 
 @Injectable()
 export class DocumentService {
@@ -33,15 +33,16 @@ export class DocumentService {
     private readonly UserService: UserService,
     private readonly documentSigningSerivice: PdfSignatureService,
     private readonly signatureService: SignatureService,
+    private readonly emailService: EmailService,
   ) {}
+  /** Sube el archivo a Minio, genera su hash y registra el documento en la base de datos. */
   async create(
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
   ) {
-    //Paso Uno, Subier el documento a Minio
     try {
       if (!file) {
-        throw new Error('Error, Documento Undefined');
+        throw new BadRequestException('Archivo no proporcionado');
       }
       const { signerId, createdById, coord } = createDocumentDto;
       const fileOriginalName = file.originalname;
@@ -57,7 +58,7 @@ export class DocumentService {
       if (
         minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED
       ) {
-        throw new Error('Error Guardando Archivo en Bucket Minio');
+        throw new Error('Error guardando archivo en bucket Minio');
       }
 
       const hashBefore = await this.hashService.generateFileHash(file);
@@ -83,10 +84,12 @@ export class DocumentService {
       await this.documentRepository.save(document);
       return document;
     } catch (error) {
-      throw new Error(`Error creando documento para firma ${error}`);
+      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
+      throw new Error(`Error creando documento para firma: ${error}`);
     }
   }
 
+  /** Retorna todos los documentos registrados en la base de datos. */
   async findAll() {
     try {
       const documents = await this.documentRepository.find();
@@ -96,6 +99,7 @@ export class DocumentService {
     }
   }
 
+  /** Retorna los documentos asignados a un firmante, con filtro opcional por estatus. */
   async findDocumentsBySigner(
     signerId: string,
     status?: DOCUMENT_STATUS_ENUM,
@@ -113,52 +117,42 @@ export class DocumentService {
     }
   }
 
-  async getDocumentMinioURL(documentId) {
+  /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento (firmado o no firmado). */
+  async getDocumentMinioURL(documentId: string): Promise<string> {
     try {
       const document = await this.findOne(documentId);
-      if (!document) {
-        throw new NotFoundException(
-          `Documento con id ${documentId}, no encontrato`,
-        );
-      }
-      
-      try {
-      if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
-          this.logger.log('DENTRO DE LA CONDICION DE DOCUMENTOS NO FIRMADOS')
-          const fileResponse = await this.minioService.getFile(
-            document.objectKey,
-            BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-          );
-          return fileResponse.secureUrl;
-        }
-      } catch (error) {
-        throw new Error(`Error obteniendo URL ${error}`);
-      }
 
-      this.logger.log(`${document.status}`);
-      this.logger.log(`${document.objectKey}`)
+      const bucket =
+        document.status === DOCUMENT_STATUS_ENUM.SIGNED
+          ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
+          : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+
+      this.logger.log(`Status: ${document.status} | ObjectKey: ${document.objectKey}`);
 
       const fileResponse = await this.minioService.getFile(
         document.objectKey,
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        bucket,
       );
 
       return fileResponse.secureUrl;
     } catch (error) {
-      throw new Error(`Error obteniendo URL del Documento`);
+      if (error instanceof NotFoundException) throw error;
+      throw new Error(`Error obteniendo URL del Documento: ${error}`);
     }
   }
 
+  /** Busca un documento por su UUID y lanza NotFoundException si no existe. */
   async findOne(documentId: string): Promise<DocumentEntity> {
-    const document = this.documentRepository.findOne({
+    const document = await this.documentRepository.findOne({
       where: { id: documentId },
     });
     if (!document) {
-      throw new Error(`El documento con id ${documentId} no se encuentra`);
+      throw new NotFoundException(`El documento con id ${documentId} no se encuentra`);
     }
     return document;
   }
 
+  /** Actualiza los datos de un documento y opcionalmente reemplaza su archivo en Minio. Solo permite documentos en estatus CREATED. */
   async update(
     id: string,
     updateDocumentDto: UpdateDocumentDto,
@@ -168,7 +162,7 @@ export class DocumentService {
       const documentDb = await this.findOne(id);
       if (documentDb.status !== DOCUMENT_STATUS_ENUM.CREATED) {
         throw new BadRequestException(
-          `Solo es posible actualizar documentos con Estatus Created`,
+          `Solo es posible actualizar documentos con estatus CREATED`,
         );
       }
       if (fileToReplace) {
@@ -182,7 +176,7 @@ export class DocumentService {
           BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
         );
         if (minioResponse.status !== FILE_STATUS_ENUM.FILE_OVERWRITTEN) {
-          throw new Error('Error remplazando el documento ');
+          throw new Error('Error reemplazando el documento en Minio');
         }
       }
       //TO DO DESAGREGAR DEL UPDATE DOCUMENT DTO LOS CAMPOS
@@ -190,16 +184,18 @@ export class DocumentService {
       await this.documentRepository.update(id, updateDocumentDto);
       return await this.findOne(id);
     } catch (error) {
-      throw new Error(`Error actualizando documento`);
+      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
+      throw new Error(`Error actualizando documento: ${error}`);
     }
   }
 
+  /** Elimina el archivo de Minio y el registro del documento. Solo permite documentos en estatus CREATED. */
   async remove(documentId: string) {
     try {
       const document = await this.findOne(documentId);
       if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
         throw new BadRequestException(
-          'Solo es posible eliminar doucmentos con estatus CREATED',
+          'Solo es posible eliminar documentos con estatus CREATED',
         );
       }
 
@@ -208,18 +204,51 @@ export class DocumentService {
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
 
-      if (response.message.status === FILE_STATUS_ENUM.FILE_DELETED) {
-        await this.documentRepository.delete({ id: documentId });
-        return `document deleted`;
+      if (response.message.status !== FILE_STATUS_ENUM.FILE_DELETED) {
+        throw new Error('Error eliminando archivo en Minio');
       }
+
+      await this.documentRepository.delete({ id: documentId });
+      return `document deleted`;
     } catch (error) {
-      throw new Error(`error eliminano un Documento: ${error}`);
+      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
+      throw new Error(`Error eliminando documento: ${error}`);
     }
   }
 
+  /** Cambia el estatus del documento de CREATED a PENDING y envía una notificación por email al firmante. */
+  async submitForAuthorization(documentId: string): Promise<DocumentEntity> {
+    try {
+      const document = await this.findOne(documentId);
+
+      if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
+        throw new BadRequestException(
+          `Solo es posible enviar a autorización documentos con estatus CREATED`,
+        );
+      }
+
+      document.status = DOCUMENT_STATUS_ENUM.PENDING;
+      await this.documentRepository.save(document);
+
+      const signer = await this.UserService.findOne(document.signerId);
+      const signerFullName = `${signer.firstName} ${signer.lastName}`;
+
+      await this.emailService.sendDocumentPendingNotification(
+        signer.email,
+        document.fileName,
+        signerFullName,
+      );
+
+      return document;
+    } catch (error) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
+      throw new Error(`Error enviando documento a autorización: ${error}`);
+    }
+  }
+
+  /** Obtiene la firma y el documento desde Minio, los fusiona en un PDF firmado, lo sube al bucket de documentos firmados y actualiza el estatus a SIGNED. */
   async mergeSignatureAndSave(payload: DocumentSignEventPayload) {
     try {
-      
       const { signerId, documentId } = payload;
       const signerUser = await this.UserService.findOne(signerId);
       const document = await this.findOne(documentId);
@@ -227,33 +256,27 @@ export class DocumentService {
 
       const signatureId = signerUser.signatureId;
       const signature = await this.signatureService.findOne(signatureId);
-      let signedDocument = null;
 
-      try {
-        const signatureObjectBuffer =
-          await this.minioService.getFileInBytesFormat(
-            signature.signatureObjectKey,
-            BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
-          );
+      const signatureObjectBuffer = await this.minioService.getFileInBytesFormat(
+        signature.signatureObjectKey,
+        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+      );
+      this.logger.debug('Signature buffer obtenido');
 
-        this.logger.debug('Signature buffer Obtenido');
+      const documentObjectBuffer = await this.minioService.getFileInBytesFormat(
+        document.objectKey,
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      );
+      this.logger.debug('Documento a firmar obtenido');
 
-        const documentObjectBuffer =
-          await this.minioService.getFileInBytesFormat(
-            document.objectKey,
-            BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-          );
+      const signedDocument = await this.documentSigningSerivice.mergeSignatureIntoPdf(
+        documentObjectBuffer,
+        signatureObjectBuffer,
+        coordinates,
+      );
 
-        this.logger.debug('Document To Sign Obtenido');
-
-        signedDocument =
-          await this.documentSigningSerivice.mergeSignatureIntoPdf(
-            documentObjectBuffer,
-            signatureObjectBuffer,
-            coordinates,
-          );
-      } catch (error) {
-        this.logger.error(error);
+      if (!signedDocument) {
+        throw new Error('El servicio de firma no retornó un documento válido');
       }
 
       await this.minioService.uploadObject(
@@ -263,17 +286,20 @@ export class DocumentService {
           mimetype: 'application/pdf',
         },
         BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-        document.objectKey
-      )
-      const signedHash =
-        await this.hashService.generateFileHash(signedDocument);
-        ((document.signedHash = signedHash),
-        (document.signedAt = new Date()),
-        (document.status = DOCUMENT_STATUS_ENUM.SIGNED),
-        await this.documentRepository.save(document));
+        document.objectKey,
+      );
+
+      const signedHash = await this.hashService.generateFileHash(signedDocument);
+      document.signedHash = signedHash;
+      document.signedAt = new Date();
+      document.status = DOCUMENT_STATUS_ENUM.SIGNED;
+      await this.documentRepository.save(document);
+
       return await this.findOne(document.id);
     } catch (error) {
-      throw new Error('Error estampando el documento');
+      if (error instanceof NotFoundException) throw error;
+      this.logger.error(`Error estampando documento: ${error}`);
+      throw new Error(`Error estampando el documento: ${error}`);
     }
   }
 }

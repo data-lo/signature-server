@@ -11,6 +11,44 @@ export const passwordResetTemplate = (resetUrl: string): string => `
   <p>Este enlace expirará en 1 hora.</p>
 `;
 
+export const documentPendingTemplate = (
+  documentName: string,
+  signerName: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #333333;">Documento enviado para autorización</h2>
+
+    <p style="color: #555555;">Hola <strong>${signerName}</strong>,</p>
+
+    <p style="color: #555555;">
+      El siguiente documento ha sido enviado para tu autorización:
+    </p>
+
+    <div style="background-color: #f4faf4; border-left: 4px solid #2E7D32; padding: 16px; margin: 24px 0;">
+      <p style="margin: 0; color: #333333;"><strong>${documentName}</strong></p>
+    </div>
+
+    <p style="color: #555555;">
+      Será necesario el código de verificación que enviaremos a tu correo para completar la firma.
+    </p>
+
+    <p style="color: #999999; font-size: 12px;">
+      Si no esperabas este mensaje, por favor contáctanos.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
+
 export const signatureRequestTemplate = (
   documentName: string,
   signerName: string,
