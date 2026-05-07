@@ -1,11 +1,11 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from 'src/auth/decorators/public.decorator';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserListResponseDto, UserResponseDto } from './dto/user-response.dto';
-import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto } from 'src/interfaces/api-response.dto';
+import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto, ApiResponseDto } from 'src/interfaces/api-response.dto';
 
 @ApiTags('User')
 @ApiBearerAuth('access-token')
@@ -23,8 +23,8 @@ export class UserController {
     return this.userService.create(createUserDto);
   }
 
-  @Public()
   @Get()
+  @ApiExcludeEndpoint()
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
   @ApiResponse({ status: 200, description: 'Lista de usuarios', type: UserListResponseDto })
   findAll() {
@@ -55,7 +55,7 @@ export class UserController {
   @Delete(':id')
   @ApiOperation({ summary: 'Eliminar usuario por UUID' })
   @ApiParam({ name: 'id', description: 'UUID del usuario', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Usuario eliminado correctamente' })
+  @ApiResponse({ status: 200, description: 'Usuario eliminado correctamente', type: ApiResponseDto })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado', type: ApiNotFoundResponseDto })
   remove(@Param('id') id: string) {
     return this.userService.remove(id);

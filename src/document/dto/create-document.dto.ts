@@ -1,13 +1,11 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
 import {
   IsNotEmpty,
   IsNumber,
-  IsOptional,
   IsString,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-
 
 export class DocumentCoordDto {
   @ApiProperty({ example: 50, description: 'Coordenada horizontal de la firma en el documento (px)' })
