@@ -15,6 +15,7 @@ export class MinioService {
 
   MINIO_CREATED_DOCUMENTS_BUCKET: any;
   MINIO_SIGNED_DOCUMENTS_BUCKET: any;
+  MINIO_CANCELLED_DOCUMENTS_BUCKET: any;
   MINIO_OFICIAL_CARDS_BUCKET: any;
   MINIO_SIGNATURE_IMAGES_BUCKET: any;
 
@@ -52,6 +53,7 @@ export class MinioService {
     if (
       !process.env.MINIO_CREATED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_SIGNED_DOCUMENTS_BUCKET ||
+      !process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_OFICIAL_CARDS_BUCKET ||
       !process.env.MINIO_SIGNATURE_IMAGES_BUCKET
     ) {
@@ -64,6 +66,8 @@ export class MinioService {
       process.env.MINIO_CREATED_DOCUMENTS_BUCKET;
     this.MINIO_SIGNED_DOCUMENTS_BUCKET =
       process.env.MINIO_SIGNED_DOCUMENTS_BUCKET;
+    this.MINIO_CANCELLED_DOCUMENTS_BUCKET =
+      process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET;
     this.MINIO_OFICIAL_CARDS_BUCKET = process.env.MINIO_OFICIAL_CARDS_BUCKET;
     this.MINIO_SIGNATURE_IMAGES_BUCKET =
       process.env.MINIO_SIGNATURE_IMAGES_BUCKET;
@@ -73,21 +77,17 @@ export class MinioService {
     return;
   }
 
-  private getBucketByType(
-    type:
-      | 'created_documents'
-      | 'signed_documents'
-      | 'oficial_cards'
-      | 'signature_images',
-  ) {
+  private getBucketByType(type: BUCKET_TYPES_ENUM) {
     switch (type) {
-      case 'created_documents':
+      case BUCKET_TYPES_ENUM.CREATED_DOCUMENTS:
         return this.MINIO_CREATED_DOCUMENTS_BUCKET;
-      case 'signed_documents':
+      case BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS:
         return this.MINIO_SIGNED_DOCUMENTS_BUCKET;
-      case 'oficial_cards':
+      case BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS:
+        return this.MINIO_CANCELLED_DOCUMENTS_BUCKET;
+      case BUCKET_TYPES_ENUM.OFICIAL_CARDS:
         return this.MINIO_OFICIAL_CARDS_BUCKET;
-      case 'signature_images':
+      case BUCKET_TYPES_ENUM.SIGNATURE_IMAGES:
         return this.MINIO_SIGNATURE_IMAGES_BUCKET;
       default:
         throw new Error('Tipo de bucket no reconocido');
@@ -132,11 +132,7 @@ export class MinioService {
 
   async uploadObject(
     file: MinioFileI,
-    type:
-      | 'created_documents'
-      | 'signed_documents'
-      | 'oficial_cards'
-      | 'signature_images',
+    type: BUCKET_TYPES_ENUM,
     objectKey?:string
   ): Promise<{
     status: FILE_STATUS_ENUM;
@@ -349,15 +345,14 @@ export class MinioService {
     }
   }
 
-  private addFileExtension(fileId, bucketType) {
+  private addFileExtension(fileId: string, bucketType: BUCKET_TYPES_ENUM): string {
     switch (bucketType) {
-      case 'created_documents':
+      case BUCKET_TYPES_ENUM.CREATED_DOCUMENTS:
+      case BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS:
+      case BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS:
+      case BUCKET_TYPES_ENUM.OFICIAL_CARDS:
         return `${fileId}.pdf`;
-      case 'signed_documents':
-        return `${fileId}.pdf`;
-      case 'oficial_cards':
-        return `${fileId}.pdf`;
-      case 'signature_images':
+      case BUCKET_TYPES_ENUM.SIGNATURE_IMAGES:
         return `${fileId}.png`;
       default:
         throw new Error('Tipo de bucket no reconocido');

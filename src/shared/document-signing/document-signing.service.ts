@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { PDFDocument, PDFImage, PDFName, PDFNumber, PDFString } from 'pdf-lib';
+import { PDFDocument, PDFImage, PDFName, PDFNumber, PDFString, StandardFonts, rgb, degrees } from 'pdf-lib';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
@@ -192,6 +192,49 @@ export class PdfSignatureService {
       PDFName.of('OutputIntents'),
       pdfDoc.context.obj([outputIntentRef]),
     );
+  }
+
+  /**
+   * Estampa la marca de agua "CANCELADO" en diagonal sobre cada página del PDF.
+   * El texto se escala para cruzar de esquina a esquina y se renderiza en rojo semitransparente.
+   *
+   * @param documentBuffer PDF firmado como Buffer de bytes.
+   * @returns PDF cancelado con marca de agua en todas sus páginas.
+   */
+  async stampCancelledWatermark(documentBuffer: Buffer): Promise<Buffer> {
+    const pdfDoc = await PDFDocument.load(documentBuffer);
+    const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const text = 'CANCELADO';
+
+    for (const page of pdfDoc.getPages()) {
+      const { width, height } = page.getSize();
+      const diagonalLength = Math.sqrt(width * width + height * height);
+      const angleRad = Math.atan2(height, width);
+      const angleDeg = (angleRad * 180) / Math.PI;
+
+      // Escalar el texto para que ocupe ~75% de la diagonal de la página
+      const textWidthAt1 = font.widthOfTextAtSize(text, 1);
+      const fontSize = (diagonalLength * 0.75) / textWidthAt1;
+      const textWidth = font.widthOfTextAtSize(text, fontSize);
+
+      // Centrar el texto rotado en el centro geométrico de la página
+      const cx = width / 2 - (textWidth / 2) * Math.cos(angleRad) + (fontSize / 2) * Math.sin(angleRad);
+      const cy = height / 2 - (textWidth / 2) * Math.sin(angleRad) - (fontSize / 2) * Math.cos(angleRad);
+
+      page.drawText(text, {
+        x: cx,
+        y: cy,
+        size: fontSize,
+        font,
+        color: rgb(0.75, 0, 0),
+        opacity: 0.35,
+        rotate: degrees(angleDeg),
+      });
+    }
+
+    this.applyPdfA2bConformance(pdfDoc);
+    const bytes = await pdfDoc.save({ useObjectStreams: false });
+    return Buffer.from(bytes);
   }
 
   /**

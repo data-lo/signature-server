@@ -16,6 +16,7 @@ import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
+import { DocumentCancelPayload } from './interfaces/document-cancel-event-payload';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
@@ -52,7 +53,7 @@ export class DocumentService {
           file: file,
           name: file.originalname,
         },
-        'created_documents',
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
 
       if (
@@ -123,9 +124,11 @@ export class DocumentService {
       const document = await this.findOne(documentId);
 
       const bucket =
-        document.status === DOCUMENT_STATUS_ENUM.SIGNED
-          ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
-          : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+        document.status === DOCUMENT_STATUS_ENUM.CANCELLED
+          ? BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS
+          : document.status === DOCUMENT_STATUS_ENUM.SIGNED || document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING
+            ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
+            : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
 
       this.logger.log(`Status: ${document.status} | ObjectKey: ${document.objectKey}`);
 
@@ -300,6 +303,76 @@ export class DocumentService {
       if (error instanceof NotFoundException) throw error;
       this.logger.error(`Error estampando documento: ${error}`);
       throw new Error(`Error estampando el documento: ${error}`);
+    }
+  }
+
+  /** Cambia el estatus del documento de SIGNED a CANCELLATION_PENDING y notifica al firmante por email. */
+  async submitForCancellation(documentId: string): Promise<DocumentEntity> {
+    try {
+      const document = await this.findOne(documentId);
+
+      if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
+        throw new BadRequestException(
+          `Solo es posible cancelar documentos con estatus SIGNED`,
+        );
+      }
+
+      document.status = DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING;
+      await this.documentRepository.save(document);
+
+      const signer = await this.UserService.findOne(document.signerId);
+      const signerFullName = `${signer.firstName} ${signer.lastName}`;
+
+      await this.emailService.sendDocumentCancellationPendingNotification(
+        signer.email,
+        document.fileName,
+        signerFullName,
+      );
+
+      return document;
+    } catch (error) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
+      throw new Error(`Error enviando documento a cancelación: ${error}`);
+    }
+  }
+
+  /** Obtiene el documento firmado desde Minio, estampa la marca de agua CANCELADO en todas las páginas, lo sube al bucket de cancelados y actualiza el estatus a CANCELLED. */
+  async cancelDocument(payload: DocumentCancelPayload): Promise<DocumentEntity> {
+    try {
+      const { documentId } = payload;
+      const document = await this.findOne(documentId);
+
+      const documentBuffer = await this.minioService.getFileInBytesFormat(
+        document.objectKey,
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      );
+      this.logger.debug(`Documento firmado obtenido para cancelación | documentId: ${documentId}`);
+
+      const cancelledDocument = await this.documentSigningSerivice.stampCancelledWatermark(documentBuffer);
+
+      if (!cancelledDocument) {
+        throw new Error('El servicio de cancelación no retornó un documento válido');
+      }
+
+      await this.minioService.uploadObject(
+        {
+          file: cancelledDocument,
+          name: document.fileName,
+          mimetype: 'application/pdf',
+        },
+        BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+        document.objectKey,
+      );
+
+      document.cancelledAt = new Date();
+      document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
+      await this.documentRepository.save(document);
+
+      return await this.findOne(document.id);
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      this.logger.error(`Error cancelando documento: ${error}`);
+      throw new Error(`Error cancelando el documento: ${error}`);
     }
   }
 }

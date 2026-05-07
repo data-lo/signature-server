@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { DocumentService } from './document.service';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
+import { DocumentCancelPayload } from './interfaces/document-cancel-event-payload';
 
 @Injectable()
 export class DocumentEventService {
@@ -19,6 +20,21 @@ export class DocumentEventService {
         } catch (error) {
             this.logger.error(
                 `[document.sign] error al estampar la firma | documentId: ${payload.documentId} | mensaje: ${error}`,
+                error,
+            );
+        }
+    }
+
+    @OnEvent('document.cancel', { async: true })
+    async handleDocumentCancel(payload: DocumentCancelPayload) {
+        this.logger.log(`[document.cancel] Iniciando cancelación de documento | documentId: ${payload.documentId} | signerId: ${payload.signerId}`);
+
+        try {
+            await this.documentService.cancelDocument(payload);
+            this.logger.log(`[document.cancel] Documento cancelado correctamente | documentId: ${payload.documentId}`);
+        } catch (error) {
+            this.logger.error(
+                `[document.cancel] Error al cancelar el documento | documentId: ${payload.documentId} | mensaje: ${error}`,
                 error,
             );
         }

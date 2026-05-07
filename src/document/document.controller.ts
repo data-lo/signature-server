@@ -86,6 +86,17 @@ export class DocumentController {
     return this.documentService.submitForAuthorization(id);
   }
 
+  @Public()
+  @Patch(':id/cancellation/submit')
+  @ApiOperation({ summary: 'Enviar documento a cancelación (SIGNED → CANCELLATION_PENDING)' })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Documento enviado a cancelación y firmante notificado', type: DocumentResponseDto })
+  @ApiResponse({ status: 400, description: 'El documento no está en estatus SIGNED', type: ApiInvalidDataResponseDto })
+  @ApiResponse({ status: 404, description: 'Documento no encontrado', type: ApiNotFoundResponseDto })
+  submitForCancellation(@Param('id') id: string) {
+    return this.documentService.submitForCancellation(id);
+  }
+
   @Patch(':id')
   @ApiOperation({ summary: 'Actualizar documento (solo estatus CREATED)' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })

@@ -63,14 +63,14 @@ export class SignatureService {
     if (signatureFile) {
       signatureObjectKeyResponse = await this.minioService.uploadObject(
         { file: signatureFile, name: signatureFile.originalname },
-        'signature_images',
+        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
       );
     }
 
     if (oficialCardPdfFile) {
       officialCardObjectKeyResponse = await this.minioService.uploadObject(
         { file: oficialCardPdfFile, name: oficialCardPdfFile.originalname },
-        'oficial_cards',
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS,
       );
     }
 
