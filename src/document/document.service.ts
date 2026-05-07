@@ -16,7 +16,7 @@ import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
-import { DocumentSigningService } from 'src/shared/document-signing/document-signing.service';
+import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
 import { FILE } from 'dns';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
@@ -31,7 +31,7 @@ export class DocumentService {
     private readonly minioService: MinioService,
     private readonly hashService: HashService,
     private readonly UserService: UserService,
-    private readonly documentSigningSerivice: DocumentSigningService,
+    private readonly documentSigningSerivice: PdfSignatureService,
     private readonly signatureService: SignatureService,
   ) {}
   async create(

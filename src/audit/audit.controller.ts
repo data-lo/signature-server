@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiExcludeEndpoint, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from 'src/auth/decorators/public.decorator';
 import { AuditService } from './audit.service';
@@ -25,7 +25,7 @@ export class AuditController {
   @ApiExcludeEndpoint()
   @ApiOperation({ summary: 'Obtener todos los registros de auditoría' })
   @ApiResponse({ status: 200, description: 'Lista de registros de auditoría' })
-  findAll() {
-    return this.auditService.findAll();
+  findAll(@Query() query: FindAllAuditDto) {
+    return this.auditService.findAll(query);
   }
 }
