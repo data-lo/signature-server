@@ -19,4 +19,18 @@ export class CreateSignatureDto {
   @IsUUID()
   @IsOptional()
   createdBy?: string;
+
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description: 'Imagen en formato PNG de la firma',
+  })
+  imagen_firma: any;
+
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description: 'Imagen del documento de identificación oficial en formato PDF',
+  })
+  identificacon_oficial: any;
 }

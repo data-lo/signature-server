@@ -2,7 +2,8 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, UseInterceptors, Req } from '@nestjs/common';
 
 // Swagger
-import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiOperation, ApiResponse, ApiTags, ApiExcludeEndpoint } from '@nestjs/swagger';
+import { ApiInvalidDataResponseDto, ApiForbiddenResponseDto, ApiNotFoundResponseDto, ApiUnauthorizedResponseDto } from 'src/interfaces/api-response.dto';
 
 // Decorators
 import { Public } from 'src/auth/decorators/public.decorator';
@@ -15,10 +16,11 @@ import { IpInterceptor } from 'src/ip/ip.interceptor';
 
 // DTOs
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
-import { ValidateCodeDto } from './dto/validate-code.dto';
+import { VerificationCodeResponseDto } from './dto/verification-code-response.dto';
 
 // Services
 import { VerificationCodeService } from './verification-code.service';
+import { ValidateCodeDto} from './dto/validate-code.dto';
 
 @ApiTags('Código de Verificación')
 @Controller('verification-code')
@@ -27,6 +29,7 @@ export class VerificationCodeController {
 
   @Public()
   @Post('generate')
+  @ApiExcludeEndpoint()
   @HttpCode(HttpStatus.CREATED)
   @Throttle({ default: { limit: 3, ttl: 60 * 1000 } })
   @ApiOperation({ summary: 'Genera y envía un código OTP al firmante del documento' })
@@ -43,6 +46,7 @@ export class VerificationCodeController {
   @SkipThrottle()
   @Post('validate')
   @HttpCode(HttpStatus.OK)
+  @ApiExcludeEndpoint()
   @UseInterceptors(IpInterceptor)
   @ApiOperation({ summary: 'Valida el código OTP enviado por el firmante' })
   @ApiBody({ type: ValidateCodeDto })
@@ -55,3 +59,6 @@ export class VerificationCodeController {
     return this.verificationCodeService.validateAndSaveCode(dto, req['ip']);
   }
 }
+    
+   
+

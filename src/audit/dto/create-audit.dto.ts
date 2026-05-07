@@ -1,14 +1,13 @@
+
 import { Type } from 'class-transformer';
 import {
   IsArray,
-  IsDate,
   IsEnum,
-  IsOptional,
-  IsString,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { TypeOfOperation } from '../schema/audit-document';
+import { IsDate, IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
 
 /** Par usuario-acción que se registra dentro de un evento de auditoría. */
 class UserActionDto {
@@ -71,4 +70,10 @@ export class CreateAuditDto {
   @ValidateNested({ each: true })
   @Type(() => UserActionDto)
   users?: UserActionDto[];
+
+
+  @ApiProperty({ example: 'sha256:abc123def456...', description: 'Hash SHA-256 de integridad del documento firmado' })
+  @IsString()
+  @IsNotEmpty()
+  integrityHash: string;
 }
