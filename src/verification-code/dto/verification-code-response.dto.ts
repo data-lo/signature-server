@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { ApiResponseDto } from '../../interfaces/api-response.dto';
 
-export class VerificationCodeResponseDto {
+export class VerificationCodeDataDto {
   @ApiProperty({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID del código de verificación generado', format: 'uuid' })
   id: string;
 
@@ -18,4 +19,9 @@ export class VerificationCodeResponseDto {
 
   @ApiProperty({ example: '2024-01-15T10:30:00Z', description: 'Fecha de creación del registro' })
   createdAt: Date;
+}
+
+export class VerificationCodeResponseDto extends ApiResponseDto {
+  @ApiProperty({ type: VerificationCodeDataDto, description: 'Datos del código de verificación generado' })
+  data: VerificationCodeDataDto;
 }

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiResponseDto } from '../../interfaces/api-response.dto';
 
-export class UserResponseDto {
+export class UserDataDto {
   @ApiProperty({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID del usuario', format: 'uuid' })
   id: string;
 
@@ -33,4 +34,14 @@ export class UserResponseDto {
 
   @ApiProperty({ example: '2024-01-15T10:30:00Z', description: 'Fecha de última actualización' })
   updatedAt: Date;
+}
+
+export class UserResponseDto extends ApiResponseDto {
+  @ApiProperty({ type: UserDataDto, description: 'Datos del usuario' })
+  data: UserDataDto;
+}
+
+export class UserListResponseDto extends ApiResponseDto {
+  @ApiProperty({ type: [UserDataDto], description: 'Lista de usuarios' })
+  data: UserDataDto[];
 }

@@ -4,7 +4,8 @@ import { Public } from 'src/auth/decorators/public.decorator';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UserResponseDto } from './dto/user-response.dto';
+import { UserListResponseDto, UserResponseDto } from './dto/user-response.dto';
+import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto } from 'src/interfaces/api-response.dto';
 
 @ApiTags('User')
 @ApiBearerAuth('access-token')
@@ -16,7 +17,7 @@ export class UserController {
   @Post()
   @ApiOperation({ summary: 'Crear nuevo usuario' })
   @ApiResponse({ status: 201, description: 'Usuario creado correctamente', type: UserResponseDto })
-  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
+  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos', type: ApiInvalidDataResponseDto })
   create(@Body() createUserDto: CreateUserDto) {
     console.log('Creating user with data:', createUserDto);
     return this.userService.create(createUserDto);
@@ -25,7 +26,7 @@ export class UserController {
   @Public()
   @Get()
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
-  @ApiResponse({ status: 200, description: 'Lista de usuarios', type: [UserResponseDto] })
+  @ApiResponse({ status: 200, description: 'Lista de usuarios', type: UserListResponseDto })
   findAll() {
     return this.userService.findAllActiveUsers();
   }
@@ -35,7 +36,7 @@ export class UserController {
   @ApiOperation({ summary: 'Obtener usuario por UUID' })
   @ApiParam({ name: 'id', description: 'UUID del usuario', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Usuario encontrado', type: UserResponseDto })
-  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado', type: ApiNotFoundResponseDto })
   findOne(@Param('id') id: string) {
     return this.userService.findOneActiveUser(id);
   }
@@ -45,7 +46,7 @@ export class UserController {
   @ApiOperation({ summary: 'Actualizar datos de un usuario' })
   @ApiParam({ name: 'id', description: 'UUID del usuario', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Usuario actualizado correctamente', type: UserResponseDto })
-  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado', type: ApiNotFoundResponseDto })
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.userService.update(id, updateUserDto);
   }
@@ -55,7 +56,7 @@ export class UserController {
   @ApiOperation({ summary: 'Eliminar usuario por UUID' })
   @ApiParam({ name: 'id', description: 'UUID del usuario', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Usuario eliminado correctamente' })
-  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado', type: ApiNotFoundResponseDto })
   remove(@Param('id') id: string) {
     return this.userService.remove(id);
   }
