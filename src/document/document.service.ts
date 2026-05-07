@@ -96,6 +96,23 @@ export class DocumentService {
     }
   }
 
+  async findDocumentsBySigner(
+    signerId: string,
+    status?: DOCUMENT_STATUS_ENUM,
+  ): Promise<DocumentEntity[]> {
+    try {
+      const whereClause: Partial<DocumentEntity> = { signerId };
+      if (status) {
+        whereClause.status = status;
+      }
+      return await this.documentRepository.find({ where: whereClause });
+    } catch (error) {
+      throw new Error(
+        `Error obteniendo documentos del firmante ${signerId}: ${error}`,
+      );
+    }
+  }
+
   async getDocumentMinioURL(documentId) {
     try {
       const document = await this.findOne(documentId);
