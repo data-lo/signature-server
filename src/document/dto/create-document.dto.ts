@@ -41,5 +41,6 @@ export class CreateDocumentDto {
   @ApiProperty({ type: DocumentCoordDto, description: 'Coordenadas donde se colocará la firma en el documento' })
   @ValidateNested()
   @Type(() => DocumentCoordDto)
+  @IsOptional()
   coord: DocumentCoordDto;
 }

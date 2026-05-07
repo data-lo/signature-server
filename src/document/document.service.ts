@@ -1,36 +1,29 @@
-// NestJS Core
 import {
   BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-
-// TypeORM
 import { InjectRepository } from '@nestjs/typeorm';
+import { DocumentEntity } from './entities/document.entity';
+import { CreateDocumentDto } from './dto/create-document.dto';
+import { UpdateDocumentDto } from './dto/update-document.dto';
 import { Repository } from 'typeorm';
-
-// Enums
-import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
-import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
-
-// Services
 import { MinioService } from '../shared/minio/minio.service';
 import { HashService } from '../shared/hash/hash.service';
 import { UserService } from '../user/user.service';
-
-// DTOs
-import { CreateDocumentDto } from './dto/create-document.dto';
-import { UpdateDocumentDto } from './dto/update-document.dto';
-
-// Entities
-import { DocumentEntity } from './entities/document.entity';
+import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
+import { DocumentSigningService } from 'src/shared/document-signing/document-signing.service';
+import { SignatureService } from 'src/signature/signature.service';
+import { FILE } from 'dns';
+import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
 
 @Injectable()
 export class DocumentService {
-  logger = new Logger();
+  logger = new Logger(DocumentService.name);
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -38,7 +31,9 @@ export class DocumentService {
     private readonly minioService: MinioService,
     private readonly hashService: HashService,
     private readonly UserService: UserService,
-  ) { }
+    private readonly documentSigningSerivice: DocumentSigningService,
+    private readonly signatureService: SignatureService,
+  ) {}
   async create(
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
@@ -80,7 +75,7 @@ export class DocumentService {
         documentUrl: null, // IMPLEMENTAR SECURE URL URL-SERVER + URL MINIO
         ipAddress: '0.0.0.0', // IMPLEMENTAR EL INTERCEPTOR DE IP
         originalHash: hashBefore,
-        signatureCoordinates: { left: 50, right: 50, top: 50, bottom: 50 },
+        signatureCoordinates: coord ? coord : DEFAULT_COORDINATES,
         requestedBy: requestedByUser,
         signer: signerUser,
       });
@@ -109,12 +104,10 @@ export class DocumentService {
           `Documento con id ${documentId}, no encontrato`,
         );
       }
-      this.logger.log(document.objectKey);
-      this.logger.log(document.status);
-
+      
       try {
-        if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
-          this.logger.log('here')
+      if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
+          this.logger.log('DENTRO DE LA CONDICION DE DOCUMENTOS NO FIRMADOS')
           const fileResponse = await this.minioService.getFile(
             document.objectKey,
             BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
@@ -122,13 +115,17 @@ export class DocumentService {
           return fileResponse.secureUrl;
         }
       } catch (error) {
-        throw new Error(`Error obteniendo URL ${error}`)
+        throw new Error(`Error obteniendo URL ${error}`);
       }
+
+      this.logger.log(`${document.status}`);
+      this.logger.log(`${document.objectKey}`)
 
       const fileResponse = await this.minioService.getFile(
         document.objectKey,
         BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
       );
+
       return fileResponse.secureUrl;
     } catch (error) {
       throw new Error(`Error obteniendo URL del Documento`);
@@ -145,32 +142,38 @@ export class DocumentService {
     return document;
   }
 
-  async update(id: string, updateDocumentDto: UpdateDocumentDto, fileToReplace?: Express.Multer.File) {
+  async update(
+    id: string,
+    updateDocumentDto: UpdateDocumentDto,
+    fileToReplace?: Express.Multer.File,
+  ) {
     try {
       const documentDb = await this.findOne(id);
       if (documentDb.status !== DOCUMENT_STATUS_ENUM.CREATED) {
-        throw new BadRequestException(`Solo es posible actualizar documentos con Estatus Created`)
+        throw new BadRequestException(
+          `Solo es posible actualizar documentos con Estatus Created`,
+        );
       }
       if (fileToReplace) {
-        const objectKey = documentDb.objectKey
+        const objectKey = documentDb.objectKey;
         const minioResponse = await this.minioService.replaceFile(
           objectKey,
           {
             file: fileToReplace,
-            name: fileToReplace.originalname
+            name: fileToReplace.originalname,
           },
-          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS
+          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
         );
         if (minioResponse.status !== FILE_STATUS_ENUM.FILE_OVERWRITTEN) {
-          throw new Error('Error remplazando el documento ')
+          throw new Error('Error remplazando el documento ');
         }
       }
       //TO DO DESAGREGAR DEL UPDATE DOCUMENT DTO LOS CAMPOS
       //QUE SON INTERNOS
-      await this.documentRepository.update(id, updateDocumentDto)
+      await this.documentRepository.update(id, updateDocumentDto);
       return await this.findOne(id);
     } catch (error) {
-      throw new Error(`Error actualizando documento`)
+      throw new Error(`Error actualizando documento`);
     }
   }
 
@@ -192,13 +195,68 @@ export class DocumentService {
         await this.documentRepository.delete({ id: documentId });
         return `document deleted`;
       }
-
     } catch (error) {
       throw new Error(`error eliminano un Documento: ${error}`);
     }
   }
 
-  async mergeSignatureAndSave(dto: DocumentSignEventPayload) {
+  async mergeSignatureAndSave(payload: DocumentSignEventPayload) {
+    try {
+      
+      const { signerId, documentId } = payload;
+      const signerUser = await this.UserService.findOne(signerId);
+      const document = await this.findOne(documentId);
+      const coordinates = document.signatureCoordinates;
 
+      const signatureId = signerUser.signatureId;
+      const signature = await this.signatureService.findOne(signatureId);
+      let signedDocument = null;
+
+      try {
+        const signatureObjectBuffer =
+          await this.minioService.getFileInBytesFormat(
+            signature.signatureObjectKey,
+            BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+          );
+
+        this.logger.debug('Signature buffer Obtenido');
+
+        const documentObjectBuffer =
+          await this.minioService.getFileInBytesFormat(
+            document.objectKey,
+            BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+          );
+
+        this.logger.debug('Document To Sign Obtenido');
+
+        signedDocument =
+          await this.documentSigningSerivice.mergeSignatureIntoPdf(
+            documentObjectBuffer,
+            signatureObjectBuffer,
+            coordinates,
+          );
+      } catch (error) {
+        this.logger.error(error);
+      }
+
+      await this.minioService.uploadObject(
+        {
+          file: signedDocument,
+          name: document.fileName,
+          mimetype: 'application/pdf',
+        },
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        document.objectKey
+      )
+      const signedHash =
+        await this.hashService.generateFileHash(signedDocument);
+        ((document.signedHash = signedHash),
+        (document.signedAt = new Date()),
+        (document.status = DOCUMENT_STATUS_ENUM.SIGNED),
+        await this.documentRepository.save(document));
+      return await this.findOne(document.id);
+    } catch (error) {
+      throw new Error('Error estampando el documento');
+    }
   }
 }

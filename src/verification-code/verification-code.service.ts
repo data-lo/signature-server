@@ -1,7 +1,7 @@
 // 1. NestJS (framework)
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException, Logger } from '@nestjs/common';
 // 2. Third-party libraries
 import { Repository } from 'typeorm';
 // 3. Internal modules
@@ -105,25 +105,21 @@ export class VerificationCodeService {
   ): Promise<{ message: string }> {
 
     let verificationCodeString = await this.redisService.get(`${dto.documentId}`);
-
     if (!verificationCodeString) {
       throw new NotFoundException('Código de verificación no encontrado o expirado');
     }
 
     const verificationCode = JSON.parse(verificationCodeString) as VerificationCodeObject;
-
     if (dto.signerId !== verificationCode.signerId) {
       throw new ForbiddenException('El firmante no está asociado a este documento');
     }
 
     const isValid = this.otpService.verify(dto.code, verificationCode.code);
-
     if (!isValid) {
       throw new UnauthorizedException('Código de verificación inválido');
     }
 
     await this.redisService.del(`${this.KEY_PREFIX}${dto.documentId}`);
-
     await this.verificationCodeRepository.update(
       { documentId: dto.documentId },
       {
@@ -136,7 +132,8 @@ export class VerificationCodeService {
         type: CodeType.VERIFICATION
       },
     );
-
+    
+    console.log('emiting event')
     this.eventEmitter.emit('document.sign', {
       signerId: dto.signerId,
       documentId: dto.documentId

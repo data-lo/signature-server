@@ -52,7 +52,7 @@ export class DocumentEntity {
     })
     status: DOCUMENT_STATUS_ENUM;
 
-    @Column({ name: 'signature_coordinates', type: 'jsonb' })
+    @Column({ name: 'signature_coordinates', type: 'jsonb', nullable:true })
     signatureCoordinates: SignatureCoordinates;
 
     @CreateDateColumn({ name: 'created_at' })

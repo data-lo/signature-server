@@ -3,13 +3,11 @@ import { PDFDocument, PDFImage, PDFName, PDFNumber, PDFString } from 'pdf-lib';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
+import { DEFAULT_COORDINATES } from './interfaces/default-signing-coordinates.interface';
 
-const DEFAULT_COORDINATES: SignatureCoordinates = {
-  x: 0,
-  y: 0,
-  width: 0,
-  height: 0,
-};
+
+// Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
+
 
 // Para ajustar los limites solo hayq ue modificar las tres constantes siguientes. Si la firma queda fuera de estos rangos, se normaliza a DEFAULT_SIGNATURE_SIZE.
 // Tamaño al que se normaliza la firma cuando está fuera de rango (puntos PDF)
