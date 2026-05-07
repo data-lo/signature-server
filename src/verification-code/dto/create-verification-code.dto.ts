@@ -1,17 +1,19 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
+import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
 
 export class CreateVerificationCodeDto {
-  @ApiProperty({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID del firmante al que se enviará el código OTP', format: 'uuid' })
+  @ApiProperty({ example: '81ec99ef-a57d-46d9-b3da-1368dfeffb45' })
   @IsString()
+  @IsNotEmpty({ message: 'Signer ID is required' })
   signerId: string;
 
-  @ApiProperty({ example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901', description: 'UUID del documento que requiere verificación', format: 'uuid' })
+  @ApiProperty({ example: '47acc228-c113-4de5-a7bc-e4a159fb7007' })
   @IsString()
+  @IsNotEmpty({ message: 'Document ID is required' })
   documentId: string;
 
-  @ApiPropertyOptional({ example: 'document_signing', description: 'Tipo de verificación. Por defecto: document_signing' })
+  @ApiProperty({ example: 'VERIFICATION' })
   @IsString()
-  @IsOptional()
-  type?: string;
+  @IsNotEmpty({ message: 'Type is required' })
+  type: string;
 }

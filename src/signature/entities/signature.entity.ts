@@ -26,6 +26,10 @@ export class SignatureEntity {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @OneToOne(() => UserEntity, (user) => user.signature)
+  @Column({ nullable: false, name: 'user_id', unique: true })
+  userId: string;
+
+  @OneToOne(() => UserEntity)
+  @JoinColumn({ name: 'user_id' })
   user: UserEntity;
 }

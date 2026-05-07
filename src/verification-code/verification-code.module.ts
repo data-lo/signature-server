@@ -1,19 +1,24 @@
+// 1. NestJS (framework)
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+// 2. Internal modules
+import { UserModule } from 'src/user/user.module';
+import { SharedModule } from 'src/shared/shared.module';
+import { DocumentModule } from 'src/document/document.module';
 import { VerificationCodeService } from './verification-code.service';
-import { VerificationCodeController } from './verification-code.controller';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
-import { OtpModule } from '../shared/otp/otp.module';
-import { RedisModule } from 'src/shared/redis/redis.module';
+import { VerificationCodeController } from './verification-code.controller';
+import { VerificationCodeEventService } from './verification-code.event.sevice';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([VerificationCodeEntity]),
-    RedisModule,
-    OtpModule,
+    UserModule,
+    SharedModule,
+    DocumentModule,
   ],
-  controllers: [VerificationCodeController],
-  providers: [VerificationCodeService],
   exports: [VerificationCodeService],
+  controllers: [VerificationCodeController],
+  providers: [VerificationCodeService, VerificationCodeEventService],
 })
-export class VerificationCodeModule {}
+export class VerificationCodeModule { }

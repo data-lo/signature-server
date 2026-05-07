@@ -2,7 +2,7 @@
 import { SignatureCoordinates } from "../interfaces/signature-coordinates";
 import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { UserEntity } from "src/user/entities/user.entity";
-import { DocumentStatus } from "../lib/document-status";
+import { DOCUMENT_STATUS_ENUM } from "../enum/document-status.enum";
 
 // document.entity.ts
 @Entity('documents')
@@ -23,7 +23,7 @@ export class DocumentEntity {
     @Column({ name: 'total_pages' })
     totalPages: number;
 
-    @Column({ name: 'document_url' })
+    @Column({ name: 'document_url', nullable:true})
     documentUrl: string;
 
     @Column({ name: 'ip_address' })
@@ -47,10 +47,10 @@ export class DocumentEntity {
     @Column({
         name: 'status',
         type: 'enum',
-        enum: DocumentStatus,
-        default: DocumentStatus.CREATED,
+        enum: DOCUMENT_STATUS_ENUM,
+        default: DOCUMENT_STATUS_ENUM.CREATED,
     })
-    status: DocumentStatus;
+    status: DOCUMENT_STATUS_ENUM;
 
     @Column({ name: 'signature_coordinates', type: 'jsonb' })
     signatureCoordinates: SignatureCoordinates;

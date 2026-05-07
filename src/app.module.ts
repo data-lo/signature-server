@@ -12,19 +12,24 @@ import { AppController } from './app.controller';
 
 // Modules
 import { UserModule } from './user/user.module';
+import { AuthModule } from './auth/auth.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuditModule } from './audit/audit.module';
-import { AuthModule } from './auth/auth.module';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
-import { DocumentSigningModule } from './shared/document-signing/document-signing.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
-import { RedisModule } from './shared/redis/redis.module';
+
 
 @Module({
   imports: [
+    EventEmitterModule.forRoot({
+      delimiter: '.'
+    }),
+
     TypeOrmModule.forRootAsync({
       name: 'default',
       imports: [ConfigModule],
@@ -45,6 +50,15 @@ import { RedisModule } from './shared/redis/redis.module';
       }),
     }),
 
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60000,
+          limit: 10,
+        },
+      ],
+    }),
+
     ConfigModule.forRoot({
       isGlobal: true,
     }),
@@ -55,8 +69,6 @@ import { RedisModule } from './shared/redis/redis.module';
     SignatureModule,
     VerificationCodeModule,
     SharedModule,
-    RedisModule,
-    DocumentSigningModule,
   ],
   controllers: [AppController],
   providers: [AppService, {

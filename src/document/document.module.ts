@@ -2,12 +2,15 @@ import { Module } from '@nestjs/common';
 import { DocumentService } from './document.service';
 import { DocumentController } from './document.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { UserEntity } from 'src/user/entities/user.entity';
 import { DocumentEntity } from './entities/document.entity';
+import { SharedModule } from 'src/shared/shared.module';
+import { UserModule } from 'src/user/user.module';
+import { DocumentEventService } from './document.event.service';
 
 @Module({
   controllers: [DocumentController],
-  providers: [DocumentService],
-    imports: [TypeOrmModule.forFeature([UserEntity, DocumentEntity])],
+  providers: [DocumentService, DocumentEventService],
+  imports: [TypeOrmModule.forFeature([DocumentEntity]), SharedModule, UserModule],
+  exports: [DocumentService]
 })
-export class DocumentModule {}
+export class DocumentModule { }
