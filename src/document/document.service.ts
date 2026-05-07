@@ -19,10 +19,11 @@ import { DocumentSignEventPayload } from './interfaces/document-sign-event-paylo
 import { DocumentSigningService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
 import { FILE } from 'dns';
+import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
 
 @Injectable()
 export class DocumentService {
-  logger = new Logger(__dirname);
+  logger = new Logger(DocumentService.name);
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -74,7 +75,7 @@ export class DocumentService {
         documentUrl: null, // IMPLEMENTAR SECURE URL URL-SERVER + URL MINIO
         ipAddress: '0.0.0.0', // IMPLEMENTAR EL INTERCEPTOR DE IP
         originalHash: hashBefore,
-        signatureCoordinates: coord,
+        signatureCoordinates: coord ? coord : DEFAULT_COORDINATES,
         requestedBy: requestedByUser,
         signer: signerUser,
       });
@@ -103,12 +104,10 @@ export class DocumentService {
           `Documento con id ${documentId}, no encontrato`,
         );
       }
-      this.logger.log(document.objectKey);
-      this.logger.log(document.status);
-
+      
       try {
-        if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
-          this.logger.log('here');
+      if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
+          this.logger.log('DENTRO DE LA CONDICION DE DOCUMENTOS NO FIRMADOS')
           const fileResponse = await this.minioService.getFile(
             document.objectKey,
             BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
@@ -119,10 +118,14 @@ export class DocumentService {
         throw new Error(`Error obteniendo URL ${error}`);
       }
 
+      this.logger.log(`${document.status}`);
+      this.logger.log(`${document.objectKey}`)
+
       const fileResponse = await this.minioService.getFile(
         document.objectKey,
         BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
       );
+
       return fileResponse.secureUrl;
     } catch (error) {
       throw new Error(`Error obteniendo URL del Documento`);
@@ -199,13 +202,11 @@ export class DocumentService {
 
   async mergeSignatureAndSave(payload: DocumentSignEventPayload) {
     try {
-      console.log('IN MERGE AND SIGNATURE AND SAVE METHOD')
+      
       const { signerId, documentId } = payload;
       const signerUser = await this.UserService.findOne(signerId);
       const document = await this.findOne(documentId);
       const coordinates = document.signatureCoordinates;
-
-      console.log(signerUser);
 
       const signatureId = signerUser.signatureId;
       const signature = await this.signatureService.findOne(signatureId);
@@ -226,7 +227,7 @@ export class DocumentService {
             BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
           );
 
-        this.logger.debug('Document To Sign Obtendio');
+        this.logger.debug('Document To Sign Obtenido');
 
         signedDocument =
           await this.documentSigningSerivice.mergeSignatureIntoPdf(
@@ -235,7 +236,7 @@ export class DocumentService {
             coordinates,
           );
       } catch (error) {
-        this.logger.error('ERROR');
+        this.logger.error(error);
       }
 
       await this.minioService.uploadObject(
@@ -245,8 +246,8 @@ export class DocumentService {
           mimetype: 'application/pdf',
         },
         BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-      );
-
+        document.objectKey
+      )
       const signedHash =
         await this.hashService.generateFileHash(signedDocument);
         ((document.signedHash = signedHash),

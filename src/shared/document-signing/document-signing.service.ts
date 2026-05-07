@@ -5,15 +5,11 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PDFDocument, PDFImage } from 'pdf-lib';
 
 import { SignatureCoordinates } from 'src/document/interfaces/signature-coordinates';
+import { DEFAULT_COORDINATES } from './interfaces/default-signing-coordinates.interface';
 
 
 // Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
-const DEFAULT_COORDINATES: SignatureCoordinates = {
-  x:   0,
-  y:  0,
-  width: 0,
-  height: 0
-};
+
 
 @Injectable()
 export class DocumentSigningService {

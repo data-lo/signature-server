@@ -8,6 +8,9 @@ import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 
 @Injectable()
 export class MinioService {
+
+  private readonly logger = new Logger(MinioService.name);
+
   minioClient: any;
 
   MINIO_CREATED_DOCUMENTS_BUCKET: any;
@@ -18,8 +21,6 @@ export class MinioService {
   MINIO_HOST: any;
   MINIO_PORT: any;
   MINIO_API: any;
-
-  logger = new Logger();
 
   constructor() {
     this.setMinioClient();
@@ -136,6 +137,7 @@ export class MinioService {
       | 'signed_documents'
       | 'oficial_cards'
       | 'signature_images',
+    objectKey?:string
   ): Promise<{
     status: FILE_STATUS_ENUM;
     fileId: string;
@@ -157,16 +159,18 @@ export class MinioService {
       this.logger.log(file.name);
       const extension = file.name.split('.').pop()?.toLowerCase();
       this.logger.log(`Extension Document ${extension}`);
+          
+      if(!objectKey){
+        objectKey = `${uuid4()}.${extension}`;  
+      }
 
-      const fileName = `${uuid4()}.${extension}`;
-      this.logger.log(`Nombre Documento ${fileName}`)
-
+      this.logger.log(`Nombre Documento ${objectKey}`)
       const {buffer:fileBuffer,mimetype} = this.resolveFileData(file);
       if (!fileBuffer) {
         throw new Error('El archivo no contiene datos válidos');
       }
 
-      await minioClient.putObject(bucketName, fileName, fileBuffer, {
+      await minioClient.putObject(bucketName, objectKey, fileBuffer, {
         'Content-Type': mimetype,
       });
 
@@ -174,7 +178,7 @@ export class MinioService {
         fileType: mimetype,
         bucket: bucketName,
         status: FILE_STATUS_ENUM.FILE_CREATED,
-        fileId: fileName,
+        fileId: objectKey,
       };
     } catch (error) {
       throw new Error(`Error al subir archivos a MinIO: ${error}`);
@@ -190,7 +194,6 @@ export class MinioService {
       let fileName = fileId;
       const minioClient = await this.getMinioClient();
       const bucketName = await this.getBucketByType(bucketType);
-      console.log(bucketName);
       const exists = await minioClient.bucketExists(bucketName);
 
       if (!exists) {
@@ -202,7 +205,7 @@ export class MinioService {
       }
 
       try {
-        console.log(await minioClient.statObject(bucketName, fileName));
+        this.logger.log(`Consulta del file en Minio ${await minioClient.statObject(bucketName, fileName)}`);
       } catch (error) {
         throw new Error(
           `El archivo con ID ${fileId} no existe en el bucket ${bucketName}`,
