@@ -6,7 +6,7 @@ import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common
 import * as sgMail from '@sendgrid/mail';
 
 // Internal modules
-import { signatureRequestTemplate } from './templates/email.templates';
+import { documentCancellationPendingTemplate, cancellationVerificationCodeTemplate, documentPendingTemplate, rejectionVerificationCodeTemplate, signatureRequestTemplate } from './templates/email.templates';
 import { EmailType } from 'src/verification-code/enums/email-type.enum';
 import { EmailSubject } from 'src/verification-code/enums/subject-type.enum';
 
@@ -64,7 +64,60 @@ export class EmailService {
       EmailSubject.VERIFICATION,
       signatureRequestTemplate(documentName, signerName, verificationCode),
       EmailType.VERIFICATION,
+    );
+  }
 
+  async sendDocumentPendingNotification(
+    to: string,
+    documentName: string,
+    signerName: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_PENDING,
+      documentPendingTemplate(documentName, signerName),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  async sendDocumentCancellationPendingNotification(
+    to: string,
+    documentName: string,
+    signerName: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.CANCELLATION_PENDING,
+      documentCancellationPendingTemplate(documentName, signerName),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  async sendCancellationVerificationCodeEmail(
+    to: string,
+    documentName: string,
+    signerName: string,
+    verificationCode: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.CANCELLATION_CODE,
+      cancellationVerificationCodeTemplate(documentName, signerName, verificationCode),
+      EmailType.VERIFICATION,
+    );
+  }
+
+  async sendRejectionVerificationCodeEmail(
+    to: string,
+    documentName: string,
+    signerName: string,
+    verificationCode: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.REJECTION_CODE,
+      rejectionVerificationCodeTemplate(documentName, signerName, verificationCode),
+      EmailType.VERIFICATION,
     );
   }
 }

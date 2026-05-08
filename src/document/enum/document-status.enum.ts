@@ -3,5 +3,7 @@ export enum DOCUMENT_STATUS_ENUM {
     SIGNED = 'signed',
     REJECTED = 'rejected',
     EXPIRED = 'expired',
-    CREATED = 'created'
+    CREATED = 'created',
+    CANCELLATION_PENDING = 'cancellation_pending',
+    CANCELLED = 'cancelled',
 }

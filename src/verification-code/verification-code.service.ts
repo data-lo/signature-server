@@ -72,7 +72,12 @@ export class VerificationCodeService {
 
     await this.redisService.set(`${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
-    this.eventEmitter.emit('send.verification.code.email', {
+    const emailEvent =
+      dto.type === CodeType.CANCELLATION ? 'send.cancellation.code.email' :
+      dto.type === CodeType.REJECTION    ? 'send.rejection.code.email' :
+                                           'send.verification.code.email';
+
+    this.eventEmitter.emit(emailEvent, {
       to: user.email,
       documentName: document.fileName,
       signerName: `${user.firstName} ${user.lastName}`,
@@ -133,10 +138,14 @@ export class VerificationCodeService {
       },
     );
     
-    console.log('emiting event')
-    this.eventEmitter.emit('document.sign', {
+    const documentEvent =
+      verificationCode.type === CodeType.CANCELLATION ? 'document.cancel' :
+      verificationCode.type === CodeType.REJECTION    ? 'document.reject' :
+                                                        'document.sign';
+
+    this.eventEmitter.emit(documentEvent, {
       signerId: dto.signerId,
-      documentId: dto.documentId
+      documentId: dto.documentId,
     });
 
     return {

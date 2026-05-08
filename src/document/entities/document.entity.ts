@@ -41,6 +41,12 @@ export class DocumentEntity {
     @Column({ name: 'signed_at', nullable: true })
     signedAt: Date;
 
+    @Column({ name: 'cancelled_at', nullable: true })
+    cancelledAt: Date;
+
+    @Column({ name: 'rejected_at', nullable: true })
+    rejectedAt: Date;
+
     @Column({ name: 'is_notified', default: false })
     isNotified: boolean;
 
