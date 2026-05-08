@@ -9,12 +9,16 @@ import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto } from 'src/interface
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GetDocumentsBySignerDto } from './dto/get-documents-by-signer.dto';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { LogService } from 'src/log/log.service';
 
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
 @Controller('document')
 export class DocumentController {
-  constructor(private readonly documentService: DocumentService) {}
+  constructor(
+    private readonly documentService: DocumentService,
+    private readonly logService: LogService,
+  ) {}
 
   @Public()
   @Get('file/:id')
@@ -22,9 +26,9 @@ export class DocumentController {
   getDocumentUrl(
     @Param('id') id: string,
   ) {
+    void this.logService.write(`[Document] getDocumentUrl - documentId: ${id}`);
     return this.documentService.getDocumentMinioURL(id);
   }
-
 
   @Public()
   @Post()
@@ -39,7 +43,7 @@ export class DocumentController {
     @Body() createDocumentDto: CreateDocumentDto,
     @UploadedFile() document: Express.Multer.File,
   ) {
-    console.log(document.filename, document.mimetype);
+    void this.logService.write(`[Document] create - fileName: ${document?.originalname}, mimeType: ${document?.mimetype}`);
     return await this.documentService.create(createDocumentDto, document);
   }
 
@@ -48,6 +52,7 @@ export class DocumentController {
   @ApiOperation({ summary: 'Obtener todos los documentos' })
   @ApiResponse({ status: 200, description: 'Lista de todos los documentos', type: [DocumentResponseDto] })
   findAll() {
+    void this.logService.write('[Document] findAll');
     return this.documentService.findAll();
   }
 
@@ -62,6 +67,7 @@ export class DocumentController {
     @Param('signerId') signerId: string,
     @Query() query: GetDocumentsBySignerDto,
   ) {
+    void this.logService.write(`[Document] findDocumentsBySigner - signerId: ${signerId}, status: ${query.status ?? 'all'}`);
     return this.documentService.findDocumentsBySigner(signerId, query.status);
   }
 
@@ -72,6 +78,7 @@ export class DocumentController {
   @ApiResponse({ status: 200, description: 'Documento encontrado', type: DocumentResponseDto })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: ApiNotFoundResponseDto })
   findOne(@Param('id') id: string) {
+    void this.logService.write(`[Document] findOne - documentId: ${id}`);
     return this.documentService.findOne(id);
   }
 
@@ -83,6 +90,7 @@ export class DocumentController {
   @ApiResponse({ status: 400, description: 'El documento no está en estatus CREATED', type: ApiInvalidDataResponseDto })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: ApiNotFoundResponseDto })
   submitForAuthorization(@Param('id') id: string) {
+    void this.logService.write(`[Document] submitForAuthorization - documentId: ${id}`);
     return this.documentService.submitForAuthorization(id);
   }
 
@@ -94,6 +102,7 @@ export class DocumentController {
   @ApiResponse({ status: 400, description: 'El documento no está en estatus SIGNED', type: ApiInvalidDataResponseDto })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: ApiNotFoundResponseDto })
   submitForCancellation(@Param('id') id: string) {
+    void this.logService.write(`[Document] submitForCancellation - documentId: ${id}`);
     return this.documentService.submitForCancellation(id);
   }
 
@@ -106,6 +115,7 @@ export class DocumentController {
   @ApiResponse({ status: 400, description: 'El documento no está en estatus CREATED', type: ApiInvalidDataResponseDto })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: ApiNotFoundResponseDto })
   update(@Param('id') id: string, @Body() updateDocumentDto: UpdateDocumentDto) {
+    void this.logService.write(`[Document] update - documentId: ${id}`);
     return this.documentService.update(id, updateDocumentDto);
   }
 
@@ -116,6 +126,7 @@ export class DocumentController {
   @ApiResponse({ status: 400, description: 'El documento no está en estatus CREATED', type: ApiInvalidDataResponseDto })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: ApiNotFoundResponseDto })
   remove(@Param('id') id: string) {
+    void this.logService.write(`[Document] remove - documentId: ${id}`);
     return this.documentService.remove(id);
   }
 }

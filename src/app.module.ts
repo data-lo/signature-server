@@ -22,6 +22,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
+import { LogModule } from './log/log.module';
 
 
 @Module({
@@ -69,6 +70,7 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
     SignatureModule,
     VerificationCodeModule,
     SharedModule,
+    LogModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
