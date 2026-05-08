@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { DocumentService } from './document.service';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
 import { DocumentCancelPayload } from './interfaces/document-cancel-event-payload';
+import { DocumentRejectPayload } from './interfaces/document-reject-event-payload';
 
 @Injectable()
 export class DocumentEventService {
@@ -35,6 +36,21 @@ export class DocumentEventService {
         } catch (error) {
             this.logger.error(
                 `[document.cancel] Error al cancelar el documento | documentId: ${payload.documentId} | mensaje: ${error}`,
+                error,
+            );
+        }
+    }
+
+    @OnEvent('document.reject', { async: true })
+    async handleDocumentReject(payload: DocumentRejectPayload) {
+        this.logger.log(`[document.reject] Iniciando rechazo de documento | documentId: ${payload.documentId} | signerId: ${payload.signerId}`);
+
+        try {
+            await this.documentService.rejectDocument(payload);
+            this.logger.log(`[document.reject] Documento rechazado correctamente | documentId: ${payload.documentId}`);
+        } catch (error) {
+            this.logger.error(
+                `[document.reject] Error al rechazar el documento | documentId: ${payload.documentId} | mensaje: ${error}`,
                 error,
             );
         }

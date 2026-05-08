@@ -194,17 +194,27 @@ export class PdfSignatureService {
     );
   }
 
-  /**
-   * Estampa la marca de agua "CANCELADO" en diagonal sobre cada página del PDF.
-   * El texto se escala para cruzar de esquina a esquina y se renderiza en rojo semitransparente.
-   *
-   * @param documentBuffer PDF firmado como Buffer de bytes.
-   * @returns PDF cancelado con marca de agua en todas sus páginas.
-   */
+  /** Estampa "CANCELADO" en diagonal rojo semitransparente en todas las páginas del PDF. */
   async stampCancelledWatermark(documentBuffer: Buffer): Promise<Buffer> {
+    return this.stampDiagonalWatermark(documentBuffer, 'CANCELADO', rgb(0.75, 0, 0));
+  }
+
+  /** Estampa "RECHAZADO" en diagonal naranja semitransparente en todas las páginas del PDF. */
+  async stampRejectedWatermark(documentBuffer: Buffer): Promise<Buffer> {
+    return this.stampDiagonalWatermark(documentBuffer, 'RECHAZADO', rgb(0.85, 0.35, 0));
+  }
+
+  /**
+   * Estampa texto diagonal centrado en cada página del PDF, escalado para cruzar de esquina a esquina.
+   * Aplica conformidad PDF/A-2B al resultado.
+   */
+  private async stampDiagonalWatermark(
+    documentBuffer: Buffer,
+    text: string,
+    color: ReturnType<typeof rgb>,
+  ): Promise<Buffer> {
     const pdfDoc = await PDFDocument.load(documentBuffer);
     const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    const text = 'CANCELADO';
 
     for (const page of pdfDoc.getPages()) {
       const { width, height } = page.getSize();
@@ -212,7 +222,6 @@ export class PdfSignatureService {
       const angleRad = Math.atan2(height, width);
       const angleDeg = (angleRad * 180) / Math.PI;
 
-      // Escalar el texto para que ocupe ~75% de la diagonal de la página
       const textWidthAt1 = font.widthOfTextAtSize(text, 1);
       const fontSize = (diagonalLength * 0.75) / textWidthAt1;
       const textWidth = font.widthOfTextAtSize(text, fontSize);
@@ -226,7 +235,7 @@ export class PdfSignatureService {
         y: cy,
         size: fontSize,
         font,
-        color: rgb(0.75, 0, 0),
+        color,
         opacity: 0.35,
         rotate: degrees(angleDeg),
       });

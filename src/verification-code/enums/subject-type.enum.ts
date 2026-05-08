@@ -4,4 +4,5 @@ export enum EmailSubject {
     DOCUMENT_PENDING = 'Documento enviado para autorización',
     CANCELLATION_PENDING = 'Solicitud de cancelación de documento',
     CANCELLATION_CODE = 'Código de verificación para cancelación',
+    REJECTION_CODE = 'Código de verificación para rechazo',
 }

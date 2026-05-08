@@ -48,4 +48,24 @@ export class VerificationCodeEventService {
       );
     }
   }
+
+  @OnEvent('send.rejection.code.email', { async: true })
+  async sendRejectionCodeEmailEvent(payload: VerificationCodeEmailPayload) {
+    this.logger.log(`[send.rejection.code.email] Enviando código de rechazo | to: ${payload.to} | signerName: ${payload.signerName}`);
+
+    try {
+      await this.emailService.sendRejectionVerificationCodeEmail(
+        payload.to,
+        payload.documentName,
+        payload.signerName,
+        payload.code,
+      );
+      this.logger.log(`[send.rejection.code.email] Correo enviado correctamente | to: ${payload.to}`);
+    } catch (error) {
+      this.logger.error(
+        `[send.rejection.code.email] Error al enviar el correo | to: ${payload.to} | mensaje: ${error}`,
+        error,
+      );
+    }
+  }
 }

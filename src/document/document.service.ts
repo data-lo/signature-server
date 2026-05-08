@@ -17,6 +17,7 @@ import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
 import { DocumentCancelPayload } from './interfaces/document-cancel-event-payload';
+import { DocumentRejectPayload } from './interfaces/document-reject-event-payload';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
@@ -126,9 +127,11 @@ export class DocumentService {
       const bucket =
         document.status === DOCUMENT_STATUS_ENUM.CANCELLED
           ? BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS
-          : document.status === DOCUMENT_STATUS_ENUM.SIGNED || document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING
-            ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
-            : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+          : document.status === DOCUMENT_STATUS_ENUM.REJECTED
+            ? BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS
+            : document.status === DOCUMENT_STATUS_ENUM.SIGNED || document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING
+              ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
+              : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
 
       this.logger.log(`Status: ${document.status} | ObjectKey: ${document.objectKey}`);
 
@@ -373,6 +376,46 @@ export class DocumentService {
       if (error instanceof NotFoundException) throw error;
       this.logger.error(`Error cancelando documento: ${error}`);
       throw new Error(`Error cancelando el documento: ${error}`);
+    }
+  }
+
+  /** Obtiene el documento original desde Minio, estampa la marca de agua RECHAZADO en todas las páginas, lo sube al bucket de rechazados y actualiza el estatus a REJECTED. */
+  async rejectDocument(payload: DocumentRejectPayload): Promise<DocumentEntity> {
+    try {
+      const { documentId } = payload;
+      const document = await this.findOne(documentId);
+
+      const documentBuffer = await this.minioService.getFileInBytesFormat(
+        document.objectKey,
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      );
+      this.logger.debug(`Documento original obtenido para rechazo | documentId: ${documentId}`);
+
+      const rejectedDocument = await this.documentSigningSerivice.stampRejectedWatermark(documentBuffer);
+
+      if (!rejectedDocument) {
+        throw new Error('El servicio de rechazo no retornó un documento válido');
+      }
+
+      await this.minioService.uploadObject(
+        {
+          file: rejectedDocument,
+          name: document.fileName,
+          mimetype: 'application/pdf',
+        },
+        BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+        document.objectKey,
+      );
+
+      document.rejectedAt = new Date();
+      document.status = DOCUMENT_STATUS_ENUM.REJECTED;
+      await this.documentRepository.save(document);
+
+      return await this.findOne(document.id);
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      this.logger.error(`Error rechazando documento: ${error}`);
+      throw new Error(`Error rechazando el documento: ${error}`);
     }
   }
 }
