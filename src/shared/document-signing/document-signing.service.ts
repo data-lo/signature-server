@@ -97,7 +97,7 @@ export class PdfSignatureService {
   async mergeSignatureIntoPdf(
     documentBuffer: Buffer,
     signatureBuffer: Buffer,
-    coordinates: SignatureCoordinates = DEFAULT_COORDINATES,
+    coordinates: SignatureCoordinates,
   ): Promise<Buffer> {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
@@ -135,6 +135,7 @@ export class PdfSignatureService {
       height: drawSize.height,
       opacity: coordinates.opacity ?? 1.0,
     });
+
 
     // Paso 7: aplicar conformidad PDF/A-2B (XMP metadata + OutputIntent sRGB)
     this.applyPdfA2bConformance(pdfDoc);
@@ -198,6 +199,30 @@ export class PdfSignatureService {
   async stampCancelledWatermark(documentBuffer: Buffer): Promise<Buffer> {
     return this.stampDiagonalWatermark(documentBuffer, 'CANCELADO', rgb(0.75, 0, 0));
   }
+
+
+  async addSignerName(documentBuffer: Buffer, signerName:string ,coord:SignatureCoordinates):Promise<Buffer>{
+    try{
+      const pdfDoc = await PDFDocument.load(documentBuffer);
+      const pages = pdfDoc.getPages();
+      const lastPage = pages[pages.length - 1];
+
+      lastPage.drawText(
+        signerName,
+        {
+          x:coord.x,
+          y:(coord.y - 20),
+          size:10,
+        }
+      );
+
+    this.applyPdfA2bConformance(pdfDoc);
+    const signedPdfBytes: Uint8Array = await pdfDoc.save({ useObjectStreams: false });
+    return Buffer.from(signedPdfBytes);      
+    }catch(error){
+      throw new InternalServerErrorException
+    }
+  };
 
   /** Estampa "RECHAZADO" en diagonal naranja semitransparente en todas las páginas del PDF. */
   async stampRejectedWatermark(documentBuffer: Buffer): Promise<Buffer> {
