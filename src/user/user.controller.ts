@@ -13,6 +13,8 @@ import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto, ApiResponseDto } fro
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
+
+  //EXPUESTOS AL API
   @Public()
   @Post()
   @ApiOperation({ summary: 'Crear nuevo usuario' })
