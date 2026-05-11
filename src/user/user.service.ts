@@ -1,16 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserEntity } from './entities/user.entity';
-import { NotFoundError } from 'rxjs';
+import { SignatureService } from 'src/signature/signature.service';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
+    private signatureService: SignatureService
   ) { }
 
   async create(createUserDto: CreateUserDto): Promise<UserEntity> {
@@ -87,6 +88,13 @@ export class UserService {
   }
 
   async remove(id: string): Promise<string> {
+    const user = await this.findOne(id);
+    const signatureId = user.signatureId;
+    try{
+      await this.signatureService.deactivate(signatureId);
+    }catch(error){
+      throw new InternalServerErrorException('Error sobreescribiendo el PNG de la firma por BlankPNG')
+    }
     await this.userRepository.update(id, { isDeleted: true, isActive: false });
     return 'User deleted';
   }

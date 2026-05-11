@@ -13,6 +13,8 @@ import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto, ApiResponseDto } fro
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
+
+  //EXPUESTOS AL API
   @Public()
   @Post()
   @ApiOperation({ summary: 'Crear nuevo usuario' })
@@ -23,8 +25,8 @@ export class UserController {
     return this.userService.create(createUserDto);
   }
 
+  @Public()
   @Get()
-  @ApiExcludeEndpoint()
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
   @ApiResponse({ status: 200, description: 'Lista de usuarios', type: UserListResponseDto })
   findAll() {

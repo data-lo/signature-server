@@ -325,7 +325,6 @@ export class MinioService {
     try{
       
       const bucketName = this.getBucketByType(bucketType);
-
       try {
         const fileData = await this.minioClient.statObject(bucketName, fileName);
         this.logger.log(fileData);

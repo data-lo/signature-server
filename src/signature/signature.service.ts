@@ -15,12 +15,14 @@ import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 
 @Injectable()
 export class SignatureService {
+  
+  logger = new Logger(SignatureService.name);
+
   constructor(
     @InjectRepository(SignatureEntity)
     private readonly signatureRepository: Repository<SignatureEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
-
     private readonly minioService: MinioService,
   ) {}
 
@@ -63,14 +65,14 @@ export class SignatureService {
     if (signatureFile) {
       signatureObjectKeyResponse = await this.minioService.uploadObject(
         { file: signatureFile, name: signatureFile.originalname },
-        'signature_images',
+        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
       );
     }
 
     if (oficialCardPdfFile) {
       officialCardObjectKeyResponse = await this.minioService.uploadObject(
         { file: oficialCardPdfFile, name: oficialCardPdfFile.originalname },
-        'oficial_cards',
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS,
       );
     }
 
@@ -149,9 +151,30 @@ export class SignatureService {
    */
   async deactivate(id: string): Promise<SignatureEntity> {
     const signature = await this.findOne(id);
+    const signaturePngObjectKey = signature.signatureObjectKey;
+    this.logger.log(`Firma de Imagen a reemplazar ${signature}`);
+    this.logger.log(`ObjectKey (fileName) del png a reemplazar ${signaturePngObjectKey}`);
 
+    const blankPngBuffer =  await this.minioService.getFileInBytesFormat(
+      'Blank_Png.png',
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+    );
+
+    try{
+      const replaceFileResponce = await this.minioService.replaceFile(
+      signaturePngObjectKey,
+      {
+        file:blankPngBuffer,
+        name: signaturePngObjectKey
+      },
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+    );
+    this.logger.log(replaceFileResponce);  
+    }catch(error){
+      this.logger.error(`Error reemplazando la firma por Blank ${error}`)
+    }
     // TODO: sobreescribir la imagen de firma en Minio con un PNG en blanco cuando MinioService esté implementado
-    // await this.minioService.overwrite(signature.signatureObjectKey, BLANK_PNG_BUFFER);
+    // await this.minioService.overwrite(signature.signatureObjectKey, BLANK_PNG_BUFFER); // subir el blank_png a minio
 
     signature.isActive = false;
     return this.signatureRepository.save(signature);
