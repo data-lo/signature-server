@@ -12,7 +12,6 @@ import { CreateSignatureDto } from './dto/create-signature.dto';
 import { MinioService } from 'src/shared/minio/minio.service';
 import 'multer';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
-import { sign } from 'crypto';
 
 @Injectable()
 export class SignatureService {
@@ -64,14 +63,14 @@ export class SignatureService {
     if (signatureFile) {
       signatureObjectKeyResponse = await this.minioService.uploadObject(
         { file: signatureFile, name: signatureFile.originalname },
-        'signature_images',
+        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
       );
     }
 
     if (oficialCardPdfFile) {
       officialCardObjectKeyResponse = await this.minioService.uploadObject(
         { file: oficialCardPdfFile, name: oficialCardPdfFile.originalname },
-        'oficial_cards',
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS,
       );
     }
 
@@ -152,7 +151,7 @@ export class SignatureService {
     const signature = await this.findOne(id);
 
     // TODO: sobreescribir la imagen de firma en Minio con un PNG en blanco cuando MinioService esté implementado
-    // await this.minioService.overwrite(signature.signatureObjectKey, BLANK_PNG_BUFFER);
+    // await this.minioService.overwrite(signature.signatureObjectKey, BLANK_PNG_BUFFER); // subir el blank_png a minio
 
     signature.isActive = false;
     return this.signatureRepository.save(signature);

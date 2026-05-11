@@ -1,6 +1,6 @@
 export interface SignatureCoordinates {
-  left:   number;
-  right:  number;
-  top:    number;
-  bottom: number;
+  x:   number;
+  y:  number;
+  width: number;
+  height: number;
 }

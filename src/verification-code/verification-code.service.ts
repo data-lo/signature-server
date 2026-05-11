@@ -1,13 +1,13 @@
 // 1. NestJS (framework)
 import { InjectRepository } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException, Logger } from '@nestjs/common';
 // 2. Third-party libraries
 import { Repository } from 'typeorm';
 // 3. Internal modules
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 
-import { validateCodeDto } from './dto/verify-verification-code.dto';
+import { ValidateCodeDto } from './dto/validate-code.dto';
 import { CreateVerificationCodeDto } from './dto/create-verification-code.dto';
 
 import { UserService } from 'src/user/user.service';
@@ -46,6 +46,10 @@ export class VerificationCodeService {
   async create(dto: CreateVerificationCodeDto): Promise<{}> {
     const document = await this.documentService.findOne(dto.documentId);
 
+    if (!document) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+
     if (dto.signerId !== document.signerId) {
       throw new ForbiddenException('El firmante no está asociado a este documento');
     }
@@ -66,9 +70,14 @@ export class VerificationCodeService {
       documentId: dto.documentId,
     }
 
-    await this.redisService.set(`${this.KEY_PREFIX}${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
+    await this.redisService.set(`${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
-    this.eventEmitter.emit('send.verification.code.email', {
+    const emailEvent =
+      dto.type === CodeType.CANCELLATION ? 'send.cancellation.code.email' :
+      dto.type === CodeType.REJECTION    ? 'send.rejection.code.email' :
+                                           'send.verification.code.email';
+
+    this.eventEmitter.emit(emailEvent, {
       to: user.email,
       documentName: document.fileName,
       signerName: `${user.firstName} ${user.lastName}`,
@@ -96,30 +105,26 @@ export class VerificationCodeService {
    * @throws UnauthorizedException - Si el código OTP es inválido
    */
   async validateAndSaveCode(
-    dto: validateCodeDto,
+    dto: ValidateCodeDto,
     ipAddress: string,
   ): Promise<{ message: string }> {
 
-    let verificationCodeString = await this.redisService.get(`${this.KEY_PREFIX}${dto.documentId}`);
-
+    let verificationCodeString = await this.redisService.get(`${dto.documentId}`);
     if (!verificationCodeString) {
       throw new NotFoundException('Código de verificación no encontrado o expirado');
     }
 
     const verificationCode = JSON.parse(verificationCodeString) as VerificationCodeObject;
-
     if (dto.signerId !== verificationCode.signerId) {
       throw new ForbiddenException('El firmante no está asociado a este documento');
     }
 
     const isValid = this.otpService.verify(dto.code, verificationCode.code);
-
     if (!isValid) {
       throw new UnauthorizedException('Código de verificación inválido');
     }
 
     await this.redisService.del(`${this.KEY_PREFIX}${dto.documentId}`);
-
     await this.verificationCodeRepository.update(
       { documentId: dto.documentId },
       {
@@ -132,12 +137,15 @@ export class VerificationCodeService {
         type: CodeType.VERIFICATION
       },
     );
+    
+    const documentEvent =
+      verificationCode.type === CodeType.CANCELLATION ? 'document.cancel' :
+      verificationCode.type === CodeType.REJECTION    ? 'document.reject' :
+                                                        'document.sign';
 
-    this.eventEmitter.emit('send.verification.code.email', {
-      // to: user.email,
-      // documentName: document.fileName,
-      // signerName: `${user.firstName} ${user.lastName}`,
-      // code,
+    this.eventEmitter.emit(documentEvent, {
+      signerId: dto.signerId,
+      documentId: dto.documentId,
     });
 
     return {

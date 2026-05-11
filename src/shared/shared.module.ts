@@ -6,10 +6,10 @@ import { HashService } from './hash/hash.service';
 import { EmailService } from './email/email.service';
 import { MinioService } from './minio/minio.service';
 import { RedisService } from './redis/redis.service';
-import { DocumentSigningService } from './document-signing/document-signing.service';
+import { PdfSignatureService } from './document-signing/document-signing.service';
 
 const services = [
-  DocumentSigningService,
+  PdfSignatureService,
   EmailService,
   HashService,
   MinioService,

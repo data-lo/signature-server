@@ -4,9 +4,23 @@ import * as crypto from 'crypto';
 @Injectable()
 export class HashService {
 
-  private readonly CIPHER_KEY = crypto.createHash('sha256')
-  .update(process.env.CIPHER_SECRET)
-  .digest()
+  CIPHER_KEY:any;
+
+  constructor(){
+    this.setCipherKey();
+  }
+
+  private setCipherKey(){
+    if(!process.env.CIPHER_SECRET){
+      throw new Error('Variable de Entorno de CHIPHER_SECRET para el Hash Service no están configuradas');
+    }
+    if(!this.CIPHER_KEY){
+      this.CIPHER_KEY = crypto.createHash('sha256')
+      .update(process.env.CIPHER_SECRET)
+      .digest()
+    }
+    return;
+  }
 
   async generateFilesHash(files: Express.Multer.File[]): Promise<string[]> {
     try {
@@ -20,8 +34,9 @@ export class HashService {
     }
   }
 
-  async generateFileHash(file: Express.Multer.File): Promise<string> {
-    const hash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+  async generateFileHash(file: Express.Multer.File | Buffer): Promise<string> {
+    const buffer = Buffer.isBuffer(file) ? file: file.buffer;
+    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     return hash;
   }
 
