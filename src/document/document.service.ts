@@ -36,7 +36,7 @@ export class DocumentService {
     private readonly documentSigningSerivice: PdfSignatureService,
     private readonly signatureService: SignatureService,
     private readonly emailService: EmailService,
-  ) {}
+  ) { }
   /** Sube el archivo a Minio, genera su hash y registra el documento en la base de datos. */
   async create(
     createDocumentDto: CreateDocumentDto,

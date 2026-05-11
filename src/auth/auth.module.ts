@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { ApiKeyGuard } from './guards/api-key.guard';
 
 /**
  * Módulo de autenticación.
@@ -11,7 +11,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
   providers: [
     {
       provide: APP_GUARD,
-      useClass: JwtAuthGuard,
+      useClass: ApiKeyGuard,
     },
   ],
 })

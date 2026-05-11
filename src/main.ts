@@ -9,6 +9,7 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
 // Módulos privados
 import { UserModule } from './user/user.module';
 import { DocumentModule } from './document/document.module';
+import { SignatureModule } from './signature/signature.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -25,13 +26,14 @@ async function bootstrap() {
     .setTitle('Signature Server API')
     .setDescription('API para gestión de firmas digitales y documentos')
     .setVersion('1.0')
-    .addApiKey({ type: 'apiKey', name: 'API_KEY', in: 'header' })
+    .addApiKey({ type: 'apiKey', name: 'x-api-key', in: 'header' }, 'x-api-key')
     .build();
 
-  // const publicDocument = SwaggerModule.createDocument(app, publicSwaggerConfig, {
-  //   include: [VerificationCodeModule], // 👈 módulos accesibles al público
-  // });
-  // SwaggerModule.setup('api/docs', app, publicDocument);
+  const publicDocument = SwaggerModule.createDocument(app, publicSwaggerConfig, {
+    include: [UserModule, DocumentModule, SignatureModule],
+  });
+
+  SwaggerModule.setup('api/docs', app, publicDocument);
 
   // Swagger Privado
   const privateSwaggerConfig = new DocumentBuilder()

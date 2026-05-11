@@ -17,7 +17,7 @@ export class UserEntity {
     @Column({ unique: true, name: 'email' })
     email: string;
 
-    @Column({ nullable: true, name: 'position' })
+    @Column({ nullable: false, name: 'position' })
     position: string;
 
     @Column({ name: 'roles', type: 'simple-array' })

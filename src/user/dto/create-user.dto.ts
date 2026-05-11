@@ -1,13 +1,10 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import {
   IsArray,
-  IsBoolean,
   IsEmail,
   IsEnum,
   IsNotEmpty,
-  IsOptional,
   IsString,
-  IsUUID,
   Length,
 } from 'class-validator';
 import { UserRoles } from '../interfaces/user.roles.enum';
@@ -28,31 +25,19 @@ export class CreateUserDto {
   @IsNotEmpty()
   email: string;
 
-  @ApiPropertyOptional({ example: 'Gerente de TI', description: 'Cargo o puesto del usuario' })
-  @IsOptional()
+  @ApiProperty({ example: 'Gerente de TI', description: 'Cargo o puesto del usuario' })
   @IsString()
-  position?: string;
+  position: string;
 
-  @ApiPropertyOptional({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID de la firma asociada al usuario', format: 'uuid' })
-  @IsUUID()
-  @IsOptional()
-  signatureId?: string;
-
-  @ApiPropertyOptional({ example: true, description: 'Indica si el usuario está activo en el sistema' })
-  @IsBoolean()
-  @IsOptional()
-  isActive?: boolean;
-
-  @ApiPropertyOptional({ example: ['signer'], description: 'Lista de roles asignados al usuario', type: [String], enum: UserRoles })
+  @ApiProperty({ example: ['signer'], description: 'Lista de roles asignados al usuario', type: [String], enum: UserRoles })
   @IsArray()
   @IsString({ each: true })
   @IsEnum(UserRoles, { each: true })
-  @IsOptional()
-  rol?: string[];
+  roles: string[];
 
   @ApiProperty({ example: 'PELJ850101HDFRNN08', description: 'CURP del usuario (18 caracteres alfanuméricos)' })
   @IsString()
   @IsNotEmpty()
   @Length(18, 18)
-  curp: string;
+  nationalId: string;
 }

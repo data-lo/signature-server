@@ -13,7 +13,7 @@ export enum ApiResponseMessage {
 
 export class ApiResponseDto {
   @ApiProperty({ example: 200, description: 'Código de estado HTTP de la respuesta' })
-  success: number;
+  success: boolean;
 
   @ApiProperty({
     example: ApiResponseMessage.SUCCESS,
