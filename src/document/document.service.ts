@@ -280,13 +280,19 @@ export class DocumentService {
         coordinates,
       );
 
-      if (!signedDocument) {
+      const signedDocumentWithName = await this.documentSigningSerivice.addSignerName(
+        signedDocument,
+        signerUser.firstName.concat(' ',signerUser.lastName),
+        coordinates
+      );
+      
+      if (!signedDocumentWithName) {
         throw new Error('El servicio de firma no retornó un documento válido');
       }
 
       await this.minioService.uploadObject(
         {
-          file: signedDocument,
+          file: signedDocumentWithName,
           name: document.fileName,
           mimetype: 'application/pdf',
         },
