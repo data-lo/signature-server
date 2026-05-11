@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,10 +13,10 @@ import { CreateSignatureDto } from './dto/create-signature.dto';
 import { MinioService } from 'src/shared/minio/minio.service';
 import 'multer';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { CanActivate } from '@nestjs/common';
 
 @Injectable()
 export class SignatureService {
-  
   logger = new Logger(SignatureService.name);
 
   constructor(
@@ -131,15 +132,15 @@ export class SignatureService {
       );
     }
 
-    if(files.imagen_ine){
+    if (files.imagen_ine) {
       await this.minioService.replaceFile(
         signatureData.officialCardObjectKey,
         {
           file: files.imagen_ine,
-          name: files.imagen_ine.filename
+          name: files.imagen_ine.filename,
         },
-        BUCKET_TYPES_ENUM.OFICIAL_CARDS
-      )
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS,
+      );
     }
 
     return await this.findOne(id);
@@ -153,34 +154,38 @@ export class SignatureService {
     const signature = await this.findOne(id);
     const signaturePngObjectKey = signature.signatureObjectKey;
     this.logger.log(`Firma de Imagen a reemplazar ${signature}`);
-    this.logger.log(`ObjectKey (fileName) del png a reemplazar ${signaturePngObjectKey}`);
+    this.logger.log(
+      `ObjectKey (fileName) del png a reemplazar ${signaturePngObjectKey}`,
+    );
 
-    const blankPngBuffer =  await this.minioService.getFileInBytesFormat(
+    const blankPngBuffer = await this.minioService.getFileInBytesFormat(
       'Blank_Png.png',
-      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
     );
 
-    try{
-      const replaceFileResponce = await this.minioService.replaceFile(
-      signaturePngObjectKey,
-      {
-        file:blankPngBuffer,
-        name: signaturePngObjectKey
-      },
-      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
-    );
-    this.logger.log(replaceFileResponce);  
-    }catch(error){
-      this.logger.error(`Error reemplazando la firma por Blank ${error}`)
+    try {
+      try {
+        const replaceFileResponce = await this.minioService.replaceFile(
+          signaturePngObjectKey,
+          {
+            file: blankPngBuffer,
+            name: signaturePngObjectKey,
+            mimetype: 'png',
+          },
+          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+        );
+        this.logger.log(replaceFileResponce);
+        signature.isActive = false;
+        return this.signatureRepository.save(signature);
+      } catch (error) {
+        this.logger.error(`Error reemplazando la firma por Blank ${error}`);
+      }
+    } catch (error) {
+      throw new InternalServerErrorException(`Error ${error}`);
     }
-    // TODO: sobreescribir la imagen de firma en Minio con un PNG en blanco cuando MinioService esté implementado
-    // await this.minioService.overwrite(signature.signatureObjectKey, BLANK_PNG_BUFFER); // subir el blank_png a minio
-
-    signature.isActive = false;
-    return this.signatureRepository.save(signature);
   }
 
-  async getFile(fileId: string, bucketType:BUCKET_TYPES_ENUM){
+  async getFile(fileId: string, bucketType: BUCKET_TYPES_ENUM) {
     return await this.minioService.getFile(fileId, bucketType);
   }
 }
