@@ -1,9 +1,11 @@
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserEntity } from './entities/user.entity';
+import { SignatureService } from 'src/signature/signature.service';
 import { NotFoundError } from 'rxjs';
 import { UserRoles } from './enums/user-roles';
 import { ApiResponseDto } from 'src/interfaces/api-response.dto';
@@ -13,6 +15,7 @@ export class UserService {
   constructor(
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
+    private signatureService: SignatureService
   ) { }
 
   async create(createUserDto: CreateUserDto): Promise<UserEntity> {
@@ -92,6 +95,16 @@ export class UserService {
     return this.userRepository.findOne({ where: { email, isDeleted: false } });
   }
 
+  async remove(id: string): Promise<string> {
+    const user = await this.findOne(id);
+    const signatureId = user.signatureId;
+    try{
+      await this.signatureService.deactivate(signatureId);
+    }catch(error){
+      throw new InternalServerErrorException('Error sobreescribiendo el PNG de la firma por BlankPNG')
+    }
+    await this.userRepository.update(id, { isDeleted: true, isActive: false });
+    return 'User deleted';
   async remove(id: string): Promise<ApiResponseDto> {
     const result = await this.userRepository.update(
       { id, isActive: true },

@@ -9,6 +9,8 @@ import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto } from 'src/interface
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GetDocumentsBySignerDto } from './dto/get-documents-by-signer.dto';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { IpInterceptor } from 'src/ip/ip.interceptor';
+import { ClientIp } from 'src/ip/ip.decorator';
 
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
@@ -34,20 +36,23 @@ export class DocumentController {
   @ApiResponse({ status: 201, description: 'Documento registrado para firmar correctamente', type: DocumentResponseDto })
   @ApiResponse({ status: 400, description: 'Datos de entrada inválidos o archivo no proporcionado', type: ApiInvalidDataResponseDto })
   @ApiResponse({ status: 404, description: 'Firmante o creador no encontrado', type: ApiNotFoundResponseDto })
-  @UseInterceptors(FileInterceptor('document'))
+  @UseInterceptors(FileInterceptor('document'),IpInterceptor)
   async create(
     @Body() createDocumentDto: CreateDocumentDto,
     @UploadedFile() document: Express.Multer.File,
+    @ClientIp() ip:string
   ) {
     console.log(document.filename, document.mimetype);
-    return await this.documentService.create(createDocumentDto, document);
+    return await this.documentService.create(createDocumentDto, document, ip);
   }
 
   @Public()
   @Get()
   @ApiOperation({ summary: 'Obtener todos los documentos' })
   @ApiResponse({ status: 200, description: 'Lista de todos los documentos', type: [DocumentResponseDto] })
-  findAll() {
+  @UseInterceptors(IpInterceptor)
+  findAll(@ClientIp() ip:string) {
+    console.log(ip)
     return this.documentService.findAll();
   }
 

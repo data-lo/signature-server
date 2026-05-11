@@ -41,6 +41,7 @@ export class DocumentService {
   async create(
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
+    ip:string
   ) {
     try {
       if (!file) {
@@ -56,7 +57,8 @@ export class DocumentService {
         },
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
-
+      const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
+    
       if (
         minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED
       ) {
@@ -67,16 +69,13 @@ export class DocumentService {
       const signerUser = await this.UserService.findOne(signerId);
       const requestedByUser = await this.UserService.findOne(createdById);
 
-      //TO DO SERVICIO DE PDF,
-      //TO DO CONSTRUIR DOCUMENT URL AL MOMENTO DE SERVIR EL DOCUMENTO AL FRONT
 
       const document = await this.documentRepository.create({
         objectKey: minioUploadDocumentResponse.fileId,
         fileName: fileOriginalName,
         fileType: file.mimetype,
-        totalPages: 0, //TO DO, IMPLEMENTAR UN CONTADOR DE PAGINAS DEL PDF
-        documentUrl: null, // IMPLEMENTAR SECURE URL URL-SERVER + URL MINIO
-        ipAddress: '0.0.0.0', // IMPLEMENTAR EL INTERCEPTOR DE IP
+        totalPages: pdfPages,
+        ipAddress: ip, // IMPLEMENTAR EL INTERCEPTOR DE IP
         originalHash: hashBefore,
         signatureCoordinates: coord ? coord : DEFAULT_COORDINATES,
         requestedBy: requestedByUser,
@@ -281,13 +280,19 @@ export class DocumentService {
         coordinates,
       );
 
-      if (!signedDocument) {
+      const signedDocumentWithName = await this.documentSigningSerivice.addSignerName(
+        signedDocument,
+        signerUser.firstName.concat(' ',signerUser.lastName),
+        coordinates
+      );
+      
+      if (!signedDocumentWithName) {
         throw new Error('El servicio de firma no retornó un documento válido');
       }
 
       await this.minioService.uploadObject(
         {
-          file: signedDocument,
+          file: signedDocumentWithName,
           name: document.fileName,
           mimetype: 'application/pdf',
         },
