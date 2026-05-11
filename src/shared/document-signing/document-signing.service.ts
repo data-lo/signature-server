@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { PDFDocument, PDFImage, PDFName, PDFNumber, PDFString, StandardFonts, rgb, degrees } from 'pdf-lib';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -266,6 +266,17 @@ export class PdfSignatureService {
     }
 
     return { width, height };
+  }
+
+  async getPdfPages(file:Express.Multer.File){
+    try{
+      const buffer = file.buffer
+      const pdf = await PDFDocument.load(buffer);
+      const totalPages = pdf.getPageCount() 
+      return totalPages
+    }catch(error){
+      throw new InternalServerErrorException(`Error obteniendo la cantidad total de imagenes del pdf: ${error}`);
+    } 
   }
 }
 
