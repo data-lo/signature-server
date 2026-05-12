@@ -108,8 +108,8 @@ export class SignatureService {
   async update(
     id: string,
     files: {
-      imagen_firma?: Express.Multer.File;
-      imagen_ine?: Express.Multer.File;
+      signatureImage?: Express.Multer.File;
+      officialFile?: Express.Multer.File;
     },
   ): Promise<SignatureEntity> {
     const signatureData = await this.findOne(id);
@@ -118,23 +118,23 @@ export class SignatureService {
       throw new NotFoundException(`Firma con id ${id} no encontrada`);
     }
 
-    if (files.imagen_firma) {
+    if (files.signatureImage) {
       await this.minioService.replaceFile(
         signatureData.signatureObjectKey,
         {
-          file: files.imagen_firma,
-          name: files.imagen_firma.fieldname,
+          file: files.signatureImage,
+          name: files.signatureImage.fieldname,
         },
         BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
       );
     }
 
-    if(files.imagen_ine){
+    if(files.officialFile){
       await this.minioService.replaceFile(
         signatureData.officialCardObjectKey,
         {
-          file: files.imagen_ine,
-          name: files.imagen_ine.filename
+          file: files.officialFile,
+          name: files.officialFile.filename
         },
         BUCKET_TYPES_ENUM.OFICIAL_CARDS
       )
