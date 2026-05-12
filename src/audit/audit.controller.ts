@@ -18,8 +18,15 @@ export class AuditController {
     return this.auditService.findOne(documentId);
   }
 
+  @Get('decrypted')
+  @ApiOperation({ summary: 'Obtener todos los registros de auditoría descifrados' })
+  @ApiResponse({ status: 200, description: 'Lista paginada de registros descifrados con sus campos de integridad' })
+  findAllDecrypted(@Query() query: FindAllAuditDto) {
+    return this.auditService.findAllDecrypted(query);
+  }
+
   @Get()
-  @ApiOperation({ summary: 'Obtener todos los registros de auditoría' })
+  @ApiOperation({ summary: 'Obtener todos los registros de auditoría (cifrados)' })
   @ApiResponse({ status: 200, description: 'Lista paginada de registros de auditoría' })
   findAll(@Query() query: FindAllAuditDto) {
     return this.auditService.findAll(query);

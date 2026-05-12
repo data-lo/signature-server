@@ -16,6 +16,8 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { DocumentService } from 'src/document/document.service';
 import { VerificationCodeObject } from './interfaces/verification-code-object';
 import { CodeType } from './enums/code-type.enum';
+import { AuditService } from 'src/audit/audit.service';
+import { AuditAction } from 'src/audit/schema/audit-document';
 
 @Injectable()
 export class VerificationCodeService {
@@ -31,6 +33,7 @@ export class VerificationCodeService {
     private readonly userService: UserService,
     private readonly redisService: RedisService,
     private readonly documentService: DocumentService,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -142,6 +145,20 @@ export class VerificationCodeService {
       verificationCode.type === CodeType.CANCELLATION ? 'document.cancel' :
       verificationCode.type === CodeType.REJECTION    ? 'document.reject' :
                                                         'document.sign';
+
+    const auditOperation =
+      verificationCode.type === CodeType.CANCELLATION ? AuditAction.DOCUMENT_CANCELLED :
+      verificationCode.type === CodeType.REJECTION    ? AuditAction.DOCUMENT_REJECTED :
+                                                        AuditAction.DOCUMENT_SIGNED;
+
+    void this.auditService.create({
+      documentId: dto.documentId,
+      operation: auditOperation,
+      ipAddress,
+      users: [{ userId: dto.signerId, action: auditOperation }],
+      verificationCodeId,
+      ...(auditOperation === AuditAction.DOCUMENT_SIGNED && { signedAt: new Date() }),
+    });
 
     this.eventEmitter.emit(documentEvent, {
       signerId: dto.signerId,

@@ -101,15 +101,75 @@ export class AuditService {
   }
 
   /**
-   * Retorna registros de auditoría con soporte de filtros y paginación.
+   * Igual que findAll pero descifra el cipher de cada registro antes de retornarlo.
+   * Permite leer el contenido original de los registros de auditoría almacenados cifrados.
+   */
+  async findAllDecrypted(query: FindAllAuditDto) {
+    const { dateFrom, dateTo, page = 1, limit = 10 } = query;
+
+    const filter: Record<string, any> = {};
+
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) filter.createdAt.$lte = new Date(dateTo);
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [records, total] = await Promise.all([
+      this.auditModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      this.auditModel.countDocuments(filter),
+    ]);
+
+    const data = await Promise.all(
+      records.map(async (record) => {
+        try {
+          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
+          return {
+            ...decryptedContent,
+            integrityHash: record.integrityHash,
+            chainHash: record.chainHash,
+            chainIndex: record.chainIndex,
+            createdAt: record['createdAt'],
+          };
+        } catch {
+          return record;
+        }
+      }),
+    );
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Retorna registros de auditoría descifrados con soporte de filtros y paginación.
+   * Cada registro se descifra usando reverseCiperHash antes de ser retornado.
    */
   async findAll(query: FindAllAuditDto) {
     const { id, dateFrom, dateTo, page = 1, limit = 10 } = query;
 
     if (id) {
-      const record = await this.auditModel.findById(id);
+      const record = await this.auditModel.findById(id).lean();
       if (!record) throw new NotFoundException(`Registro de auditoría ${id} no encontrado`);
-      return record;
+      try {
+        const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
+        return {
+          ...decryptedContent,
+          integrityHash: record.integrityHash,
+          chainHash: record.chainHash,
+          chainIndex: record.chainIndex,
+          createdAt: record['createdAt'],
+        };
+      } catch {
+        return record;
+      }
     }
 
     const filter: Record<string, any> = {};
@@ -122,10 +182,27 @@ export class AuditService {
 
     const skip = (page - 1) * limit;
 
-    const [data, total] = await Promise.all([
-      this.auditModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    const [records, total] = await Promise.all([
+      this.auditModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       this.auditModel.countDocuments(filter),
     ]);
+
+    const data = await Promise.all(
+      records.map(async (record) => {
+        try {
+          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
+          return {
+            ...decryptedContent,
+            integrityHash: record.integrityHash,
+            chainHash: record.chainHash,
+            chainIndex: record.chainIndex,
+            createdAt: record['createdAt'],
+          };
+        } catch {
+          return record;
+        }
+      }),
+    );
 
     return {
       data,
