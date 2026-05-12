@@ -1,8 +1,8 @@
 // NestJS core
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 
 // Swagger
-import { ApiOperation, ApiParam, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 // Auth
 import { Public } from 'src/auth/decorators/public.decorator';
@@ -36,20 +36,22 @@ export class UserController {
 
   @Get()
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
+  @ApiQuery({ name: 'withSignature', required: false, type: Boolean, description: 'Incluir la firma del usuario' })
   @ApiResponse({ status: 200, description: 'Lista de usuarios obtenida correctamente', type: UserGetListResponseDto })
   @ApiResponse({ status: 401, description: 'API Key inválida o no proporcionada' })
-  findAll() {
-    return this.userService.findAllActiveUsers();
+  findAll(@Query('withSignature') withSignature?: string) {
+    return this.userService.findAllActiveUsers(withSignature === 'true');
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Obtener un usuario' })
   @ApiParam({ name: 'id', description: 'Identificador único del usuario en formato UUID v4', format: 'uuid', example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa' })
+  @ApiQuery({ name: 'withSignature', required: false, type: Boolean, description: 'Incluir la firma del usuario' })
   @ApiResponse({ status: 200, description: 'Usuario encontrado', type: UserGetResponseDto })
   @ApiResponse({ status: 401, description: 'API Key inválida o no proporcionada' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado', type: ApiNotFoundResponseDto })
-  findOne(@Param('id') id: string) {
-    return this.userService.findOneActiveUser(id);
+  findOne(@Param('id') id: string, @Query('withSignature') withSignature?: string) {
+    return this.userService.findOneActiveUser(id, withSignature === 'true');
   }
 
   @Patch(':id')

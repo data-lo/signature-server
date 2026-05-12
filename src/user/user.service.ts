@@ -1,18 +1,30 @@
+// External dependencies
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+
+// DTOs
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+
+// Entities
 import { UserEntity } from './entities/user.entity';
-import { NotFoundError } from 'rxjs';
+
+// Enums
 import { UserRoles } from './enums/user-roles';
+
+// Interfaces
 import { ApiResponseDto } from 'src/interfaces/api-response.dto';
+import { SignatureService } from 'src/signature/signature.service';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
+
+    private signatureService: SignatureService
   ) { }
 
   async create(createUserDto: CreateUserDto): Promise<UserEntity> {
@@ -32,31 +44,89 @@ export class UserService {
     return this.removeSensitiveData(new_user);
   }
 
-  async findAllActiveUsers(): Promise<UserEntity[]> {
+  async findAllActiveUsers(withSignature = false): Promise<UserEntity[]> {
     const users = await this.userRepository.find({
       where: { isActive: true },
+      ...(withSignature && {
+        relations: { signature: true },
+        select: {
+          signature: {
+            signatureObjectKey: true
+          }
+        }
+      })
     });
+
     if (!users || users.length === 0) {
       return [];
     }
-    const secure_users = [];
-    users.forEach(user => {
-      const secure_user = this.removeSensitiveData(user);
-      secure_users.push(secure_user);
-    });
-    return secure_users;
+
+    const secureUsers = await Promise.all(
+      users.map(async (user) => {
+        const sanitizedUser = this.removeSensitiveData(user);
+
+        if (withSignature && user.signature?.signatureObjectKey) {
+          const signatureData = await this.signatureService.getFile(
+            user.signature.signatureObjectKey,
+            BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+          );
+
+          return {
+            ...sanitizedUser,
+            signature: {
+              secureUrl: signatureData.secureUrl,
+              expiresIn: signatureData.expiresIn,
+            }
+          };
+        }
+        return sanitizedUser;
+      })
+    );
+
+    return secureUsers as any;
   }
 
-  async findOneActiveUser(id: string): Promise<UserEntity | null> {
+  async findOneActiveUser(id: string, withSignature = false): Promise<UserEntity | null> {
     const user = await this.userRepository.findOne({
       where: { id, isActive: true },
+      ...(withSignature && {
+        relations: {
+          signature: true
+        },
+        select: {
+          signature: {
+            signatureObjectKey: true
+          }
+        }
+      })
     });
 
     if (!user) {
       throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
     }
 
-    return this.removeSensitiveData(user);
+    let signatureData;
+
+    const sanitizedUser = this.removeSensitiveData(user);
+
+    if (withSignature && user.signature?.signatureObjectKey) {
+      signatureData = await this.signatureService.getFile(
+        user.signature.signatureObjectKey,
+        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+      );
+    }
+
+    const newUserObject = {
+      ...sanitizedUser,
+      ...(withSignature && user.signature?.signatureObjectKey && {
+        signature: {
+          secureUrl: signatureData.secureUrl,
+          expiresIn: signatureData.expiresIn
+        }
+      })
+    };
+
+    return newUserObject as any;
   }
 
   async update(id: string, updateUserDto: UpdateUserDto): Promise<UserEntity> {

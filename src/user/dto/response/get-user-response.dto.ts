@@ -1,6 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { ApiResponseDto } from '../../../interfaces/api-response.dto';
 
+export class SignatureUrlDto {
+    @ApiProperty({ example: 'https://storage.example.com/firma.png?token=...', description: 'URL segura de la firma' })
+    secureUrl: string;
+
+    @ApiProperty({ example: 86400, description: 'Tiempo de expiración de la URL en segundos' })
+    expiresIn: number;
+}
+
 export class UserGetData {
     @ApiProperty({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID del usuario', format: 'uuid' })
     id: string;
@@ -29,11 +37,12 @@ export class UserGetData {
     nationalId: string;
 
     @ApiProperty({
-        example:"a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        description: 'UUID de la firma del usuario, null si no tiene firma registrada',
-        format: 'uuid',
+        type: SignatureUrlDto,
+        description: 'URL de la firma del usuario, presente solo si se solicita con withSignature=true',
+        nullable: true,
+        required: false
     })
-    signatureId: string;
+    signature?: SignatureUrlDto | null;
 }
 
 export class UserGetResponseDto extends ApiResponseDto {
