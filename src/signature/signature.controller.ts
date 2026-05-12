@@ -27,7 +27,7 @@ export class SignatureController {
     private readonly signatureService: SignatureService,
   ) {}
 
-  @Public()
+
   @ApiExcludeEndpoint()
   @Get('files/:fileId')
   @ApiOperation({ summary: 'Obtener archivo de firma o identificación desde MinIO' })
@@ -35,10 +35,10 @@ export class SignatureController {
   @ApiResponse({ status: 200, description: 'URL del archivo generada correctamente' })
   @ApiResponse({ status: 404, description: 'Archivo no encontrado', type: ApiNotFoundResponseDto })
   async getFile(
-    @Param('fileId') fileId: string,
+    @Param('fileId') objectKey: string,
     @Body('bucketType') bucketType: BUCKET_TYPES_ENUM,
   ) {
-    return await this.signatureService.getFile(fileId, bucketType);
+    return await this.signatureService.getFile(objectKey, bucketType);
   }
 
   @Public()

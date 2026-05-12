@@ -1,4 +1,3 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -95,16 +94,7 @@ export class UserService {
     return this.userRepository.findOne({ where: { email, isDeleted: false } });
   }
 
-  async remove(id: string): Promise<string> {
-    const user = await this.findOne(id);
-    const signatureId = user.signatureId;
-    try{
-      await this.signatureService.deactivate(signatureId);
-    }catch(error){
-      throw new InternalServerErrorException('Error sobreescribiendo el PNG de la firma por BlankPNG')
-    }
-    await this.userRepository.update(id, { isDeleted: true, isActive: false });
-    return 'User deleted';
+
   async remove(id: string): Promise<ApiResponseDto> {
     const result = await this.userRepository.update(
       { id, isActive: true },

@@ -188,7 +188,7 @@ export class MinioService {
   }
 
   async getFile(
-    fileId: string,
+    fileId: string, // OBJECT KEY,
     bucketType: BUCKET_TYPES_ENUM,
     expiresIn: number = 24 * 60 * 60,
   ): Promise<GetFileResponse> {
@@ -349,6 +349,8 @@ export class MinioService {
       throw new Error(`Error obteniendo Bytes de Archivo desde Minio ${error}`)
     }
   }
+
+  
 
   private addFileExtension(fileId: string, bucketType: BUCKET_TYPES_ENUM): string {
     switch (bucketType) {
