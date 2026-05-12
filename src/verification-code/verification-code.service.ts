@@ -21,6 +21,7 @@ import { CodeType } from './enums/code-type.enum';
 export class VerificationCodeService {
   private readonly OTP_TTL = 900;
   private readonly KEY_PREFIX = 'OTP:';
+  private readonly logger = new Logger(VerificationCodeService.name);
 
   constructor(
     @InjectRepository(VerificationCodeEntity)
@@ -30,7 +31,7 @@ export class VerificationCodeService {
     private readonly userService: UserService,
     private readonly redisService: RedisService,
     private readonly documentService: DocumentService,
-  ) { }
+  ) {}
 
   /**
    * Genera y envía un código OTP al firmante del documento.
@@ -38,10 +39,6 @@ export class VerificationCodeService {
    * - Valida que el firmante esté asociado al documento
    * - Almacena el código en Redis con un TTL de 15 minutos
    * - Emite un evento para enviar el código por correo
-   *
-   * @param dto - Datos del firmante y documento
-   * @returns Mensaje de confirmación
-   * @throws ForbiddenException - Si el firmante no está asociado al documento
    */
   async create(dto: CreateVerificationCodeDto): Promise<{}> {
     const document = await this.documentService.findOne(dto.documentId);
@@ -59,7 +56,6 @@ export class VerificationCodeService {
     const code = await this.otpService.generate();
 
     const expiredAt = new Date();
-
     expiredAt.setSeconds(expiredAt.getSeconds() + this.OTP_TTL);
 
     const verificationCodeObject = {
@@ -68,7 +64,7 @@ export class VerificationCodeService {
       type: dto.type,
       signerId: dto.signerId,
       documentId: dto.documentId,
-    }
+    };
 
     await this.redisService.set(`${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
@@ -86,7 +82,7 @@ export class VerificationCodeService {
 
     return {
       message: 'Código enviado al correo del firmante',
-    }
+    };
   }
 
   /**
@@ -96,19 +92,12 @@ export class VerificationCodeService {
    * - Verifica que el firmante esté asociado al documento
    * - Elimina el OTP de Redis garantizando uso único
    * - Persiste y marca el registro como usado en base de datos
-   *
-   * @param dto - Datos de validación: código OTP, firmante y documento
-   * @param ipAddress - Dirección IP desde donde se realiza la validación
-   * @returns Mensaje de confirmación del procesamiento del documento
-   * @throws NotFoundException - Si el código OTP no existe o ha expirado
-   * @throws ForbiddenException - Si el firmante no está asociado al documento
-   * @throws UnauthorizedException - Si el código OTP es inválido
+   * - Emite el evento de procesamiento del documento incluyendo IP y verificationCodeId
    */
   async validateAndSaveCode(
     dto: ValidateCodeDto,
     ipAddress: string,
   ): Promise<{ message: string }> {
-
     let verificationCodeString = await this.redisService.get(`${dto.documentId}`);
     if (!verificationCodeString) {
       throw new NotFoundException('Código de verificación no encontrado o expirado');
@@ -134,10 +123,21 @@ export class VerificationCodeService {
         code: verificationCode.code,
         signerId: verificationCode.signerId,
         documentId: verificationCode.documentId,
-        type: CodeType.VERIFICATION
+        type: CodeType.VERIFICATION,
       },
     );
-    
+
+    // Intentamos obtener el ID del registro de verificación para trazabilidad en auditoría
+    let verificationCodeId: string | undefined;
+    try {
+      const vcEntity = await this.verificationCodeRepository.findOne({
+        where: { documentId: dto.documentId },
+      });
+      verificationCodeId = vcEntity?.id;
+    } catch (err) {
+      this.logger.warn(`No se pudo obtener verificationCodeId para documentId=${dto.documentId}: ${err}`);
+    }
+
     const documentEvent =
       verificationCode.type === CodeType.CANCELLATION ? 'document.cancel' :
       verificationCode.type === CodeType.REJECTION    ? 'document.reject' :
@@ -146,6 +146,8 @@ export class VerificationCodeService {
     this.eventEmitter.emit(documentEvent, {
       signerId: dto.signerId,
       documentId: dto.documentId,
+      ipAddress,
+      verificationCodeId,
     });
 
     return {

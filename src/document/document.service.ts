@@ -22,6 +22,8 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { SignatureService } from 'src/signature/signature.service';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
 import { EmailService } from 'src/shared/email/email.service';
+import { AuditService } from 'src/audit/audit.service';
+import { AuditAction } from 'src/audit/schema/audit-document';
 
 @Injectable()
 export class DocumentService {
@@ -36,12 +38,14 @@ export class DocumentService {
     private readonly documentSigningSerivice: PdfSignatureService,
     private readonly signatureService: SignatureService,
     private readonly emailService: EmailService,
-  ) { }
+    private readonly auditService: AuditService,
+  ) {}
+
   /** Sube el archivo a Minio, genera su hash y registra el documento en la base de datos. */
   async create(
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
-    ip:string
+    ip: string,
   ) {
     try {
       if (!file) {
@@ -58,7 +62,7 @@ export class DocumentService {
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
       const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
-    
+
       if (
         minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED
       ) {
@@ -69,13 +73,12 @@ export class DocumentService {
       const signerUser = await this.UserService.findOne(signerId);
       const requestedByUser = await this.UserService.findOne(createdById);
 
-
       const document = await this.documentRepository.create({
         objectKey: minioUploadDocumentResponse.fileId,
         fileName: fileOriginalName,
         fileType: file.mimetype,
         totalPages: pdfPages,
-        ipAddress: ip, // IMPLEMENTAR EL INTERCEPTOR DE IP
+        ipAddress: ip,
         originalHash: hashBefore,
         signatureCoordinates: coord ? coord : DEFAULT_COORDINATES,
         requestedBy: requestedByUser,
@@ -83,6 +86,14 @@ export class DocumentService {
       });
 
       await this.documentRepository.save(document);
+
+      void this.auditService.create({
+        documentId: document.id,
+        operation: AuditAction.DOCUMENT_CREATED,
+        ipAddress: ip,
+        users: [{ userId: requestedByUser.id, action: AuditAction.DOCUMENT_CREATED }],
+      });
+
       return document;
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
@@ -118,7 +129,7 @@ export class DocumentService {
     }
   }
 
-  /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento (firmado o no firmado). */
+  /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
   async getDocumentMinioURL(documentId: string): Promise<string> {
     try {
       const document = await this.findOne(documentId);
@@ -184,8 +195,6 @@ export class DocumentService {
           throw new Error('Error reemplazando el documento en Minio');
         }
       }
-      //TO DO DESAGREGAR DEL UPDATE DOCUMENT DTO LOS CAMPOS
-      //QUE SON INTERNOS
       await this.documentRepository.update(id, updateDocumentDto);
       return await this.findOne(id);
     } catch (error) {
@@ -222,7 +231,7 @@ export class DocumentService {
   }
 
   /** Cambia el estatus del documento de CREATED a PENDING y envía una notificación por email al firmante. */
-  async submitForAuthorization(documentId: string): Promise<DocumentEntity> {
+  async submitForAuthorization(documentId: string, ip: string): Promise<DocumentEntity> {
     try {
       const document = await this.findOne(documentId);
 
@@ -244,6 +253,13 @@ export class DocumentService {
         signerFullName,
       );
 
+      void this.auditService.create({
+        documentId,
+        operation: AuditAction.DOCUMENT_SENT_TO_SIGN,
+        ipAddress: ip,
+        users: [{ userId: document.createdBy, action: AuditAction.DOCUMENT_SENT_TO_SIGN }],
+      });
+
       return document;
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
@@ -254,7 +270,7 @@ export class DocumentService {
   /** Obtiene la firma y el documento desde Minio, los fusiona en un PDF firmado, lo sube al bucket de documentos firmados y actualiza el estatus a SIGNED. */
   async mergeSignatureAndSave(payload: DocumentSignEventPayload) {
     try {
-      const { signerId, documentId } = payload;
+      const { signerId, documentId, ipAddress, verificationCodeId } = payload;
       const signerUser = await this.UserService.findOne(signerId);
       const document = await this.findOne(documentId);
       const coordinates = document.signatureCoordinates;
@@ -282,10 +298,10 @@ export class DocumentService {
 
       const signedDocumentWithName = await this.documentSigningSerivice.addSignerName(
         signedDocument,
-        signerUser.firstName.concat(' ',signerUser.lastName),
-        coordinates
+        signerUser.firstName.concat(' ', signerUser.lastName),
+        coordinates,
       );
-      
+
       if (!signedDocumentWithName) {
         throw new Error('El servicio de firma no retornó un documento válido');
       }
@@ -305,6 +321,15 @@ export class DocumentService {
       document.signedAt = new Date();
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
       await this.documentRepository.save(document);
+
+      void this.auditService.create({
+        documentId: document.id,
+        operation: AuditAction.DOCUMENT_SIGNED,
+        ipAddress: ipAddress ?? '0.0.0.0',
+        users: [{ userId: signerId, action: AuditAction.DOCUMENT_SIGNED }],
+        signedAt: document.signedAt,
+        verificationCodeId,
+      });
 
       return await this.findOne(document.id);
     } catch (error) {
@@ -344,10 +369,10 @@ export class DocumentService {
     }
   }
 
-  /** Obtiene el documento firmado desde Minio, estampa la marca de agua CANCELADO en todas las páginas, lo sube al bucket de cancelados y actualiza el estatus a CANCELLED. */
+  /** Estampa la marca de agua CANCELADO, lo sube al bucket de cancelados y actualiza el estatus a CANCELLED. */
   async cancelDocument(payload: DocumentCancelPayload): Promise<DocumentEntity> {
     try {
-      const { documentId } = payload;
+      const { documentId, signerId, ipAddress, verificationCodeId } = payload;
       const document = await this.findOne(documentId);
 
       const documentBuffer = await this.minioService.getFileInBytesFormat(
@@ -376,6 +401,14 @@ export class DocumentService {
       document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
       await this.documentRepository.save(document);
 
+      void this.auditService.create({
+        documentId: document.id,
+        operation: AuditAction.DOCUMENT_CANCELLED,
+        ipAddress: ipAddress ?? '0.0.0.0',
+        users: [{ userId: signerId, action: AuditAction.DOCUMENT_CANCELLED }],
+        verificationCodeId,
+      });
+
       return await this.findOne(document.id);
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
@@ -384,10 +417,10 @@ export class DocumentService {
     }
   }
 
-  /** Obtiene el documento original desde Minio, estampa la marca de agua RECHAZADO en todas las páginas, lo sube al bucket de rechazados y actualiza el estatus a REJECTED. */
+  /** Estampa la marca de agua RECHAZADO, lo sube al bucket de rechazados y actualiza el estatus a REJECTED. */
   async rejectDocument(payload: DocumentRejectPayload): Promise<DocumentEntity> {
     try {
-      const { documentId } = payload;
+      const { documentId, signerId, ipAddress, verificationCodeId } = payload;
       const document = await this.findOne(documentId);
 
       const documentBuffer = await this.minioService.getFileInBytesFormat(
@@ -415,6 +448,14 @@ export class DocumentService {
       document.rejectedAt = new Date();
       document.status = DOCUMENT_STATUS_ENUM.REJECTED;
       await this.documentRepository.save(document);
+
+      void this.auditService.create({
+        documentId: document.id,
+        operation: AuditAction.DOCUMENT_REJECTED,
+        ipAddress: ipAddress ?? '0.0.0.0',
+        users: [{ userId: signerId, action: AuditAction.DOCUMENT_REJECTED }],
+        verificationCodeId,
+      });
 
       return await this.findOne(document.id);
     } catch (error) {

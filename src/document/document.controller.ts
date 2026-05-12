@@ -87,8 +87,9 @@ export class DocumentController {
   @ApiResponse({ status: 200, description: 'Documento enviado a autorización y firmante notificado', type: DocumentResponseDto })
   @ApiResponse({ status: 400, description: 'El documento no está en estatus CREATED', type: ApiInvalidDataResponseDto })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: ApiNotFoundResponseDto })
-  submitForAuthorization(@Param('id') id: string) {
-    return this.documentService.submitForAuthorization(id);
+  @UseInterceptors(IpInterceptor)
+  submitForAuthorization(@Param('id') id: string, @ClientIp() ip: string) {
+    return this.documentService.submitForAuthorization(id, ip);
   }
 
   @Public()
