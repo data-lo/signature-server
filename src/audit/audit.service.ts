@@ -3,8 +3,15 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { AuditDocument, AuditAction } from './schema/audit-document';
-import { FindAllAuditDto } from './dto/find-audit.dto';
 import { HashService } from '../shared/hash/hash.service';
+
+export interface AuditQuery {
+  id?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  page?: string | number;
+  limit?: string | number;
+}
 
 export interface AuditPayload {
   documentId: string;
@@ -104,8 +111,10 @@ export class AuditService {
    * Igual que findAll pero descifra el cipher de cada registro antes de retornarlo.
    * Permite leer el contenido original de los registros de auditoría almacenados cifrados.
    */
-  async findAllDecrypted(query: FindAllAuditDto) {
-    const { dateFrom, dateTo, page = 1, limit = 10 } = query;
+  async findAllDecrypted(query: AuditQuery) {
+    const { dateFrom, dateTo } = query;
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
 
     const filter: Record<string, any> = {};
 
@@ -152,8 +161,10 @@ export class AuditService {
    * Retorna registros de auditoría descifrados con soporte de filtros y paginación.
    * Cada registro se descifra usando reverseCiperHash antes de ser retornado.
    */
-  async findAll(query: FindAllAuditDto) {
-    const { id, dateFrom, dateTo, page = 1, limit = 10 } = query;
+  async findAll(query: AuditQuery) {
+    const { id, dateFrom, dateTo } = query;
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
 
     if (id) {
       const record = await this.auditModel.findById(id).lean();

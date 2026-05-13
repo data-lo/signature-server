@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AuditService } from './audit.service';
-import { FindAllAuditDto } from './dto/find-audit.dto';
+import type { AuditQuery } from './audit.service';
 
 @ApiTags('Audit')
 @ApiBearerAuth('access-token')
@@ -21,14 +21,14 @@ export class AuditController {
   @Get('decrypted')
   @ApiOperation({ summary: 'Obtener todos los registros de auditoría descifrados' })
   @ApiResponse({ status: 200, description: 'Lista paginada de registros descifrados con sus campos de integridad' })
-  findAllDecrypted(@Query() query: FindAllAuditDto) {
+  findAllDecrypted(@Query() query: AuditQuery) {
     return this.auditService.findAllDecrypted(query);
   }
 
   @Get()
   @ApiOperation({ summary: 'Obtener todos los registros de auditoría (cifrados)' })
   @ApiResponse({ status: 200, description: 'Lista paginada de registros de auditoría' })
-  findAll(@Query() query: FindAllAuditDto) {
+  findAll(@Query() query: AuditQuery) {
     return this.auditService.findAll(query);
   }
 }
