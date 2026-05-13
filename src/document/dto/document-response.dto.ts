@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ApiResponseDto } from '../../interfaces/api-response.dto';
+import { BaseResponse } from '../../interfaces/api-response.dto';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 
 export class DocumentDataDto {
@@ -36,12 +36,12 @@ export class SignerDocumentDataDto {
   createdAt: Date;
 }
 
-export class DocumentResponseDto extends ApiResponseDto {
+export class DocumentResponseDto extends BaseResponse {
   @ApiProperty({ type: DocumentDataDto, description: 'Datos de la respuesta' })
   data: DocumentDataDto;
 }
 
-export class SignerDocumentListResponseDto extends ApiResponseDto {
+export class SignerDocumentListResponseDto extends BaseResponse {
   @ApiProperty({ type: [SignerDocumentDataDto], description: 'Lista de documentos del firmante' })
   data: SignerDocumentDataDto[];
 }

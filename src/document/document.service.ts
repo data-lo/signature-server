@@ -22,6 +22,7 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { SignatureService } from 'src/signature/signature.service';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
 import { EmailService } from 'src/shared/email/email.service';
+import { BaseResponse } from 'src/interfaces/api-response.dto';
 
 @Injectable()
 export class DocumentService {
@@ -41,15 +42,15 @@ export class DocumentService {
   async create(
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
+  ): Promise<BaseResponse> {
     ip:string
   ) {
     try {
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');
       }
-      const { signerId, createdById, coord } = createDocumentDto;
+      const { signerId, createdBy, signatureCoordinates } = createDocumentDto;
       const fileOriginalName = file.originalname;
-      this.logger.log(`Nombre Original del Documento: ${fileOriginalName}`);
       const minioUploadDocumentResponse = await this.minioService.uploadObject(
         {
           file: file,
@@ -67,7 +68,7 @@ export class DocumentService {
 
       const hashBefore = await this.hashService.generateFileHash(file);
       const signerUser = await this.UserService.findOne(signerId);
-      const requestedByUser = await this.UserService.findOne(createdById);
+      const requestedByUser = await this.UserService.findOne(createdBy);
 
 
       const document = await this.documentRepository.create({
@@ -77,13 +78,19 @@ export class DocumentService {
         totalPages: pdfPages,
         ipAddress: ip, // IMPLEMENTAR EL INTERCEPTOR DE IP
         originalHash: hashBefore,
-        signatureCoordinates: coord ? coord : DEFAULT_COORDINATES,
+        signatureCoordinates: signatureCoordinates ? signatureCoordinates : DEFAULT_COORDINATES,
         requestedBy: requestedByUser,
         signer: signerUser,
       });
 
       await this.documentRepository.save(document);
-      return document;
+      
+
+      return {
+        success: true,
+        message: 'Documento registrado y pendiente de firma correctamente'
+      }
+
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
       throw new Error(`Error creando documento para firma: ${error}`);
@@ -425,5 +432,12 @@ export class DocumentService {
       this.logger.error(`Error rechazando documento: ${error}`);
       throw new Error(`Error rechazando el documento: ${error}`);
     }
+  }
+
+
+  private removeSensitiveData(document: DocumentEntity): DocumentEntity {
+    const strip = ({ ipAddress, originalHash, , ...safeUser }: DocumentEntity) => safeUser as DocumentEntity;
+
+    return Array.isArray(user) ? user.map(strip) : strip(user);
   }
 }

@@ -3,7 +3,6 @@ import { Controller, Post, Body, HttpCode, HttpStatus, UseInterceptors, Req } fr
 
 // Swagger
 import { ApiBody, ApiOperation, ApiResponse, ApiTags, ApiExcludeEndpoint } from '@nestjs/swagger';
-import { ApiInvalidDataResponseDto, ApiForbiddenResponseDto, ApiNotFoundResponseDto, ApiUnauthorizedResponseDto } from 'src/interfaces/api-response.dto';
 
 // Decorators
 import { Public } from 'src/auth/decorators/public.decorator';

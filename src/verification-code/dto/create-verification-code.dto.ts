@@ -1,5 +1,5 @@
 import { IsNotEmpty, IsString } from 'class-validator';
-import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateVerificationCodeDto {
   @ApiProperty({ example: '81ec99ef-a57d-46d9-b3da-1368dfeffb45' })

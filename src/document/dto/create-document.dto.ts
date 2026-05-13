@@ -6,9 +6,9 @@ import {
   ValidateNested,
   IsOptional
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 
-export class DocumentCoordDto {
+export class SignatureCoordinatesDto {
   @ApiProperty({ example: 50, description: 'Coordenada horizontal de la firma en el documento (px)' })
   @IsNumber()
   x: number;
@@ -37,11 +37,28 @@ export class CreateDocumentDto {
   @ApiProperty({ example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901', description: 'UUID del usuario que solicita la firma', format: 'uuid' })
   @IsString()
   @IsNotEmpty()
-  createdById: string;
-
-  @ApiProperty({ type: DocumentCoordDto, description: 'Coordenadas donde se colocará la firma en el documento' })
+  createdBy: string;
+  
+  @ApiProperty({ type: SignatureCoordinatesDto })
   @ValidateNested()
-  @Type(() => DocumentCoordDto)
+  @Type(() => SignatureCoordinatesDto)
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  })
   @IsOptional()
-  coord: DocumentCoordDto;
+  signatureCoordinates: SignatureCoordinatesDto;
+
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description: 'Imagen de la firma manuscrita en formato PNG.',
+  })
+  file: any;
 }

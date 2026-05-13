@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ApiResponseDto } from '../../../interfaces/api-response.dto';
+import { BaseResponse } from '../../../interfaces/api-response.dto';
 
 export class UserCreateData {
   @ApiProperty({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID del usuario', format: 'uuid' })
@@ -29,7 +29,7 @@ export class UserCreateData {
   nationalId: string;
 }
 
-export class UserCreateResponseDto extends ApiResponseDto {
+export class UserCreateResponse extends BaseResponse<UserCreateData> {
   @ApiProperty({ type: UserCreateData, description: 'Datos del usuario creado' })
   data: UserCreateData;
 }
