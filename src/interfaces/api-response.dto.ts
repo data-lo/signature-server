@@ -11,8 +11,8 @@ export enum ApiResponseMessage {
   SERVER_ERROR = 'Error interno del servidor',
 }
 
-export class ApiResponseDto {
-  @ApiProperty({ example: 200, description: 'Código de estado HTTP de la respuesta' })
+export class BaseResponse<T = unknown> {
+  @ApiProperty({ example: true, description: 'Indica si la operación fue exitosa' })
   success: boolean;
 
   @ApiProperty({
@@ -21,9 +21,12 @@ export class ApiResponseDto {
     enum: ApiResponseMessage,
   })
   message: string;
+
+  @ApiProperty({ description: 'Datos de la respuesta' })
+  data?: T;
 }
 
-export class ApiNotFoundResponseDto {
+export class NotFoundResponse {
   @ApiProperty({ example: 404, description: 'Código de estado HTTP' })
   statusCode: number;
 
@@ -34,7 +37,7 @@ export class ApiNotFoundResponseDto {
   error: string;
 }
 
-export class ApiInvalidDataResponseDto {
+export class BadRequestResponse {
   @ApiProperty({ example: 400, description: 'Código de estado HTTP' })
   statusCode: number;
 
@@ -45,7 +48,7 @@ export class ApiInvalidDataResponseDto {
   error: string;
 }
 
-export class ApiForbiddenResponseDto {
+export class ForbiddenResponse {
   @ApiProperty({ example: 403, description: 'Código de estado HTTP' })
   statusCode: number;
 
@@ -56,7 +59,7 @@ export class ApiForbiddenResponseDto {
   error: string;
 }
 
-export class ApiUnauthorizedResponseDto {
+export class UnauthorizedResponse {
   @ApiProperty({ example: 401, description: 'Código de estado HTTP' })
   statusCode: number;
 
@@ -64,5 +67,16 @@ export class ApiUnauthorizedResponseDto {
   message: string;
 
   @ApiProperty({ example: 'Unauthorized', description: 'Tipo de error HTTP' })
+  error: string;
+}
+
+export class ConflictResponse {
+  @ApiProperty({ example: 409, description: 'Código de estado HTTP' })
+  statusCode: number;
+
+  @ApiProperty({ example: ApiResponseMessage.CONFLICT, enum: ApiResponseMessage, description: 'Mensaje de error' })
+  message: string;
+
+  @ApiProperty({ example: 'Conflict', description: 'Tipo de error HTTP' })
   error: string;
 }

@@ -6,12 +6,12 @@ export class UpdateSignatureDto {
     format: 'binary',
     description: 'Nueva imagen PNG de la firma  o Imagen reemplazada por PNG en blanco (opcional)',
   })
-  imagen_firma?: any;
+  signatureImage?: any;
 
   @ApiPropertyOptional({
     type: 'string',
     format: 'binary',
     description: 'Nueva imagen de la identificación oficial (opcional)',
   })
-  imagen_ine?: any;
+  officialFile?: any;
 }
