@@ -123,14 +123,17 @@ export class DocumentService {
     try {
       const document = await this.findOne(documentId);
 
-      const bucket =
-        document.status === DOCUMENT_STATUS_ENUM.CANCELLED
-          ? BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS
-          : document.status === DOCUMENT_STATUS_ENUM.REJECTED
-            ? BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS
-            : document.status === DOCUMENT_STATUS_ENUM.SIGNED || document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING
-              ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
-              : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+      const bucketByStatus: Record<DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM> = {
+        [DOCUMENT_STATUS_ENUM.CANCELLED]:            BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.REJECTED]:             BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.SIGNED]:               BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.PENDING]:              BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.CREATED]:              BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.EXPIRED]:              BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      };
+
+      const bucket = bucketByStatus[document.status];
 
       this.logger.log(`Status: ${document.status} | ObjectKey: ${document.objectKey}`);
 

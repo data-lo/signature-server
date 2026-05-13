@@ -72,10 +72,13 @@ export class VerificationCodeService {
 
     await this.redisService.set(`${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
-    const emailEvent =
-      dto.type === CodeType.CANCELLATION ? 'send.cancellation.code.email' :
-      dto.type === CodeType.REJECTION    ? 'send.rejection.code.email' :
-                                           'send.verification.code.email';
+    const emailEventMap: Record<CodeType, string> = {
+      [CodeType.CANCELLATION]: 'send.cancellation.code.email',
+      [CodeType.REJECTION]:    'send.rejection.code.email',
+      [CodeType.VERIFICATION]: 'send.verification.code.email',
+    };
+
+    const emailEvent = emailEventMap[dto.type];
 
     this.eventEmitter.emit(emailEvent, {
       to: user.email,
@@ -137,11 +140,34 @@ export class VerificationCodeService {
         type: CodeType.VERIFICATION
       },
     );
-    
-    const documentEvent =
-      verificationCode.type === CodeType.CANCELLATION ? 'document.cancel' :
-      verificationCode.type === CodeType.REJECTION    ? 'document.reject' :
-                                                        'document.sign';
+
+    // Intentamos obtener el ID del registro de verificación para trazabilidad en auditoría
+    let verificationCodeId: string | undefined;
+    try {
+      const vcEntity = await this.verificationCodeRepository.findOne({
+        where: { documentId: dto.documentId },
+      });
+      verificationCodeId = vcEntity?.id;
+    } catch (err) {
+      this.logger.warn(`No se pudo obtener verificationCodeId para documentId=${dto.documentId}: ${err}`);
+    }
+
+    const codeTypeMap: Record<CodeType, { documentEvent: string; auditOperation: AuditAction }> = {
+      [CodeType.CANCELLATION]: { documentEvent: 'document.cancel', auditOperation: AuditAction.DOCUMENT_CANCELLED },
+      [CodeType.REJECTION]:    { documentEvent: 'document.reject', auditOperation: AuditAction.DOCUMENT_REJECTED },
+      [CodeType.VERIFICATION]: { documentEvent: 'document.sign',   auditOperation: AuditAction.DOCUMENT_SIGNED },
+    };
+
+    const { documentEvent, auditOperation } = codeTypeMap[verificationCode.type];
+
+    void this.auditService.create({
+      documentId: dto.documentId,
+      operation: auditOperation,
+      ipAddress,
+      users: [{ userId: dto.signerId, action: auditOperation }],
+      verificationCodeId,
+      ...(auditOperation === AuditAction.DOCUMENT_SIGNED && { signedAt: new Date() }),
+    });
 
     this.eventEmitter.emit(documentEvent, {
       signerId: dto.signerId,
