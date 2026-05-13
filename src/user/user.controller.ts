@@ -25,6 +25,9 @@ import { UserGetListResponseDto, UserGetResponseDto } from './interfaces/respons
 export class UserController {
   constructor(private readonly userService: UserService) { }
 
+
+  //EXPUESTOS AL API
+  @Public()
   @Post()
   @ApiOperation({ summary: 'Crear nuevo usuario', description: 'Registra un nuevo usuario en el sistema' })
   @ApiResponse({ status: 201, description: 'Usuario creado correctamente', type: UserCreateResponse })

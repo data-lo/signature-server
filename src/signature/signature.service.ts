@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -18,12 +19,13 @@ import sharp = require('sharp');
 
 @Injectable()
 export class SignatureService {
+  logger = new Logger(SignatureService.name);
+
   constructor(
     @InjectRepository(SignatureEntity)
     private readonly signatureRepository: Repository<SignatureEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
-
     private readonly minioService: MinioService,
   ) { }
 
@@ -163,8 +165,8 @@ export class SignatureService {
           file: files.officialFile,
           name: files.officialFile.filename
         },
-        BUCKET_TYPES_ENUM.OFICIAL_CARDS
-      )
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS,
+      );
     }
 
     return {

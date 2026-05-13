@@ -36,6 +36,8 @@ import { DocumentService } from './document.service';
 
 // Enums
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { IpInterceptor } from 'src/ip/ip.interceptor';
+import { ClientIp } from 'src/ip/ip.decorator';
 
 // Decorators
 import { Public } from 'src/auth/decorators/public.decorator';
@@ -71,12 +73,25 @@ export class DocumentController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     return await this.documentService.create(createDocumentDto, file);
+  @ApiResponse({ status: 201, description: 'Documento registrado para firmar correctamente', type: DocumentResponseDto })
+  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos o archivo no proporcionado', type: ApiInvalidDataResponseDto })
+  @ApiResponse({ status: 404, description: 'Firmante o creador no encontrado', type: ApiNotFoundResponseDto })
+  @UseInterceptors(FileInterceptor('document'),IpInterceptor)
+  async create(
+    @Body() createDocumentDto: CreateDocumentDto,
+    @UploadedFile() document: Express.Multer.File,
+    @ClientIp() ip:string
+  ) {
+    console.log(document.filename, document.mimetype);
+    return await this.documentService.create(createDocumentDto, document, ip);
   }
 
   @Get()
   @ApiOperation({ summary: 'Obtener todos los documentos' })
   @ApiResponse({ status: 200, description: 'Lista de todos los documentos', type: [DocumentResponseDto] })
-  findAll() {
+  @UseInterceptors(IpInterceptor)
+  findAll(@ClientIp() ip:string) {
+    console.log(ip)
     return this.documentService.findAll();
   }
 

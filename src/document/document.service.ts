@@ -43,6 +43,8 @@ export class DocumentService {
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
   ): Promise<BaseResponse> {
+    ip:string
+  ) {
     try {
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');
@@ -56,7 +58,8 @@ export class DocumentService {
         },
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
-
+      const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
+    
       if (
         minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED
       ) {
@@ -67,16 +70,13 @@ export class DocumentService {
       const signerUser = await this.UserService.findOne(signerId);
       const requestedByUser = await this.UserService.findOne(createdBy);
 
-      //TO DO SERVICIO DE PDF,
-      //TO DO CONSTRUIR DOCUMENT URL AL MOMENTO DE SERVIR EL DOCUMENTO AL FRONT
 
       const document = await this.documentRepository.create({
         objectKey: minioUploadDocumentResponse.fileId,
         fileName: fileOriginalName,
         fileType: file.mimetype,
-        totalPages: 0, //TO DO, IMPLEMENTAR UN CONTADOR DE PAGINAS DEL PDF
-        documentUrl: null, // IMPLEMENTAR SECURE URL URL-SERVER + URL MINIO
-        ipAddress: '0.0.0.0', // IMPLEMENTAR EL INTERCEPTOR DE IP
+        totalPages: pdfPages,
+        ipAddress: ip, // IMPLEMENTAR EL INTERCEPTOR DE IP
         originalHash: hashBefore,
         signatureCoordinates: signatureCoordinates ? signatureCoordinates : DEFAULT_COORDINATES,
         requestedBy: requestedByUser,
@@ -287,21 +287,30 @@ export class DocumentService {
         coordinates,
       );
 
-      if (!signedDocument) {
+      const fullName = signerUser.firstName + ' ' + signerUser.lastName
+    
+      const signedDocumentWithName = await this.documentSigningSerivice.addSignerName(
+        signedDocument,
+        fullName,
+        coordinates
+      );
+      
+      if (!signedDocumentWithName) {
         throw new Error('El servicio de firma no retornó un documento válido');
       }
 
-      await this.minioService.uploadObject(
+      await this.minioService.uploadPdfAObject(
         {
-          file: signedDocument,
+          file: signedDocumentWithName,
           name: document.fileName,
-          mimetype: 'application/pdf',
+          mimetype: 'application/pdf'
         },
         BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        fullName,
         document.objectKey,
       );
 
-      const signedHash = await this.hashService.generateFileHash(signedDocument);
+      const signedHash = await this.hashService.generateFileHash(signedDocumentWithName);
       document.signedHash = signedHash;
       document.signedAt = new Date();
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;

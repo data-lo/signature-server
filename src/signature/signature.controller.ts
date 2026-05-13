@@ -56,10 +56,10 @@ export class SignatureController {
   @ApiResponse({ status: 200, description: 'URL prefirmada generada correctamente' })
   @ApiResponse({ status: 404, description: 'Archivo no encontrado en el bucket indicado', type: NotFoundResponse })
   async getFile(
-    @Param('fileId') fileId: string,
+    @Param('fileId') objectKey: string,
     @Body('bucketType') bucketType: BUCKET_TYPES_ENUM,
   ) {
-    return await this.signatureService.getFile(fileId, bucketType);
+    return await this.signatureService.getFile(objectKey, bucketType);
   }
 
   @ApiExcludeEndpoint()

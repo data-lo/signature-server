@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { PDFDocument, PDFImage, PDFName, PDFNumber, PDFString, StandardFonts, rgb, degrees } from 'pdf-lib';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { PDFDocument, PDFImage, PDFName, PDFNumber, PDFString, StandardFonts, rgb, degrees, PDFHexString } from 'pdf-lib';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
 import { DEFAULT_COORDINATES } from './interfaces/default-signing-coordinates.interface';
 
@@ -97,7 +98,7 @@ export class PdfSignatureService {
   async mergeSignatureIntoPdf(
     documentBuffer: Buffer,
     signatureBuffer: Buffer,
-    coordinates: SignatureCoordinates = DEFAULT_COORDINATES,
+    coordinates: SignatureCoordinates,
   ): Promise<Buffer> {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
@@ -136,6 +137,7 @@ export class PdfSignatureService {
       opacity: coordinates.opacity ?? 1.0,
     });
 
+
     // Paso 7: aplicar conformidad PDF/A-2B (XMP metadata + OutputIntent sRGB)
     this.applyPdfA2bConformance(pdfDoc);
 
@@ -160,7 +162,11 @@ export class PdfSignatureService {
       Subtype: PDFName.of('XML'),
       Length: PDFNumber.of(xmpBytes.length),
     });
+
     pdfDoc.catalog.set(PDFName.of('Metadata'), pdfDoc.context.register(metadataStream));
+
+    const id = PDFHexString.of(crypto.randomBytes(16).toString('hex'));
+    pdfDoc.context.trailerInfo.ID = pdfDoc.context.obj([id,id])
 
     const iccProfile = loadSrgbIccProfile();
     if (!iccProfile) {
@@ -171,33 +177,61 @@ export class PdfSignatureService {
       );
       return;
     }
-
+    
     const iccProfileBytes = new Uint8Array(iccProfile);
     const iccStream = pdfDoc.context.stream(iccProfileBytes, {
       N: PDFNumber.of(3),
       Length: PDFNumber.of(iccProfileBytes.length),
     });
     const iccRef = pdfDoc.context.register(iccStream);
-
     const outputIntentObj = pdfDoc.context.obj({
       Type: PDFName.of('OutputIntent'),
       S: PDFName.of('GTS_PDFA1'),
       OutputConditionIdentifier: PDFString.of('sRGB IEC61966-2.1'),
       Info: PDFString.of('sRGB IEC61966-2.1'),
       DestOutputProfile: iccRef,
+      
     });
+
+
     const outputIntentRef = pdfDoc.context.register(outputIntentObj);
 
     pdfDoc.catalog.set(
       PDFName.of('OutputIntents'),
       pdfDoc.context.obj([outputIntentRef]),
     );
+
+ 
   }
 
   /** Estampa "CANCELADO" en diagonal rojo semitransparente en todas las páginas del PDF. */
   async stampCancelledWatermark(documentBuffer: Buffer): Promise<Buffer> {
     return this.stampDiagonalWatermark(documentBuffer, 'CANCELADO', rgb(0.75, 0, 0));
   }
+
+
+  async addSignerName(documentBuffer: Buffer, signerName:string ,coord:SignatureCoordinates):Promise<Buffer>{
+    try{
+      const pdfDoc = await PDFDocument.load(documentBuffer);
+      const pages = pdfDoc.getPages();
+      const lastPage = pages[pages.length - 1];
+
+      lastPage.drawText(
+        signerName,
+        {
+          x:coord.x,
+          y:(coord.y - 20),
+          size:10,
+        }
+      );
+
+    this.applyPdfA2bConformance(pdfDoc);
+    const signedPdfBytes: Uint8Array = await pdfDoc.save({ useObjectStreams: false });
+    return Buffer.from(signedPdfBytes);      
+    }catch(error){
+      throw new InternalServerErrorException(`Error añadiendo el nombre del firmante ${error}`)
+    }
+  };
 
   /** Estampa "RECHAZADO" en diagonal naranja semitransparente en todas las páginas del PDF. */
   async stampRejectedWatermark(documentBuffer: Buffer): Promise<Buffer> {
@@ -266,6 +300,17 @@ export class PdfSignatureService {
     }
 
     return { width, height };
+  }
+
+  async getPdfPages(file:Express.Multer.File){
+    try{
+      const buffer = file.buffer
+      const pdf = await PDFDocument.load(buffer);
+      const totalPages = pdf.getPageCount() 
+      return totalPages
+    }catch(error){
+      throw new InternalServerErrorException(`Error obteniendo la cantidad total de imagenes del pdf: ${error}`);
+    } 
   }
 }
 
