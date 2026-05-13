@@ -24,7 +24,7 @@ import {
 // DTOs
 import { CreateSignatureDto } from './dto/create-signature.dto';
 import { UpdateSignatureDto } from './dto/update-signature.dto';
-import { SignatureCreateData, SignatureCreateResponse } from './interfaces/signature-create-response';
+import { SignatureCreateResponse } from './interfaces/signature-create-response';
 
 // Services
 import { SignatureService } from './signature.service';
