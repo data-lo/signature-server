@@ -5,12 +5,15 @@ import { Model } from 'mongoose';
 import { CreateAuditDto } from './dto/create-audit.dto';
 import { FindAllAuditDto } from './dto/find-audit.dto';
 import { AuditDocument, TypeOfOperation } from './schema/audit-document';
+import { LogService } from 'src/log/log.service';
+import { shortUuid } from 'src/common/utils/short-uuid.util';
 
 @Injectable()
 export class AuditService {
   constructor(
     @InjectModel(AuditDocument.name)
     private readonly auditModel: Model<AuditDocument>,
+    private readonly logService: LogService,
   ) {}
 
   /**
@@ -24,7 +27,10 @@ export class AuditService {
    *     las funciones de hashing estén disponibles.
    */
   async create(dto: CreateAuditDto) {
-    this.validateOperationFields(dto);
+    const traceId = shortUuid();
+    void this.logService.write(`[Audit] create - [${traceId}]`);
+
+    this.validateOperationFields(dto, traceId);
 
     // Buscamos el registro más reciente del mismo documento para continuar la cadena.
     const previousRecord = await this.auditModel
@@ -39,13 +45,16 @@ export class AuditService {
     // TODO: integrar cipher — hash encriptado de los campos del registro de audit
     // TODO: integrar chainHash — hash de la concatenación de todos los campos del registro de audit
 
-    return this.auditModel.create({
+    const result = await this.auditModel.create({
       ...dto,
       chainIndex,
       integrityHash: undefined,
       cipher: undefined,
       chainHash: undefined,
     });
+
+    void this.logService.write(`[Audit] create - exito [${traceId}]`);
+    return result;
   }
 
   /**
@@ -60,12 +69,19 @@ export class AuditService {
    * límite y totalPages para que el cliente pueda navegar el resultado.
    */
   async findAll(query: FindAllAuditDto) {
+    const traceId = shortUuid();
+    void this.logService.write(`[Audit] findAll - [${traceId}]`);
+
     const { id, dateFrom, dateTo, page = 1, limit = 10 } = query;
 
     // Atajo: si se pide un registro específico, lo resolvemos directamente.
     if (id) {
       const record = await this.auditModel.findById(id);
-      if (!record) throw new NotFoundException(`Registro de auditoría ${id} no encontrado`);
+      if (!record) {
+        void this.logService.write(`[Audit] findAll - error NotFoundException [${traceId}]`);
+        throw new NotFoundException(`Registro de auditoría ${id} no encontrado`);
+      }
+      void this.logService.write(`[Audit] findAll - exito [${traceId}]`);
       return record;
     }
 
@@ -86,6 +102,7 @@ export class AuditService {
       this.auditModel.countDocuments(filter),
     ]);
 
+    void this.logService.write(`[Audit] findAll - exito [${traceId}]`);
     return {
       data,
       total,
@@ -103,8 +120,9 @@ export class AuditService {
    *  - APPROVE / REJECT: requieren `verificationCodeId` para trazabilidad del OTP usado.
    *  - CREATE: no requiere ninguno de los dos campos anteriores.
    */
-  private validateOperationFields(dto: CreateAuditDto): void {
+  private validateOperationFields(dto: CreateAuditDto, traceId: string): void {
     if (dto.operation === TypeOfOperation.SIGN && !dto.signedAt) {
+      void this.logService.write(`[Audit] create - error BadRequestException signedAt requerido [${traceId}]`);
       throw new BadRequestException('signedAt es requerido para la operación SIGN');
     }
 
@@ -115,6 +133,7 @@ export class AuditService {
     ];
 
     if (requiresVerificationCode.includes(dto.operation) && !dto.verificationCodeId) {
+      void this.logService.write(`[Audit] create - error BadRequestException verificationCodeId requerido [${traceId}]`);
       throw new BadRequestException(
         `verificationCodeId es requerido para la operación ${dto.operation}`,
       );

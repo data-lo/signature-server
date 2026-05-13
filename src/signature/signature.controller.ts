@@ -17,7 +17,6 @@ import { Public } from 'src/auth/decorators/public.decorator';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { SignatureResponseDto } from './dto/signature-response.dto';
 import { ApiInvalidDataResponseDto, ApiNotFoundResponseDto } from 'src/interfaces/api-response.dto';
-import { LogService } from 'src/log/log.service';
 
 @ApiTags('Signature')
 @ApiBearerAuth('access-token')
@@ -25,7 +24,6 @@ import { LogService } from 'src/log/log.service';
 export class SignatureController {
   constructor(
     private readonly signatureService: SignatureService,
-    private readonly logService: LogService,
   ) {}
 
   @Public()
@@ -39,7 +37,6 @@ export class SignatureController {
     @Param('fileId') fileId: string,
     @Body('bucketType') bucketType: BUCKET_TYPES_ENUM,
   ) {
-    void this.logService.write(`[Signature] getFile - fileId: ${fileId}`);
     return await this.signatureService.getFile(fileId, bucketType);
   }
 
@@ -51,7 +48,6 @@ export class SignatureController {
   @ApiResponse({ status: 200, description: 'Firma encontrada', type: SignatureResponseDto })
   @ApiResponse({ status: 404, description: 'Firma no encontrada', type: ApiNotFoundResponseDto })
   findOne(@Param('id') id: string) {
-    void this.logService.write(`[Signature] findOne - signatureId: ${id}`);
     return this.signatureService.findOne(id);
   }
 
@@ -68,7 +64,6 @@ export class SignatureController {
     @Body() dto: CreateSignatureDto,
     @UploadedFiles() files: Array<Express.Multer.File>,
   ) {
-    void this.logService.write(`[Signature] create - userId: ${dto.userId}`);
     return this.signatureService.create(dto, files);
   }
 
@@ -91,7 +86,6 @@ export class SignatureController {
     @UploadedFiles()
     files: { imagen_firma?: Express.Multer.File[]; imagen_ine?: Express.Multer.File[] },
   ) {
-    void this.logService.write(`[Signature] update - signatureId: ${id}`);
     const fileFirma = files?.imagen_firma?.[0];
     const fileIne = files?.imagen_ine?.[0];
     return this.signatureService.update(id, {
@@ -107,7 +101,6 @@ export class SignatureController {
   @ApiResponse({ status: 200, description: 'Firma desactivada correctamente', type: SignatureResponseDto })
   @ApiResponse({ status: 404, description: 'Firma no encontrada', type: ApiNotFoundResponseDto })
   deactivate(@Param('id') id: string) {
-    void this.logService.write(`[Signature] deactivate - signatureId: ${id}`);
     return this.signatureService.deactivate(id);
   }
 }

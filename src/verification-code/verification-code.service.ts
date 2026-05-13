@@ -16,6 +16,8 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { DocumentService } from 'src/document/document.service';
 import { VerificationCodeObject } from './interfaces/verification-code-object';
 import { CodeType } from './enums/code-type.enum';
+import { LogService } from 'src/log/log.service';
+import { shortUuid } from 'src/common/utils/short-uuid.util';
 
 @Injectable()
 export class VerificationCodeService {
@@ -30,7 +32,8 @@ export class VerificationCodeService {
     private readonly userService: UserService,
     private readonly redisService: RedisService,
     private readonly documentService: DocumentService,
-  ) { }
+    private readonly logService: LogService,
+  ) {}
 
   /**
    * Genera y envía un código OTP al firmante del documento.
@@ -44,13 +47,18 @@ export class VerificationCodeService {
    * @throws ForbiddenException - Si el firmante no está asociado al documento
    */
   async create(dto: CreateVerificationCodeDto): Promise<{}> {
+    const traceId = shortUuid();
+    void this.logService.write(`[VerificationCode] create - [${traceId}]`);
+
     const document = await this.documentService.findOne(dto.documentId);
 
     if (!document) {
+      void this.logService.write(`[VerificationCode] create - error NotFoundException documento no encontrado [${traceId}]`);
       throw new NotFoundException('Documento no encontrado');
     }
 
     if (dto.signerId !== document.signerId) {
+      void this.logService.write(`[VerificationCode] create - error ForbiddenException firmante no asociado [${traceId}]`);
       throw new ForbiddenException('El firmante no está asociado a este documento');
     }
 
@@ -59,7 +67,6 @@ export class VerificationCodeService {
     const code = await this.otpService.generate();
 
     const expiredAt = new Date();
-
     expiredAt.setSeconds(expiredAt.getSeconds() + this.OTP_TTL);
 
     const verificationCodeObject = {
@@ -68,7 +75,7 @@ export class VerificationCodeService {
       type: dto.type,
       signerId: dto.signerId,
       documentId: dto.documentId,
-    }
+    };
 
     await this.redisService.set(`${dto.documentId}`, JSON.stringify(verificationCodeObject), this.OTP_TTL);
 
@@ -84,9 +91,10 @@ export class VerificationCodeService {
       code,
     });
 
+    void this.logService.write(`[VerificationCode] create - exito [${traceId}]`);
     return {
       message: 'Código enviado al correo del firmante',
-    }
+    };
   }
 
   /**
@@ -108,19 +116,24 @@ export class VerificationCodeService {
     dto: ValidateCodeDto,
     ipAddress: string,
   ): Promise<{ message: string }> {
+    const traceId = shortUuid();
+    void this.logService.write(`[VerificationCode] validateAndSaveCode - [${traceId}]`);
 
-    let verificationCodeString = await this.redisService.get(`${dto.documentId}`);
+    const verificationCodeString = await this.redisService.get(`${dto.documentId}`);
     if (!verificationCodeString) {
+      void this.logService.write(`[VerificationCode] validateAndSaveCode - error NotFoundException codigo expirado o no encontrado [${traceId}]`);
       throw new NotFoundException('Código de verificación no encontrado o expirado');
     }
 
     const verificationCode = JSON.parse(verificationCodeString) as VerificationCodeObject;
     if (dto.signerId !== verificationCode.signerId) {
+      void this.logService.write(`[VerificationCode] validateAndSaveCode - error ForbiddenException firmante no asociado [${traceId}]`);
       throw new ForbiddenException('El firmante no está asociado a este documento');
     }
 
     const isValid = this.otpService.verify(dto.code, verificationCode.code);
     if (!isValid) {
+      void this.logService.write(`[VerificationCode] validateAndSaveCode - error UnauthorizedException codigo invalido [${traceId}]`);
       throw new UnauthorizedException('Código de verificación inválido');
     }
 
@@ -134,10 +147,10 @@ export class VerificationCodeService {
         code: verificationCode.code,
         signerId: verificationCode.signerId,
         documentId: verificationCode.documentId,
-        type: CodeType.VERIFICATION
+        type: CodeType.VERIFICATION,
       },
     );
-    
+
     const documentEvent =
       verificationCode.type === CodeType.CANCELLATION ? 'document.cancel' :
       verificationCode.type === CodeType.REJECTION    ? 'document.reject' :
@@ -148,6 +161,7 @@ export class VerificationCodeService {
       documentId: dto.documentId,
     });
 
+    void this.logService.write(`[VerificationCode] validateAndSaveCode - exito [${traceId}]`);
     return {
       message: 'Documento enviado a procesamiento, la firma será estampada en breve',
     };

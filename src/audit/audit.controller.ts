@@ -3,7 +3,6 @@ import { ApiBearerAuth, ApiBody, ApiOperation, ApiExcludeEndpoint, ApiResponse, 
 import { AuditService } from './audit.service';
 import { CreateAuditDto } from './dto/create-audit.dto';
 import { FindAllAuditDto } from './dto/find-audit.dto';
-import { LogService } from 'src/log/log.service';
 
 @ApiTags('Audit')
 @ApiBearerAuth('access-token')
@@ -11,7 +10,6 @@ import { LogService } from 'src/log/log.service';
 export class AuditController {
   constructor(
     private readonly auditService: AuditService,
-    private readonly logService: LogService,
   ) {}
 
   @Post()
@@ -21,7 +19,6 @@ export class AuditController {
   @ApiResponse({ status: 201, description: 'Registro de auditoría creado correctamente' })
   @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
   create(@Body() createAuditDto: CreateAuditDto) {
-    void this.logService.write('[Audit] create');
     return this.auditService.create(createAuditDto);
   }
 
@@ -30,7 +27,6 @@ export class AuditController {
   @ApiOperation({ summary: 'Obtener todos los registros de auditoría' })
   @ApiResponse({ status: 200, description: 'Lista de registros de auditoría' })
   findAll(@Query() query: FindAllAuditDto) {
-    void this.logService.write('[Audit] findAll');
     return this.auditService.findAll(query);
   }
 }

@@ -21,14 +21,12 @@ import { VerificationCodeResponseDto } from './dto/verification-code-response.dt
 // Services
 import { VerificationCodeService } from './verification-code.service';
 import { ValidateCodeDto} from './dto/validate-code.dto';
-import { LogService } from 'src/log/log.service';
 
 @ApiTags('Código de Verificación')
 @Controller('verification-code')
 export class VerificationCodeController {
   constructor(
     private readonly verificationCodeService: VerificationCodeService,
-    private readonly logService: LogService,
   ) {}
 
   @Public()
@@ -43,7 +41,6 @@ export class VerificationCodeController {
   @ApiResponse({ status: 403, description: 'El firmante no está asociado al documento' })
   @ApiResponse({ status: 404, description: 'Documento no encontrado' })
   generate(@Body() dto: CreateVerificationCodeDto) {
-    void this.logService.write(`[VerificationCode] generate - documentId: ${dto.documentId}`);
     return this.verificationCodeService.create(dto);
   }
 
@@ -61,7 +58,6 @@ export class VerificationCodeController {
   @ApiResponse({ status: 403, description: 'El firmante no está asociado al documento' })
   @ApiResponse({ status: 404, description: 'Código de verificación no encontrado o expirado' })
   validate(@Body() dto: ValidateCodeDto, @Req() req: Request) {
-    void this.logService.write(`[VerificationCode] validate - documentId: ${dto.documentId}`);
     return this.verificationCodeService.validateAndSaveCode(dto, req['ip']);
   }
 }

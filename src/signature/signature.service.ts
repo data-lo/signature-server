@@ -1,7 +1,6 @@
+import 'multer';
 import {
-  BadRequestException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,8 +9,9 @@ import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { CreateSignatureDto } from './dto/create-signature.dto';
 import { MinioService } from 'src/shared/minio/minio.service';
-import 'multer';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { LogService } from 'src/log/log.service';
+import { shortUuid } from 'src/common/utils/short-uuid.util';
 
 @Injectable()
 export class SignatureService {
@@ -20,8 +20,8 @@ export class SignatureService {
     private readonly signatureRepository: Repository<SignatureEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
-
     private readonly minioService: MinioService,
+    private readonly logService: LogService,
   ) {}
 
   /**
@@ -29,10 +29,16 @@ export class SignatureService {
    * Lanza NotFoundException si no existe.
    */
   async findOne(id: string): Promise<SignatureEntity> {
+    // Genera el uuid para logs
+    const traceId = shortUuid();
+    void this.logService.write(`[Signature] findOne - [${traceId}]`);
+
     const signature = await this.signatureRepository.findOne({ where: { id } });
     if (!signature) {
+      void this.logService.write(`[Signature] findOne - error NotFoundException [${traceId}]`);
       throw new NotFoundException(`Firma con id ${id} no encontrada`);
     }
+    void this.logService.write(`[Signature] findOne - exito [${traceId}]`);
     return signature;
   }
 
@@ -42,15 +48,18 @@ export class SignatureService {
    * Al finalizar, actualiza el signatureId del usuario con el UUID de la firma creada.
    * La imagen de INE queda pendiente hasta que se llame al método update.
    */
-
   async create(
     dto: CreateSignatureDto,
     files: Array<Express.Multer.File>,
   ): Promise<SignatureEntity> {
+    const traceId = shortUuid();
+    void this.logService.write(`[Signature] create - [${traceId}]`);
+
     const user = await this.userRepository.findOne({
       where: { id: dto.userId },
     });
     if (!user) {
+      void this.logService.write(`[Signature] create - error NotFoundException [${traceId}]`);
       throw new NotFoundException(`Usuario con id ${dto.userId} no encontrado`);
     }
 
@@ -75,10 +84,12 @@ export class SignatureService {
     }
 
     if (signatureObjectKeyResponse.status !== 'FILE_CREATED') {
+      void this.logService.write(`[Signature] create - error Minio[${traceId}]`);
       throw new Error('Error al subir la imagen de firma a Minio');
     }
 
     if (officialCardObjectKeyResponse.status !== 'FILE_CREATED') {
+      void this.logService.write(`[Signature] create - error File not created [${traceId}]`);
       throw new Error(
         'Error al subir la imagen de identificación oficial a Minio',
       );
@@ -97,6 +108,7 @@ export class SignatureService {
     // Asignar el UUID de la firma creada al usuario correspondiente
     await this.userRepository.update(dto.userId, { signatureId: saved.id });
 
+    void this.logService.write(`[Signature] create - exito [${traceId}]`);
     return saved;
   }
 
@@ -112,9 +124,13 @@ export class SignatureService {
       imagen_ine?: Express.Multer.File;
     },
   ): Promise<SignatureEntity> {
+    const traceId = shortUuid();
+    void this.logService.write(`[Signature] update - [${traceId}]`);
+
     const signatureData = await this.findOne(id);
 
     if (!signatureData) {
+      void this.logService.write(`[Signature] update - error NotFoundException [${traceId}]`);
       throw new NotFoundException(`Firma con id ${id} no encontrada`);
     }
 
@@ -129,18 +145,20 @@ export class SignatureService {
       );
     }
 
-    if(files.imagen_ine){
+    if (files.imagen_ine) {
       await this.minioService.replaceFile(
         signatureData.officialCardObjectKey,
         {
           file: files.imagen_ine,
-          name: files.imagen_ine.filename
+          name: files.imagen_ine.filename,
         },
-        BUCKET_TYPES_ENUM.OFICIAL_CARDS
-      )
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS,
+      );
     }
 
-    return await this.findOne(id);
+    const result = await this.findOne(id);
+    void this.logService.write(`[Signature] update - exito [${traceId}]`);
+    return result;
   }
 
   /**
@@ -148,16 +166,28 @@ export class SignatureService {
    * y establece isActive en false. La imagen de INE (officialCardObjectKey) se conserva intacta.
    */
   async deactivate(id: string): Promise<SignatureEntity> {
+    const traceId = shortUuid();
+    void this.logService.write(`[Signature] deactivate - [${traceId}]`);
+
     const signature = await this.findOne(id);
 
     // TODO: sobreescribir la imagen de firma en Minio con un PNG en blanco cuando MinioService esté implementado
     // await this.minioService.overwrite(signature.signatureObjectKey, BLANK_PNG_BUFFER); // subir el blank_png a minio
 
     signature.isActive = false;
-    return this.signatureRepository.save(signature);
+    const result = await this.signatureRepository.save(signature);
+
+    void this.logService.write(`[Signature] deactivate - exito [${traceId}]`);
+    return result;
   }
 
-  async getFile(fileId: string, bucketType:BUCKET_TYPES_ENUM){
-    return await this.minioService.getFile(fileId, bucketType);
+  async getFile(fileId: string, bucketType: BUCKET_TYPES_ENUM) {
+    const traceId = shortUuid();
+    void this.logService.write(`[Signature] getFile - [${traceId}]`);
+
+    const result = await this.minioService.getFile(fileId, bucketType);
+    void this.logService.write(`[Signature] getFile - exito [${traceId}]`);
+
+    return result;
   }
 }
