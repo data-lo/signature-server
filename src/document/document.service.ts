@@ -280,9 +280,11 @@ export class DocumentService {
         coordinates,
       );
 
+      const fullName = signerUser.firstName + ' ' + signerUser.lastName
+    
       const signedDocumentWithName = await this.documentSigningSerivice.addSignerName(
         signedDocument,
-        signerUser.firstName.concat(' ',signerUser.lastName),
+        fullName,
         coordinates
       );
       
@@ -290,17 +292,18 @@ export class DocumentService {
         throw new Error('El servicio de firma no retornó un documento válido');
       }
 
-      await this.minioService.uploadObject(
+      await this.minioService.uploadPdfAObject(
         {
           file: signedDocumentWithName,
           name: document.fileName,
-          mimetype: 'application/pdf',
+          mimetype: 'application/pdf'
         },
         BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        fullName,
         document.objectKey,
       );
 
-      const signedHash = await this.hashService.generateFileHash(signedDocument);
+      const signedHash = await this.hashService.generateFileHash(signedDocumentWithName);
       document.signedHash = signedHash;
       document.signedAt = new Date();
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
