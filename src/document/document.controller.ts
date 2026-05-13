@@ -21,6 +21,7 @@ import {
   ApiParam,
   ApiQuery,
   ApiResponse,
+  ApiSecurity,
   ApiTags,
 } from '@nestjs/swagger';
 
@@ -42,13 +43,13 @@ import { Public } from 'src/auth/decorators/public.decorator';
 // Interfaces
 import { BadRequestResponse, NotFoundResponse } from 'src/interfaces/api-response.dto';
 
+@Public()
 @ApiTags('Document')
-@ApiBearerAuth('access-token')
+@ApiSecurity('x-api-key')
 @Controller('document')
 export class DocumentController {
   constructor(private readonly documentService: DocumentService) { }
 
-  @Public()
   @Get('file/:id')
   @ApiExcludeEndpoint()
   getDocumentUrl(
@@ -57,25 +58,21 @@ export class DocumentController {
     return this.documentService.getDocumentMinioURL(id);
   }
 
-
-  @Public()
   @Post()
   @ApiOperation({ summary: 'Registrar nuevo documento para firmar' })
-  @ApiConsumes('application/json', 'multipart/form-data')
+  @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateDocumentDto })
-  @ApiResponse({ status: 201, description: 'Documento registrado para firmar correctamente', type: DocumentResponseDto })
-  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos o archivo no proporcionado', type: BadRequestResponse })
-  @ApiResponse({ status: 404, description: 'Firmante o creador no encontrado', type: NotFoundResponse })
-  @UseInterceptors(FileInterceptor('document'))
+  @ApiResponse({ status: 201, description: 'Documento subido y registrado exitosamente en el sistema, pendiente de firma', type: DocumentResponseDto })
+  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos, formato de archivo no soportado o documento no proporcionado', type: BadRequestResponse })
+  @ApiResponse({ status: 404, description: 'El firmante o el usuario creador especificado no existe en el sistema', type: NotFoundResponse })
+  @UseInterceptors(FileInterceptor('file'))
   async create(
     @Body() createDocumentDto: CreateDocumentDto,
-    @UploadedFile() document: Express.Multer.File,
+    @UploadedFile() file: Express.Multer.File,
   ) {
-    console.log(document.filename, document.mimetype);
-    return await this.documentService.create(createDocumentDto, document);
+    return await this.documentService.create(createDocumentDto, file);
   }
 
-  @Public()
   @Get()
   @ApiOperation({ summary: 'Obtener todos los documentos' })
   @ApiResponse({ status: 200, description: 'Lista de todos los documentos', type: [DocumentResponseDto] })
@@ -83,7 +80,6 @@ export class DocumentController {
     return this.documentService.findAll();
   }
 
-  @Public()
   @Get('signer/:signerId')
   @ApiOperation({ summary: 'Obtener documentos asignados a un firmante' })
   @ApiParam({ name: 'signerId', description: 'UUID del usuario firmante', format: 'uuid' })
@@ -97,7 +93,6 @@ export class DocumentController {
     return this.documentService.findDocumentsBySigner(signerId, query.status);
   }
 
-  @Public()
   @Get(':id')
   @ApiOperation({ summary: 'Obtener documento por UUID' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
@@ -107,7 +102,6 @@ export class DocumentController {
     return this.documentService.findOne(id);
   }
 
-  @Public()
   @Patch(':id/submit')
   @ApiOperation({ summary: 'Enviar documento a autorización (CREATED → PENDING)' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
@@ -118,7 +112,6 @@ export class DocumentController {
     return this.documentService.submitForAuthorization(id);
   }
 
-  @Public()
   @Patch(':id/cancellation/submit')
   @ApiOperation({ summary: 'Enviar documento a cancelación (SIGNED → CANCELLATION_PENDING)' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
