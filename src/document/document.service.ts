@@ -38,58 +38,53 @@ export class DocumentService {
     private readonly signatureService: SignatureService,
     private readonly emailService: EmailService,
   ) { }
+
   /** Sube el archivo a Minio, genera su hash y registra el documento en la base de datos. */
   async create(
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
+    ip: string,
   ): Promise<BaseResponse> {
-    ip:string
-  ) {
     try {
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');
       }
+
       const { signerId, createdBy, signatureCoordinates } = createDocumentDto;
-      const fileOriginalName = file.originalname;
+
       const minioUploadDocumentResponse = await this.minioService.uploadObject(
-        {
-          file: file,
-          name: file.originalname,
-        },
+        { file, name: file.originalname },
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
-      const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
-    
-      if (
-        minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED
-      ) {
+
+      if (minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED) {
         throw new Error('Error guardando archivo en bucket Minio');
       }
 
+      const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
       const hashBefore = await this.hashService.generateFileHash(file);
-      const signerUser = await this.UserService.findOne(signerId);
-      const requestedByUser = await this.UserService.findOne(createdBy);
 
+      await this.UserService.findOne(signerId);
+      await this.UserService.findOne(createdBy);
 
-      const document = await this.documentRepository.create({
+      const document = this.documentRepository.create({
         objectKey: minioUploadDocumentResponse.fileId,
-        fileName: fileOriginalName,
+        fileName: file.originalname,
         fileType: file.mimetype,
         totalPages: pdfPages,
-        ipAddress: ip, // IMPLEMENTAR EL INTERCEPTOR DE IP
+        ipAddress: ip,
         originalHash: hashBefore,
-        signatureCoordinates: signatureCoordinates ? signatureCoordinates : DEFAULT_COORDINATES,
-        requestedBy: requestedByUser,
-        signer: signerUser,
+        signatureCoordinates: signatureCoordinates ?? DEFAULT_COORDINATES,
+        createdBy,
+        signerId,
       });
 
       await this.documentRepository.save(document);
-      
 
       return {
         success: true,
-        message: 'Documento registrado y pendiente de firma correctamente'
-      }
+        message: 'Documento registrado y pendiente de firma correctamente',
+      };
 
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
@@ -100,10 +95,9 @@ export class DocumentService {
   /** Retorna todos los documentos registrados en la base de datos. */
   async findAll() {
     try {
-      const documents = await this.documentRepository.find();
-      return documents;
+      return await this.documentRepository.find();
     } catch (error) {
-      throw new Error(`Error obteniendo documentos`);
+      throw new Error('Error obteniendo documentos');
     }
   }
 
@@ -119,13 +113,11 @@ export class DocumentService {
       }
       return await this.documentRepository.find({ where: whereClause });
     } catch (error) {
-      throw new Error(
-        `Error obteniendo documentos del firmante ${signerId}: ${error}`,
-      );
+      throw new Error(`Error obteniendo documentos del firmante ${signerId}: ${error}`);
     }
   }
 
-  /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento (firmado o no firmado). */
+  /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
   async getDocumentMinioURL(documentId: string): Promise<string> {
     try {
       const document = await this.findOne(documentId);
@@ -141,10 +133,7 @@ export class DocumentService {
 
       this.logger.log(`Status: ${document.status} | ObjectKey: ${document.objectKey}`);
 
-      const fileResponse = await this.minioService.getFile(
-        document.objectKey,
-        bucket,
-      );
+      const fileResponse = await this.minioService.getFile(document.objectKey, bucket);
 
       return fileResponse.secureUrl;
     } catch (error) {
@@ -173,26 +162,21 @@ export class DocumentService {
     try {
       const documentDb = await this.findOne(id);
       if (documentDb.status !== DOCUMENT_STATUS_ENUM.CREATED) {
-        throw new BadRequestException(
-          `Solo es posible actualizar documentos con estatus CREATED`,
-        );
+        throw new BadRequestException('Solo es posible actualizar documentos con estatus CREATED');
       }
+
       if (fileToReplace) {
-        const objectKey = documentDb.objectKey;
         const minioResponse = await this.minioService.replaceFile(
-          objectKey,
-          {
-            file: fileToReplace,
-            name: fileToReplace.originalname,
-          },
+          documentDb.objectKey,
+          { file: fileToReplace, name: fileToReplace.originalname },
           BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
         );
         if (minioResponse.status !== FILE_STATUS_ENUM.FILE_OVERWRITTEN) {
           throw new Error('Error reemplazando el documento en Minio');
         }
       }
-      //TO DO DESAGREGAR DEL UPDATE DOCUMENT DTO LOS CAMPOS
-      //QUE SON INTERNOS
+
+      // TO DO: desagregar del UpdateDocumentDto los campos internos
       await this.documentRepository.update(id, updateDocumentDto);
       return await this.findOne(id);
     } catch (error) {
@@ -206,9 +190,7 @@ export class DocumentService {
     try {
       const document = await this.findOne(documentId);
       if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
-        throw new BadRequestException(
-          'Solo es posible eliminar documentos con estatus CREATED',
-        );
+        throw new BadRequestException('Solo es posible eliminar documentos con estatus CREATED');
       }
 
       const response = await this.minioService.deleteFile(
@@ -234,9 +216,7 @@ export class DocumentService {
       const document = await this.findOne(documentId);
 
       if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
-        throw new BadRequestException(
-          `Solo es posible enviar a autorización documentos con estatus CREATED`,
-        );
+        throw new BadRequestException('Solo es posible enviar a autorización documentos con estatus CREATED');
       }
 
       document.status = DOCUMENT_STATUS_ENUM.PENDING;
@@ -266,8 +246,7 @@ export class DocumentService {
       const document = await this.findOne(documentId);
       const coordinates = document.signatureCoordinates;
 
-      const signatureId = signerUser.signatureId;
-      const signature = await this.signatureService.findOne(signatureId);
+      const signature = await this.signatureService.findOne(signerUser.signatureId);
 
       const signatureObjectBuffer = await this.minioService.getFileInBytesFormat(
         signature.signatureObjectKey,
@@ -287,31 +266,26 @@ export class DocumentService {
         coordinates,
       );
 
-      const fullName = signerUser.firstName + ' ' + signerUser.lastName
-    
+      const fullName = `${signerUser.firstName} ${signerUser.lastName}`;
+
       const signedDocumentWithName = await this.documentSigningSerivice.addSignerName(
         signedDocument,
         fullName,
-        coordinates
+        coordinates,
       );
-      
+
       if (!signedDocumentWithName) {
         throw new Error('El servicio de firma no retornó un documento válido');
       }
 
       await this.minioService.uploadPdfAObject(
-        {
-          file: signedDocumentWithName,
-          name: document.fileName,
-          mimetype: 'application/pdf'
-        },
+        { file: signedDocumentWithName, name: document.fileName, mimetype: 'application/pdf' },
         BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
         fullName,
         document.objectKey,
       );
 
-      const signedHash = await this.hashService.generateFileHash(signedDocumentWithName);
-      document.signedHash = signedHash;
+      document.signedHash = await this.hashService.generateFileHash(signedDocumentWithName);
       document.signedAt = new Date();
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
       await this.documentRepository.save(document);
@@ -330,9 +304,7 @@ export class DocumentService {
       const document = await this.findOne(documentId);
 
       if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
-        throw new BadRequestException(
-          `Solo es posible cancelar documentos con estatus SIGNED`,
-        );
+        throw new BadRequestException('Solo es posible cancelar documentos con estatus SIGNED');
       }
 
       document.status = DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING;
@@ -373,11 +345,7 @@ export class DocumentService {
       }
 
       await this.minioService.uploadObject(
-        {
-          file: cancelledDocument,
-          name: document.fileName,
-          mimetype: 'application/pdf',
-        },
+        { file: cancelledDocument, name: document.fileName, mimetype: 'application/pdf' },
         BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
         document.objectKey,
       );
@@ -413,11 +381,7 @@ export class DocumentService {
       }
 
       await this.minioService.uploadObject(
-        {
-          file: rejectedDocument,
-          name: document.fileName,
-          mimetype: 'application/pdf',
-        },
+        { file: rejectedDocument, name: document.fileName, mimetype: 'application/pdf' },
         BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
         document.objectKey,
       );
@@ -432,12 +396,5 @@ export class DocumentService {
       this.logger.error(`Error rechazando documento: ${error}`);
       throw new Error(`Error rechazando el documento: ${error}`);
     }
-  }
-
-
-  private removeSensitiveData(document: DocumentEntity): DocumentEntity {
-    const strip = ({ ipAddress, originalHash, , ...safeUser }: DocumentEntity) => safeUser as DocumentEntity;
-
-    return Array.isArray(user) ? user.map(strip) : strip(user);
   }
 }

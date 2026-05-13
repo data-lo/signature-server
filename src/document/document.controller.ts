@@ -67,32 +67,13 @@ export class DocumentController {
   @ApiResponse({ status: 201, description: 'Documento subido y registrado exitosamente en el sistema, pendiente de firma', type: DocumentResponseDto })
   @ApiResponse({ status: 400, description: 'Datos de entrada inválidos, formato de archivo no soportado o documento no proporcionado', type: BadRequestResponse })
   @ApiResponse({ status: 404, description: 'El firmante o el usuario creador especificado no existe en el sistema', type: NotFoundResponse })
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file'), IpInterceptor)
   async create(
     @Body() createDocumentDto: CreateDocumentDto,
     @UploadedFile() file: Express.Multer.File,
+    @ClientIp() ip: string,
   ) {
-    return await this.documentService.create(createDocumentDto, file);
-  @ApiResponse({ status: 201, description: 'Documento registrado para firmar correctamente', type: DocumentResponseDto })
-  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos o archivo no proporcionado', type: ApiInvalidDataResponseDto })
-  @ApiResponse({ status: 404, description: 'Firmante o creador no encontrado', type: ApiNotFoundResponseDto })
-  @UseInterceptors(FileInterceptor('document'),IpInterceptor)
-  async create(
-    @Body() createDocumentDto: CreateDocumentDto,
-    @UploadedFile() document: Express.Multer.File,
-    @ClientIp() ip:string
-  ) {
-    console.log(document.filename, document.mimetype);
-    return await this.documentService.create(createDocumentDto, document, ip);
-  }
-
-  @Get()
-  @ApiOperation({ summary: 'Obtener todos los documentos' })
-  @ApiResponse({ status: 200, description: 'Lista de todos los documentos', type: [DocumentResponseDto] })
-  @UseInterceptors(IpInterceptor)
-  findAll(@ClientIp() ip:string) {
-    console.log(ip)
-    return this.documentService.findAll();
+    return await this.documentService.create(createDocumentDto, file, ip);
   }
 
   @Get('signer/:signerId')
