@@ -1,3 +1,4 @@
+// NestJS core
 import {
   BadRequestException,
   Injectable,
@@ -5,24 +6,36 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+
+// TypeORM
+import { Repository } from 'typeorm';
+
+// Entities
 import { DocumentEntity } from './entities/document.entity';
+
+// DTOs
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
-import { Repository } from 'typeorm';
-import { MinioService } from '../shared/minio/minio.service';
-import { HashService } from '../shared/hash/hash.service';
-import { UserService } from '../user/user.service';
-import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+
+// Enums
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
+
+// Interfaces & payloads
+import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DocumentSignEventPayload } from './interfaces/document-sign-event-payload';
 import { DocumentCancelPayload } from './interfaces/document-cancel-event-payload';
 import { DocumentRejectPayload } from './interfaces/document-reject-event-payload';
+import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
+
+// Services
+import { MinioService } from '../shared/minio/minio.service';
+import { HashService } from '../shared/hash/hash.service';
+import { UserService } from '../user/user.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
-import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
 import { EmailService } from 'src/shared/email/email.service';
-import { BaseResponse } from 'src/interfaces/api-response.dto';
 
 @Injectable()
 export class DocumentService {
