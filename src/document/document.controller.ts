@@ -28,6 +28,7 @@ export class DocumentController {
   }
 
 
+  @Public()
   @Post()
   @ApiOperation({ summary: 'Registrar nuevo documento para firmar' })
   @ApiConsumes('application/json', 'multipart/form-data')
@@ -79,7 +80,7 @@ export class DocumentController {
     return this.documentService.findOne(id);
   }
 
-
+  @Public()
   @Patch(':id/submit')
   @ApiOperation({ summary: 'Enviar documento a autorización (CREATED → PENDING)' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })

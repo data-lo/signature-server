@@ -27,7 +27,7 @@ import { ValidateCodeDto} from './dto/validate-code.dto';
 export class VerificationCodeController {
   constructor(private readonly verificationCodeService: VerificationCodeService) {}
 
-
+  @Public()
   @Post('generate')
   @ApiExcludeEndpoint()
   @HttpCode(HttpStatus.CREATED)
@@ -42,7 +42,7 @@ export class VerificationCodeController {
     return this.verificationCodeService.create(dto);
   }
 
-
+  @Public()
   @SkipThrottle()
   @Post('validate')
   @HttpCode(HttpStatus.OK)
