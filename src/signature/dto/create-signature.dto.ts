@@ -3,7 +3,7 @@ import { IsNotEmpty, IsOptional, IsUUID } from 'class-validator';
 
 export class CreateSignatureDto {
   @ApiProperty({
-    description: 'UUID del usuario al que se asignará esta firma. Al crear la firma, su ID se asigna automáticamente al usuario.',
+    description: 'Identificador único del usuario al que se asignará la firma en formato UUID v4. Al registrar la firma, su ID queda vinculado automáticamente al usuario.',
     format: 'uuid',
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   })
@@ -12,7 +12,7 @@ export class CreateSignatureDto {
   userId: string;
 
   @ApiPropertyOptional({
-    description: 'UUID del usuario que registra la firma (administrador o responsable). Queda en null si no se envía.',
+    description: 'Identificador único del usuario que registra la firma (administrador o responsable) en formato UUID v4. Si no se envía, el campo quedará en null.',
     format: 'uuid',
     example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
   })
@@ -23,14 +23,14 @@ export class CreateSignatureDto {
   @ApiProperty({
     type: 'string',
     format: 'binary',
-    description: 'Imagen en formato PNG de la firma',
+    description: 'Imagen de la firma manuscrita en formato PNG.',
   })
-  imagen_firma: any;
+  signatureImage: any;
 
   @ApiProperty({
     type: 'string',
     format: 'binary',
-    description: 'Imagen del documento de identificación oficial en formato PDF',
+    description: 'Documento de identificación oficial del usuario en formato PDF.',
   })
-  identificacon_oficial: any;
+  officialFile: any;
 }
