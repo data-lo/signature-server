@@ -1,7 +1,7 @@
 services:
   minio:
     image: minio/minio@sha256:ea2c70cda70860c7d10f04ce1df640d3abb995784cb7aeedef8d4baa53a5a113
-    name: signature_minio_development
+    container_name: signature_minio
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
@@ -18,9 +18,12 @@ services:
       timeout: 20s
       retries: 5
       start_period: 30s
+    networks:
+      - signature_network
+
   postgres:
     image: postgres:15
-    name: signature_postgres_development
+    container_name: signature_postgres
     restart: unless-stopped
     ports:
       - "5434:5432"
@@ -37,10 +40,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - signature_network
 
-  mongodb:
+  mongo:
     image: mongo:8
-    name: signature_mongodb_development
+    container_name: signature_mongo
     restart: unless-stopped
     ports:
       - "27018:27017"
@@ -55,10 +60,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - signature_network
 
   redis:
     image: redis:7-alpine
-    name: signature_redis_development
+    container_name: signature_redis
     restart: unless-stopped
     ports:
       - "${REDIS_PORT}:6379"
@@ -72,24 +79,42 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - signature_network
 
-  app:
-    build: .
-    ports:
-      - "3000:3000"
-    env_file:
-      - .env
+  nestjs:
+    image: dataloplatforms/signature-server:1.0.0
+    container_name: nestjs
+    restart: always
+    ports: 
+      - "4000:4000"
     depends_on:
-      postgres:
-        condition: service_healthy
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+      - postgres
+      - mongo
+      - minio
+      - redis
+    networks:
+      - signature_network
+
+  nextjs:
+    image: dataloplatforms/signature-app:1.0.0
+    container_name: nextjs
+    restart: always
+    ports: 
+      - "4005:4005"
+    depends_on:
+      - postgres
+      - mongo
+      - minio
+    networks:
+      - signature_network
 
 volumes:
   minio_data_v2:
   postgres_data:
   mongo_data:
   redis_data:
+
+networks:
+  signature_network:
+    driver: bridge
