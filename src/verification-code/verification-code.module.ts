@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserModule } from 'src/user/user.module';
 import { SharedModule } from 'src/shared/shared.module';
 import { DocumentModule } from 'src/document/document.module';
+import { AuditModule } from 'src/audit/audit.module';
 import { VerificationCodeService } from './verification-code.service';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { VerificationCodeController } from './verification-code.controller';
@@ -16,9 +17,10 @@ import { VerificationCodeEventService } from './verification-code.event.sevice';
     UserModule,
     SharedModule,
     DocumentModule,
+    AuditModule,
   ],
   exports: [VerificationCodeService],
   controllers: [VerificationCodeController],
   providers: [VerificationCodeService, VerificationCodeEventService],
 })
-export class VerificationCodeModule { }
+export class VerificationCodeModule {}

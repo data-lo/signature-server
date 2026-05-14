@@ -37,10 +37,8 @@ import { UserService } from '../user/user.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
 import { EmailService } from 'src/shared/email/email.service';
-import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
-import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
-import { UpdateDocumentData } from './interfaces/responses/document-update-response';
-import { find } from 'rxjs';
+import { AuditService } from 'src/audit/audit.service';
+import { AuditAction } from 'src/audit/schema/audit-document';
 
 @Injectable()
 export class DocumentService {
@@ -62,7 +60,8 @@ export class DocumentService {
     private readonly documentSigningSerivice: PdfSignatureService,
     private readonly signatureService: SignatureService,
     private readonly emailService: EmailService,
-  ) { }
+    private readonly auditService: AuditService,
+  ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento en la base de datos. */
   async create(
@@ -82,18 +81,18 @@ export class DocumentService {
         { file, name: file.originalname },
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
+      const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
 
-      if (minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED) {
+      if (
+        minioUploadDocumentResponse.status !== FILE_STATUS_ENUM.FILE_CREATED
+      ) {
         throw new Error('Error guardando archivo en bucket Minio');
       }
 
       const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
       const hashBefore = await this.hashService.generateFileHash(file);
 
-      await this.userService.findOne(signerId);
-      await this.userService.findOne(createdBy);
-
-      const document = this.documentRepository.create({
+      const document = await this.documentRepository.create({
         objectKey: minioUploadDocumentResponse.fileId,
         fileName: file.originalname,
         fileType: file.mimetype,
@@ -461,6 +460,15 @@ export class DocumentService {
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
       await this.documentRepository.save(document);
 
+      void this.auditService.create({
+        documentId: document.id,
+        operation: AuditAction.DOCUMENT_SIGNED,
+        ipAddress: ipAddress ?? '0.0.0.0',
+        users: [{ userId: signerId, action: AuditAction.DOCUMENT_SIGNED }],
+        signedAt: document.signedAt,
+        verificationCodeId,
+      });
+
       return await this.findOne(document.id);
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
@@ -470,10 +478,10 @@ export class DocumentService {
   }
 
 
-  /** Obtiene el documento firmado desde Minio, estampa la marca de agua CANCELADO en todas las páginas, lo sube al bucket de cancelados y actualiza el estatus a CANCELLED. */
+  /** Estampa la marca de agua CANCELADO, lo sube al bucket de cancelados y actualiza el estatus a CANCELLED. */
   async cancelDocument(payload: DocumentCancelPayload): Promise<DocumentEntity> {
     try {
-      const { documentId } = payload;
+      const { documentId, signerId, ipAddress, verificationCodeId } = payload;
       const document = await this.findOne(documentId);
 
       const documentBuffer = await this.minioService.getFileInBytesFormat(
@@ -498,6 +506,14 @@ export class DocumentService {
       document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
       await this.documentRepository.save(document);
 
+      void this.auditService.create({
+        documentId: document.id,
+        operation: AuditAction.DOCUMENT_CANCELLED,
+        ipAddress: ipAddress ?? '0.0.0.0',
+        users: [{ userId: signerId, action: AuditAction.DOCUMENT_CANCELLED }],
+        verificationCodeId,
+      });
+
       return await this.findOne(document.id);
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
@@ -506,10 +522,10 @@ export class DocumentService {
     }
   }
 
-  /** Obtiene el documento original desde Minio, estampa la marca de agua RECHAZADO en todas las páginas, lo sube al bucket de rechazados y actualiza el estatus a REJECTED. */
+  /** Estampa la marca de agua RECHAZADO, lo sube al bucket de rechazados y actualiza el estatus a REJECTED. */
   async rejectDocument(payload: DocumentRejectPayload): Promise<DocumentEntity> {
     try {
-      const { documentId } = payload;
+      const { documentId, signerId, ipAddress, verificationCodeId } = payload;
       const document = await this.findOne(documentId);
 
       const documentBuffer = await this.minioService.getFileInBytesFormat(
@@ -533,6 +549,14 @@ export class DocumentService {
       document.rejectedAt = new Date();
       document.status = DOCUMENT_STATUS_ENUM.REJECTED;
       await this.documentRepository.save(document);
+
+      void this.auditService.create({
+        documentId: document.id,
+        operation: AuditAction.DOCUMENT_REJECTED,
+        ipAddress: ipAddress ?? '0.0.0.0',
+        users: [{ userId: signerId, action: AuditAction.DOCUMENT_REJECTED }],
+        verificationCodeId,
+      });
 
       return await this.findOne(document.id);
     } catch (error) {
