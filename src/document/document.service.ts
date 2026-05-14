@@ -40,6 +40,7 @@ import { EmailService } from 'src/shared/email/email.service';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
+import { find } from 'rxjs';
 
 @Injectable()
 export class DocumentService {
@@ -108,6 +109,16 @@ export class DocumentService {
 
       const url = await this.getDocumentMinioURL(savedDocument.id);
 
+      const newDocumentObject = await this.documentRepository.findOne({
+        where: {
+          id: savedDocument.id,
+        },
+        select: {
+          requestedBy: true,
+          signer: true
+        },
+      });
+
       return {
         success: true,
         message: 'Documento registrado y pendiente de firma correctamente',
@@ -116,8 +127,8 @@ export class DocumentService {
           fileName: savedDocument.fileName,
           fileType: savedDocument.fileType,
           totalPages: savedDocument.totalPages,
-          signer: `${savedDocument.signer.firstName} ${savedDocument.signer.lastName}`,
-          creator: `${savedDocument.requestedBy.firstName} ${savedDocument.requestedBy.lastName}`,
+          signer: `${newDocumentObject.signer.firstName} ${newDocumentObject.signer.lastName}`,
+          creator: `${newDocumentObject.requestedBy.firstName} ${newDocumentObject.requestedBy.lastName}`,
           status: savedDocument.status,
           secureUrl: url.secureUrl,
           expiresIn: url.expiresIn,
@@ -225,13 +236,13 @@ export class DocumentService {
       const document = await this.findOne(documentId);
 
       const bucketByStatus: Record<DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM> = {
-        [DOCUMENT_STATUS_ENUM.CANCELLED]:            BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
-        [DOCUMENT_STATUS_ENUM.REJECTED]:             BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
-        [DOCUMENT_STATUS_ENUM.SIGNED]:               BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
         [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-        [DOCUMENT_STATUS_ENUM.PENDING]:              BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-        [DOCUMENT_STATUS_ENUM.CREATED]:              BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-        [DOCUMENT_STATUS_ENUM.EXPIRED]:              BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       };
 
       const bucket = bucketByStatus[document.status];
