@@ -1,9 +1,7 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiExcludeEndpoint, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Public } from 'src/auth/decorators/public.decorator';
+import { Controller, Get, Param, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { AuditService } from './audit.service';
-import { CreateAuditDto } from './dto/create-audit.dto';
-import { FindAllAuditDto } from './dto/find-audit.dto';
+import type { AuditQuery } from './audit.service';
 
 @ApiTags('Audit')
 @ApiBearerAuth('access-token')
@@ -11,21 +9,26 @@ import { FindAllAuditDto } from './dto/find-audit.dto';
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
-  @Post()
-  @ApiExcludeEndpoint()
-  @ApiOperation({ summary: 'Registrar entrada de auditoría' })
-  @ApiBody({ type: CreateAuditDto })
-  @ApiResponse({ status: 201, description: 'Registro de auditoría creado correctamente' })
-  @ApiResponse({ status: 400, description: 'Datos de entrada inválidos' })
-  create(@Body() createAuditDto: CreateAuditDto) {
-    return this.auditService.create(createAuditDto);
+  @Get('document/:documentId')
+  @ApiOperation({ summary: 'Obtener registros de auditoría de un documento descifrados' })
+  @ApiParam({ name: 'documentId', description: 'UUID del documento', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Lista de registros de auditoría descifrados, ordenados por chainIndex ASC' })
+  @ApiResponse({ status: 404, description: 'No se encontraron registros para el documento' })
+  findByDocument(@Param('documentId') documentId: string) {
+    return this.auditService.findOne(documentId);
+  }
+
+  @Get('decrypted')
+  @ApiOperation({ summary: 'Obtener todos los registros de auditoría descifrados' })
+  @ApiResponse({ status: 200, description: 'Lista paginada de registros descifrados con sus campos de integridad' })
+  findAllDecrypted(@Query() query: AuditQuery) {
+    return this.auditService.findAllDecrypted(query);
   }
 
   @Get()
-  @ApiExcludeEndpoint()
-  @ApiOperation({ summary: 'Obtener todos los registros de auditoría' })
-  @ApiResponse({ status: 200, description: 'Lista de registros de auditoría' })
-  findAll(@Query() query: FindAllAuditDto) {
+  @ApiOperation({ summary: 'Obtener todos los registros de auditoría (cifrados)' })
+  @ApiResponse({ status: 200, description: 'Lista paginada de registros de auditoría' })
+  findAll(@Query() query: AuditQuery) {
     return this.auditService.findAll(query);
   }
 }
