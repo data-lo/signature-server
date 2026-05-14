@@ -39,6 +39,9 @@ import { SignatureService } from 'src/signature/signature.service';
 import { EmailService } from 'src/shared/email/email.service';
 import { AuditService } from 'src/audit/audit.service';
 import { AuditAction } from 'src/audit/schema/audit-document';
+import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
+import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
+import { UpdateDocumentData } from './interfaces/responses/document-update-response';
 
 @Injectable()
 export class DocumentService {
@@ -89,7 +92,6 @@ export class DocumentService {
         throw new Error('Error guardando archivo en bucket Minio');
       }
 
-      const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
       const hashBefore = await this.hashService.generateFileHash(file);
 
       const document = await this.documentRepository.create({
@@ -468,14 +470,14 @@ export class DocumentService {
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
       await this.documentRepository.save(document);
 
-      void this.auditService.create({
-        documentId: document.id,
-        operation: AuditAction.DOCUMENT_SIGNED,
-        ipAddress: ipAddress ?? '0.0.0.0',
-        users: [{ userId: signerId, action: AuditAction.DOCUMENT_SIGNED }],
-        signedAt: document.signedAt,
-        verificationCodeId,
-      });
+      // void this.auditService.create({
+      //   documentId: document.id,
+      //   operation: AuditAction.DOCUMENT_SIGNED,
+      //   ipAddress: ipAddress ?? '0.0.0.0',
+      //   users: [{ userId: signerId, action: AuditAction.DOCUMENT_SIGNED }],
+      //   signedAt: document.signedAt,
+      //   verificationCodeId,
+      // });
 
       return await this.findOne(document.id);
     } catch (error) {

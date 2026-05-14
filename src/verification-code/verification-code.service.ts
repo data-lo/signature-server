@@ -161,19 +161,19 @@ export class VerificationCodeService {
       ...(auditOperation === AuditAction.DOCUMENT_SIGNED && { signedAt: new Date() }),
     });
 
-    const auditOperation =
-      verificationCode.type === CodeType.CANCELLATION ? AuditAction.DOCUMENT_CANCELLED :
-      verificationCode.type === CodeType.REJECTION    ? AuditAction.DOCUMENT_REJECTED :
-                                                        AuditAction.DOCUMENT_SIGNED;
+    // const auditOperation =
+    //   verificationCode.type === CodeType.CANCELLATION ? AuditAction.DOCUMENT_CANCELLED :
+    //   verificationCode.type === CodeType.REJECTION    ? AuditAction.DOCUMENT_REJECTED :
+    //                                                     AuditAction.DOCUMENT_SIGNED;
 
-    void this.auditService.create({
-      documentId: dto.documentId,
-      operation: auditOperation,
-      ipAddress,
-      users: [{ userId: dto.signerId, action: auditOperation }],
-      verificationCodeId,
-      ...(auditOperation === AuditAction.DOCUMENT_SIGNED && { signedAt: new Date() }),
-    });
+    // void this.auditService.create({
+    //   documentId: dto.documentId,
+    //   operation: auditOperation,
+    //   ipAddress,
+    //   users: [{ userId: dto.signerId, action: auditOperation }],
+    //   verificationCodeId,
+    //   ...(auditOperation === AuditAction.DOCUMENT_SIGNED && { signedAt: new Date() }),
+    // });
 
     this.eventEmitter.emit(documentEvent, {
       signerId: dto.signerId,
