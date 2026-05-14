@@ -1,9 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "exclude": ["node_modules", "test", "dist", "**/*spec.ts"],
-  "include": [
-    "src/shared/document-signing/resources/sRGB_v4_ICC_preference_displayclass.icc",
-    "src/shared/document-signing/resources/sRGB_v4_ICC_preference.icc",
-    "src/shared/document-signing/resources/sRGB2014.icc"
-  ]
+  "include": ["./"]
 }
