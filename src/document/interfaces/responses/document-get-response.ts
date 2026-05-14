@@ -26,14 +26,43 @@ export class DocumentGetData {
 
     @ApiProperty({ example: 86400, description: 'Tiempo de expiración de la URL prefirmada en segundos (24 horas)' })
     expiresIn: number;
+
+    @ApiProperty({ example: 'JOSÉ RAMOS PÉREZ', description: 'Nombre completo del firmante' })
+    signer: string;
+
+    @ApiProperty({ example: 'ALFREDO SÁNCHEZ RAMOS', description: 'Nombre completo del firmante' })
+    creator: string;
+}
+
+export class PaginationMeta {
+    @ApiProperty({ example: 22, description: 'Total de registros encontrados' })
+    total: number;
+
+    @ApiProperty({ example: 1, description: 'Página actual' })
+    page: number;
+
+    @ApiProperty({ example: 10, description: 'Cantidad de registros por página' })
+    limit: number;
+
+    @ApiProperty({ example: 3, description: 'Total de páginas' })
+    totalPages: number;
+
+    @ApiProperty({ example: true, description: 'Indica si existe una página siguiente' })
+    hasNextPage: boolean;
+
+    @ApiProperty({ example: false, description: 'Indica si existe una página anterior' })
+    hasPrevPage: boolean;
 }
 
 export class DocumentGetResponse extends BaseResponse {
-    @ApiProperty({ type: DocumentGetData, description: 'Datos del usuario encontrado' })
+    @ApiProperty({ type: DocumentGetData, description: 'Datos del documento encontrado' })
     data: DocumentGetData;
 }
 
 export class DocumentGetListResponse extends BaseResponse {
-    @ApiProperty({ type: [DocumentGetData], description: 'Lista de usuarios activos' })
+    @ApiProperty({ type: [DocumentGetData], description: 'Lista de documentos' })
     data: DocumentGetData[];
+
+    @ApiProperty({ type: PaginationMeta, description: 'Metadatos de paginación' })
+    meta: PaginationMeta;
 }

@@ -45,7 +45,11 @@ import { Public } from 'src/auth/decorators/public.decorator';
 import { BadRequestResponse, NotFoundResponse } from 'src/interfaces/api-response.dto';
 import { DocumentCreateResponse } from './interfaces/responses/document-create-response';
 import { DocumentGetListResponse } from './interfaces/responses/document-get-response';
-import { GetDocumentsQueryDto } from './dto/get-documents-query-dto';
+import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
+import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
+import { DocumentUpdateResponse } from './interfaces/responses/document-update-response';
+import { SubmitForAuthorizationResponse } from './interfaces/responses/submit-for-authorization-response';
+import { SubmitForCancellationResponse } from './interfaces/responses/submit-for-cancellation-response';
 
 @Public()
 @ApiTags('Document')
@@ -95,36 +99,36 @@ export class DocumentController {
     return this.documentService.findWithFilters(query);
   }
 
-  @Patch(':id/submit')
-  @ApiOperation({ summary: 'Enviar documento a autorización (CREATED → PENDING)' })
+  @Patch(':id/submit-for-authorization')
+  @ApiOperation({ summary: 'Enviar documento a autorización' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Documento enviado a autorización y firmante notificado', type: DocumentResponseDto })
-  @ApiResponse({ status: 400, description: 'El documento no está en estatus CREATED', type: BadRequestResponse })
+  @ApiResponse({ status: 200, description: 'Documento enviado a autorización exitosamente, firmante notificado por correo', type: SubmitForAuthorizationResponse })
+  @ApiResponse({ status: 400, description: 'El documento no se encuentra en estatus CREATED', type: BadRequestResponse })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: NotFoundResponse })
   submitForAuthorization(@Param('id') id: string) {
     return this.documentService.submitForAuthorization(id);
   }
 
-  @Patch(':id/cancellation/submit')
-  @ApiOperation({ summary: 'Enviar documento a cancelación (SIGNED → CANCELLATION_PENDING)' })
+  @Patch(':id/submit-for-cancellation')
+  @ApiOperation({ summary: 'Enviar documento a cancelación' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Documento enviado a cancelación y firmante notificado', type: DocumentResponseDto })
-  @ApiResponse({ status: 400, description: 'El documento no está en estatus SIGNED', type: BadRequestResponse })
+  @ApiResponse({ status: 200, description: 'Solicitud de cancelación enviada exitosamente, firmante notificado por correo', type: SubmitForCancellationResponse })
+  @ApiResponse({ status: 400, description: 'El documento no se encuentra en estatus SIGNED', type: BadRequestResponse })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: NotFoundResponse })
   submitForCancellation(@Param('id') id: string) {
-    return this.documentService.submitForCancellation(id);
+    return this.documentService.requestCancellation(id);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Actualizar documento (solo estatus CREATED)' })
+  @ApiOperation({ summary: 'Actualizar campos del documento (solo en estatus CREATED)' })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
   @ApiConsumes('application/json', 'multipart/form-data')
-  @ApiBody({ type: UpdateDocumentDto })
-  @ApiResponse({ status: 200, description: 'Documento actualizado correctamente', type: DocumentResponseDto })
-  @ApiResponse({ status: 400, description: 'El documento no está en estatus CREATED', type: BadRequestResponse })
+  @ApiBody({ type: SignatureCoordinatesDto })
+  @ApiResponse({ status: 200, description: 'Documento actualizado exitosamente', type: DocumentUpdateResponse })
+  @ApiResponse({ status: 400, description: 'El documento no se encuentra en estatus CREATED', type: BadRequestResponse })
   @ApiResponse({ status: 404, description: 'Documento no encontrado', type: NotFoundResponse })
-  update(@Param('id') id: string, @Body() updateDocumentDto: UpdateDocumentDto) {
-    return this.documentService.update(id, updateDocumentDto);
+  update(@Param('id') id: string, @Body() signatureCoordinatesDto: SignatureCoordinatesDto) {
+    return this.documentService.update(id, signatureCoordinatesDto);
   }
 
   @Delete(':id')

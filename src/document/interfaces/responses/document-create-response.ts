@@ -23,6 +23,12 @@ export class CreateDocumentData {
 
   @ApiProperty({ example: 86400, description: 'Tiempo de expiración de la URL prefirmada en segundos (24 horas)' })
   expiresIn: number;
+
+  @ApiProperty({ example: 'JOSÉ RAMOS PÉREZ', description: 'Nombre completo del firmante' })
+  signer: string;
+
+  @ApiProperty({ example: 'ALFREDO SÁNCHEZ', description: 'Nombre completo del firmante' })
+  creator: string;
 }
 
 export class DocumentCreateResponse extends BaseResponse<CreateDocumentData> {
