@@ -15,7 +15,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserCreateData, UserCreateResponse } from './interfaces/response/user-create-response';
 import { BadRequestResponse, NotFoundResponse, BaseResponse, ConflictResponse } from 'src/interfaces/api-response.dto';
-import { UserGetListResponseDto, UserGetResponseDto } from './interfaces/response/get-user-response.dto';
+import { UserGetListResponse, UserGetResponse } from './interfaces/response/get-user-response';
 
 
 @Public()
@@ -41,7 +41,7 @@ export class UserController {
   @Get()
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
   @ApiQuery({ name: 'withSignature', required: false, type: Boolean, description: 'Incluir la firma del usuario' })
-  @ApiResponse({ status: 200, description: 'Lista de usuarios obtenida correctamente', type: UserGetListResponseDto })
+  @ApiResponse({ status: 200, description: 'Lista de usuarios obtenida correctamente', type: UserGetListResponse })
   @ApiResponse({ status: 401, description: 'API Key inválida o no proporcionada' })
   findAll(@Query('withSignature') withSignature?: string) {
     return this.userService.findAllActiveUsers(withSignature === 'true');
@@ -51,7 +51,7 @@ export class UserController {
   @ApiOperation({ summary: 'Obtener un usuario' })
   @ApiParam({ name: 'id', description: 'Identificador único del usuario en formato UUID v4', format: 'uuid', example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa' })
   @ApiQuery({ name: 'withSignature', required: false, type: Boolean, description: 'Incluir la firma del usuario' })
-  @ApiResponse({ status: 200, description: 'Usuario encontrado', type: UserGetResponseDto })
+  @ApiResponse({ status: 200, description: 'Usuario encontrado', type: UserGetResponse })
   @ApiResponse({ status: 401, description: 'API Key inválida o no proporcionada' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado', type: NotFoundResponse })
   findOne(@Param('id') id: string, @Query('withSignature') withSignature?: string) {

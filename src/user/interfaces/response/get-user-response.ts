@@ -48,12 +48,12 @@ export class UserGetData {
     signature?: SignatureUrlDto | null;
 }
 
-export class UserGetResponseDto extends BaseResponse {
+export class UserGetResponse extends BaseResponse {
     @ApiProperty({ type: UserGetData, description: 'Datos del usuario encontrado' })
     data: UserGetData;
 }
 
-export class UserGetListResponseDto extends BaseResponse {
+export class UserGetListResponse extends BaseResponse {
     @ApiProperty({ type: [UserGetData], description: 'Lista de usuarios activos' })
     data: UserGetData[];
 }

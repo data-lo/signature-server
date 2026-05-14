@@ -2,6 +2,7 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -36,17 +37,27 @@ import { UserService } from '../user/user.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
 import { EmailService } from 'src/shared/email/email.service';
+import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
+import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
+import { UpdateDocumentData } from './interfaces/responses/document-update-response';
 
 @Injectable()
 export class DocumentService {
   logger = new Logger(DocumentService.name);
+
+  private readonly STATUS_BUCKET_MAP: Partial<Record<DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM>> = {
+    [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+  }
 
   constructor(
     @InjectRepository(DocumentEntity)
     private readonly documentRepository: Repository<DocumentEntity>,
     private readonly minioService: MinioService,
     private readonly hashService: HashService,
-    private readonly UserService: UserService,
+    private readonly userService: UserService,
     private readonly documentSigningSerivice: PdfSignatureService,
     private readonly signatureService: SignatureService,
     private readonly emailService: EmailService,
@@ -63,6 +74,7 @@ export class DocumentService {
         throw new BadRequestException('Archivo no proporcionado');
       }
 
+
       const { signerId, createdBy, signatureCoordinates } = createDocumentDto;
 
       const minioUploadDocumentResponse = await this.minioService.uploadObject(
@@ -77,8 +89,8 @@ export class DocumentService {
       const pdfPages = await this.documentSigningSerivice.getPdfPages(file);
       const hashBefore = await this.hashService.generateFileHash(file);
 
-      await this.UserService.findOne(signerId);
-      await this.UserService.findOne(createdBy);
+      await this.userService.findOne(signerId);
+      await this.userService.findOne(createdBy);
 
       const document = this.documentRepository.create({
         objectKey: minioUploadDocumentResponse.fileId,
@@ -92,11 +104,24 @@ export class DocumentService {
         signerId,
       });
 
-      await this.documentRepository.save(document);
+      const savedDocument = await this.documentRepository.save(document);
+
+      const url = await this.getDocumentMinioURL(savedDocument.id);
 
       return {
         success: true,
         message: 'Documento registrado y pendiente de firma correctamente',
+        data: {
+          id: savedDocument.id,
+          fileName: savedDocument.fileName,
+          fileType: savedDocument.fileType,
+          totalPages: savedDocument.totalPages,
+          signer: `${savedDocument.signer.firstName} ${savedDocument.signer.lastName}`,
+          creator: `${savedDocument.requestedBy.firstName} ${savedDocument.requestedBy.lastName}`,
+          status: savedDocument.status,
+          secureUrl: url.secureUrl,
+          expiresIn: url.expiresIn,
+        },
       };
 
     } catch (error) {
@@ -105,33 +130,97 @@ export class DocumentService {
     }
   }
 
-  /** Retorna todos los documentos registrados en la base de datos. */
-  async findAll() {
-    try {
-      return await this.documentRepository.find();
-    } catch (error) {
-      throw new Error('Error obteniendo documentos');
-    }
-  }
+  async findWithFilters(query: GetDocumentsQueryDto) {
+    const { id, signerId, email, status, dateFrom, dateTo, page, limit, withUrl } = query;
 
-  /** Retorna los documentos asignados a un firmante, con filtro opcional por estatus. */
-  async findDocumentsBySigner(
-    signerId: string,
-    status?: DOCUMENT_STATUS_ENUM,
-  ): Promise<DocumentEntity[]> {
-    try {
-      const whereClause: Partial<DocumentEntity> = { signerId };
-      if (status) {
-        whereClause.status = status;
-      }
-      return await this.documentRepository.find({ where: whereClause });
-    } catch (error) {
-      throw new Error(`Error obteniendo documentos del firmante ${signerId}: ${error}`);
+    const qb = this.documentRepository
+      .createQueryBuilder('document')
+      .leftJoinAndSelect('document.requestedBy', 'requester')
+      .leftJoinAndSelect('document.signer', 'signer')
+      .orderBy('document.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (id) {
+      qb.andWhere('document.id = :id', { id });
     }
+
+    if (signerId) {
+      qb.andWhere('signer.id = :signerId', { signerId });
+    }
+
+    if (email) {
+      qb.andWhere('(signer.email = :email OR requester.email = :email)', { email });
+    }
+
+    if (status) {
+      qb.andWhere('document.status = :status', { status });
+    }
+
+    if (dateFrom) {
+      qb.andWhere('document.createdAt >= :dateFrom', { dateFrom: new Date(dateFrom) });
+    }
+
+    if (dateTo) {
+      qb.andWhere('document.createdAt <= :dateTo', { dateTo: new Date(dateTo) });
+    }
+
+    const [documents, total] = await qb.getManyAndCount();
+
+    if (!documents.length) {
+      throw new NotFoundException('No se encontraron documentos con los filtros indicados');
+    }
+
+    const data = await Promise.all(
+      documents.map(async (doc) => {
+        if (!withUrl) {
+          return {
+            id: doc.id,
+            fileName: doc.fileName,
+            fileType: doc.fileType,
+            signer: `${doc.signer.firstName} ${doc.signer.lastName}`,
+            creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
+            totalPages: doc.totalPages + 1,
+            status: doc.status,
+            createdAt: doc.createdAt
+          };
+        }
+
+        const bucket = this.STATUS_BUCKET_MAP[doc.status] ?? BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+
+        const { secureUrl, expiresIn } = await this.minioService.getFile(doc.objectKey, bucket);
+
+        return {
+          id: doc.id,
+          fileName: doc.fileName,
+          fileType: doc.fileType,
+          totalPages: doc.totalPages,
+          signer: `${doc.signer.firstName} ${doc.signer.lastName}`,
+          status: doc.status,
+          createdAt: doc.createdAt,
+          secureUrl,
+          expiresIn,
+        };
+      }),
+    );
+
+    return {
+      success: true,
+      message: 'Documentos obtenidos correctamente',
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page < Math.ceil(total / limit),
+        hasPrevPage: page > 1,
+      },
+    };
   }
 
   /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
-  async getDocumentMinioURL(documentId: string): Promise<string> {
+  async getDocumentMinioURL(documentId: string) {
     try {
       const document = await this.findOne(documentId);
 
@@ -144,11 +233,9 @@ export class DocumentService {
               ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
               : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
 
-      this.logger.log(`Status: ${document.status} | ObjectKey: ${document.objectKey}`);
-
       const fileResponse = await this.minioService.getFile(document.objectKey, bucket);
 
-      return fileResponse.secureUrl;
+      return fileResponse;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
       throw new Error(`Error obteniendo URL del Documento: ${error}`);
@@ -168,30 +255,64 @@ export class DocumentService {
 
   /** Actualiza los datos de un documento y opcionalmente reemplaza su archivo en Minio. Solo permite documentos en estatus CREATED. */
   async update(
-    id: string,
-    updateDocumentDto: UpdateDocumentDto,
+    documentId: string,
+    signatureCoordinatesDto?: SignatureCoordinatesDto,
     fileToReplace?: Express.Multer.File,
-  ) {
+  ): Promise<BaseResponse<UpdateDocumentData>> {
     try {
-      const documentDb = await this.findOne(id);
-      if (documentDb.status !== DOCUMENT_STATUS_ENUM.CREATED) {
-        throw new BadRequestException('Solo es posible actualizar documentos con estatus CREATED');
+      const document = await this.findOne(documentId);
+
+      if (!signatureCoordinatesDto && !fileToReplace) {
+        throw new BadRequestException(
+          'Debe proporcionar al menos un campo para actualizar: archivo o coordenadas de firma',
+        );
+      }
+
+      if (!document) {
+        throw new NotFoundException(`El documento con id ${documentId} no se encuentra`);
+      }
+
+      if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
+        throw new BadRequestException(
+          `El documento no puede actualizarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.CREATED}', el estatus actual es '${document.status}'`,
+        );
       }
 
       if (fileToReplace) {
         const minioResponse = await this.minioService.replaceFile(
-          documentDb.objectKey,
-          { file: fileToReplace, name: fileToReplace.originalname },
+          document.objectKey,
+          {
+            file: fileToReplace,
+            name: fileToReplace.originalname
+          },
           BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
         );
+
         if (minioResponse.status !== FILE_STATUS_ENUM.FILE_OVERWRITTEN) {
-          throw new Error('Error reemplazando el documento en Minio');
+          throw new InternalServerErrorException(
+            `Error al reemplazar el archivo en el almacenamiento. Estado recibido: '${minioResponse.status}'`,
+          );
         }
       }
 
-      // TO DO: desagregar del UpdateDocumentDto los campos internos
-      await this.documentRepository.update(id, updateDocumentDto);
-      return await this.findOne(id);
+      await this.documentRepository.update(documentId, { signatureCoordinates: signatureCoordinatesDto });
+
+      const { secureUrl, expiresIn } = await this.minioService.getFile(document.objectKey, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS);
+
+      const updatedDocument = await this.findOne(documentId);
+
+      return {
+        success: true,
+        message: "Documento actualizado exitosamente",
+        data: {
+          id: document.id,
+          signatureCoordinates: updatedDocument.signatureCoordinates,
+          secureUrl,
+          expiresIn,
+        }
+      }
+
+
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
       throw new Error(`Error actualizando documento: ${error}`);
@@ -222,40 +343,63 @@ export class DocumentService {
       throw new Error(`Error eliminando documento: ${error}`);
     }
   }
+  async submitForAuthorization(documentId: string): Promise<BaseResponse<null>> {
+    const document = await this.findOne(documentId);
 
-  /** Cambia el estatus del documento de CREATED a PENDING y envía una notificación por email al firmante. */
-  async submitForAuthorization(documentId: string): Promise<DocumentEntity> {
-    try {
-      const document = await this.findOne(documentId);
-
-      if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
-        throw new BadRequestException('Solo es posible enviar a autorización documentos con estatus CREATED');
-      }
-
-      document.status = DOCUMENT_STATUS_ENUM.PENDING;
-      await this.documentRepository.save(document);
-
-      const signer = await this.UserService.findOne(document.signerId);
-      const signerFullName = `${signer.firstName} ${signer.lastName}`;
-
-      await this.emailService.sendDocumentPendingNotification(
-        signer.email,
-        document.fileName,
-        signerFullName,
+    if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
+      throw new BadRequestException(
+        `El documento no puede enviarse a autorización. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.CREATED}', el estatus actual es '${document.status}'`,
       );
-
-      return document;
-    } catch (error) {
-      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
-      throw new Error(`Error enviando documento a autorización: ${error}`);
     }
+
+    const signer = await this.userService.findOne(document.signerId);
+
+    document.status = DOCUMENT_STATUS_ENUM.PENDING;
+    await this.documentRepository.save(document);
+
+    await this.emailService.sendDocumentPendingNotification(
+      signer.email,
+      document.fileName,
+      `${signer.firstName} ${signer.lastName}`,
+    );
+
+    return {
+      success: true,
+      message: 'Solicitud de autorización enviada exitosamente',
+    };
+  }
+
+  async requestCancellation(documentId: string): Promise<BaseResponse<null>> {
+    const document = await this.findOne(documentId);
+
+    if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
+      throw new BadRequestException(
+        `El documento no puede enviarse a cancelación. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.SIGNED}', el estatus actual es '${document.status}'`,
+      );
+    }
+
+    const signer = await this.userService.findOne(document.signerId);
+
+    document.status = DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING;
+    await this.documentRepository.save(document);
+
+    await this.emailService.sendDocumentCancellationPendingNotification(
+      signer.email,
+      document.fileName,
+      `${signer.firstName} ${signer.lastName}`,
+    );
+
+    return {
+      success: true,
+      message: 'Solicitud de cancelación enviada exitosamente',
+    };
   }
 
   /** Obtiene la firma y el documento desde Minio, los fusiona en un PDF firmado, lo sube al bucket de documentos firmados y actualiza el estatus a SIGNED. */
   async mergeSignatureAndSave(payload: DocumentSignEventPayload) {
     try {
       const { signerId, documentId } = payload;
-      const signerUser = await this.UserService.findOne(signerId);
+      const signerUser = await this.userService.findOne(signerId);
       const document = await this.findOne(documentId);
       const coordinates = document.signatureCoordinates;
 
@@ -311,33 +455,6 @@ export class DocumentService {
     }
   }
 
-  /** Cambia el estatus del documento de SIGNED a CANCELLATION_PENDING y notifica al firmante por email. */
-  async submitForCancellation(documentId: string): Promise<DocumentEntity> {
-    try {
-      const document = await this.findOne(documentId);
-
-      if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
-        throw new BadRequestException('Solo es posible cancelar documentos con estatus SIGNED');
-      }
-
-      document.status = DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING;
-      await this.documentRepository.save(document);
-
-      const signer = await this.UserService.findOne(document.signerId);
-      const signerFullName = `${signer.firstName} ${signer.lastName}`;
-
-      await this.emailService.sendDocumentCancellationPendingNotification(
-        signer.email,
-        document.fileName,
-        signerFullName,
-      );
-
-      return document;
-    } catch (error) {
-      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
-      throw new Error(`Error enviando documento a cancelación: ${error}`);
-    }
-  }
 
   /** Obtiene el documento firmado desde Minio, estampa la marca de agua CANCELADO en todas las páginas, lo sube al bucket de cancelados y actualiza el estatus a CANCELLED. */
   async cancelDocument(payload: DocumentCancelPayload): Promise<DocumentEntity> {
