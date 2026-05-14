@@ -113,7 +113,7 @@ export class DocumentService {
         where: {
           id: savedDocument.id,
         },
-        select: {
+        relations: {
           requestedBy: true,
           signer: true
         },
