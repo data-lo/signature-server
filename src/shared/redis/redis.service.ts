@@ -56,6 +56,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
    * Se ejecuta automáticamente al detener el módulo.
    * Cierra la conexión con Redis para liberar recursos.
    */
+  async ping(): Promise<string> {
+    return this.client.ping();
+  }
+
   onModuleDestroy() {
     if (this.client) {
       this.client.disconnect();
