@@ -36,10 +36,18 @@ import { UserService } from '../user/user.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
 import { EmailService } from 'src/shared/email/email.service';
+import { GetDocumentsQueryDto } from './dto/get-documents-query-dto';
 
 @Injectable()
 export class DocumentService {
   logger = new Logger(DocumentService.name);
+
+  private readonly STATUS_BUCKET_MAP: Partial<Record<DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM>> = {
+    [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+  }
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -92,11 +100,22 @@ export class DocumentService {
         signerId,
       });
 
-      await this.documentRepository.save(document);
+      const savedDocument = await this.documentRepository.save(document);
+
+      const url = await this.getDocumentMinioURL(savedDocument.id);
 
       return {
         success: true,
         message: 'Documento registrado y pendiente de firma correctamente',
+        data: {
+          id: savedDocument.id,
+          fileName: savedDocument.fileName,
+          fileType: savedDocument.fileType,
+          totalPages: savedDocument.totalPages,
+          status: savedDocument.status,
+          secureUrl: url.secureUrl,
+          expiresIn: url.expiresIn,
+        },
       };
 
     } catch (error) {
@@ -105,33 +124,93 @@ export class DocumentService {
     }
   }
 
-  /** Retorna todos los documentos registrados en la base de datos. */
-  async findAll() {
-    try {
-      return await this.documentRepository.find();
-    } catch (error) {
-      throw new Error('Error obteniendo documentos');
-    }
-  }
+  async findWithFilters(query: GetDocumentsQueryDto) {
+    const { id, signerId, email, status, dateFrom, dateTo, page, limit, withUrl } = query;
 
-  /** Retorna los documentos asignados a un firmante, con filtro opcional por estatus. */
-  async findDocumentsBySigner(
-    signerId: string,
-    status?: DOCUMENT_STATUS_ENUM,
-  ): Promise<DocumentEntity[]> {
-    try {
-      const whereClause: Partial<DocumentEntity> = { signerId };
-      if (status) {
-        whereClause.status = status;
-      }
-      return await this.documentRepository.find({ where: whereClause });
-    } catch (error) {
-      throw new Error(`Error obteniendo documentos del firmante ${signerId}: ${error}`);
+    const qb = this.documentRepository
+      .createQueryBuilder('document')
+      .leftJoinAndSelect('document.requestedBy', 'requester')
+      .leftJoinAndSelect('document.signer', 'signer')
+      .orderBy('document.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (id) {
+      qb.andWhere('document.id = :id', { id });
     }
+
+    if (signerId) {
+      qb.andWhere('signer.id = :signerId', { signerId });
+    }
+
+    if (email) {
+      qb.andWhere('(signer.email = :email OR requester.email = :email)', { email });
+    }
+
+    if (status) {
+      qb.andWhere('document.status = :status', { status });
+    }
+
+    if (dateFrom) {
+      qb.andWhere('document.createdAt >= :dateFrom', { dateFrom: new Date(dateFrom) });
+    }
+
+    if (dateTo) {
+      qb.andWhere('document.createdAt <= :dateTo', { dateTo: new Date(dateTo) });
+    }
+
+    const [documents, total] = await qb.getManyAndCount();
+
+    if (!documents.length) {
+      throw new NotFoundException('No se encontraron documentos con los filtros indicados');
+    }
+
+    const data = await Promise.all(
+      documents.map(async (doc) => {
+        if (!withUrl) {
+          return {
+            id: doc.id,
+            fileName: doc.fileName,
+            fileType: doc.fileType,
+            totalPages: doc.totalPages,
+            status: doc.status,
+            createdAt: doc.createdAt
+          };
+        }
+
+        const bucket = this.STATUS_BUCKET_MAP[doc.status] ?? BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+        const { secureUrl, expiresIn } = await this.minioService.getFile(doc.objectKey, bucket);
+
+        return {
+          id: doc.id,
+          fileName: doc.fileName,
+          fileType: doc.fileType,
+          totalPages: doc.totalPages,
+          status: doc.status,
+          createdAt: doc.createdAt,
+          secureUrl,
+          expiresIn,
+        };
+      }),
+    );
+
+    return {
+      success: true,
+      message: 'Documentos obtenidos correctamente',
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page < Math.ceil(total / limit),
+        hasPrevPage: page > 1,
+      },
+    };
   }
 
   /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
-  async getDocumentMinioURL(documentId: string): Promise<string> {
+  async getDocumentMinioURL(documentId: string) {
     try {
       const document = await this.findOne(documentId);
 
@@ -144,11 +223,9 @@ export class DocumentService {
               ? BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS
               : BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
 
-      this.logger.log(`Status: ${document.status} | ObjectKey: ${document.objectKey}`);
-
       const fileResponse = await this.minioService.getFile(document.objectKey, bucket);
 
-      return fileResponse.secureUrl;
+      return fileResponse;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
       throw new Error(`Error obteniendo URL del Documento: ${error}`);
