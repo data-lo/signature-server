@@ -351,7 +351,13 @@ export class DocumentService {
       }
 
       await this.documentRepository.delete({ id: documentId });
-      return `document deleted`;
+      return {
+        success: true,
+        message: "Documento eliminado exitosamente",
+        data: {
+          id: document.id,
+        }
+      }
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
       throw new Error(`Error eliminando documento: ${error}`);
@@ -380,6 +386,7 @@ export class DocumentService {
     return {
       success: true,
       message: 'Solicitud de autorización enviada exitosamente',
+      data: null,
     };
   }
 
@@ -406,6 +413,7 @@ export class DocumentService {
     return {
       success: true,
       message: 'Solicitud de cancelación enviada exitosamente',
+      data: null,
     };
   }
 

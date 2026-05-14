@@ -43,7 +43,7 @@ export class CreateDocumentDto {
   @ApiProperty({
     type: 'string',
     format: 'binary',
-    description: 'Imagen de la firma manuscrita en formato PNG.',
+    description: 'PDF del documento a firmar.',
   })
   file: any;
 }
