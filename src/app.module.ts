@@ -23,6 +23,7 @@ import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
 import { HealthModule } from './health/health.module';
+import { AccountModule } from './account/account.module';
 
 
 @Module({
@@ -66,6 +67,7 @@ import { HealthModule } from './health/health.module';
     AuthModule,
     DocumentModule,
     UserModule,
+    AccountModule,
     AuditModule,
     SignatureModule,
     VerificationCodeModule,
