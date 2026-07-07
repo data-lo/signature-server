@@ -32,6 +32,7 @@ async function bootstrap() {
     .setDescription('API para gestión de firmas digitales y documentos')
     .setVersion('1.0')
     .addApiKey({ type: 'apiKey', name: 'x-api-key', in: 'header' }, 'x-api-key')
+    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'access-token')
     .build();
 
   const publicDocument = SwaggerModule.createDocument(app, publicSwaggerConfig, {

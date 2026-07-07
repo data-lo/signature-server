@@ -6,13 +6,19 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
-import { RegisterResponse, LoginResponse } from './interfaces/response/auth-response';
-import { UnauthorizedResponse, ConflictResponse } from '../interfaces/api-response.dto';
+import {
+  RegisterResponse,
+  LoginResponse,
+} from './interfaces/response/auth-response';
+import {
+  UnauthorizedResponse,
+  ConflictResponse,
+} from '../interfaces/api-response.dto';
 
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(private readonly authService: AuthService) {}
 
   @SkipJwtAuth()
   @Post('register')

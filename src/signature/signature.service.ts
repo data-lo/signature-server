@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -42,21 +43,22 @@ export class SignatureService {
   }
 
   /**
-   * Crea una nueva firma para un usuario existente.
+   * Crea una nueva firma para el usuario autenticado.
    * Sube la imagen de firma a Minio y guarda el object key resultante en la entidad.
    * Al finalizar, actualiza el signatureId del usuario con el UUID de la firma creada.
    * La imagen de INE queda pendiente hasta que se llame al método update.
    */
 
   async create(
+    userId: string,
     dto: CreateSignatureDto,
     files: { signatureImage?: Express.Multer.File[]; officialFile?: Express.Multer.File[] },
   ): Promise<BaseResponse<{ id: string }>> {
     const user = await this.userRepository.findOne({
-      where: { id: dto.userId },
+      where: { id: userId },
     });
     if (!user) {
-      throw new NotFoundException(`Usuario con id ${dto.userId} no encontrado`);
+      throw new NotFoundException(`Usuario con id ${userId} no encontrado`);
     }
 
     const signature = await this.signatureRepository.findOne({
@@ -100,14 +102,14 @@ export class SignatureService {
     const newSignature = this.signatureRepository.create({
       signatureObjectKey: signatureObjectKeyResponse.fileId,
       officialCardObjectKey: officialCardObjectKeyResponse.fileId,
-      createdBy: dto.createdBy ?? null,
+      createdBy: userId,
       isActive: true,
-      userId: dto.userId,
+      userId,
     });
 
     const saved = await this.signatureRepository.save(newSignature);
 
-    await this.userRepository.update(dto.userId, { signatureId: saved.id });
+    await this.userRepository.update(userId, { signatureId: saved.id });
 
     return {
       success: true,
@@ -125,6 +127,7 @@ export class SignatureService {
    */
   async update(
     id: string,
+    currentUserId: string,
     files: {
       signatureImage?: Express.Multer.File;
       officialFile?: Express.Multer.File;
@@ -134,6 +137,10 @@ export class SignatureService {
 
     if (!signature) {
       throw new NotFoundException(`Firma con id ${id} no encontrada`);
+    }
+
+    if (signature.userId !== currentUserId) {
+      throw new ForbiddenException('La firma no pertenece al usuario autenticado');
     }
 
     let message = "Firma actualizada correctamente"
@@ -176,12 +183,16 @@ export class SignatureService {
     };
   }
 
-  async deactivate(id: string): Promise<BaseResponse> {
+  async deactivate(id: string, currentUserId: string): Promise<BaseResponse> {
 
     const signature = await this.signatureRepository.findOne({ where: { id } });
 
     if (!signature) {
       throw new NotFoundException(`Firma con ID ${id} no encontrada`);
+    }
+
+    if (signature.userId !== currentUserId) {
+      throw new ForbiddenException('La firma no pertenece al usuario autenticado');
     }
 
     if (!signature.isActive) {
