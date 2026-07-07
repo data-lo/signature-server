@@ -208,8 +208,42 @@ export class UserService {
   private removeSensitiveData(user: UserEntity): UserEntity;
   private removeSensitiveData(user: UserEntity[]): UserEntity[];
   private removeSensitiveData(user: UserEntity | UserEntity[]): UserEntity | UserEntity[] {
-    const strip = ({ signatureId, createdAt, updatedAt, isActive, isDeleted, ...safeUser }: UserEntity) => safeUser as UserEntity;
+    const strip = ({ signatureId, createdAt, updatedAt, isActive, isDeleted, password, ...safeUser }: UserEntity) => safeUser as UserEntity;
 
     return Array.isArray(user) ? user.map(strip) : strip(user);
+  }
+
+  sanitize(user: UserEntity): UserEntity {
+    return this.removeSensitiveData(user);
+  }
+
+  async createFromSignup(
+    dto: { firstName: string; lastName: string; email: string; position: string; nationalId: string },
+    hashedPassword: string,
+  ): Promise<BaseResponse<UserEntity>> {
+    const existingUser = await this.userRepository.findOne({
+      where: { email: dto.email.toLowerCase() },
+    });
+    if (existingUser) {
+      throw new ConflictException('Ya existe un usuario registrado con ese correo electrónico');
+    }
+
+    const user = this.userRepository.create({
+      firstName: dto.firstName.toUpperCase(),
+      lastName: dto.lastName.toUpperCase(),
+      email: dto.email.toLowerCase(),
+      position: dto.position.toUpperCase(),
+      roles: [UserRoles.SIGNER],
+      nationalId: dto.nationalId.toUpperCase(),
+      password: hashedPassword,
+    });
+
+    const newUser = await this.userRepository.save(user);
+
+    return {
+      success: true,
+      message: 'Usuario registrado correctamente',
+      data: this.removeSensitiveData(newUser),
+    };
   }
 }

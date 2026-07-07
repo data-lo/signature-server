@@ -40,6 +40,9 @@ export class UserEntity {
   @Column({ length: 18, name: 'national_id' })
   nationalId: string;
 
+  @Column({ name: 'password' })
+  password: string;
+
   @Column({ nullable: true, name: 'signature_id' })
   signatureId: string;
 
