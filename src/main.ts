@@ -10,10 +10,15 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
 import { UserModule } from './user/user.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
+import { AuthModule } from './auth/auth.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: new ConsoleLogger(),
+  });
+
+  app.enableCors({
+    origin: process.env.FRONTEND_URL ?? 'http://localhost:3001',
   });
 
   app.useGlobalPipes(new ValidationPipe({
@@ -30,7 +35,7 @@ async function bootstrap() {
     .build();
 
   const publicDocument = SwaggerModule.createDocument(app, publicSwaggerConfig, {
-    include: [UserModule, DocumentModule, SignatureModule],
+    include: [UserModule, DocumentModule, SignatureModule, AuthModule],
   });
 
   SwaggerModule.setup('api/docs', app, publicDocument);
