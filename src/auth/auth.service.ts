@@ -57,4 +57,8 @@ export class AuthService {
     }
     return { success: true, message: 'Sesión cerrada correctamente', data: null };
   }
+
+  async me(payload: JwtPayload) {
+    return this.userService.findOneActiveUser(payload.sub, true);
+  }
 }

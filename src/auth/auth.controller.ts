@@ -1,5 +1,5 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipJwtAuth } from './decorators/skip-jwt-auth.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { AuthService } from './auth.service';
@@ -10,6 +10,7 @@ import {
   RegisterResponse,
   LoginResponse,
 } from './interfaces/response/auth-response';
+import { UserGetResponse } from '../user/interfaces/response/get-user-response';
 import {
   UnauthorizedResponse,
   ConflictResponse,
@@ -46,5 +47,14 @@ export class AuthController {
   @ApiResponse({ status: 401, type: UnauthorizedResponse })
   logout(@CurrentUser() user: JwtPayload) {
     return this.authService.logout(user);
+  }
+
+  @ApiBearerAuth('access-token')
+  @Get('me')
+  @ApiOperation({ summary: 'Obtener los datos del usuario autenticado' })
+  @ApiResponse({ status: 200, type: UserGetResponse })
+  @ApiResponse({ status: 401, type: UnauthorizedResponse })
+  me(@CurrentUser() user: JwtPayload) {
+    return this.authService.me(user);
   }
 }
