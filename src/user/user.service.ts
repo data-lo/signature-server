@@ -115,7 +115,8 @@ export class UserService {
         select: {
           signature: {
             id: true,
-            signatureObjectKey: true
+            signatureObjectKey: true,
+            officialCardObjectKey: true,
           }
         }
       })
@@ -126,6 +127,7 @@ export class UserService {
     }
 
     let signature;
+    let officialFile;
 
     const sanitizedUser = this.removeSensitiveData(user);
 
@@ -136,6 +138,13 @@ export class UserService {
       );
     }
 
+    if (withSignature && user.signature?.officialCardObjectKey) {
+      officialFile = await this.signatureService.getFile(
+        user.signature.officialCardObjectKey,
+        BUCKET_TYPES_ENUM.OFICIAL_CARDS
+      );
+    }
+
     const newUserObject = {
       ...sanitizedUser,
       ...(withSignature && user.signature?.signatureObjectKey && {
@@ -143,6 +152,13 @@ export class UserService {
           id: user.signature.id,
           secureUrl: signature.secureUrl,
           expiresIn: signature.expiresIn
+        }
+      }),
+      ...(withSignature && user.signature?.officialCardObjectKey && {
+        officialFile: {
+          id: user.signature.id,
+          secureUrl: officialFile.secureUrl,
+          expiresIn: officialFile.expiresIn
         }
       })
     };
