@@ -1,14 +1,23 @@
 // NestJS (framework)
 import { ConfigService } from '@nestjs/config';
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 
 // Third-party libraries
 import * as sgMail from '@sendgrid/mail';
 
 // Internal modules
-import { documentCancellationPendingTemplate, cancellationVerificationCodeTemplate, documentPendingTemplate, rejectionVerificationCodeTemplate, signatureRequestTemplate } from './templates/email.templates';
-import { EmailType } from 'src/verification-code/enums/email-type.enum';
-import { EmailSubject } from 'src/verification-code/enums/subject-type.enum';
+import {
+  documentCancellationPendingTemplate,
+  documentPendingTemplate,
+  documentRejectedTemplate,
+  documentSignedTemplate,
+} from './templates/email.templates';
+import { EmailType } from './enums/email-type.enum';
+import { EmailSubject } from './enums/subject-type.enum';
 
 @Injectable()
 export class EmailService {
@@ -25,23 +34,26 @@ export class EmailService {
     this.logger.log('SendGrid initialized');
   }
   /**
-  * Envía un correo electrónico mediante SendGrid.
-  * Método base utilizado internamente por los demás métodos de notificación.
-  */
+   * Envía un correo electrónico mediante SendGrid.
+   * Método base utilizado internamente por los demás métodos de notificación.
+   */
   async sendEmail(
     to: string,
     subject: string,
     html: string,
     emailType: EmailType,
     from?: string,
+    attachments?: sgMail.MailDataRequired['attachments'],
   ): Promise<void> {
-    const senderEmail = from ?? this.configService.get<string>('SENDGRID_FROM_EMAIL');
+    const senderEmail =
+      from ?? this.configService.get<string>('SENDGRID_FROM_EMAIL');
 
     const message: sgMail.MailDataRequired = {
       to,
       from: senderEmail,
       subject,
       html,
+      ...(attachments && { attachments }),
     };
 
     try {
@@ -53,29 +65,65 @@ export class EmailService {
     }
   }
 
-  async sendVerificationCodeEmail(
-    to: string,
-    documentName: string,
-    signerName: string,
-    verificationCode: string
-  ): Promise<void> {
-    await this.sendEmail(
-      to,
-      EmailSubject.VERIFICATION,
-      signatureRequestTemplate(documentName, signerName, verificationCode),
-      EmailType.VERIFICATION,
-    );
-  }
-
+  /** Notifica al firmante en turno que se solicita su firma, con links a la pantalla de firma y al listado de documentos. */
   async sendDocumentPendingNotification(
     to: string,
-    documentName: string,
     signerName: string,
+    creatorEmail: string,
+    documentName: string,
+    documentUrl: string,
+    allDocumentsUrl: string,
   ): Promise<void> {
     await this.sendEmail(
       to,
       EmailSubject.DOCUMENT_PENDING,
-      documentPendingTemplate(documentName, signerName),
+      documentPendingTemplate(
+        signerName,
+        creatorEmail,
+        documentName,
+        documentUrl,
+        allDocumentsUrl,
+      ),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /** Envía el PDF firmado como comprobante a un participante (firmante o espectador) una vez completado el proceso. */
+  async sendDocumentSignedNotification(
+    to: string,
+    participantName: string,
+    documentName: string,
+    signedFileBuffer: Buffer,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_SIGNED,
+      documentSignedTemplate(participantName, documentName),
+      EmailType.NOTIFICATION,
+      undefined,
+      [
+        {
+          content: signedFileBuffer.toString('base64'),
+          filename: documentName,
+          type: 'application/pdf',
+          disposition: 'attachment',
+        },
+      ],
+    );
+  }
+
+  /** Notifica al creador del documento que un firmante lo rechazó, incluyendo el motivo. */
+  async sendDocumentRejectedNotification(
+    to: string,
+    creatorName: string,
+    rejecterName: string,
+    documentName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_REJECTED,
+      documentRejectedTemplate(creatorName, rejecterName, documentName, reason),
       EmailType.NOTIFICATION,
     );
   }
@@ -90,34 +138,6 @@ export class EmailService {
       EmailSubject.CANCELLATION_PENDING,
       documentCancellationPendingTemplate(documentName, signerName),
       EmailType.NOTIFICATION,
-    );
-  }
-
-  async sendCancellationVerificationCodeEmail(
-    to: string,
-    documentName: string,
-    signerName: string,
-    verificationCode: string,
-  ): Promise<void> {
-    await this.sendEmail(
-      to,
-      EmailSubject.CANCELLATION_CODE,
-      cancellationVerificationCodeTemplate(documentName, signerName, verificationCode),
-      EmailType.VERIFICATION,
-    );
-  }
-
-  async sendRejectionVerificationCodeEmail(
-    to: string,
-    documentName: string,
-    signerName: string,
-    verificationCode: string,
-  ): Promise<void> {
-    await this.sendEmail(
-      to,
-      EmailSubject.REJECTION_CODE,
-      rejectionVerificationCodeTemplate(documentName, signerName, verificationCode),
-      EmailType.VERIFICATION,
     );
   }
 }

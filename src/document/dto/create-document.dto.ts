@@ -1,22 +1,49 @@
-import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsNotEmpty,
-  IsNumber,
-  IsString,
+  ArrayNotEmpty,
+  IsArray,
+  IsOptional,
+  IsUUID,
   ValidateNested,
-  IsOptional
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { SignatureCoordinatesDto } from './signature-coordinates.dto';
 
-
+function parseJsonArray({ value }: { value: unknown }) {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
 
 export class CreateDocumentDto {
+  @ApiProperty({
+    example: ['a1b2c3d4-e5f6-7890-abcd-ef1234567890'],
+    description:
+      'UUIDs de los usuarios que deben firmar el documento, en el orden en que se les solicitará la firma',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @ArrayNotEmpty({ message: 'Debe especificar al menos un firmante' })
+  @IsUUID('4', { each: true })
+  signerIds: string[];
 
-  @ApiProperty({ example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', description: 'UUID del usuario que debe firmar el documento', format: 'uuid' })
-  @IsString()
-  @IsNotEmpty()
-  signerId: string;
+  @ApiPropertyOptional({
+    example: ['b2c3d4e5-f6a7-8901-bcde-f12345678901'],
+    description:
+      'UUIDs de los usuarios que solo observarán el estado del documento (espectadores)',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @IsOptional()
+  @IsUUID('4', { each: true })
+  spectatorIds?: string[];
 
   @ApiProperty({ type: SignatureCoordinatesDto })
   @ValidateNested()

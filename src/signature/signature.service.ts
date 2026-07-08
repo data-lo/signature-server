@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import {
   BadRequestException,
   ConflictException,
@@ -28,7 +29,7 @@ export class SignatureService {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly minioService: MinioService,
-  ) { }
+  ) {}
 
   /**
    * Obtiene una firma por su UUID.
@@ -58,7 +59,9 @@ export class SignatureService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('no existe en el bucket')) {
-        this.logger.warn(`El archivo ${objectKey} ya no existía en Minio; se continúa con la limpieza en BD.`);
+        this.logger.warn(
+          `El archivo ${objectKey} ya no existía en Minio; se continúa con la limpieza en BD.`,
+        );
         return;
       }
       throw new InternalServerErrorException(errorMessage);
@@ -75,7 +78,10 @@ export class SignatureService {
   async create(
     userId: string,
     dto: CreateSignatureDto,
-    files: { signatureImage?: Express.Multer.File[]; officialFile?: Express.Multer.File[] },
+    files: {
+      signatureImage?: Express.Multer.File[];
+      officialFile?: Express.Multer.File[];
+    },
   ): Promise<BaseResponse<{ id: string }>> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -86,9 +92,9 @@ export class SignatureService {
 
     const signature = await this.signatureRepository.findOne({
       where: {
-        userId: user.id
-      }
-    })
+        userId: user.id,
+      },
+    });
 
     if (signature) {
       throw new ConflictException('El usuario ya tiene una firma registrada');
@@ -115,11 +121,15 @@ export class SignatureService {
     }
 
     if (signatureObjectKeyResponse?.status !== 'FILE_CREATED') {
-      throw new InternalServerErrorException('Error al subir la imagen de firma a nuestros servidores');
+      throw new InternalServerErrorException(
+        'Error al subir la imagen de firma a nuestros servidores',
+      );
     }
 
     if (officialCardObjectKeyResponse?.status !== 'FILE_CREATED') {
-      throw new InternalServerErrorException('Error al subir la imagen de identificación oficial a nuestros servidores');
+      throw new InternalServerErrorException(
+        'Error al subir la imagen de identificación oficial a nuestros servidores',
+      );
     }
 
     const newSignature = this.signatureRepository.create({
@@ -138,8 +148,8 @@ export class SignatureService {
       success: true,
       message: 'Firma registrada correctamente',
       data: {
-        id: saved.id
-      }
+        id: saved.id,
+      },
     };
   }
 
@@ -163,18 +173,17 @@ export class SignatureService {
     }
 
     if (signature.userId !== currentUserId) {
-      throw new ForbiddenException('La firma no pertenece al usuario autenticado');
+      throw new ForbiddenException(
+        'La firma no pertenece al usuario autenticado',
+      );
     }
 
-    let message = "Firma actualizada correctamente"
+    let message = 'Firma actualizada correctamente';
 
     if (!signature.isActive) {
-      await this.signatureRepository.update(
-        { id },
-        { isActive: true }
-      );
+      await this.signatureRepository.update({ id }, { isActive: true });
 
-      message = "Firma activa y actualizada correctamente"
+      message = 'Firma activa y actualizada correctamente';
     }
 
     if (files.signatureImage) {
@@ -191,11 +200,17 @@ export class SignatureService {
         );
       } else {
         const uploadResponse = await this.minioService.uploadObject(
-          { file: files.signatureImage, name: files.signatureImage.originalname },
+          {
+            file: files.signatureImage,
+            name: files.signatureImage.originalname,
+          },
           BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
         );
         objectKey = uploadResponse.fileId;
-        await this.signatureRepository.update({ id }, { signatureObjectKey: objectKey });
+        await this.signatureRepository.update(
+          { id },
+          { signatureObjectKey: objectKey },
+        );
       }
     }
 
@@ -207,7 +222,7 @@ export class SignatureService {
           objectKey,
           {
             file: files.officialFile,
-            name: files.officialFile.filename
+            name: files.officialFile.filename,
           },
           BUCKET_TYPES_ENUM.OFICIAL_CARDS,
         );
@@ -217,14 +232,17 @@ export class SignatureService {
           BUCKET_TYPES_ENUM.OFICIAL_CARDS,
         );
         objectKey = uploadResponse.fileId;
-        await this.signatureRepository.update({ id }, { officialCardObjectKey: objectKey });
+        await this.signatureRepository.update(
+          { id },
+          { officialCardObjectKey: objectKey },
+        );
       }
     }
 
     return {
       success: true,
       message: message,
-      data: { id: signature.id }
+      data: { id: signature.id },
     };
   }
 
@@ -233,15 +251,22 @@ export class SignatureService {
    * Si la identificación oficial también estaba vacía, elimina el registro completo
    * para permitir un registro nuevo desde cero.
    */
-  async deleteSignatureImage(id: string, currentUserId: string): Promise<BaseResponse<null>> {
+  async deleteSignatureImage(
+    id: string,
+    currentUserId: string,
+  ): Promise<BaseResponse<null>> {
     const signature = await this.findOne(id);
 
     if (signature.userId !== currentUserId) {
-      throw new ForbiddenException('La firma no pertenece al usuario autenticado');
+      throw new ForbiddenException(
+        'La firma no pertenece al usuario autenticado',
+      );
     }
 
     if (!signature.signatureObjectKey) {
-      throw new BadRequestException('No hay una imagen de firma registrada para eliminar');
+      throw new BadRequestException(
+        'No hay una imagen de firma registrada para eliminar',
+      );
     }
 
     await this.deleteFileIfExists(
@@ -254,7 +279,10 @@ export class SignatureService {
       await this.signatureRepository.delete({ id });
       await this.userRepository.update(signature.userId, { signatureId: null });
     } else {
-      await this.signatureRepository.update({ id }, { signatureObjectKey: null });
+      await this.signatureRepository.update(
+        { id },
+        { signatureObjectKey: null },
+      );
     }
 
     return {
@@ -269,15 +297,22 @@ export class SignatureService {
    * Si la imagen de firma también estaba vacía, elimina el registro completo
    * para permitir un registro nuevo desde cero.
    */
-  async deleteOfficialFile(id: string, currentUserId: string): Promise<BaseResponse<null>> {
+  async deleteOfficialFile(
+    id: string,
+    currentUserId: string,
+  ): Promise<BaseResponse<null>> {
     const signature = await this.findOne(id);
 
     if (signature.userId !== currentUserId) {
-      throw new ForbiddenException('La firma no pertenece al usuario autenticado');
+      throw new ForbiddenException(
+        'La firma no pertenece al usuario autenticado',
+      );
     }
 
     if (!signature.officialCardObjectKey) {
-      throw new BadRequestException('No hay una identificación oficial registrada para eliminar');
+      throw new BadRequestException(
+        'No hay una identificación oficial registrada para eliminar',
+      );
     }
 
     await this.deleteFileIfExists(
@@ -290,7 +325,10 @@ export class SignatureService {
       await this.signatureRepository.delete({ id });
       await this.userRepository.update(signature.userId, { signatureId: null });
     } else {
-      await this.signatureRepository.update({ id }, { officialCardObjectKey: null });
+      await this.signatureRepository.update(
+        { id },
+        { officialCardObjectKey: null },
+      );
     }
 
     return {
@@ -301,7 +339,6 @@ export class SignatureService {
   }
 
   async deactivate(id: string, currentUserId: string): Promise<BaseResponse> {
-
     const signature = await this.signatureRepository.findOne({ where: { id } });
 
     if (!signature) {
@@ -309,11 +346,15 @@ export class SignatureService {
     }
 
     if (signature.userId !== currentUserId) {
-      throw new ForbiddenException('La firma no pertenece al usuario autenticado');
+      throw new ForbiddenException(
+        'La firma no pertenece al usuario autenticado',
+      );
     }
 
     if (!signature.isActive) {
-      throw new BadRequestException(`La firma con ID ${id} ya está desactivada`);
+      throw new BadRequestException(
+        `La firma con ID ${id} ya está desactivada`,
+      );
     }
 
     const blankPngBuffer = await sharp({
@@ -321,25 +362,30 @@ export class SignatureService {
         width: 100,
         height: 100,
         channels: 4,
-        background: { r: 255, g: 255, b: 255, alpha: 0 }
-      }
-    }).png().toBuffer();
+        background: { r: 255, g: 255, b: 255, alpha: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
 
     await this.minioService.replaceFile(
       signature.signatureObjectKey,
       {
         file: blankPngBuffer,
         name: 'blank.png',
-        mimetype: 'image/png'
+        mimetype: 'image/png',
       },
-      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
     );
 
     signature.isActive = false;
 
     await this.signatureRepository.save(signature);
 
-    const minio = await this.minioService.getFile(signature.signatureObjectKey, BUCKET_TYPES_ENUM.SIGNATURE_IMAGES)
+    const minio = await this.minioService.getFile(
+      signature.signatureObjectKey,
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+    );
 
     return {
       success: true,
@@ -347,8 +393,8 @@ export class SignatureService {
       data: {
         id: signature.id,
         secureUrl: minio.secureUrl,
-        expiresIn: minio.expiresIn
-      }
+        expiresIn: minio.expiresIn,
+      },
     };
   }
 
