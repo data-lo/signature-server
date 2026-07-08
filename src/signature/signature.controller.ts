@@ -5,6 +5,7 @@ import {
   Post,
   Body,
   Patch,
+  Delete,
   Param,
   UseInterceptors,
   UploadedFiles,
@@ -139,5 +140,29 @@ export class SignatureController {
   @ApiResponse({ status: 404, description: 'No existe una firma registrada con el UUID proporcionado', type: NotFoundResponse })
   deactivate(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.signatureService.deactivate(id, user.sub);
+  }
+
+  @Delete(':id/signature-image')
+  @ApiOperation({ summary: 'Eliminar la imagen de firma del usuario autenticado' })
+  @ApiParam({ name: 'id', description: 'Identificador único de la firma en formato UUID v4', format: 'uuid', example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa' })
+  @ApiResponse({ status: 200, description: 'Imagen de firma eliminada correctamente' })
+  @ApiResponse({ status: 400, description: 'No hay una imagen de firma registrada para eliminar', type: BadRequestResponse })
+  @ApiResponse({ status: 401, description: 'Token de autenticación inválido, expirado o no proporcionado' })
+  @ApiResponse({ status: 403, description: 'La firma no pertenece al usuario autenticado' })
+  @ApiResponse({ status: 404, description: 'No existe una firma registrada con el UUID proporcionado', type: NotFoundResponse })
+  deleteSignatureImage(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.signatureService.deleteSignatureImage(id, user.sub);
+  }
+
+  @Delete(':id/official-file')
+  @ApiOperation({ summary: 'Eliminar la identificación oficial (INE) del usuario autenticado' })
+  @ApiParam({ name: 'id', description: 'Identificador único de la firma en formato UUID v4', format: 'uuid', example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa' })
+  @ApiResponse({ status: 200, description: 'Identificación oficial eliminada correctamente' })
+  @ApiResponse({ status: 400, description: 'No hay una identificación oficial registrada para eliminar', type: BadRequestResponse })
+  @ApiResponse({ status: 401, description: 'Token de autenticación inválido, expirado o no proporcionado' })
+  @ApiResponse({ status: 403, description: 'La firma no pertenece al usuario autenticado' })
+  @ApiResponse({ status: 404, description: 'No existe una firma registrada con el UUID proporcionado', type: NotFoundResponse })
+  deleteOfficialFile(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.signatureService.deleteOfficialFile(id, user.sub);
   }
 }

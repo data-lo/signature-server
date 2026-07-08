@@ -77,22 +77,26 @@ export class UserService {
 
     const secureUsers = await Promise.all(
       users.map(async (user) => {
-        const sanitizedUser = this.removeSensitiveData(user);
+        const { signature: _rawSignature, ...sanitizedUser } = this.removeSensitiveData(user);
 
         if (withSignature && user.signature?.signatureObjectKey) {
-          const signature = await this.signatureService.getFile(
-            user.signature.signatureObjectKey,
-            BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
-          );
+          try {
+            const signature = await this.signatureService.getFile(
+              user.signature.signatureObjectKey,
+              BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+            );
 
-          return {
-            ...sanitizedUser,
-            signature: {
-              id: user.signature.id,
-              secureUrl: signature.secureUrl,
-              expiresIn: signature.expiresIn,
-            }
-          };
+            return {
+              ...sanitizedUser,
+              signature: {
+                id: user.signature.id,
+                secureUrl: signature.secureUrl,
+                expiresIn: signature.expiresIn,
+              }
+            };
+          } catch {
+            return sanitizedUser;
+          }
         }
         return sanitizedUser;
       })
@@ -129,32 +133,40 @@ export class UserService {
     let signature;
     let officialFile;
 
-    const sanitizedUser = this.removeSensitiveData(user);
+    const { signature: _rawSignature, ...sanitizedUser } = this.removeSensitiveData(user);
 
     if (withSignature && user.signature?.signatureObjectKey) {
-      signature = await this.signatureService.getFile(
-        user.signature.signatureObjectKey,
-        BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
-      );
+      try {
+        signature = await this.signatureService.getFile(
+          user.signature.signatureObjectKey,
+          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+        );
+      } catch {
+        signature = null;
+      }
     }
 
     if (withSignature && user.signature?.officialCardObjectKey) {
-      officialFile = await this.signatureService.getFile(
-        user.signature.officialCardObjectKey,
-        BUCKET_TYPES_ENUM.OFICIAL_CARDS
-      );
+      try {
+        officialFile = await this.signatureService.getFile(
+          user.signature.officialCardObjectKey,
+          BUCKET_TYPES_ENUM.OFICIAL_CARDS
+        );
+      } catch {
+        officialFile = null;
+      }
     }
 
     const newUserObject = {
       ...sanitizedUser,
-      ...(withSignature && user.signature?.signatureObjectKey && {
+      ...(withSignature && signature && {
         signature: {
           id: user.signature.id,
           secureUrl: signature.secureUrl,
           expiresIn: signature.expiresIn
         }
       }),
-      ...(withSignature && user.signature?.officialCardObjectKey && {
+      ...(withSignature && officialFile && {
         officialFile: {
           id: user.signature.id,
           secureUrl: officialFile.secureUrl,

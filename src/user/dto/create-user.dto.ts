@@ -40,4 +40,6 @@ export class CreateUserDto {
   @IsNotEmpty()
   @Length(18, 18)
   nationalId: string;
+
+  // Agregar RFC Opcional
 }
