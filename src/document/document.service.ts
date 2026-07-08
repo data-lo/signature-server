@@ -1,6 +1,7 @@
 // NestJS core
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -68,6 +69,7 @@ export class DocumentService {
 
   /** Sube el archivo a Minio, genera su hash y registra el documento en la base de datos. */
   async create(
+    createdBy: string,
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
     ip: string,
@@ -78,7 +80,7 @@ export class DocumentService {
       }
 
 
-      const { signerId, createdBy, signatureCoordinates } = createDocumentDto;
+      const { signerId, signatureCoordinates } = createDocumentDto;
 
       const minioUploadDocumentResponse = await this.minioService.uploadObject(
         { file, name: file.originalname },
@@ -179,10 +181,6 @@ export class DocumentService {
 
     const [documents, total] = await qb.getManyAndCount();
 
-    if (!documents.length) {
-      throw new NotFoundException('No se encontraron documentos con los filtros indicados');
-    }
-
     const data = await Promise.all(
       documents.map(async (doc) => {
         if (!withUrl) {
@@ -271,6 +269,7 @@ export class DocumentService {
   /** Actualiza los datos de un documento y opcionalmente reemplaza su archivo en Minio. Solo permite documentos en estatus CREATED. */
   async update(
     documentId: string,
+    currentUserId: string,
     signatureCoordinatesDto?: SignatureCoordinatesDto,
     fileToReplace?: Express.Multer.File,
   ): Promise<BaseResponse<UpdateDocumentData>> {
@@ -285,6 +284,10 @@ export class DocumentService {
 
       if (!document) {
         throw new NotFoundException(`El documento con id ${documentId} no se encuentra`);
+      }
+
+      if (document.createdBy !== currentUserId) {
+        throw new ForbiddenException('El documento no pertenece al usuario autenticado');
       }
 
       if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
@@ -329,15 +332,20 @@ export class DocumentService {
 
 
     } catch (error) {
-      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
+      if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
       throw new Error(`Error actualizando documento: ${error}`);
     }
   }
 
   /** Elimina el archivo de Minio y el registro del documento. Solo permite documentos en estatus CREATED. */
-  async remove(documentId: string) {
+  async remove(documentId: string, currentUserId: string) {
     try {
       const document = await this.findOne(documentId);
+
+      if (document.createdBy !== currentUserId) {
+        throw new ForbiddenException('El documento no pertenece al usuario autenticado');
+      }
+
       if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
         throw new BadRequestException('Solo es posible eliminar documentos con estatus CREATED');
       }
@@ -360,12 +368,16 @@ export class DocumentService {
         }
       }
     } catch (error) {
-      if (error instanceof BadRequestException || error instanceof NotFoundException) throw error;
+      if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
       throw new Error(`Error eliminando documento: ${error}`);
     }
   }
-  async submitForAuthorization(documentId: string): Promise<BaseResponse<null>> {
+  async submitForAuthorization(documentId: string, currentUserId: string): Promise<BaseResponse<null>> {
     const document = await this.findOne(documentId);
+
+    if (document.createdBy !== currentUserId) {
+      throw new ForbiddenException('El documento no pertenece al usuario autenticado');
+    }
 
     if (document.status !== DOCUMENT_STATUS_ENUM.CREATED) {
       throw new BadRequestException(

@@ -2,7 +2,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 
 // Swagger
-import { ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiSecurity, ApiTags } from '@nestjs/swagger';
 
 // Auth
 import { Public } from 'src/auth/decorators/public.decorator';
@@ -18,9 +18,8 @@ import { BadRequestResponse, NotFoundResponse, BaseResponse, ConflictResponse } 
 import { UserGetListResponse, UserGetResponse } from './interfaces/response/get-user-response';
 
 
-@Public()
 @ApiTags('User')
-@ApiSecurity('x-api-key')
+@ApiBearerAuth('access-token')
 @Controller('user')
 export class UserController {
   constructor(private readonly userService: UserService) { }
@@ -28,6 +27,7 @@ export class UserController {
 
   //EXPUESTOS AL API
   @Public()
+  @ApiSecurity('x-api-key')
   @Post()
   @ApiOperation({ summary: 'Crear nuevo usuario', description: 'Registra un nuevo usuario en el sistema' })
   @ApiResponse({ status: 201, description: 'Usuario creado correctamente', type: UserCreateResponse })
@@ -42,11 +42,13 @@ export class UserController {
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
   @ApiQuery({ name: 'withSignature', required: false, type: Boolean, description: 'Incluir la firma del usuario' })
   @ApiResponse({ status: 200, description: 'Lista de usuarios obtenida correctamente', type: UserGetListResponse })
-  @ApiResponse({ status: 401, description: 'API Key inválida o no proporcionada' })
+  @ApiResponse({ status: 401, description: 'Token de autenticación inválido, expirado o no proporcionado' })
   findAll(@Query('withSignature') withSignature?: string) {
     return this.userService.findAllActiveUsers(withSignature === 'true');
   }
 
+  @Public()
+  @ApiSecurity('x-api-key')
   @Get(':id')
   @ApiOperation({ summary: 'Obtener un usuario' })
   @ApiParam({ name: 'id', description: 'Identificador único del usuario en formato UUID v4', format: 'uuid', example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa' })
@@ -58,6 +60,8 @@ export class UserController {
     return this.userService.findOneActiveUser(id, withSignature === 'true');
   }
 
+  @Public()
+  @ApiSecurity('x-api-key')
   @Patch(':id')
   @ApiOperation({ summary: 'Actualizar datos de un usuario' })
   @ApiParam({ name: 'id', description: 'Identificador único del usuario en formato UUID v4', format: 'uuid', example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa' })
@@ -68,6 +72,8 @@ export class UserController {
     return this.userService.update(id, updateUserDto);
   }
 
+  @Public()
+  @ApiSecurity('x-api-key')
   @Delete(':id')
   @ApiOperation({ summary: 'Eliminar usuario' })
   @ApiParam({ name: 'id', description: 'Identificador único del usuario en formato UUID v4', format: 'uuid', example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa' })
