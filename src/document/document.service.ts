@@ -632,7 +632,13 @@ export class DocumentService {
     document.status = DOCUMENT_STATUS_ENUM.PENDING;
     await this.documentRepository.save(document);
 
-    await this.notifyNextSigner(documentId);
+    try {
+      await this.notifyNextSigner(documentId);
+    } catch (error) {
+      this.logger.error(
+        `Error notificando al firmante en turno del documento ${documentId}: ${error}`,
+      );
+    }
 
     return {
       success: true,
@@ -734,7 +740,13 @@ export class DocumentService {
     );
 
     if (remainingSigners.length > 0) {
-      await this.notifyNextSigner(documentId);
+      try {
+        await this.notifyNextSigner(documentId);
+      } catch (error) {
+        this.logger.error(
+          `Error notificando al siguiente firmante del documento ${documentId}: ${error}`,
+        );
+      }
       return {
         success: true,
         message:
@@ -819,11 +831,17 @@ export class DocumentService {
       document.signedAt = new Date();
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
       await this.documentRepository.save(document);
-
-      await this.sendCompletionEmails(document.id);
     } catch (error) {
       this.logger.error(`Error estampando documento: ${error}`);
       throw new Error(`Error estampando el documento: ${error}`);
+    }
+
+    try {
+      await this.sendCompletionEmails(document.id);
+    } catch (error) {
+      this.logger.error(
+        `Error enviando correos de finalización del documento ${document.id}: ${error}`,
+      );
     }
   }
 
@@ -934,13 +952,19 @@ export class DocumentService {
     });
 
     const creator = await this.userService.findOne(document.createdBy);
-    await this.emailService.sendDocumentRejectedNotification(
-      creator.email,
-      `${creator.firstName} ${creator.lastName}`,
-      `${myParticipant.user.firstName} ${myParticipant.user.lastName}`,
-      document.fileName,
-      reason,
-    );
+    try {
+      await this.emailService.sendDocumentRejectedNotification(
+        creator.email,
+        `${creator.firstName} ${creator.lastName}`,
+        `${myParticipant.user.firstName} ${myParticipant.user.lastName}`,
+        document.fileName,
+        reason,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error notificando el rechazo del documento ${documentId}: ${error}`,
+      );
+    }
 
     return {
       success: true,
@@ -967,15 +991,21 @@ export class DocumentService {
     document.status = DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING;
     await this.documentRepository.save(document);
 
-    await Promise.all(
-      signerParticipants.map((participant) =>
-        this.emailService.sendDocumentCancellationPendingNotification(
-          participant.user.email,
-          document.fileName,
-          `${participant.user.firstName} ${participant.user.lastName}`,
+    try {
+      await Promise.all(
+        signerParticipants.map((participant) =>
+          this.emailService.sendDocumentCancellationPendingNotification(
+            participant.user.email,
+            document.fileName,
+            `${participant.user.firstName} ${participant.user.lastName}`,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error notificando la solicitud de cancelación del documento ${documentId}: ${error}`,
+      );
+    }
 
     return {
       success: true,

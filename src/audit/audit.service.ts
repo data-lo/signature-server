@@ -238,16 +238,10 @@ export class AuditService {
         if (!payload.signedAt) {
           throw new Error('signedAt es requerido para DOCUMENT_SIGNED');
         }
-        if (!payload.verificationCodeId) {
-          throw new Error('verificationCodeId es requerido para DOCUMENT_SIGNED');
-        }
         break;
 
       case AuditAction.DOCUMENT_CANCELLED:
       case AuditAction.DOCUMENT_REJECTED:
-        if (!payload.verificationCodeId) {
-          throw new Error(`verificationCodeId es requerido para ${payload.operation}`);
-        }
         break;
     }
   }

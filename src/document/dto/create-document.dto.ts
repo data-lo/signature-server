@@ -6,7 +6,7 @@ import {
   IsUUID,
   ValidateNested,
 } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { Transform, Type, plainToInstance } from 'class-transformer';
 import { SignatureCoordinatesDto } from './signature-coordinates.dto';
 
 function parseJsonArray({ value }: { value: unknown }) {
@@ -49,14 +49,15 @@ export class CreateDocumentDto {
   @ValidateNested()
   @Type(() => SignatureCoordinatesDto)
   @Transform(({ value }) => {
+    let parsed = value;
     if (typeof value === 'string') {
       try {
-        return JSON.parse(value);
+        parsed = JSON.parse(value);
       } catch {
         return value;
       }
     }
-    return value;
+    return plainToInstance(SignatureCoordinatesDto, parsed);
   })
   @IsOptional()
   signatureCoordinates: SignatureCoordinatesDto;
