@@ -15,6 +15,7 @@ import { Repository } from 'typeorm';
 // Entities
 import { DocumentEntity } from './entities/document.entity';
 import { DocumentParticipantEntity } from './entities/document-participant.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
 
 // DTOs
 import { CreateDocumentDto } from './dto/create-document.dto';
@@ -676,6 +677,32 @@ export class DocumentService {
   }
 
   /**
+   * Verifica que el usuario tenga registrada y activa su firma manuscrita e identificación
+   * oficial (INE) antes de permitirle firmar o rechazar un documento.
+   */
+  private async assertUserHasSignatureOnFile(user: UserEntity): Promise<void> {
+    const missingSignatureMessage =
+      'Necesitas registrar tu firma y tu identificación oficial (INE) en tu perfil antes de poder firmar o rechazar documentos';
+
+    if (!user.signatureId) {
+      throw new BadRequestException(missingSignatureMessage);
+    }
+
+    const signature = await this.signatureService
+      .findOne(user.signatureId)
+      .catch(() => null);
+
+    if (
+      !signature ||
+      !signature.isActive ||
+      !signature.signatureObjectKey ||
+      !signature.officialCardObjectKey
+    ) {
+      throw new BadRequestException(missingSignatureMessage);
+    }
+  }
+
+  /**
    * Registra la firma del usuario autenticado si es su turno. Si era el último firmante pendiente,
    * estampa el PDF con todas las firmas, lo mueve al bucket de firmados y notifica a todos los participantes.
    */
@@ -721,6 +748,21 @@ export class DocumentService {
       );
     }
 
+    await this.assertUserHasSignatureOnFile(myParticipant.user);
+
+    const remainingSigners = signerParticipants.filter(
+      (p) =>
+        p.id !== myParticipant.id &&
+        p.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
+    );
+
+    // Si soy el último firmante pendiente, estampo y finalizo el documento ANTES de
+    // registrar mi firma: si el estampado falla, ni el participante ni el documento
+    // quedan marcados como firmados, y la firma puede reintentarse sin quedar atascada.
+    if (remainingSigners.length === 0) {
+      await this.finalizeSignedDocument(document, signerParticipants);
+    }
+
     myParticipant.status = DOCUMENT_PARTICIPANT_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
     await this.participantRepository.save(myParticipant);
@@ -732,12 +774,6 @@ export class DocumentService {
       users: [{ userId: currentUserId, action: AuditAction.DOCUMENT_SIGNED }],
       signedAt: myParticipant.signedAt,
     });
-
-    const remainingSigners = signerParticipants.filter(
-      (p) =>
-        p.id !== myParticipant.id &&
-        p.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
-    );
 
     if (remainingSigners.length > 0) {
       try {
@@ -754,8 +790,6 @@ export class DocumentService {
         data: { id: documentId },
       };
     }
-
-    await this.finalizeSignedDocument(document, signerParticipants);
 
     return {
       success: true,
@@ -914,11 +948,11 @@ export class DocumentService {
       );
     }
 
-    myParticipant.status = DOCUMENT_PARTICIPANT_STATUS_ENUM.REJECTED;
-    myParticipant.rejectedAt = new Date();
-    myParticipant.rejectionReason = reason;
-    await this.participantRepository.save(myParticipant);
+    await this.assertUserHasSignatureOnFile(myParticipant.user);
 
+    // Estampo y muevo el documento a rechazados ANTES de marcar al participante como
+    // rechazado: si el estampado o la subida a MinIO fallan, ni el participante ni el
+    // documento quedan marcados, y el rechazo puede reintentarse sin quedar atascado.
     const documentBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
       BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
@@ -943,6 +977,11 @@ export class DocumentService {
     document.rejectedAt = new Date();
     document.status = DOCUMENT_STATUS_ENUM.REJECTED;
     await this.documentRepository.save(document);
+
+    myParticipant.status = DOCUMENT_PARTICIPANT_STATUS_ENUM.REJECTED;
+    myParticipant.rejectedAt = new Date();
+    myParticipant.rejectionReason = reason;
+    await this.participantRepository.save(myParticipant);
 
     void this.auditService.create({
       documentId,
