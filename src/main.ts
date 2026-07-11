@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { AppModule } from './app.module';
 
 // Módulos privados
@@ -16,6 +17,19 @@ async function bootstrap() {
 
   app.enableCors({
     origin: process.env.FRONTEND_URL ?? 'http://localhost:3001',
+  });
+
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.KAFKA,
+    options: {
+      client: {
+        clientId: process.env.KAFKA_CLIENT_ID ?? 'signature-server',
+        brokers: [process.env.KAFKA_BROKER ?? 'localhost:9094'],
+      },
+      consumer: {
+        groupId: process.env.KAFKA_CONSUMER_GROUP_ID ?? 'signature-server-consumer',
+      },
+    },
   });
 
   app.useGlobalPipes(new ValidationPipe({
@@ -40,6 +54,7 @@ async function bootstrap() {
 
   app.useGlobalFilters();
   app.useGlobalInterceptors();
+  await app.startAllMicroservices();
   await app.listen(3000);
 }
 bootstrap();

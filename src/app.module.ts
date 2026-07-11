@@ -22,6 +22,7 @@ import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { HealthModule } from './health/health.module';
 import { AccountModule } from './account/account.module';
+import { KafkaModule } from './kafka/kafka.module';
 
 
 @Module({
@@ -66,6 +67,7 @@ import { AccountModule } from './account/account.module';
     SignatureModule,
     SharedModule,
     HealthModule,
+    KafkaModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
