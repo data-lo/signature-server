@@ -46,6 +46,14 @@ export class UserGetData {
         required: false
     })
     signature?: SignatureUrlDto | null;
+
+    @ApiProperty({
+        type: SignatureUrlDto,
+        description: 'URL de la identificación oficial (INE) del usuario, presente solo si se solicita con withSignature=true',
+        nullable: true,
+        required: false
+    })
+    officialFile?: SignatureUrlDto | null;
 }
 
 export class UserGetResponse extends BaseResponse {

@@ -1,5 +1,0 @@
-export enum CodeType {
-    VERIFICATION = 'VERIFICATION',
-    CANCELLATION = 'CANCELLATION',
-    REJECTION = 'REJECTION',
-}

@@ -1,4 +1,5 @@
 import { DocumentEntity } from 'src/document/entities/document.entity';
+import { DocumentParticipantEntity } from 'src/document/entities/document-participant.entity';
 import { SignatureEntity } from 'src/signature/entities/signature.entity';
 import { AccountMemberEntity } from 'src/account/entities/account-member.entity';
 import {
@@ -58,8 +59,8 @@ export class UserEntity {
   @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
   createdDocuments: DocumentEntity[];
 
-  @OneToMany(() => DocumentEntity, (document) => document.signer)
-  documentsToSign: DocumentEntity[];
+  @OneToMany(() => DocumentParticipantEntity, (participant) => participant.user)
+  documentsToSign: DocumentParticipantEntity[];
 
   @OneToMany(() => AccountMemberEntity, (member) => member.user)
   accountMemberships: AccountMemberEntity[];

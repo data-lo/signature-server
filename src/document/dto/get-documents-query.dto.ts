@@ -10,12 +10,12 @@ export class GetDocumentsQueryDto {
   @IsUUID()
   id?: string;
 
-  @ApiPropertyOptional({ description: 'UUID del firmante', format: 'uuid' })
+  @ApiPropertyOptional({ description: 'Email de un participante (firmante o espectador) del documento' })
   @IsOptional()
-  @IsUUID()
-  signerId?: string;
+  @IsEmail()
+  participantEmail?: string;
 
-  @ApiPropertyOptional({ description: 'Email del firmante o propietario' })
+  @ApiPropertyOptional({ description: 'Email del propietario o de cualquier participante del documento' })
   @IsOptional()
   @IsEmail()
   email?: string;
@@ -31,15 +31,45 @@ export class GetDocumentsQueryDto {
   @Transform(({ value }) => value === 'true' || value === true)
   withUrl?: boolean = false;
 
-  @ApiPropertyOptional({ description: 'Fecha inicio (ISO 8601)', example: '2024-01-01' })
+  @ApiPropertyOptional({ description: 'Fecha de creación inicio (ISO 8601)', example: '2024-01-01' })
   @IsOptional()
   @IsDateString()
   dateFrom?: string;
 
-  @ApiPropertyOptional({ description: 'Fecha fin (ISO 8601)', example: '2024-12-31' })
+  @ApiPropertyOptional({ description: 'Fecha de creación fin (ISO 8601)', example: '2024-12-31' })
   @IsOptional()
   @IsDateString()
   dateTo?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha de firma inicio (ISO 8601)', example: '2024-01-01' })
+  @IsOptional()
+  @IsDateString()
+  signedDateFrom?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha de firma fin (ISO 8601)', example: '2024-12-31' })
+  @IsOptional()
+  @IsDateString()
+  signedDateTo?: string;
+
+  @ApiPropertyOptional({ description: 'Búsqueda parcial por nombre de archivo' })
+  @IsOptional()
+  @IsString()
+  fileName?: string;
+
+  @ApiPropertyOptional({ description: 'Búsqueda parcial por nombre o correo de un firmante/espectador' })
+  @IsOptional()
+  @IsString()
+  participantName?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Requiere participantEmail. Solo documentos donde ese participante es firmante y le toca firmar en este momento',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  myTurnOnly?: boolean = false;
 
   @ApiPropertyOptional({ description: 'Página', default: 1, minimum: 1 })
   @IsOptional()
