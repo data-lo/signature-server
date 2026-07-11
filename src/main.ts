@@ -13,6 +13,7 @@ import { AuthModule } from './auth/auth.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: new ConsoleLogger(),
+    rawBody: true,
   });
 
   app.enableCors({

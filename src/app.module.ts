@@ -23,6 +23,7 @@ import { SignatureModule } from './signature/signature.module';
 import { HealthModule } from './health/health.module';
 import { AccountModule } from './account/account.module';
 import { KafkaModule } from './kafka/kafka.module';
+import { StripeModule } from './stripe/stripe.module';
 
 
 @Module({
@@ -68,6 +69,7 @@ import { KafkaModule } from './kafka/kafka.module';
     SharedModule,
     HealthModule,
     KafkaModule,
+    StripeModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
