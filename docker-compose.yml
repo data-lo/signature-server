@@ -125,35 +125,7 @@ services:
       - kafka
     networks:
       - signature_network
-
-  nestjs:
-    image: dataloplatforms/signature-server:1.0.0
-    container_name: nestjs
-    restart: always
-    ports:
-      - "4000:4000"
-    depends_on:
-      - postgres
-      - mongo
-      - minio
-      - redis
-      - kafka
-    networks:
-      - signature_network
-
-  nextjs:
-    image: dataloplatforms/signature-app:1.0.0
-    container_name: nextjs
-    restart: always
-    ports: 
-      - "4005:4005"
-    depends_on:
-      - postgres
-      - mongo
-      - minio
-    networks:
-      - signature_network
-
+      
 volumes:
   minio_data_v2:
   postgres_data:
