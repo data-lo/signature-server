@@ -2,10 +2,12 @@ import { DocumentEntity } from 'src/document/entities/document.entity';
 import { DocumentParticipantEntity } from 'src/document/entities/document-participant.entity';
 import { SignatureEntity } from 'src/signature/entities/signature.entity';
 import { AccountMemberEntity } from 'src/account/entities/account-member.entity';
+import { PersonalInformationEntity } from './personal-information.entity';
 import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
   OneToMany,
   OneToOne,
   PrimaryGeneratedColumn,
@@ -45,7 +47,10 @@ export class UserEntity {
   password: string;
 
   @Column({ nullable: true, name: 'signature_id' })
-  signatureId: string;
+  signatureId: string | null;
+
+  @Column({ nullable: false, name: 'personal_information_id' })
+  personalInformationId: string;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
@@ -53,8 +58,13 @@ export class UserEntity {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @OneToOne(() => SignatureEntity, (signature) => signature.user)
-  signature: SignatureEntity;
+  @OneToOne(() => SignatureEntity)
+  @JoinColumn({ name: 'signature_id' })
+  signature: SignatureEntity | null;
+
+  @OneToOne(() => PersonalInformationEntity)
+  @JoinColumn({ name: 'personal_information_id' })
+  personalInformation: PersonalInformationEntity;
 
   @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
   createdDocuments: DocumentEntity[];

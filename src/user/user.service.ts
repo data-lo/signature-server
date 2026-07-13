@@ -10,9 +10,11 @@ import { Repository } from 'typeorm';
 // DTOs
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
 
 // Entities
 import { UserEntity } from './entities/user.entity';
+import { PersonalInformationEntity } from './entities/personal-information.entity';
 
 // Enums
 import { UserRoles } from './enums/user-roles';
@@ -27,6 +29,8 @@ export class UserService {
   constructor(
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
+    @InjectRepository(PersonalInformationEntity)
+    private personalInformationRepository: Repository<PersonalInformationEntity>,
 
     private signatureService: SignatureService,
   ) {}
@@ -43,6 +47,14 @@ export class UserService {
       );
     }
 
+    const personalInformation = await this.personalInformationRepository.save(
+      this.personalInformationRepository.create({
+        name: createUserDto.firstName?.toUpperCase(),
+        lastName: createUserDto.lastName?.toUpperCase(),
+        curp: createUserDto.nationalId?.toUpperCase(),
+      }),
+    );
+
     const user = this.userRepository.create({
       ...(createUserDto.firstName && {
         firstName: createUserDto.firstName.toUpperCase(),
@@ -58,6 +70,7 @@ export class UserService {
       ...(createUserDto.nationalId && {
         nationalId: createUserDto.nationalId.toUpperCase(),
       }),
+      personalInformationId: personalInformation.id,
     });
 
     const newUser = await this.userRepository.save(user);
@@ -275,6 +288,7 @@ export class UserService {
   ): UserEntity | UserEntity[] {
     const strip = ({
       signatureId,
+      personalInformationId,
       createdAt,
       updatedAt,
       isActive,
@@ -309,6 +323,14 @@ export class UserService {
       );
     }
 
+    const personalInformation = await this.personalInformationRepository.save(
+      this.personalInformationRepository.create({
+        name: dto.firstName.toUpperCase(),
+        lastName: dto.lastName.toUpperCase(),
+        curp: dto.nationalId.toUpperCase(),
+      }),
+    );
+
     const user = this.userRepository.create({
       firstName: dto.firstName.toUpperCase(),
       lastName: dto.lastName.toUpperCase(),
@@ -317,6 +339,7 @@ export class UserService {
       roles: [UserRoles.SIGNER],
       nationalId: dto.nationalId.toUpperCase(),
       password: hashedPassword,
+      personalInformationId: personalInformation.id,
     });
 
     const newUser = await this.userRepository.save(user);
@@ -325,6 +348,31 @@ export class UserService {
       success: true,
       message: 'Usuario registrado correctamente',
       data: this.removeSensitiveData(newUser),
+    };
+  }
+
+  async updatePersonalInformation(
+    userId: string,
+    dto: UpdatePersonalInformationDto,
+  ): Promise<BaseResponse<PersonalInformationEntity>> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    await this.personalInformationRepository.update(
+      user.personalInformationId,
+      { ...dto },
+    );
+
+    const updated = await this.personalInformationRepository.findOne({
+      where: { id: user.personalInformationId },
+    });
+
+    return {
+      success: true,
+      message: 'Información personal actualizada correctamente',
+      data: updated,
     };
   }
 }

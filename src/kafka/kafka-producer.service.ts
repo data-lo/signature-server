@@ -25,14 +25,14 @@ export class KafkaProducerService
   async onApplicationBootstrap() {
     try {
       this.logger.log('Sending initial connectivity check to Kafka...');
-      
+
       await lastValueFrom(
         this.emit('signature.test', {
           message: 'signature-server kafka connectivity check',
           timestamp: new Date().toISOString(),
-        })
+        }),
       );
-      
+
       this.logger.log('Initial connectivity check message sent successfully!');
     } catch (error) {
       this.logger.error('Failed to send connectivity check message', error);

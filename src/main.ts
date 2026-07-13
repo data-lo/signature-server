@@ -66,9 +66,7 @@ async function bootstrap() {
 
   SwaggerModule.setup('api/docs', app, publicDocument);
 
-
   await app.listen(3000);
   await app.startAllMicroservices();
-  
 }
 bootstrap();
