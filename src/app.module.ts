@@ -24,6 +24,7 @@ import { SignatureModule } from './signature/signature.module';
 import { VerificationCodeModule } from './verification-code/verification-code.module';
 import { HealthModule } from './health/health.module';
 import { AccountModule } from './account/account.module';
+import { EfirmaModule } from './efirma/efirma.module';
 
 
 @Module({
@@ -36,7 +37,9 @@ import { AccountModule } from './account/account.module';
       name: 'default',
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
+      useFactory: (config: ConfigService) => (
+        console.log(config.get('POSTGRES_DB_URL')),
+        {
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',
         autoLoadEntities: true,
@@ -73,6 +76,7 @@ import { AccountModule } from './account/account.module';
     VerificationCodeModule,
     SharedModule,
     HealthModule,
+    EfirmaModule,
   ],
   controllers: [AppController],
   providers: [AppService, {
