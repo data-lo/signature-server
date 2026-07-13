@@ -10,6 +10,8 @@ import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 
+process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: new ConsoleLogger(),
@@ -20,6 +22,7 @@ async function bootstrap() {
     origin: process.env.FRONTEND_URL ?? 'http://localhost:3001',
   });
 
+  // Conexión del Microservicio Kafka (Consumer)
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.KAFKA,
     options: {
@@ -53,9 +56,9 @@ async function bootstrap() {
 
   SwaggerModule.setup('api/docs', app, publicDocument);
 
-  app.useGlobalFilters();
-  app.useGlobalInterceptors();
-  await app.startAllMicroservices();
+
   await app.listen(3000);
+  await app.startAllMicroservices();
+  
 }
 bootstrap();
