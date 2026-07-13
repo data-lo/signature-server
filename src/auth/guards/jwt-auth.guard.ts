@@ -1,4 +1,9 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -12,7 +17,7 @@ export class JwtAuthGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
-  ) { }
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
@@ -44,7 +49,9 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Token inválido o expirado');
     }
 
-    const isBlacklisted = await this.redisService.exists(`blacklist:${payload.jti}`);
+    const isBlacklisted = await this.redisService.exists(
+      `blacklist:${payload.jti}`,
+    );
     if (isBlacklisted) {
       throw new UnauthorizedException('La sesión ha sido cerrada');
     }

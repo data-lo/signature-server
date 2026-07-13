@@ -9,7 +9,9 @@ import { StripeCheckoutController } from './stripe-checkout.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AccountSubscriptionEntity, AccountMemberEntity])],
+  imports: [
+    TypeOrmModule.forFeature([AccountSubscriptionEntity, AccountMemberEntity]),
+  ],
   controllers: [StripeCheckoutController, StripeWebhookController],
   providers: [StripeService, StripeWebhookService, StripeSignatureGuard],
   exports: [StripeService],

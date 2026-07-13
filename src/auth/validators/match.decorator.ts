@@ -1,4 +1,8 @@
-import { registerDecorator, ValidationArguments, ValidationOptions } from 'class-validator';
+import {
+  registerDecorator,
+  ValidationArguments,
+  ValidationOptions,
+} from 'class-validator';
 
 export function Match(property: string, validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string) {
@@ -11,7 +15,9 @@ export function Match(property: string, validationOptions?: ValidationOptions) {
       validator: {
         validate(value: unknown, args: ValidationArguments) {
           const [relatedProperty] = args.constraints;
-          return value === (args.object as Record<string, unknown>)[relatedProperty];
+          return (
+            value === (args.object as Record<string, unknown>)[relatedProperty]
+          );
         },
         defaultMessage(args: ValidationArguments) {
           const [relatedProperty] = args.constraints;

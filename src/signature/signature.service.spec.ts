@@ -27,4 +27,3 @@ function expect(service: SignatureService) {
     },
   };
 }
-

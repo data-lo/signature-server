@@ -28,15 +28,18 @@ async function bootstrap() {
         brokers: [process.env.KAFKA_BROKER ?? 'localhost:9094'],
       },
       consumer: {
-        groupId: process.env.KAFKA_CONSUMER_GROUP_ID ?? 'signature-server-consumer',
+        groupId:
+          process.env.KAFKA_CONSUMER_GROUP_ID ?? 'signature-server-consumer',
       },
     },
   });
 
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    transform: true,
-  }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  );
 
   // Swagger Público
   const publicSwaggerConfig = new DocumentBuilder()
@@ -44,12 +47,19 @@ async function bootstrap() {
     .setDescription('API para gestión de firmas digitales y documentos')
     .setVersion('1.0')
     .addApiKey({ type: 'apiKey', name: 'x-api-key', in: 'header' }, 'x-api-key')
-    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'access-token')
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      'access-token',
+    )
     .build();
 
-  const publicDocument = SwaggerModule.createDocument(app, publicSwaggerConfig, {
-    include: [UserModule, DocumentModule, SignatureModule, AuthModule],
-  });
+  const publicDocument = SwaggerModule.createDocument(
+    app,
+    publicSwaggerConfig,
+    {
+      include: [UserModule, DocumentModule, SignatureModule, AuthModule],
+    },
+  );
 
   SwaggerModule.setup('api/docs', app, publicDocument);
 

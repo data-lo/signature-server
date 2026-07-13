@@ -1,5 +1,9 @@
 // External dependencies
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -24,24 +28,36 @@ export class UserService {
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
 
-    private signatureService: SignatureService
-  ) { }
+    private signatureService: SignatureService,
+  ) {}
 
-  async create(createUserDto: CreateUserDto): Promise<BaseResponse<UserEntity>> {
+  async create(
+    createUserDto: CreateUserDto,
+  ): Promise<BaseResponse<UserEntity>> {
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email.toLowerCase() }
+      where: { email: createUserDto.email.toLowerCase() },
     });
     if (existingUser) {
-      throw new ConflictException('Ya existe un usuario registrado con ese correo electrónico');
+      throw new ConflictException(
+        'Ya existe un usuario registrado con ese correo electrónico',
+      );
     }
 
     const user = this.userRepository.create({
-      ...(createUserDto.firstName && { firstName: createUserDto.firstName.toUpperCase() }),
-      ...(createUserDto.lastName && { lastName: createUserDto.lastName.toUpperCase() }),
+      ...(createUserDto.firstName && {
+        firstName: createUserDto.firstName.toUpperCase(),
+      }),
+      ...(createUserDto.lastName && {
+        lastName: createUserDto.lastName.toUpperCase(),
+      }),
       ...(createUserDto.email && { email: createUserDto.email.toLowerCase() }),
-      ...(createUserDto.position && { position: createUserDto.position.toUpperCase() }),
+      ...(createUserDto.position && {
+        position: createUserDto.position.toUpperCase(),
+      }),
       roles: createUserDto.roles ?? [UserRoles.SIGNER],
-      ...(createUserDto.nationalId && { nationalId: createUserDto.nationalId.toUpperCase() }),
+      ...(createUserDto.nationalId && {
+        nationalId: createUserDto.nationalId.toUpperCase(),
+      }),
     });
 
     const newUser = await this.userRepository.save(user);
@@ -53,7 +69,9 @@ export class UserService {
     };
   }
 
-  async findAllActiveUsers(withSignature = false): Promise<BaseResponse<UserEntity[]>> {
+  async findAllActiveUsers(
+    withSignature = false,
+  ): Promise<BaseResponse<UserEntity[]>> {
     const users = await this.userRepository.find({
       where: { isActive: true },
       ...(withSignature && {
@@ -61,10 +79,10 @@ export class UserService {
         select: {
           signature: {
             id: true,
-            signatureObjectKey: true
-          }
-        }
-      })
+            signatureObjectKey: true,
+          },
+        },
+      }),
     });
 
     if (!users || users.length === 0) {
@@ -77,13 +95,14 @@ export class UserService {
 
     const secureUsers = await Promise.all(
       users.map(async (user) => {
-        const { signature: _rawSignature, ...sanitizedUser } = this.removeSensitiveData(user);
+        const { signature: _rawSignature, ...sanitizedUser } =
+          this.removeSensitiveData(user);
 
         if (withSignature && user.signature?.signatureObjectKey) {
           try {
             const signature = await this.signatureService.getFile(
               user.signature.signatureObjectKey,
-              BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+              BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
             );
 
             return {
@@ -92,14 +111,14 @@ export class UserService {
                 id: user.signature.id,
                 secureUrl: signature.secureUrl,
                 expiresIn: signature.expiresIn,
-              }
+              },
             };
           } catch {
             return sanitizedUser;
           }
         }
         return sanitizedUser;
-      })
+      }),
     );
 
     return {
@@ -109,21 +128,24 @@ export class UserService {
     };
   }
 
-  async findOneActiveUser(id: string, withSignature = false): Promise<BaseResponse<UserEntity | null>> {
+  async findOneActiveUser(
+    id: string,
+    withSignature = false,
+  ): Promise<BaseResponse<UserEntity | null>> {
     const user = await this.userRepository.findOne({
       where: { id, isActive: true },
       ...(withSignature && {
         relations: {
-          signature: true
+          signature: true,
         },
         select: {
           signature: {
             id: true,
             signatureObjectKey: true,
             officialCardObjectKey: true,
-          }
-        }
-      })
+          },
+        },
+      }),
     });
 
     if (!user) {
@@ -133,13 +155,14 @@ export class UserService {
     let signature;
     let officialFile;
 
-    const { signature: _rawSignature, ...sanitizedUser } = this.removeSensitiveData(user);
+    const { signature: _rawSignature, ...sanitizedUser } =
+      this.removeSensitiveData(user);
 
     if (withSignature && user.signature?.signatureObjectKey) {
       try {
         signature = await this.signatureService.getFile(
           user.signature.signatureObjectKey,
-          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
         );
       } catch {
         signature = null;
@@ -150,7 +173,7 @@ export class UserService {
       try {
         officialFile = await this.signatureService.getFile(
           user.signature.officialCardObjectKey,
-          BUCKET_TYPES_ENUM.OFICIAL_CARDS
+          BUCKET_TYPES_ENUM.OFICIAL_CARDS,
         );
       } catch {
         officialFile = null;
@@ -159,20 +182,22 @@ export class UserService {
 
     const newUserObject = {
       ...sanitizedUser,
-      ...(withSignature && signature && {
-        signature: {
-          id: user.signature.id,
-          secureUrl: signature.secureUrl,
-          expiresIn: signature.expiresIn
-        }
-      }),
-      ...(withSignature && officialFile && {
-        officialFile: {
-          id: user.signature.id,
-          secureUrl: officialFile.secureUrl,
-          expiresIn: officialFile.expiresIn
-        }
-      })
+      ...(withSignature &&
+        signature && {
+          signature: {
+            id: user.signature.id,
+            secureUrl: signature.secureUrl,
+            expiresIn: signature.expiresIn,
+          },
+        }),
+      ...(withSignature &&
+        officialFile && {
+          officialFile: {
+            id: user.signature.id,
+            secureUrl: officialFile.secureUrl,
+            expiresIn: officialFile.expiresIn,
+          },
+        }),
     };
 
     return {
@@ -182,16 +207,26 @@ export class UserService {
     };
   }
 
-  async update(id: string, updateUserDto: UpdateUserDto): Promise<BaseResponse<any>> {
+  async update(
+    id: string,
+    updateUserDto: UpdateUserDto,
+  ): Promise<BaseResponse<any>> {
     await this.userRepository.update(id, {
-      ...(updateUserDto.firstName && { firstName: updateUserDto.firstName.toUpperCase() }),
-      ...(updateUserDto.lastName && { lastName: updateUserDto.lastName.toUpperCase() }),
+      ...(updateUserDto.firstName && {
+        firstName: updateUserDto.firstName.toUpperCase(),
+      }),
+      ...(updateUserDto.lastName && {
+        lastName: updateUserDto.lastName.toUpperCase(),
+      }),
       ...(updateUserDto.email && { email: updateUserDto.email.toLowerCase() }),
-      ...(updateUserDto.position && { position: updateUserDto.position.toUpperCase() }),
+      ...(updateUserDto.position && {
+        position: updateUserDto.position.toUpperCase(),
+      }),
       ...(updateUserDto.roles && { roles: updateUserDto.roles }),
-      ...(updateUserDto.nationalId && { nationalId: updateUserDto.nationalId.toUpperCase() }),
+      ...(updateUserDto.nationalId && {
+        nationalId: updateUserDto.nationalId.toUpperCase(),
+      }),
     });
-
 
     const updatedUser = await this.findOneActiveUser(id);
 
@@ -220,7 +255,7 @@ export class UserService {
   async remove(id: string): Promise<BaseResponse> {
     const result = await this.userRepository.update(
       { id, isActive: true },
-      { isDeleted: true, isActive: false }
+      { isDeleted: true, isActive: false },
     );
 
     if (result.affected === 0) {
@@ -235,8 +270,18 @@ export class UserService {
 
   private removeSensitiveData(user: UserEntity): UserEntity;
   private removeSensitiveData(user: UserEntity[]): UserEntity[];
-  private removeSensitiveData(user: UserEntity | UserEntity[]): UserEntity | UserEntity[] {
-    const strip = ({ signatureId, createdAt, updatedAt, isActive, isDeleted, password, ...safeUser }: UserEntity) => safeUser as UserEntity;
+  private removeSensitiveData(
+    user: UserEntity | UserEntity[],
+  ): UserEntity | UserEntity[] {
+    const strip = ({
+      signatureId,
+      createdAt,
+      updatedAt,
+      isActive,
+      isDeleted,
+      password,
+      ...safeUser
+    }: UserEntity) => safeUser as UserEntity;
 
     return Array.isArray(user) ? user.map(strip) : strip(user);
   }
@@ -246,14 +291,22 @@ export class UserService {
   }
 
   async createFromSignup(
-    dto: { firstName: string; lastName: string; email: string; position: string; nationalId: string },
+    dto: {
+      firstName: string;
+      lastName: string;
+      email: string;
+      position: string;
+      nationalId: string;
+    },
     hashedPassword: string,
   ): Promise<BaseResponse<UserEntity>> {
     const existingUser = await this.userRepository.findOne({
       where: { email: dto.email.toLowerCase() },
     });
     if (existingUser) {
-      throw new ConflictException('Ya existe un usuario registrado con ese correo electrónico');
+      throw new ConflictException(
+        'Ya existe un usuario registrado con ese correo electrónico',
+      );
     }
 
     const user = this.userRepository.create({

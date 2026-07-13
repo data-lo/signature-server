@@ -1,9 +1,16 @@
-import { UserEntity } from "src/user/entities/user.entity";
-import { Column, CreateDateColumn, Entity, JoinColumn, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { UserEntity } from 'src/user/entities/user.entity';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  OneToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity('signatures')
 export class SignatureEntity {
-
   @PrimaryGeneratedColumn('uuid')
   id: string;
 

@@ -23,20 +23,26 @@ export class StripeWebhookService {
   async process(event: Stripe.Event): Promise<void> {
     switch (event.type) {
       case 'checkout.session.completed':
-        await this.handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
+        await this.handleCheckoutSessionCompleted(
+          event.data.object as Stripe.Checkout.Session,
+        );
         break;
       case 'invoice.paid':
         await this.handleInvoicePaid(event.data.object as Stripe.Invoice);
         break;
       case 'customer.subscription.deleted':
-        await this.handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        await this.handleSubscriptionDeleted(
+          event.data.object as Stripe.Subscription,
+        );
         break;
       default:
         this.logger.log(`Evento de Stripe sin manejar: ${event.type}`);
     }
   }
 
-  private async handleCheckoutSessionCompleted(session: Stripe.Checkout.Session): Promise<void> {
+  private async handleCheckoutSessionCompleted(
+    session: Stripe.Checkout.Session,
+  ): Promise<void> {
     const accountId = session.metadata?.accountId;
     if (!accountId || session.mode !== 'subscription') {
       return;
@@ -56,29 +62,44 @@ export class StripeWebhookService {
 
   private async handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
     const stripeCustomerId = this.toId(invoice.customer);
-    const stripeSubscriptionId = this.toId(invoice.parent?.subscription_details?.subscription);
+    const stripeSubscriptionId = this.toId(
+      invoice.parent?.subscription_details?.subscription,
+    );
     const currentPeriodEnd = invoice.lines.data[0]?.period?.end
       ? new Date(invoice.lines.data[0].period.end * 1000)
       : null;
 
-    const subscription = await this.findByCustomerOrSubscription(stripeCustomerId, stripeSubscriptionId);
+    const subscription = await this.findByCustomerOrSubscription(
+      stripeCustomerId,
+      stripeSubscriptionId,
+    );
     if (!subscription) {
-      this.logger.warn(`invoice.paid recibido sin AccountSubscriptionEntity asociada (customer ${stripeCustomerId})`);
+      this.logger.warn(
+        `invoice.paid recibido sin AccountSubscriptionEntity asociada (customer ${stripeCustomerId})`,
+      );
       return;
     }
 
     await this.subscriptionRepository.update(subscription.id, {
       status: SUBSCRIPTION_STATUS_ENUM.ACTIVE,
       signingEnabled: true,
-      stripeSubscriptionId: stripeSubscriptionId ?? subscription.stripeSubscriptionId,
+      stripeSubscriptionId:
+        stripeSubscriptionId ?? subscription.stripeSubscriptionId,
       currentPeriodEnd,
     });
   }
 
-  private async handleSubscriptionDeleted(subscription: Stripe.Subscription): Promise<void> {
-    const record = await this.findByCustomerOrSubscription(this.toId(subscription.customer), subscription.id);
+  private async handleSubscriptionDeleted(
+    subscription: Stripe.Subscription,
+  ): Promise<void> {
+    const record = await this.findByCustomerOrSubscription(
+      this.toId(subscription.customer),
+      subscription.id,
+    );
     if (!record) {
-      this.logger.warn(`customer.subscription.deleted recibido sin AccountSubscriptionEntity asociada (subscription ${subscription.id})`);
+      this.logger.warn(
+        `customer.subscription.deleted recibido sin AccountSubscriptionEntity asociada (subscription ${subscription.id})`,
+      );
       return;
     }
 
@@ -92,14 +113,20 @@ export class StripeWebhookService {
     accountId: string,
     changes: Partial<AccountSubscriptionEntity>,
   ): Promise<void> {
-    const existing = await this.subscriptionRepository.findOne({ where: { accountId } });
+    const existing = await this.subscriptionRepository.findOne({
+      where: { accountId },
+    });
 
     if (existing) {
       await this.subscriptionRepository.update(existing.id, changes);
       return;
     }
 
-    const created = this.subscriptionRepository.create({ accountId, signingEnabled: false, ...changes });
+    const created = this.subscriptionRepository.create({
+      accountId,
+      signingEnabled: false,
+      ...changes,
+    });
     await this.subscriptionRepository.save(created);
   }
 
@@ -108,16 +135,26 @@ export class StripeWebhookService {
     stripeSubscriptionId: string | null,
   ): Promise<AccountSubscriptionEntity | null> {
     if (stripeSubscriptionId) {
-      return this.subscriptionRepository.findOne({ where: { stripeSubscriptionId } });
+      return this.subscriptionRepository.findOne({
+        where: { stripeSubscriptionId },
+      });
     }
     if (stripeCustomerId) {
-      return this.subscriptionRepository.findOne({ where: { stripeCustomerId } });
+      return this.subscriptionRepository.findOne({
+        where: { stripeCustomerId },
+      });
     }
     return Promise.resolve(null);
   }
 
   private toId(
-    value: string | Stripe.Customer | Stripe.DeletedCustomer | Stripe.Subscription | null | undefined,
+    value:
+      | string
+      | Stripe.Customer
+      | Stripe.DeletedCustomer
+      | Stripe.Subscription
+      | null
+      | undefined,
   ): string | null {
     if (!value) return null;
     return typeof value === 'string' ? value : value.id;

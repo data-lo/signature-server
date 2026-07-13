@@ -1,4 +1,10 @@
-import { Controller, Post, RawBodyRequest, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  RawBodyRequest,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { Request } from 'express';
 import Stripe = require('stripe');
@@ -19,7 +25,9 @@ export class StripeWebhookController {
   @Post('webhook')
   @SkipJwtAuth()
   @UseGuards(StripeSignatureGuard)
-  async handleWebhook(@Req() request: RawBodyRequest<Request> & { stripeEvent: Stripe.Event }): Promise<{ received: true }> {
+  async handleWebhook(
+    @Req() request: RawBodyRequest<Request> & { stripeEvent: Stripe.Event },
+  ): Promise<{ received: true }> {
     await this.stripeWebhookService.process(request.stripeEvent);
     return { received: true };
   }

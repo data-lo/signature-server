@@ -9,8 +9,17 @@ import { PlanDetails } from '../interfaces/plan-details.interface';
  */
 export function getPlansConfig(config: ConfigService): PlanDetails[] {
   return [
-    { id: PLAN_ID_ENUM.BASIC, priceId: config.get<string>('STRIPE_PRICE_ID_BASIC') },
-    { id: PLAN_ID_ENUM.PRO, priceId: config.get<string>('STRIPE_PRICE_ID_PRO') },
-    { id: PLAN_ID_ENUM.ENTERPRISE, priceId: config.get<string>('STRIPE_PRICE_ID_ENTERPRISE') },
+    {
+      id: PLAN_ID_ENUM.BASIC,
+      priceId: config.get<string>('STRIPE_PRICE_ID_BASIC'),
+    },
+    {
+      id: PLAN_ID_ENUM.PRO,
+      priceId: config.get<string>('STRIPE_PRICE_ID_PRO'),
+    },
+    {
+      id: PLAN_ID_ENUM.ENTERPRISE,
+      priceId: config.get<string>('STRIPE_PRICE_ID_ENTERPRISE'),
+    },
   ];
 }

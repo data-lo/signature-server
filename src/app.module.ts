@@ -25,7 +25,6 @@ import { AccountModule } from './account/account.module';
 import { KafkaModule } from './kafka/kafka.module';
 import { StripeModule } from './stripe/stripe.module';
 
-
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
@@ -72,9 +71,13 @@ import { StripeModule } from './stripe/stripe.module';
     StripeModule,
   ],
   controllers: [AppController],
-  providers: [AppService, {
-    provide: APP_INTERCEPTOR,
-    useClass: IpInterceptor,
-  }, SharedModule],
+  providers: [
+    AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: IpInterceptor,
+    },
+    SharedModule,
+  ],
 })
-export class AppModule { }
+export class AppModule {}

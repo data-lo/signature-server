@@ -20,22 +20,36 @@ export class CreateUserDto {
   @IsNotEmpty()
   lastName: string;
 
-  @ApiProperty({ example: 'juan.perez@empresa.com', description: 'Correo electrónico único del usuario' })
+  @ApiProperty({
+    example: 'juan.perez@empresa.com',
+    description: 'Correo electrónico único del usuario',
+  })
   @IsEmail()
   @IsNotEmpty()
   email: string;
 
-  @ApiProperty({ example: 'Gerente de TI', description: 'Cargo o puesto del usuario' })
+  @ApiProperty({
+    example: 'Gerente de TI',
+    description: 'Cargo o puesto del usuario',
+  })
   @IsString()
   position: string;
 
-  @ApiProperty({ example: ['signer'], description: 'Lista de roles asignados al usuario', type: [String], enum: UserRoles })
+  @ApiProperty({
+    example: ['signer'],
+    description: 'Lista de roles asignados al usuario',
+    type: [String],
+    enum: UserRoles,
+  })
   @IsArray()
   @IsString({ each: true })
   @IsEnum(UserRoles, { each: true })
   roles: string[];
 
-  @ApiProperty({ example: 'PELJ850101HDFRNN08', description: 'CURP del usuario (18 caracteres alfanuméricos)' })
+  @ApiProperty({
+    example: 'PELJ850101HDFRNN08',
+    description: 'CURP del usuario (18 caracteres alfanuméricos)',
+  })
   @IsString()
   @IsNotEmpty()
   @Length(18, 18)

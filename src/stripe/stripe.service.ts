@@ -24,7 +24,9 @@ export class StripeService {
     @InjectRepository(AccountMemberEntity)
     private readonly accountMemberRepository: Repository<AccountMemberEntity>,
   ) {
-    this.client = new Stripe(this.configService.get<string>('STRIPE_SECRET_KEY'));
+    this.client = new Stripe(
+      this.configService.get<string>('STRIPE_SECRET_KEY'),
+    );
     this.plans = getPlansConfig(this.configService);
   }
 
@@ -38,7 +40,9 @@ export class StripeService {
     });
 
     if (!membership) {
-      throw new NotFoundException('El usuario no pertenece a ninguna cuenta activa');
+      throw new NotFoundException(
+        'El usuario no pertenece a ninguna cuenta activa',
+      );
     }
 
     return membership.accountId;
@@ -55,10 +59,14 @@ export class StripeService {
     }
 
     const subscription = await this.getOrCreateSubscriptionRecord(accountId);
-    const customerId = subscription.stripeCustomerId ?? (await this.createCustomer(accountId, email));
+    const customerId =
+      subscription.stripeCustomerId ??
+      (await this.createCustomer(accountId, email));
 
     if (!subscription.stripeCustomerId) {
-      await this.subscriptionRepository.update(subscription.id, { stripeCustomerId: customerId });
+      await this.subscriptionRepository.update(subscription.id, {
+        stripeCustomerId: customerId,
+      });
     }
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL');
@@ -78,8 +86,12 @@ export class StripeService {
     return { sessionId: session.id, url: session.url };
   }
 
-  async getSubscriptionState(accountId: string): Promise<UserSubscriptionState> {
-    const subscription = await this.subscriptionRepository.findOne({ where: { accountId } });
+  async getSubscriptionState(
+    accountId: string,
+  ): Promise<UserSubscriptionState> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { accountId },
+    });
 
     if (!subscription) {
       return {
@@ -98,7 +110,10 @@ export class StripeService {
     };
   }
 
-  private async createCustomer(accountId: string, email: string): Promise<string> {
+  private async createCustomer(
+    accountId: string,
+    email: string,
+  ): Promise<string> {
     const customer = await this.client.customers.create({
       email,
       metadata: { accountId },
@@ -106,8 +121,12 @@ export class StripeService {
     return customer.id;
   }
 
-  private async getOrCreateSubscriptionRecord(accountId: string): Promise<AccountSubscriptionEntity> {
-    const existing = await this.subscriptionRepository.findOne({ where: { accountId } });
+  private async getOrCreateSubscriptionRecord(
+    accountId: string,
+  ): Promise<AccountSubscriptionEntity> {
+    const existing = await this.subscriptionRepository.findOne({
+      where: { accountId },
+    });
     if (existing) {
       return existing;
     }

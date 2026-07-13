@@ -11,4 +11,4 @@ import { SignatureModule } from 'src/signature/signature.module';
   controllers: [UserController],
   imports: [TypeOrmModule.forFeature([UserEntity]), SignatureModule],
 })
-export class UserModule { }
+export class UserModule {}

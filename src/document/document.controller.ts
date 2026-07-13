@@ -165,12 +165,14 @@ export class DocumentController {
   @ApiQuery({
     name: 'participantName',
     required: false,
-    description: 'Búsqueda parcial por nombre o correo de un firmante/espectador',
+    description:
+      'Búsqueda parcial por nombre o correo de un firmante/espectador',
   })
   @ApiQuery({
     name: 'myTurnOnly',
     required: false,
-    description: 'Requiere participantEmail. Solo documentos donde te toca firmar ahora mismo',
+    description:
+      'Requiere participantEmail. Solo documentos donde te toca firmar ahora mismo',
   })
   @ApiQuery({
     name: 'page',
