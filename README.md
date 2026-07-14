@@ -69,8 +69,8 @@ Cuando firma el último firmante pendiente:
 
 | Entidad | Tabla / colección | Campos principales |
 |---|---|---|
-| `UserEntity` | `users` (Postgres) | id, firstName, lastName, email (único), position, roles, isActive, isDeleted, nationalId (CURP, 18 chars), password, `signatureId` (FK opcional), `personalInformationId` (FK obligatoria), createdAt, updatedAt |
-| `PersonalInformationEntity` | `personal_information` (Postgres) | id, name, lastName, curp, rfc (nullable), phoneNumber (nullable), secondaryEmail (nullable) |
+| `UserEntity` | `users` (Postgres) | id, firstName, lastName, email (único), position, roles, isActive, isDeleted, nationalId (CURP, 18 chars, **único**), password, `signatureId` (FK opcional), `personalInformationId` (FK obligatoria), createdAt, updatedAt |
+| `PersonalInformationEntity` | `personal_information` (Postgres) | id, name, lastName, curp, rfc (nullable a nivel de columna — obligatorio en `POST /auth/register`, opcional en `POST /user`), phoneNumber (nullable), secondaryEmail (nullable) |
 | `SignatureEntity` | `signatures` (Postgres) | id, signatureObjectKey (nullable), officialCardObjectKey (nullable), isActive, createdAt, updatedAt |
 | `DocumentEntity` | `documents` (Postgres) | id, objectKey, fileName, fileType, totalPages, documentUrl, ipAddress, originalHash, signedHash, signedAt, cancelledAt, rejectedAt, status, signatureCoordinates (jsonb), createdBy (FK) |
 | `DocumentParticipantEntity` | `document_participants` (Postgres) | id, documentId (FK), userId (FK), role (`signer`\|`spectator`), status (`pending`\|`signed`\|`rejected`), signOrder, signedAt, rejectedAt, rejectionReason |
@@ -92,7 +92,7 @@ Cuando firma el último firmante pendiente:
 - **Account 1—N AccountMember**: FK `account_id`, `onDelete: CASCADE`.
 - **Account 1—1 AccountSubscription**: FK `account_id` (único), `onDelete: CASCADE`.
 
-> El esquema se sincroniza automáticamente desde las entidades (`synchronize: true` en TypeORM) — no hay carpeta de migraciones. Cualquier cambio de entidad se aplica al reiniciar el servidor.
+> El esquema ya **no** se sincroniza automáticamente (`synchronize: false`). Hay un sistema de migraciones formal de TypeORM en `src/migrations/` — ver sección 6 para los comandos y el flujo para aplicar cambios de entidad.
 
 ---
 
@@ -206,10 +206,23 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 ```bash
 docker compose up -d      # Postgres, MongoDB, Redis, Kafka, Kafka UI, MinIO
 npm install
-npm run start:dev         # aplica el esquema automáticamente (synchronize: true)
+npm run start:dev         # aplica las migraciones pendientes automáticamente (migrationsRun: true) y levanta con --watch
 ```
 
 Swagger disponible en `/api/docs` una vez levantado.
+
+### Migraciones (TypeORM)
+
+El esquema ya no se gestiona con `synchronize: true`. `src/data-source.ts` es el `DataSource` que usa la CLI (independiente del `TypeOrmModule.forRootAsync` de `app.module.ts`, que sigue siendo lo que usa la app en tiempo de ejecución).
+
+```bash
+npm run migration:generate -- src/migrations/NombreDescriptivo   # genera una migración a partir del diff entidades vs. DB
+npm run migration:create -- src/migrations/NombreDescriptivo     # crea una migración vacía (up/down manuales)
+npm run migration:run                                            # aplica las migraciones pendientes
+npm run migration:revert                                         # revierte la última migración aplicada
+```
+
+`migrationsRun: true` en `app.module.ts` significa que `npm run start:dev`/`start:prod` aplican automáticamente cualquier migración pendiente al arrancar — no hace falta correr `migration:run` a mano en el flujo normal, solo al generar una migración nueva para probarla antes de commitear.
 
 ---
 
@@ -217,12 +230,10 @@ Swagger disponible en `/api/docs` una vez levantado.
 
 ### Pendientes reales (lo que queda abierto hoy)
 - **Migración de modelo completa (`ENTIDAD_RELACIÓN_V2`)**: RBAC granular (`role`/`permission`/`resource`/`action`), `Organization` separada de `OrganizationDetail`, mover `email`/`password` de `Users` a `Account` (multi-cuenta), `Collaborator` reemplazando `DocumentParticipant` con campos nuevos (`comments`, `geoLoc`, `visibilityLevel`, `cancellationReason`, `reminderPeriodicity`, `signatureType`), `Watcher`/`Notification`/`Event`, `verification_code`, `SimpleSignature`/`FIELSignature`, `Document Transaction`. Decisión tomada: se planea como fase aparte, no se toca el login actual hasta diseñarla explícitamente. Ver detalle más abajo.
-- **CURP sin constraint `@unique` en base de datos**: la unicidad se valida hoy solo a nivel de aplicación (`UserService.assertCurpNotTaken`), no con un índice único de Postgres. Dos requests concurrentes con el mismo CURP podrían colarse en una condición de carrera.
-- **RFC no se recolecta en el registro** (`POST /auth/register`): sigue siendo `nullable`, solo se puede cargar después vía `PATCH /user/personal-information`. Pendiente decidir si se agrega al formulario de registro.
 - **Kafka sin caso de uso de negocio para el consumidor**: `DocumentEventsConsumer` hoy solo loggea los eventos de forma estructurada. Falta decidir una acción real (p. ej. desacoplar el envío de emails del request síncrono, alimentar un dashboard, disparar webhooks a terceros).
 - **`OTPService`**: implementado pero deliberadamente sin integrar a ningún flujo (decisión del equipo, no es un olvido).
-- **Sin sistema de migraciones formal**: `synchronize: true` sigue aplicando cualquier cambio de entidad directo a la base configurada. Antes de acometer la migración de modelo grande de arriba, hay que decidir si se introduce un sistema de migraciones de TypeORM.
-- **Tests siguen siendo smoke tests**: las 14 suites pasan, pero solo verifican `should be defined` (inyección de dependencias correcta). No hay cobertura de comportamiento real (casos de éxito/error de cada método de servicio).
+- **Cobertura de tests parcial**: `user.service.spec.ts` y `document.service.spec.ts` ya cubren comportamiento real (éxito + errores). El resto de specs (`signature`, `audit`, `account`, etc.) siguen siendo smoke tests (`should be defined`). Pendiente extender el mismo patrón de tests de comportamiento al resto de servicios si se quiere subir la cobertura real.
+- **Migración baseline generada contra una base vacía de desarrollo**: `src/migrations/*-InitialSchema.ts` se generó reseteando el schema `public` de la base de dev (confirmado como desechable). Si este proyecto ya tiene un ambiente de staging/producción con datos reales, esa migración **no** debe correrse ahí tal cual — habría que generar una migración de diff real contra ese ambiente, o revisar la baseline a mano antes de aplicarla.
 
 ### Resuelto recientemente
 - **Duplicados en `POST /document`**: `DocumentService.create` ahora rechaza (`400`) IDs repetidos entre `signerIds`/`spectatorIds`, y rechaza crear un documento con el mismo `fileName` que otro documento propio (mismo `createdBy`) en estatus `CREATED` o `PENDING`.
@@ -242,8 +253,14 @@ Decisión tomada con el equipo: el diagrama `ENTIDAD_RELACIÓN_V2` completo (RBA
 - **Auditoría completa**: `DocumentService` ahora invoca `AuditService.create()` también para `DOCUMENT_CREATED` (en `create()`) y `DOCUMENT_SENT_TO_SIGN` (en `submitForAuthorization()`), además de los `DOCUMENT_SIGNED`/`DOCUMENT_REJECTED` que ya existían y el nuevo `DOCUMENT_CANCELLED` (ver siguiente punto).
 - **Ciclo de cancelación completado**: nuevo método `DocumentService.confirmCancellation()` + endpoint `PATCH /document/:id/confirm-cancellation`. Cualquier firmante puede confirmar (una sola confirmación basta, igual que el rechazo — no hay votación de todos los firmantes, eso requeriría un campo de estado por participante que no existe hoy). Estampa "CANCELADO" (`stampCancelledWatermark`, ya existía), mueve el archivo a `cancelled_documents`, marca `cancelledAt`/`status = CANCELLED`, audita `DOCUMENT_CANCELLED` y notifica a todos los participantes (`sendDocumentCancelledNotification`, nuevo). También se endureció `requestCancellation()`: ahora exige que el llamador sea el creador del documento (antes no validaba propiedad) y expone `canRequestCancellation`/`canConfirmCancellation` en `GET /document/:id` para que el frontend muestre los botones correctos. Ver también README de `signature-app`.
 - **Kafka con productor y consumidor reales**: nuevo `DocumentEventsProducer` (`src/kafka/document-events.producer.ts`) publica `document.created`, `document.sent_to_sign`, `document.signed`, `document.rejected`, `document.cancelled` en los mismos puntos donde se audita cada evento. Nuevo `DocumentEventsConsumer` (`src/kafka/document-events.controller.ts`) los consume y los loggea de forma estructurada — es un punto de partida real (visible en Kafka UI), no el mensaje de prueba original. Queda para una futura iteración conectar el consumidor a una acción de negocio real (p. ej. mover el envío de notificaciones fuera del request síncrono).
-- **Tests arreglados**: la causa raíz de que casi toda la suite fallara no era solo la falta de mocks — el `rootDir: "src"` de Jest no tenía un `moduleNameMapper` para el prefijo `src/...` que usa todo el proyecto (TypeScript lo resuelve vía `baseUrl`, pero Jest no lo entendía y ni siquiera podía cargar los archivos). Se agregó `"moduleNameMapper": { "^src/(.*)$": "<rootDir>/$1" }` en la config de Jest (`package.json`). Además: dos specs (`signature.service.spec.ts`, `signature.controller.spec.ts`, `document.controller.spec.ts`, `redis.service.spec.ts`, `app.controller.spec.ts`) importaban `describe`/`it`/`beforeEach` desde `node:test` en vez de usar los globals de Jest — se quitaron esos imports. Se agregaron mocks reales (`getRepositoryToken`/`getModelToken`/`getDataSourceToken` + `jest.fn()`) a los specs de `user`, `document`, `signature` y `audit`. **Las 14 suites (15 tests) pasan ahora.** Siguen siendo smoke tests ("should be defined"); no se agregaron casos de comportamiento nuevos — eso queda como trabajo futuro si se quiere subir la cobertura real.
+- **Tests arreglados**: la causa raíz de que casi toda la suite fallara no era solo la falta de mocks — el `rootDir: "src"` de Jest no tenía un `moduleNameMapper` para el prefijo `src/...` que usa todo el proyecto (TypeScript lo resuelve vía `baseUrl`, pero Jest no lo entendía y ni siquiera podía cargar los archivos). Se agregó `"moduleNameMapper": { "^src/(.*)$": "<rootDir>/$1" }` en la config de Jest (`package.json`). Además: dos specs (`signature.service.spec.ts`, `signature.controller.spec.ts`, `document.controller.spec.ts`, `redis.service.spec.ts`, `app.controller.spec.ts`) importaban `describe`/`it`/`beforeEach` desde `node:test` en vez de usar los globals de Jest — se quitaron esos imports. Se agregaron mocks reales (`getRepositoryToken`/`getModelToken`/`getDataSourceToken` + `jest.fn()`) a los specs de `user`, `document`, `signature` y `audit`.
 - **`OTPService` se deja explícitamente en pendiente** (decisión del equipo, no se tocó).
+
+### Resuelto en esta ronda (CURP único, RFC en registro, migraciones, tests de comportamiento)
+- **CURP con constraint `@unique` en base de datos**: `UserEntity.nationalId` ahora tiene `unique: true` (antes la unicidad solo se validaba en la aplicación vía `assertCurpNotTaken`). Aplicado en la migración baseline (`CONSTRAINT ... UNIQUE ("national_id")`).
+- **RFC recolectado en el registro**: `POST /auth/register` (`RegisterDto`) ahora exige `rfc` (12-13 caracteres alfanuméricos). `POST /user` (`CreateUserDto`, uso administrativo) lo recibe **opcional** — cumple el TODO que ya existía en el DTO ("Agregar RFC Opcional"). Se restauró `UserService.assertRfcNotTaken()` para rechazar (`409`) un RFC duplicado al crear/registrar (la columna `rfc` sigue siendo nullable a nivel de base porque `POST /user` puede omitirlo). El frontend (`signature-app`) ya tiene el campo en el formulario de signup — ver su README.
+- **Sistema de migraciones formal**: `src/data-source.ts` (DataSource para la CLI), scripts `migration:generate`/`migration:create`/`migration:run`/`migration:revert` en `package.json`, `synchronize: false` + `migrationsRun: true` en `app.module.ts`. Se generó y aplicó `src/migrations/*-InitialSchema.ts` como baseline, reseteando primero el schema `public` de la base de dev (confirmada como desechable) para partir de un diff limpio contra las entidades actuales (incluyendo el CURP único de arriba). Ver sección 6 para el flujo completo. Tuvo el mismo problema de resolución de módulos que Jest (`src/...`): se resolvió agregando `"ts-node": { "require": ["tsconfig-paths/register"] }` a `tsconfig.json`.
+- **Tests de comportamiento real**: `user.service.spec.ts` y `document.service.spec.ts` dejaron de ser smoke tests. Ahora cubren, con mocks reales de repositorios/servicios (no solo `should be defined`): en `UserService` — creación exitosa dentro de transacción, rollback si falla el `save` del usuario (sin fila huérfana), rechazo por email/CURP/RFC duplicado (tanto en `create()` como en `createFromSignup()`), actualización de información personal; en `DocumentService` — creación exitosa y sus 3 validaciones de rechazo (sin archivo, participante duplicado, nombre duplicado), firma intermedia vs. firma del último firmante (finalización + estampado), rechazo, solicitud y confirmación de cancelación, y sus respectivos casos de error (estatus inválido, no ser firmante/creador, turno incorrecto, sin credencial de firma activa). 47 tests en total (antes 15, todos "should be defined").
 
 ### Frontend
 El frontend (`signature-app`) ya consume `PATCH /user/personal-information` para `phoneNumber` y `secondaryEmail` desde `/personal-documents`. `name`, `lastName`, `curp`, `rfc` no tienen UI de edición **por diseño** (no es una tarea pendiente, es la decisión tomada — ver arriba). Ver pendientes propios del README de `signature-app` (incluye una dependencia futura de esta misma migración RBAC/multi-cuenta).

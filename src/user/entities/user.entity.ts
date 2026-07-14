@@ -40,7 +40,7 @@ export class UserEntity {
   @Column({ default: false, name: 'is_deleted' })
   isDeleted: boolean;
 
-  @Column({ length: 18, name: 'national_id' })
+  @Column({ length: 18, name: 'national_id', unique: true })
   nationalId: string;
 
   @Column({ name: 'password' })

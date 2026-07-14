@@ -52,6 +52,9 @@ export class UserService {
     if (createUserDto.nationalId) {
       await this.assertCurpNotTaken(createUserDto.nationalId.toUpperCase());
     }
+    if (createUserDto.rfc) {
+      await this.assertRfcNotTaken(createUserDto.rfc.toUpperCase());
+    }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -63,6 +66,7 @@ export class UserService {
           name: createUserDto.firstName?.toUpperCase(),
           lastName: createUserDto.lastName?.toUpperCase(),
           curp: createUserDto.nationalId?.toUpperCase(),
+          rfc: createUserDto.rfc?.toUpperCase(),
         }),
       );
 
@@ -338,6 +342,7 @@ export class UserService {
       email: string;
       position: string;
       nationalId: string;
+      rfc: string;
     },
     hashedPassword: string,
   ): Promise<BaseResponse<UserEntity>> {
@@ -351,6 +356,7 @@ export class UserService {
     }
 
     await this.assertCurpNotTaken(dto.nationalId.toUpperCase());
+    await this.assertRfcNotTaken(dto.rfc.toUpperCase());
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -362,6 +368,7 @@ export class UserService {
           name: dto.firstName.toUpperCase(),
           lastName: dto.lastName.toUpperCase(),
           curp: dto.nationalId.toUpperCase(),
+          rfc: dto.rfc.toUpperCase(),
         }),
       );
 
@@ -425,6 +432,18 @@ export class UserService {
     if (existing) {
       throw new ConflictException(
         'Ya existe un usuario registrado con ese CURP',
+      );
+    }
+  }
+
+  /** Lanza ConflictException si ya existe un registro de información personal con ese RFC. */
+  private async assertRfcNotTaken(rfc: string): Promise<void> {
+    const existing = await this.personalInformationRepository.findOne({
+      where: { rfc },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'Ya existe un usuario registrado con ese RFC',
       );
     }
   }

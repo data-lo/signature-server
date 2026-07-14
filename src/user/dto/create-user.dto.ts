@@ -1,9 +1,10 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsOptional,
   IsString,
   Length,
 } from 'class-validator';
@@ -55,5 +56,12 @@ export class CreateUserDto {
   @Length(18, 18)
   nationalId: string;
 
-  // Agregar RFC Opcional
+  @ApiPropertyOptional({
+    example: 'PELJ850101ABC',
+    description: 'RFC del usuario (12 o 13 caracteres alfanuméricos)',
+  })
+  @IsOptional()
+  @IsString()
+  @Length(12, 13)
+  rfc?: string;
 }
