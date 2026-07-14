@@ -40,6 +40,9 @@ export class UserEntity {
   @Column({ default: false, name: 'is_deleted' })
   isDeleted: boolean;
 
+  @Column({ default: false, name: 'is_configured' })
+  isConfigured: boolean;
+
   @Column({ length: 18, name: 'national_id', unique: true })
   nationalId: string;
 

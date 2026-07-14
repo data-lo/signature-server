@@ -2,6 +2,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -11,6 +12,7 @@ import { DataSource, Repository } from 'typeorm';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
+import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 
 // Entities
 import { UserEntity } from './entities/user.entity';
@@ -23,9 +25,12 @@ import { UserRoles } from './enums/user-roles';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { SignatureService } from 'src/signature/signature.service';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { RedisService } from 'src/shared/redis/redis.service';
 
 @Injectable()
 export class UserService {
+  private readonly logger = new Logger(UserService.name);
+
   constructor(
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
@@ -35,6 +40,7 @@ export class UserService {
     private dataSource: DataSource,
 
     private signatureService: SignatureService,
+    private redisService: RedisService,
   ) {}
 
   async create(
@@ -179,6 +185,7 @@ export class UserService {
         personalInformation: {
           phoneNumber: true,
           secondaryEmail: true,
+          rfc: true,
         },
         ...(withSignature && {
           signature: {
@@ -229,6 +236,7 @@ export class UserService {
       ...sanitizedUser,
       phoneNumber: personalInformation?.phoneNumber ?? null,
       secondaryEmail: personalInformation?.secondaryEmail ?? null,
+      rfc: personalInformation?.rfc ?? null,
       ...(withSignature &&
         signature && {
           signature: {
@@ -318,7 +326,6 @@ export class UserService {
     user: UserEntity | UserEntity[],
   ): UserEntity | UserEntity[] {
     const strip = ({
-      signatureId,
       personalInformationId,
       createdAt,
       updatedAt,
@@ -386,6 +393,8 @@ export class UserService {
       const newUser = await queryRunner.manager.save(user);
       await queryRunner.commitTransaction();
 
+      await this.refreshUserCurpCache(newUser, personalInformation);
+
       return {
         success: true,
         message: 'Usuario registrado correctamente',
@@ -396,6 +405,80 @@ export class UserService {
       throw error;
     } finally {
       await queryRunner.release();
+    }
+  }
+
+  /**
+   * Actualiza de forma atómica isConfigured=true (consolidación final del onboarding)
+   * y refresca el snapshot cacheado en Redis bajo la key del CURP. El valor recibido
+   * en el DTO no se usa: este endpoint es un disparador de consolidación de un solo
+   * sentido, no un toggle genérico de estado.
+   */
+  async updateStatus(
+    userId: string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    dto: UpdateUserStatusDto,
+  ): Promise<BaseResponse<{ isConfigured: boolean }>> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    await this.userRepository.update(userId, { isConfigured: true });
+
+    const updatedUser = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: { personalInformation: true },
+    });
+
+    await this.refreshUserCurpCache(
+      updatedUser,
+      updatedUser.personalInformation,
+    );
+
+    return {
+      success: true,
+      message: 'Estado de configuración actualizado correctamente',
+      data: { isConfigured: true },
+    };
+  }
+
+  /**
+   * Cachea en Redis DB 0, bajo la key del CURP, un snapshot estable del perfil
+   * unificado del usuario. Deliberadamente excluye URLs prefirmadas de MinIO
+   * (secureUrl/expiresIn) porque expiran y quedarían obsoletas en el cache.
+   * Un fallo de Redis nunca debe tumbar la operación que lo dispara.
+   */
+  private async refreshUserCurpCache(
+    user: UserEntity,
+    personalInformation: PersonalInformationEntity,
+  ): Promise<void> {
+    try {
+      const payload = {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        position: user.position,
+        roles: user.roles,
+        nationalId: user.nationalId,
+        isConfigured: user.isConfigured,
+        signatureId: user.signatureId,
+        personalInformation: {
+          rfc: personalInformation?.rfc ?? null,
+          phoneNumber: personalInformation?.phoneNumber ?? null,
+          secondaryEmail: personalInformation?.secondaryEmail ?? null,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      await this.redisService.set(user.nationalId, JSON.stringify(payload));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo refrescar el cache de Redis para el CURP ${user.nationalId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 

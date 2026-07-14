@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserEntity } from './entities/user.entity';
 import { PersonalInformationEntity } from './entities/personal-information.entity';
 import { SignatureModule } from 'src/signature/signature.module';
+import { SharedModule } from 'src/shared/shared.module';
 
 @Module({
   exports: [UserService],
@@ -13,6 +14,7 @@ import { SignatureModule } from 'src/signature/signature.module';
   imports: [
     TypeOrmModule.forFeature([UserEntity, PersonalInformationEntity]),
     SignatureModule,
+    SharedModule,
   ],
 })
 export class UserModule {}

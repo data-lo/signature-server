@@ -33,6 +33,7 @@ import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
+import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import {
   UserCreateData,
   UserCreateResponse,
@@ -169,6 +170,32 @@ export class UserController {
     @Body() dto: UpdatePersonalInformationDto,
   ) {
     return this.userService.updatePersonalInformation(user.sub, dto);
+  }
+
+  @Patch('me/status')
+  @ApiOperation({
+    summary: 'Consolidar el estado de onboarding del usuario autenticado',
+    description:
+      'Marca isConfigured=true de forma atómica en PostgreSQL y refresca el cache unificado en Redis. El usuario se identifica mediante el JWT.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Estado de configuración actualizado correctamente',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Usuario no encontrado',
+    type: NotFoundResponse,
+  })
+  updateStatus(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateUserStatusDto,
+  ) {
+    return this.userService.updateStatus(user.sub, dto);
   }
 
   @Public()

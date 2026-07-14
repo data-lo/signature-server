@@ -5,6 +5,7 @@ import { UserService } from './user.service';
 import { UserEntity } from './entities/user.entity';
 import { PersonalInformationEntity } from './entities/personal-information.entity';
 import { SignatureService } from 'src/signature/signature.service';
+import { RedisService } from 'src/shared/redis/redis.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRoles } from './enums/user-roles';
 
@@ -39,6 +40,7 @@ describe('UserService', () => {
   let personalInformationRepository: ReturnType<typeof createMockRepository>;
   let dataSource: { createQueryRunner: jest.Mock };
   let queryRunner: ReturnType<typeof createMockQueryRunner>;
+  let redisService: { set: jest.Mock; get: jest.Mock };
 
   beforeEach(async () => {
     userRepository = createMockRepository();
@@ -47,6 +49,7 @@ describe('UserService', () => {
     dataSource = {
       createQueryRunner: jest.fn(() => queryRunner),
     };
+    redisService = { set: jest.fn(), get: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -61,6 +64,7 @@ describe('UserService', () => {
           provide: SignatureService,
           useValue: { findOne: jest.fn(), getFile: jest.fn() },
         },
+        { provide: RedisService, useValue: redisService },
       ],
     }).compile();
 
@@ -152,7 +156,7 @@ describe('UserService', () => {
       rfc: 'GOMA900101XYZ',
     };
 
-    it('registra el usuario correctamente', async () => {
+    it('registra el usuario correctamente y cachea el perfil en Redis por CURP', async () => {
       userRepository.findOne.mockResolvedValue(null);
       personalInformationRepository.findOne.mockResolvedValue(null);
 
@@ -160,6 +164,10 @@ describe('UserService', () => {
 
       expect(result.success).toBe(true);
       expect(queryRunner.commitTransaction).toHaveBeenCalled();
+      expect(redisService.set).toHaveBeenCalledWith(
+        dto.nationalId.toUpperCase(),
+        expect.any(String),
+      );
     });
 
     it('rechaza con ConflictException si el email ya existe', async () => {
@@ -225,6 +233,45 @@ describe('UserService', () => {
         service.updatePersonalInformation('missing-user', {
           phoneNumber: '5512345678',
         }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('updateStatus', () => {
+    it('fija isConfigured=true y refresca el cache de Redis por CURP', async () => {
+      userRepository.findOne
+        .mockResolvedValueOnce({ id: 'user-1', nationalId: 'CURP1' }) // existencia
+        .mockResolvedValueOnce({
+          id: 'user-1',
+          nationalId: 'CURP1',
+          isConfigured: true,
+          signatureId: 'sig-1',
+          personalInformation: {
+            rfc: 'RFC1',
+            phoneNumber: '123',
+            secondaryEmail: 'a@a.com',
+          },
+        }); // refetch
+
+      const result = await service.updateStatus('user-1', {
+        isConfigured: true,
+      });
+
+      expect(userRepository.update).toHaveBeenCalledWith('user-1', {
+        isConfigured: true,
+      });
+      expect(redisService.set).toHaveBeenCalledWith(
+        'CURP1',
+        expect.any(String),
+      );
+      expect(result.data.isConfigured).toBe(true);
+    });
+
+    it('lanza NotFoundException si el usuario no existe', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateStatus('missing-user', { isConfigured: true }),
       ).rejects.toThrow(NotFoundException);
     });
   });
