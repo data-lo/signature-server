@@ -212,6 +212,15 @@ Swagger disponible en `/api/docs` una vez levantado.
 
 ## 7. Pendientes / trabajo futuro
 
+### Resuelto recientemente
+- **Duplicados en `POST /document`**: `DocumentService.create` ahora rechaza (`400`) IDs repetidos entre `signerIds`/`spectatorIds`, y rechaza crear un documento con el mismo `fileName` que otro documento propio (mismo `createdBy`) en estatus `CREATED` o `PENDING`.
+- **`findOneActiveUser` expone `phoneNumber`/`secondaryEmail`**: ahora incluye la relación `personalInformation` (solo esos dos campos) y los aplana en la respuesta de `GET /user/:id` y `GET /auth/me`, para que el frontend pueda mostrarlos y prefilling un formulario de edición.
+- **`PATCH /user/personal-information` solo acepta `phoneNumber` y `secondaryEmail`**: `name`, `lastName`, `curp` y `rfc` se quitaron de `UpdatePersonalInformationDto` — son campos de identidad y no deben poder actualizarse por este endpoint (el frontend ya solo enviaba estos dos campos, pero ahora el backend tampoco los acepta si algún otro cliente de la API los envía).
+- **`PATCH /user/:id` ya no acepta `nationalId` (CURP)**: `UpdateUserDto` excluye `nationalId` de `CreateUserDto` (`OmitType`). El CURP se fija una sola vez al crear el usuario y no es editable después, por la misma razón: es un campo de identidad.
+- **Frontend consumiendo `PATCH /user/personal-information`**: `signature-app` tiene una pantalla (`/personal-documents`) que edita `phoneNumber` y `secondaryEmail` contra este endpoint — ver README de `signature-app`.
+- **Validación de la firma del JWT**: confirmado que `JwtAuthGuard` verifica la firma con `jwtService.verifyAsync` (no solo decodifica) en cada request no marcado `@Public()`/`@SkipJwtAuth()`. El `middleware.ts` del frontend que decodifica sin verificar es seguro como optimización de UX porque esta capa sigue siendo la validación real.
+- **Duplicados de CURP al crear/registrar usuario**: `UserService.assertCurpNotTaken` rechaza (`409`) un CURP ya usado por otro usuario activo, tanto en `POST /auth/register` como en `POST /user`. El correo electrónico ya tenía esta validación desde antes. **A propósito, `firstName`/`lastName` NO son campos de unicidad** — dos usuarios distintos pueden compartir nombre y apellido. Como `curp`/`nationalId` ya no son editables después de crear el usuario (ver puntos anteriores), no hace falta validar duplicados en ninguna actualización — solo al crear.
+
 ### Modelo de datos (ENTIDAD_RELACIÓN_V2)
 - El diagrama de referencia define entidades que todavía no existen en el código: sistema de permisos granular (`role`, `role_permission`, `Permission`, `Resource`, `action`), `Organization` (distinta del actual `OrganizationDetail`), `Watcher`, `Notification`, `Event`, `MemberShip`, `SigningUsers`, `verification_code`, `SimpleSignature`. Falta ir sincronizando el resto del modelo conforme se aborde cada módulo.
 - `Users.tax_identification_number (CURP) @unique` aparece en el diagrama pero no se implementó — quedó fuera del alcance de la sincronización de `Signature`/`PersonalInformation` (ver decisión documentada en esa tarea).
@@ -232,4 +241,4 @@ Swagger disponible en `/api/docs` una vez levantado.
 - Varios `*.spec.ts` (`user.service.spec.ts`, `user.controller.spec.ts`, `signature.service.spec.ts`, `document.service.spec.ts`, entre otros) son boilerplate de Nest CLI sin los mocks reales de sus dependencias (`Repository`, otros servicios inyectados) — no reflejan el comportamiento real y probablemente fallan al compilar el `TestingModule`. No hay un patrón de mocking establecido (`getRepositoryToken` + `jest.fn()`) para reutilizar. Pendiente escribir suites de test confiables.
 
 ### Frontend
-- El frontend (`signature-app`) todavía no consume el endpoint `PATCH /user/personal-information` ni los nuevos campos de `PersonalInformation` (`name`, `lastName`, `curp`, `rfc`, `phoneNumber`, `secondaryEmail`) — hoy en `/personal-documents` solo maneja la credencial de firma (`signature`/`officialFile`), no la información personal. Ver pendientes del README de `signature-app`.
+- El frontend (`signature-app`) ya consume `PATCH /user/personal-information` para `phoneNumber` y `secondaryEmail` desde `/personal-documents`. Los campos `name`, `lastName`, `curp`, `rfc` siguen sin UI que los edite (decisión de producto, no limitación técnica) — ver pendientes del README de `signature-app`.

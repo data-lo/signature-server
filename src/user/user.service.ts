@@ -47,6 +47,10 @@ export class UserService {
       );
     }
 
+    if (createUserDto.nationalId) {
+      await this.assertCurpNotTaken(createUserDto.nationalId.toUpperCase());
+    }
+
     const personalInformation = await this.personalInformationRepository.save(
       this.personalInformationRepository.create({
         name: createUserDto.firstName?.toUpperCase(),
@@ -147,18 +151,23 @@ export class UserService {
   ): Promise<BaseResponse<UserEntity | null>> {
     const user = await this.userRepository.findOne({
       where: { id, isActive: true },
-      ...(withSignature && {
-        relations: {
-          signature: true,
+      relations: {
+        personalInformation: true,
+        ...(withSignature && { signature: true }),
+      },
+      select: {
+        personalInformation: {
+          phoneNumber: true,
+          secondaryEmail: true,
         },
-        select: {
+        ...(withSignature && {
           signature: {
             id: true,
             signatureObjectKey: true,
             officialCardObjectKey: true,
           },
-        },
-      }),
+        }),
+      },
     });
 
     if (!user) {
@@ -168,8 +177,11 @@ export class UserService {
     let signature;
     let officialFile;
 
-    const { signature: _rawSignature, ...sanitizedUser } =
-      this.removeSensitiveData(user);
+    const {
+      signature: _rawSignature,
+      personalInformation,
+      ...sanitizedUser
+    } = this.removeSensitiveData(user);
 
     if (withSignature && user.signature?.signatureObjectKey) {
       try {
@@ -195,6 +207,8 @@ export class UserService {
 
     const newUserObject = {
       ...sanitizedUser,
+      phoneNumber: personalInformation?.phoneNumber ?? null,
+      secondaryEmail: personalInformation?.secondaryEmail ?? null,
       ...(withSignature &&
         signature && {
           signature: {
@@ -236,9 +250,6 @@ export class UserService {
         position: updateUserDto.position.toUpperCase(),
       }),
       ...(updateUserDto.roles && { roles: updateUserDto.roles }),
-      ...(updateUserDto.nationalId && {
-        nationalId: updateUserDto.nationalId.toUpperCase(),
-      }),
     });
 
     const updatedUser = await this.findOneActiveUser(id);
@@ -323,6 +334,8 @@ export class UserService {
       );
     }
 
+    await this.assertCurpNotTaken(dto.nationalId.toUpperCase());
+
     const personalInformation = await this.personalInformationRepository.save(
       this.personalInformationRepository.create({
         name: dto.firstName.toUpperCase(),
@@ -374,5 +387,17 @@ export class UserService {
       message: 'Información personal actualizada correctamente',
       data: updated,
     };
+  }
+
+  /** Lanza ConflictException si otro usuario activo ya tiene ese CURP registrado. */
+  private async assertCurpNotTaken(curp: string): Promise<void> {
+    const existing = await this.userRepository.findOne({
+      where: { nationalId: curp, isActive: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'Ya existe un usuario registrado con ese CURP',
+      );
+    }
   }
 }

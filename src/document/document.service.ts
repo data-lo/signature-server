@@ -10,7 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 
 // TypeORM
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 // Entities
 import { DocumentEntity } from './entities/document.entity';
@@ -94,10 +94,32 @@ export class DocumentService {
       const { signerIds, spectatorIds, signatureCoordinates } =
         createDocumentDto;
 
+      const allParticipantIds = [...signerIds, ...(spectatorIds ?? [])];
+      const uniqueParticipantIds = new Set(allParticipantIds);
+      if (uniqueParticipantIds.size !== allParticipantIds.length) {
+        throw new BadRequestException(
+          'No puedes seleccionar al mismo usuario más de una vez entre firmantes y espectadores',
+        );
+      }
+
+      const duplicateNameDocument = await this.documentRepository.findOne({
+        where: {
+          createdBy,
+          fileName: file.originalname,
+          status: In([
+            DOCUMENT_STATUS_ENUM.CREATED,
+            DOCUMENT_STATUS_ENUM.PENDING,
+          ]),
+        },
+      });
+      if (duplicateNameDocument) {
+        throw new BadRequestException(
+          `Ya tienes un documento con el nombre "${file.originalname}" pendiente de firma. Renómbralo o espera a que finalice su proceso de firma.`,
+        );
+      }
+
       await Promise.all(
-        [...signerIds, ...(spectatorIds ?? [])].map((userId) =>
-          this.userService.findOne(userId),
-        ),
+        allParticipantIds.map((userId) => this.userService.findOne(userId)),
       );
 
       const minioUploadDocumentResponse = await this.minioService.uploadObject(

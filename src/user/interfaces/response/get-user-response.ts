@@ -65,6 +65,20 @@ export class UserGetData {
   nationalId: string;
 
   @ApiProperty({
+    example: '5512345678',
+    description: 'Número de teléfono de contacto (información personal)',
+    nullable: true,
+  })
+  phoneNumber: string | null;
+
+  @ApiProperty({
+    example: 'juan.perez@personal.com',
+    description: 'Correo electrónico secundario (información personal)',
+    nullable: true,
+  })
+  secondaryEmail: string | null;
+
+  @ApiProperty({
     type: SignatureUrlDto,
     description:
       'URL de la firma del usuario, presente solo si se solicita con withSignature=true',
