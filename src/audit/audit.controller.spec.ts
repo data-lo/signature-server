@@ -8,7 +8,16 @@ describe('AuditController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuditController],
-      providers: [AuditService],
+      providers: [
+        {
+          provide: AuditService,
+          useValue: {
+            findOne: jest.fn(),
+            findAll: jest.fn(),
+            findAllDecrypted: jest.fn(),
+          },
+        },
+      ],
     }).compile();
 
     controller = module.get<AuditController>(AuditController);

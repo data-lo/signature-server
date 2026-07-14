@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentController } from './document.controller';
 import { DocumentService } from './document.service';
-import { describe, beforeEach, it } from 'node:test';
 
 describe('DocumentController', () => {
   let controller: DocumentController;
@@ -9,7 +8,25 @@ describe('DocumentController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [DocumentController],
-      providers: [DocumentService],
+      providers: [
+        {
+          provide: DocumentService,
+          useValue: {
+            create: jest.fn(),
+            findWithFilters: jest.fn(),
+            findDetailForUser: jest.fn(),
+            getDocumentMinioURL: jest.fn(),
+            assertUserHasAccess: jest.fn(),
+            submitForAuthorization: jest.fn(),
+            sign: jest.fn(),
+            reject: jest.fn(),
+            requestCancellation: jest.fn(),
+            confirmCancellation: jest.fn(),
+            update: jest.fn(),
+            remove: jest.fn(),
+          },
+        },
+      ],
     }).compile();
 
     controller = module.get<DocumentController>(DocumentController);

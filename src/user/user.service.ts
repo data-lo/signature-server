@@ -4,8 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 
 // DTOs
 import { CreateUserDto } from './dto/create-user.dto';
@@ -31,6 +31,8 @@ export class UserService {
     private userRepository: Repository<UserEntity>,
     @InjectRepository(PersonalInformationEntity)
     private personalInformationRepository: Repository<PersonalInformationEntity>,
+    @InjectDataSource()
+    private dataSource: DataSource,
 
     private signatureService: SignatureService,
   ) {}
@@ -51,39 +53,53 @@ export class UserService {
       await this.assertCurpNotTaken(createUserDto.nationalId.toUpperCase());
     }
 
-    const personalInformation = await this.personalInformationRepository.save(
-      this.personalInformationRepository.create({
-        name: createUserDto.firstName?.toUpperCase(),
-        lastName: createUserDto.lastName?.toUpperCase(),
-        curp: createUserDto.nationalId?.toUpperCase(),
-      }),
-    );
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    const user = this.userRepository.create({
-      ...(createUserDto.firstName && {
-        firstName: createUserDto.firstName.toUpperCase(),
-      }),
-      ...(createUserDto.lastName && {
-        lastName: createUserDto.lastName.toUpperCase(),
-      }),
-      ...(createUserDto.email && { email: createUserDto.email.toLowerCase() }),
-      ...(createUserDto.position && {
-        position: createUserDto.position.toUpperCase(),
-      }),
-      roles: createUserDto.roles ?? [UserRoles.SIGNER],
-      ...(createUserDto.nationalId && {
-        nationalId: createUserDto.nationalId.toUpperCase(),
-      }),
-      personalInformationId: personalInformation.id,
-    });
+    try {
+      const personalInformation = await queryRunner.manager.save(
+        queryRunner.manager.create(PersonalInformationEntity, {
+          name: createUserDto.firstName?.toUpperCase(),
+          lastName: createUserDto.lastName?.toUpperCase(),
+          curp: createUserDto.nationalId?.toUpperCase(),
+        }),
+      );
 
-    const newUser = await this.userRepository.save(user);
+      const user = queryRunner.manager.create(UserEntity, {
+        ...(createUserDto.firstName && {
+          firstName: createUserDto.firstName.toUpperCase(),
+        }),
+        ...(createUserDto.lastName && {
+          lastName: createUserDto.lastName.toUpperCase(),
+        }),
+        ...(createUserDto.email && {
+          email: createUserDto.email.toLowerCase(),
+        }),
+        ...(createUserDto.position && {
+          position: createUserDto.position.toUpperCase(),
+        }),
+        roles: createUserDto.roles ?? [UserRoles.SIGNER],
+        ...(createUserDto.nationalId && {
+          nationalId: createUserDto.nationalId.toUpperCase(),
+        }),
+        personalInformationId: personalInformation.id,
+      });
 
-    return {
-      success: true,
-      message: 'Usuario creado correctamente',
-      data: this.removeSensitiveData(newUser),
-    };
+      const newUser = await queryRunner.manager.save(user);
+      await queryRunner.commitTransaction();
+
+      return {
+        success: true,
+        message: 'Usuario creado correctamente',
+        data: this.removeSensitiveData(newUser),
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async findAllActiveUsers(
@@ -336,32 +352,44 @@ export class UserService {
 
     await this.assertCurpNotTaken(dto.nationalId.toUpperCase());
 
-    const personalInformation = await this.personalInformationRepository.save(
-      this.personalInformationRepository.create({
-        name: dto.firstName.toUpperCase(),
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const personalInformation = await queryRunner.manager.save(
+        queryRunner.manager.create(PersonalInformationEntity, {
+          name: dto.firstName.toUpperCase(),
+          lastName: dto.lastName.toUpperCase(),
+          curp: dto.nationalId.toUpperCase(),
+        }),
+      );
+
+      const user = queryRunner.manager.create(UserEntity, {
+        firstName: dto.firstName.toUpperCase(),
         lastName: dto.lastName.toUpperCase(),
-        curp: dto.nationalId.toUpperCase(),
-      }),
-    );
+        email: dto.email.toLowerCase(),
+        position: dto.position.toUpperCase(),
+        roles: [UserRoles.SIGNER],
+        nationalId: dto.nationalId.toUpperCase(),
+        password: hashedPassword,
+        personalInformationId: personalInformation.id,
+      });
 
-    const user = this.userRepository.create({
-      firstName: dto.firstName.toUpperCase(),
-      lastName: dto.lastName.toUpperCase(),
-      email: dto.email.toLowerCase(),
-      position: dto.position.toUpperCase(),
-      roles: [UserRoles.SIGNER],
-      nationalId: dto.nationalId.toUpperCase(),
-      password: hashedPassword,
-      personalInformationId: personalInformation.id,
-    });
+      const newUser = await queryRunner.manager.save(user);
+      await queryRunner.commitTransaction();
 
-    const newUser = await this.userRepository.save(user);
-
-    return {
-      success: true,
-      message: 'Usuario registrado correctamente',
-      data: this.removeSensitiveData(newUser),
-    };
+      return {
+        success: true,
+        message: 'Usuario registrado correctamente',
+        data: this.removeSensitiveData(newUser),
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async updatePersonalInformation(

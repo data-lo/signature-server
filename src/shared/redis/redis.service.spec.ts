@@ -1,6 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RedisService } from './redis.service';
-import { beforeEach, describe, it } from 'node:test';
 
 describe('RedisService', () => {
   let service: RedisService;

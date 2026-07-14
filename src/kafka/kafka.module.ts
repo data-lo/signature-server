@@ -3,6 +3,8 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { KafkaProducerService } from './kafka-producer.service';
 import { KafkaTestController } from './kafka-test.controller';
+import { DocumentEventsProducer } from './document-events.producer';
+import { DocumentEventsConsumer } from './document-events.controller';
 import { KAFKA_SERVICE } from './kafka.constants';
 
 @Module({
@@ -27,8 +29,8 @@ import { KAFKA_SERVICE } from './kafka.constants';
       },
     ]),
   ],
-  controllers: [KafkaTestController],
-  providers: [KafkaProducerService],
-  exports: [ClientsModule, KafkaProducerService],
+  controllers: [KafkaTestController, DocumentEventsConsumer],
+  providers: [KafkaProducerService, DocumentEventsProducer],
+  exports: [ClientsModule, KafkaProducerService, DocumentEventsProducer],
 })
 export class KafkaModule {}

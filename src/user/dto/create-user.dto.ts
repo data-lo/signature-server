@@ -7,7 +7,7 @@ import {
   IsString,
   Length,
 } from 'class-validator';
-import { UserRoles } from '../interfaces/user.roles.enum';
+import { UserRoles } from '../enums/user-roles';
 
 export class CreateUserDto {
   @ApiProperty({ example: 'Juan', description: 'Nombre(s) del usuario' })

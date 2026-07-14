@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { describe, beforeEach, it } from 'node:test';
 
 describe('AppController', () => {
   let appController: AppController;
@@ -21,12 +20,3 @@ describe('AppController', () => {
     });
   });
 });
-function expect(received: any) {
-  return {
-    toBe: (expected: any) => {
-      if (received !== expected) {
-        throw new Error(`Expected ${expected}, but received ${received}`);
-      }
-    },
-  };
-}

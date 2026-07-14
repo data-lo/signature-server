@@ -12,6 +12,7 @@ import * as sgMail from '@sendgrid/mail';
 // Internal modules
 import {
   documentCancellationPendingTemplate,
+  documentCancelledTemplate,
   documentPendingTemplate,
   documentRejectedTemplate,
   documentSignedTemplate,
@@ -137,6 +138,20 @@ export class EmailService {
       to,
       EmailSubject.CANCELLATION_PENDING,
       documentCancellationPendingTemplate(documentName, signerName),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /** Notifica a un participante que el documento fue cancelado y ya no requiere ninguna acción. */
+  async sendDocumentCancelledNotification(
+    to: string,
+    participantName: string,
+    documentName: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_CANCELLED,
+      documentCancelledTemplate(participantName, documentName),
       EmailType.NOTIFICATION,
     );
   }
