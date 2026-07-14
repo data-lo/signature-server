@@ -6,6 +6,7 @@ import { UserEntity } from './entities/user.entity';
 import { PersonalInformationEntity } from './entities/personal-information.entity';
 import { SignatureService } from 'src/signature/signature.service';
 import { RedisService } from 'src/shared/redis/redis.service';
+import { AccountService } from 'src/account/account.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRoles } from './enums/user-roles';
 
@@ -41,6 +42,10 @@ describe('UserService', () => {
   let dataSource: { createQueryRunner: jest.Mock };
   let queryRunner: ReturnType<typeof createMockQueryRunner>;
   let redisService: { set: jest.Mock; get: jest.Mock };
+  let accountService: {
+    createDefaultPersonalAccount: jest.Mock;
+    appendAccountToCatalog: jest.Mock;
+  };
 
   beforeEach(async () => {
     userRepository = createMockRepository();
@@ -50,6 +55,12 @@ describe('UserService', () => {
       createQueryRunner: jest.fn(() => queryRunner),
     };
     redisService = { set: jest.fn(), get: jest.fn() };
+    accountService = {
+      createDefaultPersonalAccount: jest
+        .fn()
+        .mockResolvedValue({ id: 'personal-account-1' }),
+      appendAccountToCatalog: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -65,6 +76,7 @@ describe('UserService', () => {
           useValue: { findOne: jest.fn(), getFile: jest.fn() },
         },
         { provide: RedisService, useValue: redisService },
+        { provide: AccountService, useValue: accountService },
       ],
     }).compile();
 
@@ -156,7 +168,7 @@ describe('UserService', () => {
       rfc: 'GOMA900101XYZ',
     };
 
-    it('registra el usuario correctamente y cachea el perfil en Redis por CURP', async () => {
+    it('registra el usuario correctamente, cachea el perfil en Redis por CURP y crea la cuenta personal por defecto', async () => {
       userRepository.findOne.mockResolvedValue(null);
       personalInformationRepository.findOne.mockResolvedValue(null);
 
@@ -167,6 +179,15 @@ describe('UserService', () => {
       expect(redisService.set).toHaveBeenCalledWith(
         dto.nationalId.toUpperCase(),
         expect.any(String),
+      );
+      expect(accountService.createDefaultPersonalAccount).toHaveBeenCalledWith(
+        queryRunner.manager,
+        expect.any(String),
+        `${dto.firstName} ${dto.lastName}`,
+      );
+      expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
+        expect.any(String),
+        { id: 'personal-account-1' },
       );
     });
 

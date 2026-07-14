@@ -6,6 +6,7 @@ import { UserEntity } from './entities/user.entity';
 import { PersonalInformationEntity } from './entities/personal-information.entity';
 import { SignatureModule } from 'src/signature/signature.module';
 import { SharedModule } from 'src/shared/shared.module';
+import { AccountModule } from 'src/account/account.module';
 
 @Module({
   exports: [UserService],
@@ -15,6 +16,7 @@ import { SharedModule } from 'src/shared/shared.module';
     TypeOrmModule.forFeature([UserEntity, PersonalInformationEntity]),
     SignatureModule,
     SharedModule,
+    AccountModule,
   ],
 })
 export class UserModule {}

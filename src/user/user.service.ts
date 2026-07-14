@@ -26,6 +26,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { SignatureService } from 'src/signature/signature.service';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { RedisService } from 'src/shared/redis/redis.service';
+import { AccountService } from 'src/account/account.service';
 
 @Injectable()
 export class UserService {
@@ -41,6 +42,7 @@ export class UserService {
 
     private signatureService: SignatureService,
     private redisService: RedisService,
+    private accountService: AccountService,
   ) {}
 
   async create(
@@ -391,9 +393,21 @@ export class UserService {
       });
 
       const newUser = await queryRunner.manager.save(user);
+
+      const personalAccount =
+        await this.accountService.createDefaultPersonalAccount(
+          queryRunner.manager,
+          newUser.id,
+          `${dto.firstName} ${dto.lastName}`,
+        );
+
       await queryRunner.commitTransaction();
 
       await this.refreshUserCurpCache(newUser, personalInformation);
+      await this.accountService.appendAccountToCatalog(
+        newUser.id,
+        personalAccount,
+      );
 
       return {
         success: true,

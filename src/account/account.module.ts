@@ -7,6 +7,7 @@ import { AccountMemberController } from './account-member.controller';
 import { AccountEntity } from './entities/account.entity';
 import { OrganizationDetailEntity } from './entities/organization-detail.entity';
 import { AccountMemberEntity } from './entities/account-member.entity';
+import { SharedModule } from 'src/shared/shared.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AccountMemberEntity } from './entities/account-member.entity';
       OrganizationDetailEntity,
       AccountMemberEntity,
     ]),
+    SharedModule,
   ],
   controllers: [AccountController, AccountMemberController],
   providers: [AccountService, AccountMemberService],
