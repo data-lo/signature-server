@@ -258,6 +258,66 @@ describe('UserService', () => {
     });
   });
 
+  describe('getMeFromCache', () => {
+    it('retorna el snapshot cacheado en Redis sin consultar PostgreSQL', async () => {
+      const cached = {
+        id: 'user-1',
+        nationalId: 'CURP1',
+        isConfigured: false,
+        signatureId: null,
+        personalInformation: { rfc: 'RFC1', phoneNumber: null, secondaryEmail: null },
+      };
+      redisService.get.mockResolvedValue(JSON.stringify(cached));
+
+      const result = await service.getMeFromCache('CURP1');
+
+      expect(redisService.get).toHaveBeenCalledWith('CURP1');
+      expect(userRepository.findOne).not.toHaveBeenCalled();
+      expect(result.data).toEqual(cached);
+    });
+
+    it('reconstruye y recachea el snapshot desde PostgreSQL si la key no existe en Redis', async () => {
+      redisService.get.mockResolvedValue(null);
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        firstName: 'Juan',
+        lastName: 'Pérez',
+        email: 'juan@empresa.com',
+        position: 'Gerente',
+        roles: ['signer'],
+        nationalId: 'CURP1',
+        isConfigured: false,
+        signatureId: null,
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: null,
+          secondaryEmail: null,
+        },
+      });
+
+      const result = await service.getMeFromCache('CURP1');
+
+      expect(userRepository.findOne).toHaveBeenCalledWith({
+        where: { nationalId: 'CURP1', isActive: true },
+        relations: { personalInformation: true },
+      });
+      expect(redisService.set).toHaveBeenCalledWith(
+        'CURP1',
+        expect.any(String),
+      );
+      expect(result.data).toMatchObject({ id: 'user-1', nationalId: 'CURP1' });
+    });
+
+    it('lanza NotFoundException si no hay cache ni usuario en PostgreSQL con ese CURP', async () => {
+      redisService.get.mockResolvedValue(null);
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.getMeFromCache('CURP-INEXISTENTE')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('updateStatus', () => {
     it('fija isConfigured=true y refresca el cache de Redis por CURP', async () => {
       userRepository.findOne

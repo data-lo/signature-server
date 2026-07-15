@@ -97,7 +97,7 @@ describe('AccountService', () => {
   describe('createOrganization', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
 
-    it('crea Account + OrganizationDetail + AccountMember(OWNER) dentro de una transacción y refresca el catálogo en Redis', async () => {
+    it('crea Account + OrganizationDetail + AccountMember(role NULL) dentro de una transacción y refresca el catálogo en Redis', async () => {
       accountRepository.findOne.mockResolvedValue({
         id: 'generated-id',
         name: 'Acme',
@@ -116,7 +116,7 @@ describe('AccountService', () => {
       expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
 
       const memberSaveCall = queryRunner.manager.save.mock.calls[2][0];
-      expect(memberSaveCall.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(memberSaveCall.role).toBeNull();
       expect(memberSaveCall.userId).toBe('user-1');
 
       expect(redisService.set).toHaveBeenCalledWith(

@@ -27,8 +27,9 @@ export class AccountMemberEntity {
     type: 'enum',
     enum: ACCOUNT_MEMBER_ROLE_ENUM,
     array: true,
+    nullable: true,
   })
-  role: ACCOUNT_MEMBER_ROLE_ENUM[];
+  role: ACCOUNT_MEMBER_ROLE_ENUM[] | null;
 
   @Column({ name: 'position', nullable: true })
   position: string | null;

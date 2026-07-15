@@ -44,6 +44,7 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       roles: user.roles,
+      nationalId: user.nationalId,
       jti: randomUUID(),
     };
     const token = this.jwtService.sign(payload);

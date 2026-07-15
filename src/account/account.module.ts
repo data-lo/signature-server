@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountService } from './account.service';
 import { AccountController } from './account.controller';
+import { OrganizationsController } from './organizations.controller';
+import { AccountsController } from './accounts.controller';
 import { AccountMemberService } from './account-member.service';
 import { AccountMemberController } from './account-member.controller';
 import { AccountEntity } from './entities/account.entity';
@@ -18,7 +20,12 @@ import { SharedModule } from 'src/shared/shared.module';
     ]),
     SharedModule,
   ],
-  controllers: [AccountController, AccountMemberController],
+  controllers: [
+    AccountController,
+    OrganizationsController,
+    AccountsController,
+    AccountMemberController,
+  ],
   providers: [AccountService, AccountMemberService],
   exports: [AccountService, AccountMemberService],
 })

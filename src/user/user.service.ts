@@ -458,34 +458,44 @@ export class UserService {
   }
 
   /**
-   * Cachea en Redis DB 0, bajo la key del CURP, un snapshot estable del perfil
-   * unificado del usuario. Deliberadamente excluye URLs prefirmadas de MinIO
+   * Construye el snapshot estable del perfil unificado del usuario que se
+   * cachea en Redis. Deliberadamente excluye URLs prefirmadas de MinIO
    * (secureUrl/expiresIn) porque expiran y quedarían obsoletas en el cache.
-   * Un fallo de Redis nunca debe tumbar la operación que lo dispara.
+   */
+  private buildCurpCachePayload(
+    user: UserEntity,
+    personalInformation: PersonalInformationEntity,
+  ) {
+    return {
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      position: user.position,
+      roles: user.roles,
+      nationalId: user.nationalId,
+      isConfigured: user.isConfigured,
+      signatureId: user.signatureId,
+      personalInformation: {
+        rfc: personalInformation?.rfc ?? null,
+        phoneNumber: personalInformation?.phoneNumber ?? null,
+        secondaryEmail: personalInformation?.secondaryEmail ?? null,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Cachea en Redis DB 0, bajo la key del CURP, el snapshot del perfil
+   * unificado del usuario. Un fallo de Redis nunca debe tumbar la operación
+   * que lo dispara.
    */
   private async refreshUserCurpCache(
     user: UserEntity,
     personalInformation: PersonalInformationEntity,
   ): Promise<void> {
     try {
-      const payload = {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        position: user.position,
-        roles: user.roles,
-        nationalId: user.nationalId,
-        isConfigured: user.isConfigured,
-        signatureId: user.signatureId,
-        personalInformation: {
-          rfc: personalInformation?.rfc ?? null,
-          phoneNumber: personalInformation?.phoneNumber ?? null,
-          secondaryEmail: personalInformation?.secondaryEmail ?? null,
-        },
-        updatedAt: new Date().toISOString(),
-      };
-
+      const payload = this.buildCurpCachePayload(user, personalInformation);
       await this.redisService.set(user.nationalId, JSON.stringify(payload));
     } catch (error) {
       this.logger.warn(
@@ -494,6 +504,41 @@ export class UserService {
         }`,
       );
     }
+  }
+
+  /**
+   * Resuelve GET /users/me consultando exclusivamente Redis DB 0 por CURP
+   * (sin joins ni URLs prefirmadas de MinIO, para una hidratación rápida del
+   * store de onboarding en el cliente). Si la key no existe (por ejemplo, un
+   * fallo previo de Redis al registrar), reconstruye el snapshot desde
+   * PostgreSQL una única vez y lo vuelve a cachear.
+   */
+  async getMeFromCache(curp: string): Promise<BaseResponse<unknown>> {
+    const raw = await this.redisService.get(curp);
+    if (raw) {
+      return {
+        success: true,
+        message: 'Usuario obtenido correctamente',
+        data: JSON.parse(raw),
+      };
+    }
+
+    const user = await this.userRepository.findOne({
+      where: { nationalId: curp, isActive: true },
+      relations: { personalInformation: true },
+    });
+    if (!user) {
+      throw new NotFoundException(`Usuario con CURP ${curp} no encontrado`);
+    }
+
+    const payload = this.buildCurpCachePayload(user, user.personalInformation);
+    await this.refreshUserCurpCache(user, user.personalInformation);
+
+    return {
+      success: true,
+      message: 'Usuario obtenido correctamente',
+      data: payload,
+    };
   }
 
   async updatePersonalInformation(

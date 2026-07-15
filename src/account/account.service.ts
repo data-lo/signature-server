@@ -157,8 +157,9 @@ export class AccountService {
 
   /**
    * Crea una Organización de forma transaccional: Account(type=ORGANIZATION),
-   * OrganizationDetail, y la membresía OWNER del usuario autenticado. Al
-   * confirmar, refresca el catálogo de cuentas cacheado en Redis.
+   * OrganizationDetail, y la membresía del usuario autenticado con role NULL
+   * (se asigna en un paso posterior). Al confirmar, refresca el catálogo de
+   * cuentas cacheado en Redis.
    */
   async createOrganization(
     userId: string,
@@ -187,7 +188,7 @@ export class AccountService {
         queryRunner.manager.create(AccountMemberEntity, {
           accountId: account.id,
           userId,
-          role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+          role: null,
         }),
       );
 

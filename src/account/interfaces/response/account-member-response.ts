@@ -26,11 +26,13 @@ export class AccountMemberData {
 
   @ApiProperty({
     example: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
-    description: 'Lista de roles asignados en esa cuenta',
+    description:
+      'Lista de roles asignados en esa cuenta; NULL si aún no se le ha asignado un rol',
     enum: ACCOUNT_MEMBER_ROLE_ENUM,
     isArray: true,
+    nullable: true,
   })
-  role: ACCOUNT_MEMBER_ROLE_ENUM[];
+  role: ACCOUNT_MEMBER_ROLE_ENUM[] | null;
 
   @ApiProperty({
     example: 'Gerente de TI',

@@ -11,9 +11,7 @@ import {
 } from '@nestjs/swagger';
 
 // Auth
-import { Public, RequireAuth } from 'src/auth/decorators/public.decorator';
-import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
-import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { Public } from 'src/auth/decorators/public.decorator';
 
 // Service
 import { AccountService } from './account.service';
@@ -21,7 +19,6 @@ import { AccountService } from './account.service';
 // DTOs
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
-import { CreateOrganizationDto } from './dto/create-organization.dto';
 import {
   AccountListResponse,
   AccountResponse,
@@ -59,54 +56,6 @@ export class AccountController {
   })
   create(@Body() createAccountDto: CreateAccountDto) {
     return this.accountService.create(createAccountDto);
-  }
-
-  @RequireAuth()
-  @Post('organization')
-  @ApiOperation({
-    summary: 'Crear una organización',
-    description:
-      'Crea de forma transaccional la Account(ORGANIZATION), su OrganizationDetail y la membresía OWNER del usuario autenticado, y refresca el catálogo de cuentas en Redis',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Organización creada correctamente',
-    type: AccountResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Los datos enviados son inválidos o incompletos',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  createOrganization(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: CreateOrganizationDto,
-  ) {
-    return this.accountService.createOrganization(user.sub, dto);
-  }
-
-  @RequireAuth()
-  @Get('me')
-  @ApiOperation({
-    summary: 'Obtener el catálogo de cuentas del usuario autenticado',
-    description:
-      'Lee exclusivamente desde Redis DB 0 (key accounts:{userId}) el listado unificado de cuentas Personal y Organización del usuario',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Catálogo de cuentas obtenido correctamente',
-    type: AccountListResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  getAccountsCatalog(@CurrentUser() user: JwtPayload) {
-    return this.accountService.getAccountsCatalog(user.sub);
   }
 
   @Get()

@@ -2,7 +2,6 @@
 import {
   Controller,
   Get,
-  Post,
   Body,
   Patch,
   Delete,
@@ -24,9 +23,7 @@ import {
 } from '@nestjs/swagger';
 
 // DTOs
-import { CreateSignatureDto } from './dto/create-signature.dto';
 import { UpdateSignatureDto } from './dto/update-signature.dto';
-import { SignatureCreateResponse } from './interfaces/signature-create-response';
 
 // Services
 import { SignatureService } from './signature.service';
@@ -42,7 +39,6 @@ import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import {
   BadRequestResponse,
   NotFoundResponse,
-  ConflictResponse,
   BaseResponse,
 } from 'src/interfaces/api-response.dto';
 import { SignatureUpdateReponse } from './interfaces/signature-update-response';
@@ -106,54 +102,6 @@ export class SignatureController {
   })
   findOne(@Param('id') id: string) {
     return this.signatureService.findOne(id);
-  }
-
-  @Post()
-  @ApiOperation({
-    summary: 'Registrar una nueva firma para el usuario autenticado',
-  })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({ type: CreateSignatureDto })
-  @ApiResponse({
-    status: 201,
-    description: 'Firma registrada y asignada al usuario correctamente',
-    type: SignatureCreateResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Datos inválidos o imagen de firma no proporcionada',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'No existe un usuario registrado con el UUID proporcionado',
-    type: NotFoundResponse,
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'El usuario ya tiene una firma registrada',
-    type: ConflictResponse,
-  })
-  @UseInterceptors(
-    FileFieldsInterceptor([
-      { name: 'signatureImage', maxCount: 1 },
-      { name: 'officialFile', maxCount: 1 },
-    ]),
-  )
-  async create(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: CreateSignatureDto,
-    @UploadedFiles()
-    files: {
-      signatureImage?: Express.Multer.File[];
-      officialFile?: Express.Multer.File[];
-    },
-  ) {
-    return this.signatureService.create(user.sub, dto, files);
   }
 
   @Patch(':id')
