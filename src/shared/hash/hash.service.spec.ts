@@ -5,6 +5,8 @@ describe('HashService', () => {
   let service: HashService;
 
   beforeEach(async () => {
+    process.env.CIPHER_SECRET = 'test-cipher-secret';
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [HashService],
     }).compile();

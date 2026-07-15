@@ -138,7 +138,10 @@ export class SignatureService {
       );
     }
 
-    if (officialCardObjectKeyResponse?.status !== 'FILE_CREATED') {
+    if (
+      officialFile &&
+      officialCardObjectKeyResponse?.status !== 'FILE_CREATED'
+    ) {
       throw new InternalServerErrorException(
         'Error al subir la imagen de identificación oficial a nuestros servidores',
       );
@@ -146,7 +149,7 @@ export class SignatureService {
 
     const newSignature = this.signatureRepository.create({
       signatureObjectKey: signatureObjectKeyResponse.fileId,
-      officialCardObjectKey: officialCardObjectKeyResponse.fileId,
+      officialCardObjectKey: officialCardObjectKeyResponse?.fileId ?? null,
       isActive: true,
     });
 

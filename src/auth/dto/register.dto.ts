@@ -45,6 +45,15 @@ export class RegisterDto {
   nationalId: string;
 
   @ApiProperty({
+    example: 'PELJ850101ABC',
+    description: 'RFC del usuario (12 o 13 caracteres alfanuméricos)',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Length(12, 13)
+  rfc: string;
+
+  @ApiProperty({
     example: 'supersecret123',
     description: 'Contraseña (mínimo 8 caracteres)',
   })

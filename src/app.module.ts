@@ -35,7 +35,9 @@ import { StripeModule } from './stripe/stripe.module';
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: false,
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
+        migrationsRun: true,
       }),
     }),
 

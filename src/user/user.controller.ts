@@ -23,8 +23,6 @@ import {
 
 // Auth
 import { Public } from 'src/auth/decorators/public.decorator';
-import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
-import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 // Service
 import { UserService } from './user.service';
@@ -32,7 +30,6 @@ import { UserService } from './user.service';
 // DTOs
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
 import {
   UserCreateData,
   UserCreateResponse,
@@ -47,7 +44,6 @@ import {
   UserGetListResponse,
   UserGetResponse,
 } from './interfaces/response/get-user-response';
-import { PersonalInformationResponse } from './interfaces/response/personal-information-response';
 
 @ApiTags('User')
 @ApiBearerAuth('access-token')
@@ -142,33 +138,6 @@ export class UserController {
     @Query('withSignature') withSignature?: string,
   ) {
     return this.userService.findOneActiveUser(id, withSignature === 'true');
-  }
-
-  @Patch('personal-information')
-  @ApiOperation({
-    summary: 'Actualizar información personal del usuario autenticado',
-    description:
-      'El usuario se identifica mediante el JWT; no se envía por params ni body',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Información personal actualizada correctamente',
-    type: PersonalInformationResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Usuario no encontrado',
-    type: NotFoundResponse,
-  })
-  updatePersonalInformation(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: UpdatePersonalInformationDto,
-  ) {
-    return this.userService.updatePersonalInformation(user.sub, dto);
   }
 
   @Public()

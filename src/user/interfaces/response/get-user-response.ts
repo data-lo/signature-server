@@ -65,6 +65,42 @@ export class UserGetData {
   nationalId: string;
 
   @ApiProperty({
+    example: '5512345678',
+    description: 'Número de teléfono de contacto (información personal)',
+    nullable: true,
+  })
+  phoneNumber: string | null;
+
+  @ApiProperty({
+    example: 'juan.perez@personal.com',
+    description: 'Correo electrónico secundario (información personal)',
+    nullable: true,
+  })
+  secondaryEmail: string | null;
+
+  @ApiProperty({
+    example: 'PELJ850101ABC',
+    description: 'RFC del usuario (información personal)',
+    nullable: true,
+  })
+  rfc: string | null;
+
+  @ApiProperty({
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    description: 'UUID de la firma asociada al usuario, si existe',
+    format: 'uuid',
+    nullable: true,
+  })
+  signatureId: string | null;
+
+  @ApiProperty({
+    example: false,
+    description:
+      'Indica si el usuario completó su información personal y firma (onboarding)',
+  })
+  isConfigured: boolean;
+
+  @ApiProperty({
     type: SignatureUrlDto,
     description:
       'URL de la firma del usuario, presente solo si se solicita con withSignature=true',

@@ -352,12 +352,54 @@ export class DocumentController {
     description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
   @ApiResponse({
+    status: 403,
+    description: 'El documento no pertenece al usuario autenticado',
+  })
+  @ApiResponse({
     status: 404,
     description: 'Documento no encontrado',
     type: NotFoundResponse,
   })
-  submitForCancellation(@Param('id') id: string) {
-    return this.documentService.requestCancellation(id);
+  submitForCancellation(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.documentService.requestCancellation(id, user.sub);
+  }
+
+  @Patch(':id/confirm-cancellation')
+  @ApiOperation({
+    summary: 'Confirmar la cancelación de un documento (cualquier firmante)',
+  })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Documento cancelado correctamente, marca de agua estampada y participantes notificados',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'El documento no se encuentra en estatus CANCELLATION_PENDING',
+    type: BadRequestResponse,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No eres firmante de este documento',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Documento no encontrado',
+    type: NotFoundResponse,
+  })
+  confirmCancellation(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.documentService.confirmCancellation(id, user.sub);
   }
 
   @Patch(':id')

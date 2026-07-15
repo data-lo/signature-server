@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateSignatureDto {
   @ApiProperty({
@@ -8,11 +8,11 @@ export class CreateSignatureDto {
   })
   signatureImage: any;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     type: 'string',
     format: 'binary',
     description:
-      'Documento de identificación oficial del usuario en formato PDF.',
+      'Documento de identificación oficial del usuario en formato PDF. Opcional: puede completarse en un paso posterior.',
   })
-  officialFile: any;
+  officialFile?: any;
 }
