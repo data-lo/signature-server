@@ -1,14 +1,26 @@
-import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
-import { PDFDocument, PDFImage, PDFName, PDFNumber, PDFString, StandardFonts, rgb, degrees, PDFHexString } from 'pdf-lib';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
+import {
+  PDFDocument,
+  PDFImage,
+  PDFName,
+  PDFNumber,
+  PDFString,
+  StandardFonts,
+  rgb,
+  degrees,
+  PDFHexString,
+} from 'pdf-lib';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
-import { DEFAULT_COORDINATES } from './interfaces/default-signing-coordinates.interface';
-
 
 // Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
-
 
 // Para ajustar los limites solo hayq ue modificar las tres constantes siguientes. Si la firma queda fuera de estos rangos, se normaliza a DEFAULT_SIGNATURE_SIZE.
 // Tamaño al que se normaliza la firma cuando está fuera de rango (puntos PDF)
@@ -118,7 +130,9 @@ export class PdfSignatureService {
     if (isPng) {
       signatureImage = await pdfDoc.embedPng(signatureBuffer);
     } else {
-      throw new BadRequestException('FORMATO DE IMAGEN NO SOPORTADO. SOLO SE PERMITEN PNG');
+      throw new BadRequestException(
+        'FORMATO DE IMAGEN NO SOPORTADO. SOLO SE PERMITEN PNG',
+      );
     }
 
     // Paso 4: seleccionar la última página del documento como destino de la firma
@@ -137,12 +151,13 @@ export class PdfSignatureService {
       opacity: coordinates.opacity ?? 1.0,
     });
 
-
     // Paso 7: aplicar conformidad PDF/A-2B (XMP metadata + OutputIntent sRGB)
     this.applyPdfA2bConformance(pdfDoc);
 
     // Paso 8: serializar sin object streams para máxima compatibilidad con validadores PDF/A
-    const signedPdfBytes: Uint8Array = await pdfDoc.save({ useObjectStreams: false });
+    const signedPdfBytes: Uint8Array = await pdfDoc.save({
+      useObjectStreams: false,
+    });
     return Buffer.from(signedPdfBytes);
   }
 
@@ -163,10 +178,13 @@ export class PdfSignatureService {
       Length: PDFNumber.of(xmpBytes.length),
     });
 
-    pdfDoc.catalog.set(PDFName.of('Metadata'), pdfDoc.context.register(metadataStream));
+    pdfDoc.catalog.set(
+      PDFName.of('Metadata'),
+      pdfDoc.context.register(metadataStream),
+    );
 
     const id = PDFHexString.of(crypto.randomBytes(16).toString('hex'));
-    pdfDoc.context.trailerInfo.ID = pdfDoc.context.obj([id,id])
+    pdfDoc.context.trailerInfo.ID = pdfDoc.context.obj([id, id]);
 
     const iccProfile = loadSrgbIccProfile();
     if (!iccProfile) {
@@ -177,7 +195,7 @@ export class PdfSignatureService {
       );
       return;
     }
-    
+
     const iccProfileBytes = new Uint8Array(iccProfile);
     const iccStream = pdfDoc.context.stream(iccProfileBytes, {
       N: PDFNumber.of(3),
@@ -190,9 +208,7 @@ export class PdfSignatureService {
       OutputConditionIdentifier: PDFString.of('sRGB IEC61966-2.1'),
       Info: PDFString.of('sRGB IEC61966-2.1'),
       DestOutputProfile: iccRef,
-      
     });
-
 
     const outputIntentRef = pdfDoc.context.register(outputIntentObj);
 
@@ -200,42 +216,52 @@ export class PdfSignatureService {
       PDFName.of('OutputIntents'),
       pdfDoc.context.obj([outputIntentRef]),
     );
-
- 
   }
 
   /** Estampa "CANCELADO" en diagonal rojo semitransparente en todas las páginas del PDF. */
   async stampCancelledWatermark(documentBuffer: Buffer): Promise<Buffer> {
-    return this.stampDiagonalWatermark(documentBuffer, 'CANCELADO', rgb(0.75, 0, 0));
+    return this.stampDiagonalWatermark(
+      documentBuffer,
+      'CANCELADO',
+      rgb(0.75, 0, 0),
+    );
   }
 
-
-  async addSignerName(documentBuffer: Buffer, signerName:string ,coord:SignatureCoordinates):Promise<Buffer>{
-    try{
+  async addSignerName(
+    documentBuffer: Buffer,
+    signerName: string,
+    coord: SignatureCoordinates,
+  ): Promise<Buffer> {
+    try {
       const pdfDoc = await PDFDocument.load(documentBuffer);
       const pages = pdfDoc.getPages();
       const lastPage = pages[pages.length - 1];
 
-      lastPage.drawText(
-        signerName,
-        {
-          x:coord.x,
-          y:(coord.y - 20),
-          size:10,
-        }
-      );
+      lastPage.drawText(signerName, {
+        x: coord.x,
+        y: coord.y - 20,
+        size: 10,
+      });
 
-    this.applyPdfA2bConformance(pdfDoc);
-    const signedPdfBytes: Uint8Array = await pdfDoc.save({ useObjectStreams: false });
-    return Buffer.from(signedPdfBytes);      
-    }catch(error){
-      throw new InternalServerErrorException(`Error añadiendo el nombre del firmante ${error}`)
+      this.applyPdfA2bConformance(pdfDoc);
+      const signedPdfBytes: Uint8Array = await pdfDoc.save({
+        useObjectStreams: false,
+      });
+      return Buffer.from(signedPdfBytes);
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Error añadiendo el nombre del firmante ${error}`,
+      );
     }
-  };
+  }
 
   /** Estampa "RECHAZADO" en diagonal naranja semitransparente en todas las páginas del PDF. */
   async stampRejectedWatermark(documentBuffer: Buffer): Promise<Buffer> {
-    return this.stampDiagonalWatermark(documentBuffer, 'RECHAZADO', rgb(0.85, 0.35, 0));
+    return this.stampDiagonalWatermark(
+      documentBuffer,
+      'RECHAZADO',
+      rgb(0.85, 0.35, 0),
+    );
   }
 
   /**
@@ -261,8 +287,14 @@ export class PdfSignatureService {
       const textWidth = font.widthOfTextAtSize(text, fontSize);
 
       // Centrar el texto rotado en el centro geométrico de la página
-      const cx = width / 2 - (textWidth / 2) * Math.cos(angleRad) + (fontSize / 2) * Math.sin(angleRad);
-      const cy = height / 2 - (textWidth / 2) * Math.sin(angleRad) - (fontSize / 2) * Math.cos(angleRad);
+      const cx =
+        width / 2 -
+        (textWidth / 2) * Math.cos(angleRad) +
+        (fontSize / 2) * Math.sin(angleRad);
+      const cy =
+        height / 2 -
+        (textWidth / 2) * Math.sin(angleRad) -
+        (fontSize / 2) * Math.cos(angleRad);
 
       page.drawText(text, {
         x: cx,
@@ -293,7 +325,7 @@ export class PdfSignatureService {
     const { width, height } = coordinates;
 
     const tooSmall = width < minSize.width || height < minSize.height;
-    const tooBig   = width > maxSize.width  || height > maxSize.height;
+    const tooBig = width > maxSize.width || height > maxSize.height;
 
     if (tooSmall || tooBig) {
       return { ...defaultSize };
@@ -302,15 +334,17 @@ export class PdfSignatureService {
     return { width, height };
   }
 
-  async getPdfPages(file:Express.Multer.File){
-    try{
-      const buffer = file.buffer
+  async getPdfPages(file: Express.Multer.File) {
+    try {
+      const buffer = file.buffer;
       const pdf = await PDFDocument.load(buffer);
-      const totalPages = pdf.getPageCount() 
-      return totalPages
-    }catch(error){
-      throw new InternalServerErrorException(`Error obteniendo la cantidad total de imagenes del pdf: ${error}`);
-    } 
+      const totalPages = pdf.getPageCount();
+      return totalPages;
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Error obteniendo la cantidad total de imagenes del pdf: ${error}`,
+      );
+    }
   }
 }
 

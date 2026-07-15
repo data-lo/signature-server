@@ -1,10 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { authenticator } from '@otplib/preset-default';
-import { randomBytes } from 'crypto';
 
 @Injectable()
 export class OTPService {
-
   /**
    * Genera un código OTP de 6 dígitos con una validez de 15 minutos (900 segundos).
    * @returns El código OTP generado como una cadena de texto.

@@ -22,7 +22,8 @@ import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { HealthModule } from './health/health.module';
 import { AccountModule } from './account/account.module';
-
+import { KafkaModule } from './kafka/kafka.module';
+import { StripeModule } from './stripe/stripe.module';
 
 @Module({
   imports: [
@@ -34,7 +35,9 @@ import { AccountModule } from './account/account.module';
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',
         autoLoadEntities: true,
-        synchronize: true,
+        synchronize: false,
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
+        migrationsRun: true,
       }),
     }),
 
@@ -66,11 +69,17 @@ import { AccountModule } from './account/account.module';
     SignatureModule,
     SharedModule,
     HealthModule,
+    KafkaModule,
+    StripeModule,
   ],
   controllers: [AppController],
-  providers: [AppService, {
-    provide: APP_INTERCEPTOR,
-    useClass: IpInterceptor,
-  }, SharedModule],
+  providers: [
+    AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: IpInterceptor,
+    },
+    SharedModule,
+  ],
 })
-export class AppModule { }
+export class AppModule {}

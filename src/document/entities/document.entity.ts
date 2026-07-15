@@ -1,81 +1,91 @@
-
-import { SignatureCoordinates } from "../interfaces/signature-coordinates";
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
-import { UserEntity } from "src/user/entities/user.entity";
-import { DOCUMENT_STATUS_ENUM } from "../enum/document-status.enum";
-import { DocumentParticipantEntity } from "./document-participant.entity";
+import { SignatureCoordinates } from '../interfaces/signature-coordinates';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import { DocumentParticipantEntity } from './document-participant.entity';
 
 // document.entity.ts
 @Entity('documents')
 export class DocumentEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @Column({ name: 'object_key' })
+  objectKey: string;
 
-    @Column({ name: 'object_key' })
-    objectKey: string;
+  @Column({ name: 'file_name' })
+  fileName: string;
 
-    @Column({ name: 'file_name' })
-    fileName: string;
+  @Column({ name: 'file_type' })
+  fileType: string;
 
-    @Column({ name: 'file_type' })
-    fileType: string;
+  @Column({ name: 'total_pages' })
+  totalPages: number;
 
-    @Column({ name: 'total_pages' })
-    totalPages: number;
+  @Column({ name: 'document_url', nullable: true })
+  documentUrl: string;
 
-    @Column({ name: 'document_url', nullable:true})
-    documentUrl: string;
+  @Column({ name: 'ip_address' })
+  ipAddress: string;
 
-    @Column({ name: 'ip_address' })
-    ipAddress: string;
+  @Column({ name: 'verification_code_id', nullable: true })
+  verificationCodeId: string;
 
-    @Column({ name: 'verification_code_id', nullable: true })
-    verificationCodeId: string;
+  @Column({ name: 'original_hash' })
+  originalHash: string;
 
-    @Column({ name: 'original_hash' })
-    originalHash: string;
+  @Column({ name: 'signed_hash', nullable: true })
+  signedHash: string;
 
-    @Column({ name: 'signed_hash', nullable: true })
-    signedHash: string;
+  @Column({ name: 'signed_at', nullable: true })
+  signedAt: Date;
 
-    @Column({ name: 'signed_at', nullable: true })
-    signedAt: Date;
+  @Column({ name: 'cancelled_at', nullable: true })
+  cancelledAt: Date;
 
-    @Column({ name: 'cancelled_at', nullable: true })
-    cancelledAt: Date;
+  @Column({ name: 'rejected_at', nullable: true })
+  rejectedAt: Date;
 
-    @Column({ name: 'rejected_at', nullable: true })
-    rejectedAt: Date;
+  @Column({ name: 'is_notified', default: false })
+  isNotified: boolean;
 
-    @Column({ name: 'is_notified', default: false })
-    isNotified: boolean;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: DOCUMENT_STATUS_ENUM,
+    default: DOCUMENT_STATUS_ENUM.CREATED,
+  })
+  status: DOCUMENT_STATUS_ENUM;
 
-    @Column({
-        name: 'status',
-        type: 'enum',
-        enum: DOCUMENT_STATUS_ENUM,
-        default: DOCUMENT_STATUS_ENUM.CREATED,
-    })
-    status: DOCUMENT_STATUS_ENUM;
+  @Column({ name: 'signature_coordinates', type: 'jsonb', nullable: true })
+  signatureCoordinates: SignatureCoordinates;
 
-    @Column({ name: 'signature_coordinates', type: 'jsonb', nullable:true })
-    signatureCoordinates: SignatureCoordinates;
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 
-    @CreateDateColumn({ name: 'created_at' })
-    createdAt: Date;
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
 
-    @UpdateDateColumn({ name: 'updated_at' })
-    updatedAt: Date;
+  @Column({ name: 'created_by' })
+  createdBy: string;
 
-    @Column({ name: 'created_by' })
-    createdBy: string;
+  @ManyToOne(() => UserEntity, (user) => user.createdDocuments)
+  @JoinColumn({ name: 'created_by' })
+  requestedBy: UserEntity;
 
-    @ManyToOne(() => UserEntity, (user) => user.createdDocuments)
-    @JoinColumn({ name: 'created_by' })
-    requestedBy: UserEntity;
-
-    @OneToMany(() => DocumentParticipantEntity, (participant) => participant.document, { cascade: true })
-    participants: DocumentParticipantEntity[];
-
+  @OneToMany(
+    () => DocumentParticipantEntity,
+    (participant) => participant.document,
+    { cascade: true },
+  )
+  participants: DocumentParticipantEntity[];
 }

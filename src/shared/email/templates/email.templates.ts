@@ -115,6 +115,32 @@ export const documentRejectedTemplate = (
 </html>
 `;
 
+export const documentCancelledTemplate = (
+  participantName: string,
+  documentName: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #C62828; margin-top: 0;">Documento cancelado</h2>
+
+    <p style="color: #555555;">Hola <strong>${participantName}</strong>,</p>
+
+    <p style="color: #555555;">
+      El documento <strong>${documentName}</strong> fue cancelado. Ya no es necesario realizar ninguna acción sobre él.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
+
 export const documentCancellationPendingTemplate = (
   documentName: string,
   signerName: string,

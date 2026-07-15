@@ -38,6 +38,8 @@ describe('EmailService', () => {
   it('should throw error if SENDGRID_API_KEY is not defined', () => {
     jest.spyOn(configService, 'get').mockReturnValue(undefined);
 
-    expect(() => new EmailService(configService)).toThrow('SENDGRID_API_KEY is not defined');
+    expect(() => new EmailService(configService)).toThrow(
+      'SENDGRID_API_KEY is not defined',
+    );
   });
 });
