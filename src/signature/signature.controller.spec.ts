@@ -16,5 +16,6 @@ describe('SignatureController', () => {
   });
 
   it('should be defined', () => {
+    expect(controller).toBeDefined();
   });
 });

@@ -11,7 +11,8 @@ export class CreateSignatureDto {
   @ApiProperty({
     type: 'string',
     format: 'binary',
-    description: 'Documento de identificación oficial del usuario en formato PDF.',
+    description:
+      'Documento de identificación oficial del usuario en formato PDF.',
   })
   officialFile: any;
 }

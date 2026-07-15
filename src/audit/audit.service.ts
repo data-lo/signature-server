@@ -50,7 +50,8 @@ export class AuditService {
       const recordData = { ...payload, chainIndex };
 
       // Hash unidireccional del contenido del registro (integridad del propio registro)
-      const integrityHash = await this.hashService.generateRegistryHash(recordData);
+      const integrityHash =
+        await this.hashService.generateRegistryHash(recordData);
 
       // Contenido encadenado: incluye integrityHash y el chainHash previo para encadenamiento
       const chainContent = {
@@ -72,7 +73,9 @@ export class AuditService {
         cipher,
       });
     } catch (error) {
-      this.logger.error(`[AuditService.create] Error registrando auditoría para documentId=${payload.documentId}: ${error}`);
+      this.logger.error(
+        `[AuditService.create] Error registrando auditoría para documentId=${payload.documentId}: ${error}`,
+      );
     }
   }
 
@@ -87,13 +90,17 @@ export class AuditService {
       .lean();
 
     if (!records.length) {
-      throw new NotFoundException(`No se encontraron registros de auditoría para el documento ${documentId}`);
+      throw new NotFoundException(
+        `No se encontraron registros de auditoría para el documento ${documentId}`,
+      );
     }
 
     return Promise.all(
       records.map(async (record) => {
         try {
-          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
+          const decryptedContent = await this.hashService.reverseCiperHash(
+            record.cipher,
+          );
           return {
             ...decryptedContent,
             integrityHash: record.integrityHash,
@@ -127,14 +134,21 @@ export class AuditService {
     const skip = (page - 1) * limit;
 
     const [records, total] = await Promise.all([
-      this.auditModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      this.auditModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       this.auditModel.countDocuments(filter),
     ]);
 
     const data = await Promise.all(
       records.map(async (record) => {
         try {
-          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
+          const decryptedContent = await this.hashService.reverseCiperHash(
+            record.cipher,
+          );
           return {
             ...decryptedContent,
             integrityHash: record.integrityHash,
@@ -168,9 +182,14 @@ export class AuditService {
 
     if (id) {
       const record = await this.auditModel.findById(id).lean();
-      if (!record) throw new NotFoundException(`Registro de auditoría ${id} no encontrado`);
+      if (!record)
+        throw new NotFoundException(
+          `Registro de auditoría ${id} no encontrado`,
+        );
       try {
-        const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
+        const decryptedContent = await this.hashService.reverseCiperHash(
+          record.cipher,
+        );
         return {
           ...decryptedContent,
           integrityHash: record.integrityHash,
@@ -194,14 +213,21 @@ export class AuditService {
     const skip = (page - 1) * limit;
 
     const [records, total] = await Promise.all([
-      this.auditModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      this.auditModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       this.auditModel.countDocuments(filter),
     ]);
 
     const data = await Promise.all(
       records.map(async (record) => {
         try {
-          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
+          const decryptedContent = await this.hashService.reverseCiperHash(
+            record.cipher,
+          );
           return {
             ...decryptedContent,
             integrityHash: record.integrityHash,

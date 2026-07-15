@@ -27,7 +27,6 @@ function expect(received: any) {
       if (received !== expected) {
         throw new Error(`Expected ${expected}, but received ${received}`);
       }
-    }
+    },
   };
 }
-
