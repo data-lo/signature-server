@@ -36,8 +36,6 @@ import { StripeModule } from './stripe/stripe.module';
         type: 'postgres',
         autoLoadEntities: true,
         synchronize: false,
-        migrations: [__dirname + '/migrations/*{.ts,.js}'],
-        migrationsRun: true,
       }),
     }),
 
