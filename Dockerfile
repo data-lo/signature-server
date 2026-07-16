@@ -18,16 +18,13 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Copiamos, instalamos y limpiamos todo en un solo paso para evitar capas pesadas
 COPY package*.json ./
 RUN npm ci --omit=dev \
     && npm cache clean --force \
     && rm -f package*.json
 
-# Copiamos solo lo necesario desde el builder
 COPY --chown=node:node --from=builder /app/dist ./dist
 
-# Si tu app no empaqueta dependencias dentro de dist, traemos node_modules limpio
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 
 USER node
