@@ -69,14 +69,14 @@ Cuando firma el último firmante pendiente:
 
 | Entidad | Tabla / colección | Campos principales |
 |---|---|---|
-| `UserEntity` | `users` (Postgres) | id, firstName, lastName, email (único), position, roles, isActive, isDeleted, nationalId (CURP, 18 chars, **único**), password, `signatureId` (FK opcional), `personalInformationId` (FK obligatoria), createdAt, updatedAt |
+| `UserEntity` | `users` (Postgres) | id, firstName, lastName, email (único), position, roles, isActive, isDeleted, `isConfigured` (default `false` — onboarding: se pone en `true` solo vía `PATCH /api/v1/users/me/status`), nationalId (CURP, 18 chars, **único**), password, `signatureId` (FK opcional), `personalInformationId` (FK obligatoria), createdAt, updatedAt |
 | `PersonalInformationEntity` | `personal_information` (Postgres) | id, name, lastName, curp, rfc (nullable a nivel de columna — obligatorio en `POST /auth/register`, opcional en `POST /user`), phoneNumber (nullable), secondaryEmail (nullable) |
 | `SignatureEntity` | `signatures` (Postgres) | id, signatureObjectKey (nullable), officialCardObjectKey (nullable), isActive, createdAt, updatedAt |
 | `DocumentEntity` | `documents` (Postgres) | id, objectKey, fileName, fileType, totalPages, documentUrl, ipAddress, originalHash, signedHash, signedAt, cancelledAt, rejectedAt, status, signatureCoordinates (jsonb), createdBy (FK) |
 | `DocumentParticipantEntity` | `document_participants` (Postgres) | id, documentId (FK), userId (FK), role (`signer`\|`spectator`), status (`pending`\|`signed`\|`rejected`), signOrder, signedAt, rejectedAt, rejectionReason |
 | `AccountEntity` | `accounts` (Postgres) | id, name, type (`PERSONAL`\|`ORGANIZATION`) |
 | `OrganizationDetailEntity` | `organization_details` (Postgres) | accountId (PK = FK), name |
-| `AccountMemberEntity` | `account_members` (Postgres) | id, accountId (FK), userId (FK), role[] (`OWNER`\|`ADMIN`\|`SIGNEE`), isActive — único por (accountId, userId) |
+| `AccountMemberEntity` | `account_members` (Postgres) | id, accountId (FK), userId (FK), role[] (`OWNER`\|`ADMIN`\|`SIGNEE`) **nullable** — `NULL` al crear una organización (se asigna en un paso posterior, hoy sin UI — ver Pendientes), siempre `[OWNER]` en la cuenta personal del registro —, isActive — único por (accountId, userId) |
 | `AccountSubscriptionEntity` | `account_subscriptions` (Postgres) | id, accountId (FK, único), planId, stripeCustomerId, stripeSubscriptionId, status, currentPeriodEnd, signingEnabled |
 | `AuditDocument` | `audits` (Mongo) | documentId, users[], operation, chainIndex, integrityHash, cipher, chainHash — sin FK real hacia Postgres (bases distintas) |
 
@@ -120,7 +120,6 @@ Cuando firma el último firmante pendiente:
 |---|---|
 | `GET /signature/files/:fileId` | `getFile()` — URL prefirmada |
 | `GET /signature/:id` | `findOne()` |
-| `POST /signature` | `create()` — sube firma + INE, asigna `signatureId` al usuario |
 | `PATCH /signature/:id` | `update()` — reemplaza imagen de firma y/o INE |
 | `PATCH /signature/:id/deactivate` | `deactivate()` — sustituye la firma por PNG en blanco |
 | `DELETE /signature/:id/signature-image` | `deleteSignatureImage()` |
@@ -128,20 +127,46 @@ Cuando firma el último firmante pendiente:
 
 Ownership de cada operación se valida contra `User.signatureId` (dueño real de la relación), no contra una FK en `Signature`.
 
-### `user` (`/user`)
+> `POST /signature` (creación inicial) ya no está expuesto aquí — `SignatureService.create()` ahora solo se llama desde `PUT /api/v1/users/me/signature` (onboarding, JWT). El resto de operaciones (`update`/`deactivate`/`delete*`) siguen bajo `/signature` sin cambios.
+
+### `user` (`/user`) — CRUD administrativo (API key)
 
 | Endpoint | Servicio |
 |---|---|
 | `POST /user` | `create()` — crea usuario + `PersonalInformation` vinculada |
 | `GET /user` | `findAllActiveUsers()` |
 | `GET /user/:id` | `findOneActiveUser()` |
-| `PATCH /user/personal-information` | `updatePersonalInformation()` — el id sale del JWT, nunca de params/body |
 | `PATCH /user/:id` | `update()` |
 | `DELETE /user/:id` | `remove()` — soft delete |
 
-### `account` / `account-member` (`/account`, `/account-member`)
+> `PATCH /user/personal-information` y `PATCH /user/me/status` ya **no** existen aquí — se movieron a `api/v1/users` (JWT, ver abajo) como parte del flujo de onboarding.
 
-`AccountService`: `create()`, `findAll()`, `findOne()`, `update()` (maneja `OrganizationDetailEntity` cuando `type = ORGANIZATION`). `AccountMemberService`: `create()`, `findByAccount()`, `findOne()`, `update()`, `remove()` (revocación = soft delete).
+### `users` (`/api/v1/users`) — perfil y onboarding del usuario autenticado (JWT)
+
+| Endpoint | Servicio | Qué hace |
+|---|---|---|
+| `GET /api/v1/users/me` | `UserService.getMeFromCache()` | Lee **exclusivamente Redis DB 0** por CURP (key = `nationalId`) el snapshot unificado User+PersonalInformation, para hidratar rápido el store de onboarding en el cliente. Si la key no existe (p. ej. un fallo previo de Redis), reconstruye una única vez desde Postgres y recachea. |
+| `PUT /api/v1/users/me/personal-information` | `UserService.updatePersonalInformation()` | Actualiza `phoneNumber`/`secondaryEmail` en Postgres. El userId sale del JWT, nunca de params/body. **No refresca el cache de Redis por CURP** (ver Pendientes). |
+| `PUT /api/v1/users/me/signature` | `SignatureService.create()` | Sube la firma PNG (+ INE opcional) y vincula `signatureId` al usuario — mismo servicio que usaba `POST /signature`, ya no expuesto ahí (ver módulo `signature`). Tampoco refresca el cache de Redis por CURP. |
+| `PATCH /api/v1/users/me/status` | `UserService.updateStatus()` | Consolidación final del onboarding: fija `isConfigured = true` de forma atómica y **sí** refresca el cache de Redis por CURP. El body (`{ isConfigured: true }`) se ignora — es un disparador de un solo sentido, no un toggle. |
+
+El JWT ahora incluye `nationalId` (CURP) como claim estable (ver sección 4) para que `GET /me` pueda resolver directo por Redis sin una consulta previa a Postgres.
+
+### `account` (`/account`) — CRUD genérico de cuentas (API key)
+
+`AccountService`: `create()`, `findAll()`, `findOne()`, `update()` (maneja `OrganizationDetailEntity` cuando `type = ORGANIZATION`).
+
+### `organizations` (`POST /api/v1/organizations`, JWT) — creación de organización (multi-tenant)
+
+`AccountService.createOrganization(userId, dto)`: transacción ACID que crea `Account(type=ORGANIZATION)` + `OrganizationDetail` + `AccountMemberEntity` (con `role: null` — ver Pendientes sobre asignación posterior). Al confirmar, refresca el catálogo cacheado en Redis (`appendAccountToCatalog`) para el usuario creador.
+
+### `accounts` (`GET /api/v1/accounts/me`, JWT) — catálogo de cuentas del usuario autenticado
+
+`AccountService.getAccountsCatalog(userId)`: lee **exclusivamente** el catálogo cacheado en Redis DB 0 (key `accounts:{userId}`), sin fallback a Postgres. Si la key no existe, retorna un catálogo vacío (no hay self-heal como en `users/me`, porque el catálogo se puebla siempre al registrarse/crear una organización).
+
+### `account-member` (`/account-member`) — membresías (API key, sin ownership check)
+
+`AccountMemberService`: `create()` (otorgar acceso con uno o más roles), `findByAccount()`, `findOne()`, `update()` (cambia rol/puesto/vigencia — es el único lugar donde un `role` que nació `NULL` puede asignarse), `remove()` (revocación = soft delete `isActive=false`). Protegido solo por `x-api-key`, **no valida que el llamador pertenezca o sea OWNER/ADMIN de esa cuenta** — ver Pendientes.
 
 ### `auth` (`/auth`)
 
@@ -150,7 +175,7 @@ Ownership de cada operación se valida contra `User.signatureId` (dueño real de
 | `POST /auth/register` | `register()` → `UserService.createFromSignup()` |
 | `POST /auth/login` | `login()` — valida password (bcrypt), firma JWT con `jti` único |
 | `POST /auth/logout` | `logout()` — agrega el `jti` a la blacklist de Redis |
-| `GET /auth/me` | `me()` |
+| `GET /auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
 
 ### `audit` (`/audit`)
 
@@ -180,7 +205,7 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 - **`ApiKeyGuard`** — solo exige `x-api-key` en endpoints marcados `@Public()`.
 - **`JwtAuthGuard`** — exige `Authorization: Bearer <jwt>` válido y no presente en la blacklist de Redis, salvo `@Public()` o `@SkipJwtAuth()` (usado solo en `/auth/register` y `/auth/login`).
 
-`@CurrentUser()` expone el payload del JWT (`sub`, `email`, `roles`, `jti`) inyectado por el guard en `request.user`.
+`@CurrentUser()` expone el payload del JWT (`sub`, `email`, `roles`, `nationalId`, `jti`) inyectado por el guard en `request.user`. `nationalId` (CURP) se agregó como claim estable — no es un dato volátil de onboarding (eso vive en Redis, no en el JWT), es la misma clase de identificador que `email`/`roles`, y permite que `GET /api/v1/users/me` resuelva directo por Redis sin una consulta previa a Postgres.
 
 ---
 
@@ -229,11 +254,25 @@ npm run migration:revert                                         # revierte la �
 ## 7. Pendientes / trabajo futuro
 
 ### Pendientes reales (lo que queda abierto hoy)
-- **Migración de modelo completa (`ENTIDAD_RELACIÓN_V2`)**: RBAC granular (`role`/`permission`/`resource`/`action`), `Organization` separada de `OrganizationDetail`, mover `email`/`password` de `Users` a `Account` (multi-cuenta), `Collaborator` reemplazando `DocumentParticipant` con campos nuevos (`comments`, `geoLoc`, `visibilityLevel`, `cancellationReason`, `reminderPeriodicity`, `signatureType`), `Watcher`/`Notification`/`Event`, `verification_code`, `SimpleSignature`/`FIELSignature`, `Document Transaction`. Decisión tomada: se planea como fase aparte, no se toca el login actual hasta diseñarla explícitamente. Ver detalle más abajo.
+- **Migración de modelo completa (`ENTIDAD_RELACIÓN_V2`)**: RBAC granular (`role`/`permission`/`resource`/`action` como entidades propias — hoy `role` en `AccountMemberEntity` sigue siendo un enum-array, no una FK), `Organization` separada de `OrganizationDetail`, mover `email`/`password` de `Users` a `Account`, `Collaborator` reemplazando `DocumentParticipant` con campos nuevos (`comments`, `geoLoc`, `visibilityLevel`, `cancellationReason`, `reminderPeriodicity`, `signatureType`), `Watcher`/`Notification`/`Event`, `verification_code`, `SimpleSignature`/`FIELSignature`, `Document Transaction`. **Nota**: ya se implementó una porción acotada de multi-cuenta (creación de organización, catálogo de cuentas cacheado en Redis, membresías con rol nullable) — ver "Resuelto en esta ronda" más abajo — pero es explícitamente un paso intermedio, no la migración RBAC completa. Sigue sin tocarse el login/JWT (`sub`/`email`/`roles`/`nationalId`, sin claims de cuenta/organización activa).
+- **`roleId` de una organización nunca se asigna desde ningún flujo de producto**: `createOrganization` deja `AccountMemberEntity.role = NULL` a propósito (ver Escenario 1 de la historia de creación de organización), pero **no existe ninguna pantalla que llame** `PATCH /account-member/:id` para asignarlo después — solo es alcanzable a mano vía Swagger/Postman. El dueño de una organización recién creada queda con rol `NULL` indefinidamente en la práctica.
+- **`account`/`account-member` sin ownership check**: ambos módulos están `@Public()` protegidos solo por `x-api-key` (no JWT), así que cualquier llamador con la API key puede leer/otorgar/revocar/actualizar la membresía de **cualquier** cuenta, no solo las propias. Antes de que este modelo multi-tenant maneje datos reales de clientes hace falta exigir JWT + validar que el llamador sea OWNER/ADMIN de la cuenta objetivo.
+- **El catálogo de cuentas no expone `role`/`isActive` de la membresía**: `AccountService.toCatalogEntry()` solo serializa `id`/`name`/`type`/`createdAt`/`organizationDetail.name`. El frontend (`useAuthStore`, `accountsList`) espera un `roleId`/`status` por cuenta y hoy los rellena con valores por defecto (`null`/`'ACTIVE'`) porque el backend no se los manda — ver README de `signature-app`. Extender `appendAccountToCatalog`/`toCatalogEntry` para incluir el `role`/`isActive` reales de la membresía cerraría esto sin necesitar el RBAC completo.
+- **Migración `MakeAccountMemberRoleNullable` sin confirmar contra una base con datos reales**: se generó y se verificó que aplica limpio (`ALTER COLUMN role DROP NOT NULL`), pero solo se corrió contra el esquema de desarrollo. Si ya hay un ambiente de staging/producción, `migrationsRun: true` la aplicará sola al desplegar — no requiere acción manual, pero vale confirmarlo la primera vez.
 - **Kafka sin caso de uso de negocio para el consumidor**: `DocumentEventsConsumer` hoy solo loggea los eventos de forma estructurada. Falta decidir una acción real (p. ej. desacoplar el envío de emails del request síncrono, alimentar un dashboard, disparar webhooks a terceros).
 - **`OTPService`**: implementado pero deliberadamente sin integrar a ningún flujo (decisión del equipo, no es un olvido).
-- **Cobertura de tests parcial**: `user.service.spec.ts` y `document.service.spec.ts` ya cubren comportamiento real (éxito + errores). El resto de specs (`signature`, `audit`, `account`, etc.) siguen siendo smoke tests (`should be defined`). Pendiente extender el mismo patrón de tests de comportamiento al resto de servicios si se quiere subir la cobertura real.
+- **Cobertura de tests parcial**: `user.service.spec.ts` y `document.service.spec.ts` (y ahora `account.service.spec.ts`) ya cubren comportamiento real (éxito + errores). El resto de specs (`audit`, `account-member`, etc.) siguen siendo smoke tests (`should be defined`). Pendiente extender el mismo patrón de tests de comportamiento al resto de servicios si se quiere subir la cobertura real. Tampoco hay un e2e que ejercite el flujo completo registro→login→onboarding→crear organización (`test/app.e2e-spec.ts` sigue siendo el scaffold por defecto de Nest).
 - **Migración baseline generada contra una base vacía de desarrollo**: `src/migrations/*-InitialSchema.ts` se generó reseteando el schema `public` de la base de dev (confirmado como desechable). Si este proyecto ya tiene un ambiente de staging/producción con datos reales, esa migración **no** debe correrse ahí tal cual — habría que generar una migración de diff real contra ese ambiente, o revisar la baseline a mano antes de aplicarla.
+
+### Resuelto en esta ronda (invalidación del cache de Redis)
+- **`updatePersonalInformation` y `PUT /api/v1/users/me/signature` ahora refrescan el cache de Redis por CURP**: `UserService.updatePersonalInformation()` llama `refreshUserCurpCache()` tras actualizar `PersonalInformation`. Para la firma, como `SignatureService` no conoce el CURP ni el cache de onboarding (y hacerlo depender de `UserService` crearía una dependencia circular con `UserModule`), se agregó `UserService.refreshCurpCacheForUser(userId)` (público, reconstruye el snapshot completo desde Postgres) y `UsersController.updateSignature()` lo llama justo después de `signatureService.create()`. Ya no hay ventana en la que `GET /api/v1/users/me` devuelva `signatureId`/`phoneNumber` desactualizados tras completar un paso del onboarding.
+- **El catálogo de cuentas cacheado en Redis ya no queda obsoleto**: `AccountService.update()` (rename de cuenta/organización) ahora recorre los miembros activos (`AccountMemberEntity`, `isActive: true`) y reemplaza la entrada de esa cuenta en el catálogo (`accounts:{userId}`) de cada uno — solo cuando `name`/`organizationName` realmente cambiaron. `AccountMemberService.remove()` (revocar acceso) ahora resuelve la membresía primero (para tener `userId`/`accountId`) y llama al nuevo `AccountService.removeAccountFromCatalog(userId, accountId)`, que la quita del catálogo cacheado de ese usuario. Ambos helpers son best-effort (no tumban la operación si Redis falla), igual que `appendAccountToCatalog`. Se agregó `account-member.service.spec.ts` (no existía) cubriendo el `remove()` nuevo.
+
+### Resuelto en esta ronda (organizaciones, onboarding vía Redis, endpoints versionados)
+- **Creación de organización y switcher multi-tenant**: nuevo `POST /api/v1/organizations` (transaccional: `Account(ORGANIZATION)` + `OrganizationDetail` + `AccountMemberEntity` con `role: null`) y `GET /api/v1/accounts/me` (catálogo leído solo de Redis, sin fallback a Postgres). Ambos en controllers nuevos (`OrganizationsController`, `AccountsController`) separados del `AccountController` genérico (`/account`), que se queda solo con el CRUD administrativo.
+- **`AccountMemberEntity.role` ahora nullable**: migración `MakeAccountMemberRoleNullable` (`DROP NOT NULL`). `createOrganization` guarda `role: null` a propósito (se asigna después, hoy sin UI — ver Pendientes); `createDefaultPersonalAccount` (registro) sigue asignando `[OWNER]` de inmediato, sin cambios.
+- **Flujo de onboarding movido a `api/v1/users`**: `GET /api/v1/users/me` (perfil cacheado en Redis por CURP, con self-heal desde Postgres si la key no existe), `PUT /api/v1/users/me/personal-information`, `PUT /api/v1/users/me/signature` (delega en el mismo `SignatureService.create()`, ya no expuesto como `POST /signature`) y `PATCH /api/v1/users/me/status` (consolidación, sí refresca Redis). El JWT ahora incluye `nationalId` para que `GET /me` no necesite tocar Postgres en el camino feliz.
+- **Rutas alineadas a lo pedido por las historias** (`/api/v1/...`, plural, verbos HTTP explícitos) en vez de seguir la convención singular sin versión que ya tenía el resto de la API (`/account`, `/user`, `/auth`) — es una inconsistencia de estilo consciente, documentada, no un descuido.
 
 ### Resuelto recientemente
 - **Duplicados en `POST /document`**: `DocumentService.create` ahora rechaza (`400`) IDs repetidos entre `signerIds`/`spectatorIds`, y rechaza crear un documento con el mismo `fileName` que otro documento propio (mismo `createdBy`) en estatus `CREATED` o `PENDING`.
@@ -263,4 +302,4 @@ Decisión tomada con el equipo: el diagrama `ENTIDAD_RELACIÓN_V2` completo (RBA
 - **Tests de comportamiento real**: `user.service.spec.ts` y `document.service.spec.ts` dejaron de ser smoke tests. Ahora cubren, con mocks reales de repositorios/servicios (no solo `should be defined`): en `UserService` — creación exitosa dentro de transacción, rollback si falla el `save` del usuario (sin fila huérfana), rechazo por email/CURP/RFC duplicado (tanto en `create()` como en `createFromSignup()`), actualización de información personal; en `DocumentService` — creación exitosa y sus 3 validaciones de rechazo (sin archivo, participante duplicado, nombre duplicado), firma intermedia vs. firma del último firmante (finalización + estampado), rechazo, solicitud y confirmación de cancelación, y sus respectivos casos de error (estatus inválido, no ser firmante/creador, turno incorrecto, sin credencial de firma activa). 47 tests en total (antes 15, todos "should be defined").
 
 ### Frontend
-El frontend (`signature-app`) ya consume `PATCH /user/personal-information` para `phoneNumber` y `secondaryEmail` desde `/personal-documents`. `name`, `lastName`, `curp`, `rfc` no tienen UI de edición **por diseño** (no es una tarea pendiente, es la decisión tomada — ver arriba). Ver pendientes propios del README de `signature-app` (incluye una dependencia futura de esta misma migración RBAC/multi-cuenta).
+El frontend (`signature-app`) consume `PUT /api/v1/users/me/personal-information` para `phoneNumber` y `secondaryEmail` desde `/personal-documents` (ruta movida desde el `PATCH /user/personal-information` original, ver "Resuelto en esta ronda" arriba). `name`, `lastName`, `curp`, `rfc` no tienen UI de edición **por diseño** (no es una tarea pendiente, es la decisión tomada). También consume `GET /api/v1/users/me`, `GET /api/v1/accounts/me`, `POST /api/v1/organizations` y `PUT /api/v1/users/me/signature` para el onboarding y el switcher multi-tenant, con un store de Zustand (`useAuthStore`, Slices Pattern). Ver pendientes propios del README de `signature-app` (incluye una dependencia futura de la migración RBAC/multi-cuenta completa, y los gaps de `roleId`/`status` que dependen de que este backend los exponga).

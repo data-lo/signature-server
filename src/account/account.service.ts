@@ -35,6 +35,9 @@ export class AccountService {
     @InjectRepository(OrganizationDetailEntity)
     private organizationDetailRepository: Repository<OrganizationDetailEntity>,
 
+    @InjectRepository(AccountMemberEntity)
+    private accountMemberRepository: Repository<AccountMemberEntity>,
+
     @InjectDataSource()
     private dataSource: DataSource,
 
@@ -107,10 +110,16 @@ export class AccountService {
       });
     }
 
+    const updatedAccount = await this.findEntityById(id);
+
+    if (updateAccountDto.name || updateAccountDto.organizationName) {
+      await this.refreshCatalogForAccountMembers(updatedAccount);
+    }
+
     return {
       success: true,
       message: 'Cuenta actualizada correctamente',
-      data: await this.findEntityById(id),
+      data: updatedAccount,
     };
   }
 
@@ -230,6 +239,87 @@ export class AccountService {
     } catch (error) {
       this.logger.warn(
         `No se pudo refrescar el catálogo de cuentas en Redis para el usuario ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Refresca la entrada de esta cuenta dentro del catálogo cacheado en Redis
+   * de cada miembro activo. Se usa tras renombrar una cuenta/organización
+   * (`update()`) para que el switcher del frontend no muestre un nombre
+   * obsoleto indefinidamente.
+   */
+  private async refreshCatalogForAccountMembers(
+    account: AccountEntity,
+  ): Promise<void> {
+    const members = await this.accountMemberRepository.find({
+      where: { accountId: account.id, isActive: true },
+    });
+
+    await Promise.all(
+      members.map((member) =>
+        this.replaceAccountInCatalog(member.userId, account),
+      ),
+    );
+  }
+
+  private async replaceAccountInCatalog(
+    userId: string,
+    account: AccountEntity,
+  ): Promise<void> {
+    try {
+      const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
+      const existingRaw = await this.redisService.get(key);
+      if (!existingRaw) {
+        return;
+      }
+
+      const catalog: AccountData[] = JSON.parse(existingRaw);
+      const index = catalog.findIndex((entry) => entry.id === account.id);
+      if (index === -1) {
+        return;
+      }
+
+      catalog[index] = this.toCatalogEntry(account);
+      await this.redisService.set(key, JSON.stringify(catalog));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo refrescar el catálogo de cuentas en Redis para el usuario ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Quita una cuenta del catálogo cacheado en Redis del usuario. Se usa al
+   * revocar el acceso de un miembro (`AccountMemberService.remove`), para que
+   * el switcher del frontend no siga ofreciendo una cuenta a la que el
+   * usuario ya no tiene acceso.
+   */
+  async removeAccountFromCatalog(
+    userId: string,
+    accountId: string,
+  ): Promise<void> {
+    try {
+      const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
+      const existingRaw = await this.redisService.get(key);
+      if (!existingRaw) {
+        return;
+      }
+
+      const catalog: AccountData[] = JSON.parse(existingRaw);
+      const filtered = catalog.filter((entry) => entry.id !== accountId);
+      if (filtered.length === catalog.length) {
+        return;
+      }
+
+      await this.redisService.set(key, JSON.stringify(filtered));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo actualizar el catálogo de cuentas en Redis para el usuario ${userId} al revocar la cuenta ${accountId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

@@ -128,7 +128,7 @@ export class UsersController {
       { name: 'officialFile', maxCount: 1 },
     ]),
   )
-  updateSignature(
+  async updateSignature(
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreateSignatureDto,
     @UploadedFiles()
@@ -137,7 +137,9 @@ export class UsersController {
       officialFile?: Express.Multer.File[];
     },
   ) {
-    return this.signatureService.create(user.sub, dto, files);
+    const result = await this.signatureService.create(user.sub, dto, files);
+    await this.userService.refreshCurpCacheForUser(user.sub);
+    return result;
   }
 
   @Patch('me/status')

@@ -3,6 +3,7 @@ import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AccountService } from './account.service';
 import { AccountEntity } from './entities/account.entity';
 import { OrganizationDetailEntity } from './entities/organization-detail.entity';
+import { AccountMemberEntity } from './entities/account-member.entity';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_MEMBER_ROLE_ENUM } from './enums/account-member-role.enum';
@@ -36,6 +37,7 @@ describe('AccountService', () => {
   let service: AccountService;
   let accountRepository: ReturnType<typeof createMockRepository>;
   let organizationDetailRepository: ReturnType<typeof createMockRepository>;
+  let accountMemberRepository: ReturnType<typeof createMockRepository>;
   let dataSource: { createQueryRunner: jest.Mock };
   let queryRunner: ReturnType<typeof createMockQueryRunner>;
   let redisService: { set: jest.Mock; get: jest.Mock };
@@ -43,6 +45,7 @@ describe('AccountService', () => {
   beforeEach(async () => {
     accountRepository = createMockRepository();
     organizationDetailRepository = createMockRepository();
+    accountMemberRepository = createMockRepository();
     queryRunner = createMockQueryRunner();
     dataSource = { createQueryRunner: jest.fn(() => queryRunner) };
     redisService = { set: jest.fn(), get: jest.fn() };
@@ -57,6 +60,10 @@ describe('AccountService', () => {
         {
           provide: getRepositoryToken(OrganizationDetailEntity),
           useValue: organizationDetailRepository,
+        },
+        {
+          provide: getRepositoryToken(AccountMemberEntity),
+          useValue: accountMemberRepository,
         },
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: RedisService, useValue: redisService },
@@ -139,6 +146,88 @@ describe('AccountService', () => {
       expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
       expect(queryRunner.release).toHaveBeenCalled();
+    });
+  });
+
+  describe('update', () => {
+    const existingAccount = {
+      id: 'account-1',
+      name: 'Acme',
+      type: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      createdAt: new Date('2026-01-01'),
+      organizationDetail: { name: 'Acme Corp S.A. de C.V.' },
+    };
+    const renamedAccount = {
+      ...existingAccount,
+      name: 'Acme Renombrada',
+      organizationDetail: { name: 'Acme Renombrada S.A. de C.V.' },
+    };
+
+    it('refresca el catálogo de cada miembro activo cuando cambia el nombre', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(existingAccount)
+        .mockResolvedValueOnce(renamedAccount);
+      accountMemberRepository.find.mockResolvedValue([
+        { userId: 'user-1', accountId: 'account-1', isActive: true },
+        { userId: 'user-2', accountId: 'account-1', isActive: true },
+      ]);
+      redisService.get.mockResolvedValue(
+        JSON.stringify([{ id: 'account-1', name: 'Acme' }]),
+      );
+
+      await service.update('account-1', {
+        name: 'Acme Renombrada',
+        organizationName: 'Acme Renombrada S.A. de C.V.',
+      });
+
+      expect(accountMemberRepository.find).toHaveBeenCalledWith({
+        where: { accountId: 'account-1', isActive: true },
+      });
+      expect(redisService.set).toHaveBeenCalledTimes(2);
+      const [, firstValue] = redisService.set.mock.calls[0];
+      expect(JSON.parse(firstValue)[0].name).toBe('Acme Renombrada');
+    });
+
+    it('no toca Redis si no se actualizó name ni organizationName', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(existingAccount)
+        .mockResolvedValueOnce(existingAccount);
+
+      await service.update('account-1', {});
+
+      expect(accountMemberRepository.find).not.toHaveBeenCalled();
+      expect(redisService.set).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeAccountFromCatalog', () => {
+    it('quita la cuenta del catálogo cacheado del usuario', async () => {
+      redisService.get.mockResolvedValue(
+        JSON.stringify([{ id: 'account-1' }, { id: 'account-2' }]),
+      );
+
+      await service.removeAccountFromCatalog('user-1', 'account-1');
+
+      const [key, value] = redisService.set.mock.calls[0];
+      expect(key).toBe('accounts:user-1');
+      const saved = JSON.parse(value);
+      expect(saved).toEqual([{ id: 'account-2' }]);
+    });
+
+    it('no escribe en Redis si la cuenta no estaba en el catálogo', async () => {
+      redisService.get.mockResolvedValue(JSON.stringify([{ id: 'account-2' }]));
+
+      await service.removeAccountFromCatalog('user-1', 'account-1');
+
+      expect(redisService.set).not.toHaveBeenCalled();
+    });
+
+    it('no propaga el error si Redis falla', async () => {
+      redisService.get.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(
+        service.removeAccountFromCatalog('user-1', 'account-1'),
+      ).resolves.toBeUndefined();
     });
   });
 

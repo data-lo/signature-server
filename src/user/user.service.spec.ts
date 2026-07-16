@@ -224,9 +224,10 @@ describe('UserService', () => {
   });
 
   describe('updatePersonalInformation', () => {
-    it('actualiza phoneNumber y secondaryEmail', async () => {
+    it('actualiza phoneNumber y secondaryEmail, y refresca el cache de Redis por CURP', async () => {
       userRepository.findOne.mockResolvedValue({
         id: 'user-1',
+        nationalId: 'CURP1',
         personalInformationId: 'pi-1',
       });
       personalInformationRepository.findOne.mockResolvedValue({
@@ -245,6 +246,10 @@ describe('UserService', () => {
         { phoneNumber: '5512345678', secondaryEmail: 'secundario@correo.com' },
       );
       expect(result.data.phoneNumber).toBe('5512345678');
+      expect(redisService.set).toHaveBeenCalledWith(
+        'CURP1',
+        expect.any(String),
+      );
     });
 
     it('lanza NotFoundException si el usuario no existe', async () => {
@@ -254,6 +259,41 @@ describe('UserService', () => {
         service.updatePersonalInformation('missing-user', {
           phoneNumber: '5512345678',
         }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('refreshCurpCacheForUser', () => {
+    it('reconstruye el snapshot desde PostgreSQL y lo recachea por CURP', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        nationalId: 'CURP1',
+        isConfigured: false,
+        signatureId: 'sig-1',
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: '5512345678',
+          secondaryEmail: 'a@a.com',
+        },
+      });
+
+      await service.refreshCurpCacheForUser('user-1');
+
+      expect(userRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        relations: { personalInformation: true },
+      });
+      expect(redisService.set).toHaveBeenCalledWith(
+        'CURP1',
+        expect.any(String),
+      );
+    });
+
+    it('lanza NotFoundException si el usuario no existe', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.refreshCurpCacheForUser('missing-user'),
       ).rejects.toThrow(NotFoundException);
     });
   });

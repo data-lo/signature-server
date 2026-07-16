@@ -14,6 +14,9 @@ import { UpdateAccountMemberDto } from './dto/update-account-member.dto';
 // Entities
 import { AccountMemberEntity } from './entities/account-member.entity';
 
+// Services
+import { AccountService } from './account.service';
+
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 
@@ -22,6 +25,8 @@ export class AccountMemberService {
   constructor(
     @InjectRepository(AccountMemberEntity)
     private accountMemberRepository: Repository<AccountMemberEntity>,
+
+    private readonly accountService: AccountService,
   ) {}
 
   async create(
@@ -103,14 +108,19 @@ export class AccountMemberService {
   }
 
   async remove(id: string): Promise<BaseResponse> {
-    const result = await this.accountMemberRepository.update(
-      { id, isActive: true },
-      { isActive: false },
-    );
-
-    if (result.affected === 0) {
+    const membership = await this.accountMemberRepository.findOne({
+      where: { id, isActive: true },
+    });
+    if (!membership) {
       throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
     }
+
+    await this.accountMemberRepository.update(id, { isActive: false });
+
+    await this.accountService.removeAccountFromCatalog(
+      membership.userId,
+      membership.accountId,
+    );
 
     return {
       success: true,
