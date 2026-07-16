@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
 import { ACCOUNT_TYPE_ENUM } from '../../enums/account-type.enum';
+import { ACCOUNT_MEMBER_ROLE_ENUM } from '../../enums/account-member-role.enum';
 
 export class OrganizationDetailData {
   @ApiProperty({
@@ -45,6 +46,23 @@ export class AccountData {
     required: false,
   })
   organizationDetail?: OrganizationDetailData | null;
+
+  @ApiProperty({
+    example: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+    description:
+      'Rol(es) del usuario autenticado en esta cuenta; NULL si todavía no se le ha asignado uno explícitamente (la columna admite NULL, aunque hoy el creador de una cuenta personal u organización siempre queda como OWNER de inmediato)',
+    enum: ACCOUNT_MEMBER_ROLE_ENUM,
+    isArray: true,
+    nullable: true,
+  })
+  role: ACCOUNT_MEMBER_ROLE_ENUM[] | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Vigencia de la membresía del usuario autenticado en esta cuenta',
+  })
+  isActive: boolean;
 }
 
 export class AccountResponse extends BaseResponse<AccountData> {

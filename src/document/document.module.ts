@@ -9,6 +9,7 @@ import { UserModule } from 'src/user/user.module';
 import { SignatureModule } from 'src/signature/signature.module';
 import { AuditModule } from 'src/audit/audit.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
+import { AccountModule } from 'src/account/account.module';
 
 @Module({
   controllers: [DocumentController],
@@ -20,6 +21,7 @@ import { KafkaModule } from 'src/kafka/kafka.module';
     SignatureModule,
     AuditModule,
     KafkaModule,
+    AccountModule,
   ],
   exports: [DocumentService],
 })

@@ -20,6 +20,7 @@ import { SignatureService } from 'src/signature/signature.service';
 import { EmailService } from 'src/shared/email/email.service';
 import { AuditService } from 'src/audit/audit.service';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
+import { AccountMemberService } from 'src/account/account-member.service';
 
 function createMockRepository() {
   return {
@@ -64,6 +65,7 @@ describe('DocumentService', () => {
   let emailService: Record<string, jest.Mock>;
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
+  let accountMemberService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
@@ -123,6 +125,9 @@ describe('DocumentService', () => {
       emitRejected: jest.fn(),
       emitCancelled: jest.fn(),
     };
+    accountMemberService = {
+      assertIsActiveMember: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -143,6 +148,7 @@ describe('DocumentService', () => {
         { provide: EmailService, useValue: emailService },
         { provide: AuditService, useValue: auditService },
         { provide: DocumentEventsProducer, useValue: documentEventsProducer },
+        { provide: AccountMemberService, useValue: accountMemberService },
       ],
     }).compile();
 
@@ -186,7 +192,13 @@ describe('DocumentService', () => {
     });
 
     it('crea el documento y sus participantes cuando todo es válido', async () => {
-      const result = await service.create('creator-1', dto, file, '127.0.0.1');
+      const result = await service.create(
+        'creator-1',
+        'account-1',
+        dto,
+        file,
+        '127.0.0.1',
+      );
 
       expect(result.success).toBe(true);
       expect(minioService.uploadObject).toHaveBeenCalled();
@@ -195,11 +207,42 @@ describe('DocumentService', () => {
         expect.objectContaining({ operation: 'DOCUMENT_CREATED' }),
       );
       expect(documentEventsProducer.emitCreated).toHaveBeenCalled();
+      expect(accountMemberService.assertIsActiveMember).toHaveBeenCalledWith(
+        'creator-1',
+        'account-1',
+      );
+
+      const savedDocumentCall = documentRepository.save.mock.calls[0][0];
+      expect(savedDocumentCall.accountId).toBe('account-1');
+    });
+
+    it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
+      await expect(
+        service.create('creator-1', undefined as any, dto, file, '127.0.0.1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('rechaza con ForbiddenException si el creador no pertenece a la cuenta activa', async () => {
+      accountMemberService.assertIsActiveMember.mockRejectedValue(
+        new ForbiddenException('No perteneces a esta cuenta'),
+      );
+
+      await expect(
+        service.create('creator-1', 'account-ajena', dto, file, '127.0.0.1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
     });
 
     it('rechaza si no se proporciona archivo', async () => {
       await expect(
-        service.create('creator-1', dto, undefined as any, '127.0.0.1'),
+        service.create(
+          'creator-1',
+          'account-1',
+          dto,
+          undefined as any,
+          '127.0.0.1',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -207,7 +250,7 @@ describe('DocumentService', () => {
       const dupDto = { signerIds: ['user-1'], spectatorIds: ['user-1'] } as any;
 
       await expect(
-        service.create('creator-1', dupDto, file, '127.0.0.1'),
+        service.create('creator-1', 'account-1', dupDto, file, '127.0.0.1'),
       ).rejects.toThrow(BadRequestException);
       expect(minioService.uploadObject).not.toHaveBeenCalled();
     });
@@ -219,9 +262,61 @@ describe('DocumentService', () => {
       });
 
       await expect(
-        service.create('creator-1', dto, file, '127.0.0.1'),
+        service.create('creator-1', 'account-1', dto, file, '127.0.0.1'),
       ).rejects.toThrow(BadRequestException);
       expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findWithFilters', () => {
+    function createMockQueryBuilder(documents: unknown[] = [], total = 0) {
+      const qb: any = {};
+      [
+        'where',
+        'andWhere',
+        'leftJoinAndSelect',
+        'orderBy',
+        'skip',
+        'take',
+      ].forEach((method) => {
+        qb[method] = jest.fn().mockReturnValue(qb);
+      });
+      qb.getManyAndCount = jest.fn().mockResolvedValue([documents, total]);
+      return qb;
+    }
+
+    const query = { page: 1, limit: 10 } as any;
+
+    it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
+      await expect(
+        service.findWithFilters('user-1', undefined as any, query),
+      ).rejects.toThrow(BadRequestException);
+      expect(documentRepository.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('rechaza con ForbiddenException si el usuario no pertenece a la cuenta activa', async () => {
+      accountMemberService.assertIsActiveMember.mockRejectedValue(
+        new ForbiddenException('No perteneces a esta cuenta'),
+      );
+
+      await expect(
+        service.findWithFilters('user-1', 'account-ajena', query),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('filtra el listado por la cuenta activa', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findWithFilters('user-1', 'account-1', query);
+
+      expect(accountMemberService.assertIsActiveMember).toHaveBeenCalledWith(
+        'user-1',
+        'account-1',
+      );
+      expect(qb.where).toHaveBeenCalledWith('document.accountId = :accountId', {
+        accountId: 'account-1',
+      });
     });
   });
 

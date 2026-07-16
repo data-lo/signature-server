@@ -1,5 +1,10 @@
 // External dependencies
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 
@@ -23,6 +28,12 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { AccountData } from './interfaces/response/account-response';
 
 const ACCOUNTS_CATALOG_KEY_PREFIX = 'accounts:';
+
+/** Campos de la membresía del usuario que se cachean junto a la cuenta. */
+interface MembershipCatalogFields {
+  role: ACCOUNT_MEMBER_ROLE_ENUM[] | null;
+  isActive: boolean;
+}
 
 @Injectable()
 export class AccountService {
@@ -81,7 +92,11 @@ export class AccountService {
     };
   }
 
-  async findOne(id: string): Promise<BaseResponse<AccountEntity>> {
+  async findOne(
+    callerId: string,
+    id: string,
+  ): Promise<BaseResponse<AccountEntity>> {
+    await this.assertIsOwner(callerId, id);
     const account = await this.findEntityById(id);
 
     return {
@@ -92,9 +107,11 @@ export class AccountService {
   }
 
   async update(
+    callerId: string,
     id: string,
     updateAccountDto: UpdateAccountDto,
   ): Promise<BaseResponse<AccountEntity>> {
+    await this.assertIsOwner(callerId, id);
     const account = await this.findEntityById(id);
 
     await this.accountRepository.update(id, {
@@ -137,15 +154,37 @@ export class AccountService {
   }
 
   /**
+   * Solo un OWNER activo de la cuenta puede leerla o actualizarla. Lanza
+   * ForbiddenException si el llamador no lo es.
+   */
+  private async assertIsOwner(
+    callerId: string,
+    accountId: string,
+  ): Promise<void> {
+    const callerMembership = await this.accountMemberRepository.findOne({
+      where: { userId: callerId, accountId, isActive: true },
+    });
+
+    if (!callerMembership?.role?.includes(ACCOUNT_MEMBER_ROLE_ENUM.OWNER)) {
+      throw new ForbiddenException(
+        'No tienes permisos de OWNER sobre esta cuenta',
+      );
+    }
+  }
+
+  /**
    * Crea la cuenta PERSONAL por defecto de un usuario recién registrado y su
    * membresía como OWNER. Recibe el EntityManager del llamador para poder
    * enlistarse en la transacción de registro (no abre su propia transacción).
+   * Retorna también la membresía creada para que el llamador pueda cachearla
+   * en el catálogo de Redis sin duplicar el conocimiento de qué role/isActive
+   * le corresponde a la cuenta personal.
    */
   async createDefaultPersonalAccount(
     manager: EntityManager,
     userId: string,
     accountName: string,
-  ): Promise<AccountEntity> {
+  ): Promise<{ account: AccountEntity; membership: AccountMemberEntity }> {
     const account = await manager.save(
       manager.create(AccountEntity, {
         name: accountName,
@@ -153,27 +192,29 @@ export class AccountService {
       }),
     );
 
-    await manager.save(
+    const membership = await manager.save(
       manager.create(AccountMemberEntity, {
         accountId: account.id,
         userId,
         role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        isActive: true,
       }),
     );
 
-    return account;
+    return { account, membership };
   }
 
   /**
    * Crea una Organización de forma transaccional: Account(type=ORGANIZATION),
-   * OrganizationDetail, y la membresía del usuario autenticado con role NULL
-   * (se asigna en un paso posterior). Al confirmar, refresca el catálogo de
-   * cuentas cacheado en Redis.
+   * OrganizationDetail, y la membresía OWNER del usuario autenticado (el
+   * creador de una organización queda como su dueño de inmediato, igual que
+   * en la cuenta personal). Al confirmar, refresca el catálogo de cuentas
+   * cacheado en Redis.
    */
   async createOrganization(
     userId: string,
     dto: CreateOrganizationDto,
-  ): Promise<BaseResponse<AccountEntity>> {
+  ): Promise<BaseResponse<AccountData>> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -193,23 +234,30 @@ export class AccountService {
         }),
       );
 
-      await queryRunner.manager.save(
+      const membership = await queryRunner.manager.save(
         queryRunner.manager.create(AccountMemberEntity, {
           accountId: account.id,
           userId,
-          role: null,
+          role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+          isActive: true,
         }),
       );
 
       await queryRunner.commitTransaction();
 
       const fullAccount = await this.findEntityById(account.id);
-      await this.appendAccountToCatalog(userId, fullAccount);
+      const membershipFields: MembershipCatalogFields = {
+        role: membership.role,
+        isActive: membership.isActive,
+      };
+      await this.appendAccountToCatalog(userId, fullAccount, membershipFields);
 
       return {
         success: true,
         message: 'Organización creada correctamente',
-        data: fullAccount,
+        // toCatalogEntry (no la AccountEntity cruda) para que la respuesta
+        // HTTP incluya role/isActive, igual que el catálogo cacheado.
+        data: this.toCatalogEntry(fullAccount, membershipFields),
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -227,13 +275,14 @@ export class AccountService {
   async appendAccountToCatalog(
     userId: string,
     account: AccountEntity,
+    membership: MembershipCatalogFields,
   ): Promise<void> {
     try {
       const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
       const existingRaw = await this.redisService.get(key);
       const catalog: AccountData[] = existingRaw ? JSON.parse(existingRaw) : [];
 
-      catalog.push(this.toCatalogEntry(account));
+      catalog.push(this.toCatalogEntry(account, membership));
 
       await this.redisService.set(key, JSON.stringify(catalog));
     } catch (error) {
@@ -282,7 +331,12 @@ export class AccountService {
         return;
       }
 
-      catalog[index] = this.toCatalogEntry(account);
+      // Renombrar una cuenta no toca la membresía: se preserva el role/isActive
+      // ya cacheado en vez de requerir una consulta extra a account_members.
+      catalog[index] = this.toCatalogEntry(account, {
+        role: catalog[index].role,
+        isActive: catalog[index].isActive,
+      });
       await this.redisService.set(key, JSON.stringify(catalog));
     } catch (error) {
       this.logger.warn(
@@ -346,7 +400,10 @@ export class AccountService {
     };
   }
 
-  private toCatalogEntry(account: AccountEntity): AccountData {
+  private toCatalogEntry(
+    account: AccountEntity,
+    membership: MembershipCatalogFields,
+  ): AccountData {
     return {
       id: account.id,
       name: account.name,
@@ -355,6 +412,8 @@ export class AccountService {
       organizationDetail: account.organizationDetail
         ? { name: account.organizationDetail.name }
         : null,
+      role: membership.role,
+      isActive: membership.isActive,
     };
   }
 }

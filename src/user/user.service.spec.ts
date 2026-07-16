@@ -56,9 +56,10 @@ describe('UserService', () => {
     };
     redisService = { set: jest.fn(), get: jest.fn() };
     accountService = {
-      createDefaultPersonalAccount: jest
-        .fn()
-        .mockResolvedValue({ id: 'personal-account-1' }),
+      createDefaultPersonalAccount: jest.fn().mockResolvedValue({
+        account: { id: 'personal-account-1' },
+        membership: { role: ['OWNER'], isActive: true },
+      }),
       appendAccountToCatalog: jest.fn(),
     };
 
@@ -188,6 +189,7 @@ describe('UserService', () => {
       expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
         expect.any(String),
         { id: 'personal-account-1' },
+        { role: ['OWNER'], isActive: true },
       );
     });
 
@@ -305,7 +307,11 @@ describe('UserService', () => {
         nationalId: 'CURP1',
         isConfigured: false,
         signatureId: null,
-        personalInformation: { rfc: 'RFC1', phoneNumber: null, secondaryEmail: null },
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: null,
+          secondaryEmail: null,
+        },
       };
       redisService.get.mockResolvedValue(JSON.stringify(cached));
 

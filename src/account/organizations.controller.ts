@@ -31,7 +31,7 @@ export class OrganizationsController {
   @ApiOperation({
     summary: 'Crear una organización',
     description:
-      'Crea de forma transaccional la Account(ORGANIZATION), su OrganizationDetail y la membresía del usuario autenticado (roleId inicial NULL), y refresca el catálogo de cuentas en Redis',
+      'Crea de forma transaccional la Account(ORGANIZATION), su OrganizationDetail y la membresía OWNER del usuario autenticado (el creador queda como dueño de inmediato), y refresca el catálogo de cuentas en Redis',
   })
   @ApiResponse({
     status: 201,

@@ -12,16 +12,17 @@ import {
 
 // Swagger
 import {
+  ApiBearerAuth,
   ApiOperation,
   ApiParam,
   ApiQuery,
   ApiResponse,
-  ApiSecurity,
   ApiTags,
 } from '@nestjs/swagger';
 
 // Auth
-import { Public } from 'src/auth/decorators/public.decorator';
+import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
+import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 // Service
 import { AccountMemberService } from './account-member.service';
@@ -40,9 +41,8 @@ import {
   NotFoundResponse,
 } from 'src/interfaces/api-response.dto';
 
-@Public()
 @ApiTags('Account Member')
-@ApiSecurity('x-api-key')
+@ApiBearerAuth('access-token')
 @Controller('account-member')
 export class AccountMemberController {
   constructor(private readonly accountMemberService: AccountMemberService) {}
@@ -50,7 +50,8 @@ export class AccountMemberController {
   @Post()
   @ApiOperation({
     summary: 'Otorgar acceso a una cuenta',
-    description: 'Asocia un usuario a una cuenta con uno o más roles',
+    description:
+      'Asocia un usuario a una cuenta con uno o más roles. Solo un OWNER activo de esa cuenta puede otorgar acceso.',
   })
   @ApiResponse({
     status: 201,
@@ -64,19 +65,30 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es OWNER de esta cuenta',
   })
   @ApiResponse({
     status: 409,
     description: 'El usuario ya tiene acceso a esta cuenta',
     type: ConflictResponse,
   })
-  create(@Body() createAccountMemberDto: CreateAccountMemberDto) {
-    return this.accountMemberService.create(createAccountMemberDto);
+  create(
+    @CurrentUser() user: JwtPayload,
+    @Body() createAccountMemberDto: CreateAccountMemberDto,
+  ) {
+    return this.accountMemberService.create(user.sub, createAccountMemberDto);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Obtener los miembros de una cuenta' })
+  @ApiOperation({
+    summary: 'Obtener los miembros de una cuenta',
+    description:
+      'Solo un OWNER activo de esa cuenta puede listar sus miembros.',
+  })
   @ApiQuery({
     name: 'accountId',
     required: true,
@@ -90,14 +102,25 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
-  findByAccount(@Query('accountId') accountId: string) {
-    return this.accountMemberService.findByAccount(accountId);
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es OWNER de esta cuenta',
+  })
+  findByAccount(
+    @CurrentUser() user: JwtPayload,
+    @Query('accountId') accountId: string,
+  ) {
+    return this.accountMemberService.findByAccount(user.sub, accountId);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Obtener una membresía' })
+  @ApiOperation({
+    summary: 'Obtener una membresía',
+    description:
+      'Solo un OWNER activo de la cuenta de esa membresía puede consultarla.',
+  })
   @ApiParam({
     name: 'id',
     description: 'Identificador único de la membresía en formato UUID v4',
@@ -111,21 +134,26 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es OWNER de esta cuenta',
   })
   @ApiResponse({
     status: 404,
     description: 'Membresía no encontrada',
     type: NotFoundResponse,
   })
-  findOne(@Param('id') id: string) {
-    return this.accountMemberService.findOne(id);
+  findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.accountMemberService.findOne(user.sub, id);
   }
 
   @Patch(':id')
   @ApiOperation({
     summary: 'Actualizar una membresía',
-    description: 'Actualiza el rol, puesto o vigencia del acceso',
+    description:
+      'Actualiza el rol, puesto o vigencia del acceso. Solo un OWNER activo de la cuenta de esa membresía puede hacerlo.',
   })
   @ApiParam({
     name: 'id',
@@ -140,7 +168,11 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es OWNER de esta cuenta',
   })
   @ApiResponse({
     status: 404,
@@ -148,16 +180,22 @@ export class AccountMemberController {
     type: NotFoundResponse,
   })
   update(
+    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() updateAccountMemberDto: UpdateAccountMemberDto,
   ) {
-    return this.accountMemberService.update(id, updateAccountMemberDto);
+    return this.accountMemberService.update(
+      user.sub,
+      id,
+      updateAccountMemberDto,
+    );
   }
 
   @Delete(':id')
   @ApiOperation({
     summary: 'Revocar acceso',
-    description: 'Marca el acceso del usuario a la cuenta como no vigente',
+    description:
+      'Marca el acceso del usuario a la cuenta como no vigente. Solo un OWNER activo de esa cuenta puede revocar acceso.',
   })
   @ApiParam({
     name: 'id',
@@ -172,14 +210,18 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es OWNER de esta cuenta',
   })
   @ApiResponse({
     status: 404,
     description: 'Membresía no encontrada',
     type: NotFoundResponse,
   })
-  remove(@Param('id') id: string) {
-    return this.accountMemberService.remove(id);
+  remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.accountMemberService.remove(user.sub, id);
   }
 }

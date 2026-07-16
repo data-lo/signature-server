@@ -67,19 +67,17 @@ describe('UsersController', () => {
   it('updateSignature delega en signatureService.create y refresca el cache de Redis por CURP', async () => {
     const dto = { signatureImage: {} } as any;
     const files = { signatureImage: [{ originalname: 'firma.png' }] } as any;
-    const createResult = { success: true, message: 'ok', data: { id: 'sig-1' } };
+    const createResult = {
+      success: true,
+      message: 'ok',
+      data: { id: 'sig-1' },
+    };
     signatureService.create.mockResolvedValue(createResult);
 
     const result = await controller.updateSignature(user, dto, files);
 
-    expect(signatureService.create).toHaveBeenCalledWith(
-      'user-1',
-      dto,
-      files,
-    );
-    expect(userService.refreshCurpCacheForUser).toHaveBeenCalledWith(
-      'user-1',
-    );
+    expect(signatureService.create).toHaveBeenCalledWith('user-1', dto, files);
+    expect(userService.refreshCurpCacheForUser).toHaveBeenCalledWith('user-1');
     expect(result).toBe(createResult);
   });
 

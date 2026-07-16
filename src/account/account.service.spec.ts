@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AccountService } from './account.service';
@@ -84,11 +85,12 @@ describe('AccountService', () => {
         save: jest.fn(async (data) => ({ id: 'personal-account-1', ...data })),
       };
 
-      const account = await service.createDefaultPersonalAccount(
-        manager as any,
-        'user-1',
-        'Juan Pérez',
-      );
+      const { account, membership } =
+        await service.createDefaultPersonalAccount(
+          manager as any,
+          'user-1',
+          'Juan Pérez',
+        );
 
       expect(manager.save).toHaveBeenCalledTimes(2);
       expect(account.type).toBe(ACCOUNT_TYPE_ENUM.PERSONAL);
@@ -98,13 +100,17 @@ describe('AccountService', () => {
       expect(memberSaveCall.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
       expect(memberSaveCall.accountId).toBe('personal-account-1');
       expect(memberSaveCall.userId).toBe('user-1');
+      expect(memberSaveCall.isActive).toBe(true);
+
+      expect(membership.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(membership.isActive).toBe(true);
     });
   });
 
   describe('createOrganization', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
 
-    it('crea Account + OrganizationDetail + AccountMember(role NULL) dentro de una transacción y refresca el catálogo en Redis', async () => {
+    it('crea Account + OrganizationDetail + AccountMember(OWNER) dentro de una transacción y refresca el catálogo en Redis', async () => {
       accountRepository.findOne.mockResolvedValue({
         id: 'generated-id',
         name: 'Acme',
@@ -123,14 +129,20 @@ describe('AccountService', () => {
       expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
 
       const memberSaveCall = queryRunner.manager.save.mock.calls[2][0];
-      expect(memberSaveCall.role).toBeNull();
+      expect(memberSaveCall.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
       expect(memberSaveCall.userId).toBe('user-1');
+      expect(memberSaveCall.isActive).toBe(true);
 
-      expect(redisService.set).toHaveBeenCalledWith(
-        'accounts:user-1',
-        expect.any(String),
-      );
+      const [, cachedValue] = redisService.set.mock.calls[0];
+      const cachedCatalog = JSON.parse(cachedValue);
+      expect(cachedCatalog[0].role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(cachedCatalog[0].isActive).toBe(true);
       expect(result.success).toBe(true);
+
+      // La respuesta HTTP debe incluir role/isActive igual que el catálogo
+      // cacheado (antes devolvía la AccountEntity cruda, sin estos campos).
+      expect(result.data.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(result.data.isActive).toBe(true);
     });
 
     it('hace rollback si falla la creación de la membresía', async () => {
@@ -162,8 +174,15 @@ describe('AccountService', () => {
       name: 'Acme Renombrada',
       organizationDetail: { name: 'Acme Renombrada S.A. de C.V.' },
     };
+    const ownerMembership = {
+      userId: 'owner-1',
+      accountId: 'account-1',
+      role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+      isActive: true,
+    };
 
     it('refresca el catálogo de cada miembro activo cuando cambia el nombre', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(ownerMembership);
       accountRepository.findOne
         .mockResolvedValueOnce(existingAccount)
         .mockResolvedValueOnce(renamedAccount);
@@ -172,10 +191,17 @@ describe('AccountService', () => {
         { userId: 'user-2', accountId: 'account-1', isActive: true },
       ]);
       redisService.get.mockResolvedValue(
-        JSON.stringify([{ id: 'account-1', name: 'Acme' }]),
+        JSON.stringify([
+          {
+            id: 'account-1',
+            name: 'Acme',
+            role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+            isActive: true,
+          },
+        ]),
       );
 
-      await service.update('account-1', {
+      await service.update('owner-1', 'account-1', {
         name: 'Acme Renombrada',
         organizationName: 'Acme Renombrada S.A. de C.V.',
       });
@@ -185,18 +211,62 @@ describe('AccountService', () => {
       });
       expect(redisService.set).toHaveBeenCalledTimes(2);
       const [, firstValue] = redisService.set.mock.calls[0];
-      expect(JSON.parse(firstValue)[0].name).toBe('Acme Renombrada');
+      const updatedEntry = JSON.parse(firstValue)[0];
+      expect(updatedEntry.name).toBe('Acme Renombrada');
+      expect(updatedEntry.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(updatedEntry.isActive).toBe(true);
     });
 
     it('no toca Redis si no se actualizó name ni organizationName', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(ownerMembership);
       accountRepository.findOne
         .mockResolvedValueOnce(existingAccount)
         .mockResolvedValueOnce(existingAccount);
 
-      await service.update('account-1', {});
+      await service.update('owner-1', 'account-1', {});
 
       expect(accountMemberRepository.find).not.toHaveBeenCalled();
       expect(redisService.set).not.toHaveBeenCalled();
+    });
+
+    it('lanza ForbiddenException si el llamador no es OWNER activo de la cuenta', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.update('intruder', 'account-1', { name: 'Hackeada' }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findOne', () => {
+    it('retorna la cuenta si el llamador es OWNER activo', async () => {
+      accountMemberRepository.findOne.mockResolvedValue({
+        userId: 'owner-1',
+        accountId: 'account-1',
+        role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        isActive: true,
+      });
+      accountRepository.findOne.mockResolvedValue({
+        id: 'account-1',
+        name: 'Acme',
+        type: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        createdAt: new Date('2026-01-01'),
+        organizationDetail: { name: 'Acme Corp S.A. de C.V.' },
+      });
+
+      const result = await service.findOne('owner-1', 'account-1');
+
+      expect(result.data.id).toBe('account-1');
+    });
+
+    it('lanza ForbiddenException si el llamador no es OWNER activo de la cuenta', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.findOne('intruder', 'account-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(accountRepository.findOne).not.toHaveBeenCalled();
     });
   });
 
@@ -248,19 +318,27 @@ describe('AccountService', () => {
         ]),
       );
 
-      await service.appendAccountToCatalog('user-1', account);
+      await service.appendAccountToCatalog('user-1', account, {
+        role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        isActive: true,
+      });
 
       const [key, value] = redisService.set.mock.calls[0];
       expect(key).toBe('accounts:user-1');
       const saved = JSON.parse(value);
       expect(saved).toHaveLength(2);
       expect(saved[1].id).toBe('account-1');
+      expect(saved[1].role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(saved[1].isActive).toBe(true);
     });
 
     it('empieza un catálogo nuevo si la key no existe en Redis', async () => {
       redisService.get.mockResolvedValue(null);
 
-      await service.appendAccountToCatalog('user-1', account);
+      await service.appendAccountToCatalog('user-1', account, {
+        role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        isActive: true,
+      });
 
       const [, value] = redisService.set.mock.calls[0];
       const saved = JSON.parse(value);
@@ -271,7 +349,10 @@ describe('AccountService', () => {
       redisService.get.mockRejectedValue(new Error('ECONNREFUSED'));
 
       await expect(
-        service.appendAccountToCatalog('user-1', account),
+        service.appendAccountToCatalog('user-1', account, {
+          role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+          isActive: true,
+        }),
       ).resolves.toBeUndefined();
     });
   });

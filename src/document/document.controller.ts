@@ -18,6 +18,7 @@ import {
   ApiTags,
   ApiQuery,
   ApiParam,
+  ApiHeader,
   ApiConsumes,
   ApiResponse,
   ApiOperation,
@@ -38,6 +39,7 @@ import { ClientIp } from 'src/ip/ip.decorator';
 
 // Decorators
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
+import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 
 // Interfaces
 import {
@@ -70,6 +72,12 @@ export class DocumentController {
 
   @Post()
   @ApiOperation({ summary: 'Registrar nuevo documento para firmar' })
+  @ApiHeader({
+    name: 'X-Account-Id',
+    description:
+      'UUID de la cuenta activa (personal u organización). El documento queda scopeado a esa cuenta; el usuario debe ser miembro activo.',
+    required: true,
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateDocumentDto })
   @ApiResponse({
@@ -89,6 +97,10 @@ export class DocumentController {
     description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
   @ApiResponse({
+    status: 403,
+    description: 'No perteneces a la cuenta activa (X-Account-Id)',
+  })
+  @ApiResponse({
     status: 404,
     description:
       'Algún firmante o espectador especificado no existe en el sistema',
@@ -97,12 +109,14 @@ export class DocumentController {
   @UseInterceptors(FileInterceptor('file'), IpInterceptor)
   async create(
     @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
     @Body() createDocumentDto: CreateDocumentDto,
     @UploadedFile() file: Express.Multer.File,
     @ClientIp() ip: string,
   ) {
     return await this.documentService.create(
       user.sub,
+      accountId,
       createDocumentDto,
       file,
       ip,
@@ -111,6 +125,12 @@ export class DocumentController {
 
   @Get()
   @ApiOperation({ summary: 'Consultar documentos con filtros opcionales' })
+  @ApiHeader({
+    name: 'X-Account-Id',
+    description:
+      'UUID de la cuenta activa (personal u organización). El listado se restringe a los documentos de esa cuenta; el usuario debe ser miembro activo.',
+    required: true,
+  })
   @ApiQuery({
     name: 'id',
     required: false,
@@ -200,8 +220,16 @@ export class DocumentController {
     status: 401,
     description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
-  findAll(@Query() query: GetDocumentsQueryDto) {
-    return this.documentService.findWithFilters(query);
+  @ApiResponse({
+    status: 403,
+    description: 'No perteneces a la cuenta activa (X-Account-Id)',
+  })
+  findAll(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+    @Query() query: GetDocumentsQueryDto,
+  ) {
+    return this.documentService.findWithFilters(user.sub, accountId, query);
   }
 
   @Get(':id')
