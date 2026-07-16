@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import * as Minio from 'minio';
 import { MinioFileI } from './interfaces/minio.file.interface';
 import { FILE_STATUS_ENUM } from './enums/file-status-enum';
@@ -136,6 +136,70 @@ export class MinioService {
     }
   }
 
+
+  async uploadPdfAObject(
+    file:MinioFileI,
+    type:BUCKET_TYPES_ENUM,
+    signerFullName:string,
+    objectKey?:string,
+  ):Promise<{
+    status:FILE_STATUS_ENUM,
+    fileId:string,
+    bucket:string,
+    fileType:string
+  }>{
+    try{
+      const minioClient = await this.getMinioClient();
+      const bucketName = await this.getBucketByType(type);
+
+      await minioClient.bucketExists(bucketName, (err, exists) => {
+        if (err) {
+          throw new Error(
+            `Error al verificar la existencia del bucket: ${err}`,
+          );
+        }
+      });
+
+      this.logger.log(file.name);
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      this.logger.log(`Extension Document ${extension}`);
+          
+      if(!objectKey){
+        objectKey = `${uuid4()}.${extension}`;  
+      }
+
+      this.logger.log(`Nombre Documento ${objectKey}`)
+      const {buffer:fileBuffer,mimetype} = this.resolveFileData(file);
+      if (!fileBuffer) {
+        throw new Error('El archivo no contiene datos válidos');
+      }
+
+      await minioClient.putObject(
+        bucketName, 
+        objectKey, 
+        fileBuffer,
+        fileBuffer.length, 
+        mimetype,
+        {
+        'Content-Type': mimetype,
+        'x-amz-meta-pdfa-conformance':'PDF/A-2B',
+        'x-amz-meta-signed-at':new Date().toString(),
+        'x-amz-meta-signer':signerFullName
+        }
+    );
+
+      return {
+        fileType: mimetype,
+        bucket: bucketName,
+        status: FILE_STATUS_ENUM.FILE_CREATED,
+        fileId: objectKey,
+      };
+
+    }catch(error){
+      throw new InternalServerErrorException(`Error cargano PDF/A en minio ${error}`)
+    }
+  }
+
   async uploadObject(
     file: MinioFileI,
     type: BUCKET_TYPES_ENUM,
@@ -188,7 +252,7 @@ export class MinioService {
   }
 
   async getFile(
-    fileId: string,
+    fileId: string, // OBJECT KEY,
     bucketType: BUCKET_TYPES_ENUM,
     expiresIn: number = 24 * 60 * 60,
   ): Promise<GetFileResponse> {
@@ -349,6 +413,8 @@ export class MinioService {
       throw new Error(`Error obteniendo Bytes de Archivo desde Minio ${error}`)
     }
   }
+
+  
 
   private addFileExtension(fileId: string, bucketType: BUCKET_TYPES_ENUM): string {
     switch (bucketType) {

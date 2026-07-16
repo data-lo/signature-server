@@ -18,18 +18,14 @@ import { AuditModule } from './audit/audit.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
-import { EventEmitterModule } from '@nestjs/event-emitter';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
-import { VerificationCodeModule } from './verification-code/verification-code.module';
+import { HealthModule } from './health/health.module';
+import { AccountModule } from './account/account.module';
 
 
 @Module({
   imports: [
-    EventEmitterModule.forRoot({
-      delimiter: '.'
-    }),
-
     TypeOrmModule.forRootAsync({
       name: 'default',
       imports: [ConfigModule],
@@ -65,10 +61,11 @@ import { VerificationCodeModule } from './verification-code/verification-code.mo
     AuthModule,
     DocumentModule,
     UserModule,
+    AccountModule,
     AuditModule,
     SignatureModule,
-    VerificationCodeModule,
     SharedModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService, {

@@ -1,4 +1,3 @@
-import { DocumentEntity } from "src/document/entities/document.entity";
 import { UserEntity } from "src/user/entities/user.entity";
 import { Column, CreateDateColumn, Entity, JoinColumn, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 
@@ -8,8 +7,8 @@ export class SignatureEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'signature_object_key' })
-  signatureObjectKey: string;
+  @Column({ nullable: true, name: 'signature_object_key' })
+  signatureObjectKey: string | null;
 
   @Column({ nullable: true, name: 'official_card_object_key' })
   officialCardObjectKey: string | null;

@@ -7,6 +7,7 @@ import { EmailService } from './email/email.service';
 import { MinioService } from './minio/minio.service';
 import { RedisService } from './redis/redis.service';
 import { PdfSignatureService } from './document-signing/document-signing.service';
+import { PasswordService } from './password/password.service';
 
 const services = [
   PdfSignatureService,
@@ -15,6 +16,7 @@ const services = [
   MinioService,
   OTPService,
   RedisService,
+  PasswordService,
 ];
 
 @Module({

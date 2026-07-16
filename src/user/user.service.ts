@@ -1,83 +1,205 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import { Injectable, NotFoundException } from '@nestjs/common';
+// External dependencies
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+
+// DTOs
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+
+// Entities
 import { UserEntity } from './entities/user.entity';
-import { SignatureService } from 'src/signature/signature.service';
-import { NotFoundError } from 'rxjs';
+
+// Enums
 import { UserRoles } from './enums/user-roles';
-import { ApiResponseDto } from 'src/interfaces/api-response.dto';
+
+// Interfaces
+import { BaseResponse } from 'src/interfaces/api-response.dto';
+import { SignatureService } from 'src/signature/signature.service';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(UserEntity)
     private userRepository: Repository<UserEntity>,
+
     private signatureService: SignatureService
   ) { }
 
-  async create(createUserDto: CreateUserDto): Promise<UserEntity> {
-    const { firstName, lastName, email, position, roles, nationalId } = createUserDto;
+  async create(createUserDto: CreateUserDto): Promise<BaseResponse<UserEntity>> {
+    const existingUser = await this.userRepository.findOne({
+      where: { email: createUserDto.email.toLowerCase() }
+    });
+    if (existingUser) {
+      throw new ConflictException('Ya existe un usuario registrado con ese correo electrónico');
+    }
 
     const user = this.userRepository.create({
-      firstName: firstName.toUpperCase(),
-      lastName: lastName.toUpperCase(),
-      email: email.toLowerCase(),
-      position: position.toUpperCase(),
-      roles: roles ?? [UserRoles.SIGNER],
-      nationalId: nationalId.toUpperCase(),
+      ...(createUserDto.firstName && { firstName: createUserDto.firstName.toUpperCase() }),
+      ...(createUserDto.lastName && { lastName: createUserDto.lastName.toUpperCase() }),
+      ...(createUserDto.email && { email: createUserDto.email.toLowerCase() }),
+      ...(createUserDto.position && { position: createUserDto.position.toUpperCase() }),
+      roles: createUserDto.roles ?? [UserRoles.SIGNER],
+      ...(createUserDto.nationalId && { nationalId: createUserDto.nationalId.toUpperCase() }),
     });
 
-    const new_user = await this.userRepository.save(user);
+    const newUser = await this.userRepository.save(user);
 
-    return this.removeSensitiveData(new_user);
+    return {
+      success: true,
+      message: 'Usuario creado correctamente',
+      data: this.removeSensitiveData(newUser),
+    };
   }
 
-  async findAllActiveUsers(): Promise<UserEntity[]> {
+  async findAllActiveUsers(withSignature = false): Promise<BaseResponse<UserEntity[]>> {
     const users = await this.userRepository.find({
       where: { isActive: true },
+      ...(withSignature && {
+        relations: { signature: true },
+        select: {
+          signature: {
+            id: true,
+            signatureObjectKey: true
+          }
+        }
+      })
     });
+
     if (!users || users.length === 0) {
-      return [];
+      return {
+        success: true,
+        message: 'No hay usuarios registrados',
+        data: [],
+      };
     }
-    const secure_users = [];
-    users.forEach(user => {
-      const secure_user = this.removeSensitiveData(user);
-      secure_users.push(secure_user);
-    });
-    return secure_users;
+
+    const secureUsers = await Promise.all(
+      users.map(async (user) => {
+        const { signature: _rawSignature, ...sanitizedUser } = this.removeSensitiveData(user);
+
+        if (withSignature && user.signature?.signatureObjectKey) {
+          try {
+            const signature = await this.signatureService.getFile(
+              user.signature.signatureObjectKey,
+              BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+            );
+
+            return {
+              ...sanitizedUser,
+              signature: {
+                id: user.signature.id,
+                secureUrl: signature.secureUrl,
+                expiresIn: signature.expiresIn,
+              }
+            };
+          } catch {
+            return sanitizedUser;
+          }
+        }
+        return sanitizedUser;
+      })
+    );
+
+    return {
+      success: true,
+      message: 'Usuarios obtenidos correctamente',
+      data: secureUsers as any,
+    };
   }
 
-  async findOneActiveUser(id: string): Promise<UserEntity | null> {
+  async findOneActiveUser(id: string, withSignature = false): Promise<BaseResponse<UserEntity | null>> {
     const user = await this.userRepository.findOne({
       where: { id, isActive: true },
+      ...(withSignature && {
+        relations: {
+          signature: true
+        },
+        select: {
+          signature: {
+            id: true,
+            signatureObjectKey: true,
+            officialCardObjectKey: true,
+          }
+        }
+      })
     });
 
     if (!user) {
       throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
     }
 
-    return this.removeSensitiveData(user);
+    let signature;
+    let officialFile;
+
+    const { signature: _rawSignature, ...sanitizedUser } = this.removeSensitiveData(user);
+
+    if (withSignature && user.signature?.signatureObjectKey) {
+      try {
+        signature = await this.signatureService.getFile(
+          user.signature.signatureObjectKey,
+          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
+        );
+      } catch {
+        signature = null;
+      }
+    }
+
+    if (withSignature && user.signature?.officialCardObjectKey) {
+      try {
+        officialFile = await this.signatureService.getFile(
+          user.signature.officialCardObjectKey,
+          BUCKET_TYPES_ENUM.OFICIAL_CARDS
+        );
+      } catch {
+        officialFile = null;
+      }
+    }
+
+    const newUserObject = {
+      ...sanitizedUser,
+      ...(withSignature && signature && {
+        signature: {
+          id: user.signature.id,
+          secureUrl: signature.secureUrl,
+          expiresIn: signature.expiresIn
+        }
+      }),
+      ...(withSignature && officialFile && {
+        officialFile: {
+          id: user.signature.id,
+          secureUrl: officialFile.secureUrl,
+          expiresIn: officialFile.expiresIn
+        }
+      })
+    };
+
+    return {
+      success: true,
+      message: 'Usuario obtenido correctamente',
+      data: newUserObject as any,
+    };
   }
 
-  async update(id: string, updateUserDto: UpdateUserDto): Promise<UserEntity> {
-
-    const dbUser = await this.userRepository.findOne({ where: { id } });
-
-    const { position, roles, firstName, lastName, nationalId, email } = updateUserDto;
-
+  async update(id: string, updateUserDto: UpdateUserDto): Promise<BaseResponse<any>> {
     await this.userRepository.update(id, {
-      firstName: firstName ? firstName.toUpperCase() : dbUser.firstName,
-      lastName: lastName ? lastName.toUpperCase() : dbUser.lastName,
-      email: email ? email.toLowerCase() : dbUser.email,
-      position: position ? position.toUpperCase() : dbUser.position,
-      roles: roles,
-      nationalId: nationalId ? nationalId.toUpperCase() : dbUser.nationalId,
+      ...(updateUserDto.firstName && { firstName: updateUserDto.firstName.toUpperCase() }),
+      ...(updateUserDto.lastName && { lastName: updateUserDto.lastName.toUpperCase() }),
+      ...(updateUserDto.email && { email: updateUserDto.email.toLowerCase() }),
+      ...(updateUserDto.position && { position: updateUserDto.position.toUpperCase() }),
+      ...(updateUserDto.roles && { roles: updateUserDto.roles }),
+      ...(updateUserDto.nationalId && { nationalId: updateUserDto.nationalId.toUpperCase() }),
     });
 
-    return this.findOneActiveUser(id);
+
+    const updatedUser = await this.findOneActiveUser(id);
+
+    return {
+      success: true,
+      message: 'Usuario actualizado correctamente',
+      data: updatedUser,
+    };
   }
 
   async findOne(id: string): Promise<UserEntity> {
@@ -95,17 +217,7 @@ export class UserService {
     return this.userRepository.findOne({ where: { email, isDeleted: false } });
   }
 
-  async remove(id: string): Promise<string> {
-    const user = await this.findOne(id);
-    const signatureId = user.signatureId;
-    try{
-      await this.signatureService.deactivate(signatureId);
-    }catch(error){
-      throw new InternalServerErrorException('Error sobreescribiendo el PNG de la firma por BlankPNG')
-    }
-    await this.userRepository.update(id, { isDeleted: true, isActive: false });
-    return 'User deleted';
-  async remove(id: string): Promise<ApiResponseDto> {
+  async remove(id: string): Promise<BaseResponse> {
     const result = await this.userRepository.update(
       { id, isActive: true },
       { isDeleted: true, isActive: false }
@@ -124,8 +236,42 @@ export class UserService {
   private removeSensitiveData(user: UserEntity): UserEntity;
   private removeSensitiveData(user: UserEntity[]): UserEntity[];
   private removeSensitiveData(user: UserEntity | UserEntity[]): UserEntity | UserEntity[] {
-    const strip = ({ signatureId, createdAt, updatedAt, isActive, isDeleted, ...safeUser }: UserEntity) => safeUser as UserEntity;
+    const strip = ({ signatureId, createdAt, updatedAt, isActive, isDeleted, password, ...safeUser }: UserEntity) => safeUser as UserEntity;
 
     return Array.isArray(user) ? user.map(strip) : strip(user);
+  }
+
+  sanitize(user: UserEntity): UserEntity {
+    return this.removeSensitiveData(user);
+  }
+
+  async createFromSignup(
+    dto: { firstName: string; lastName: string; email: string; position: string; nationalId: string },
+    hashedPassword: string,
+  ): Promise<BaseResponse<UserEntity>> {
+    const existingUser = await this.userRepository.findOne({
+      where: { email: dto.email.toLowerCase() },
+    });
+    if (existingUser) {
+      throw new ConflictException('Ya existe un usuario registrado con ese correo electrónico');
+    }
+
+    const user = this.userRepository.create({
+      firstName: dto.firstName.toUpperCase(),
+      lastName: dto.lastName.toUpperCase(),
+      email: dto.email.toLowerCase(),
+      position: dto.position.toUpperCase(),
+      roles: [UserRoles.SIGNER],
+      nationalId: dto.nationalId.toUpperCase(),
+      password: hashedPassword,
+    });
+
+    const newUser = await this.userRepository.save(user);
+
+    return {
+      success: true,
+      message: 'Usuario registrado correctamente',
+      data: this.removeSensitiveData(newUser),
+    };
   }
 }

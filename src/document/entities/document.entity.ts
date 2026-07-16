@@ -1,8 +1,9 @@
 
 import { SignatureCoordinates } from "../interfaces/signature-coordinates";
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { UserEntity } from "src/user/entities/user.entity";
 import { DOCUMENT_STATUS_ENUM } from "../enum/document-status.enum";
+import { DocumentParticipantEntity } from "./document-participant.entity";
 
 // document.entity.ts
 @Entity('documents')
@@ -70,15 +71,11 @@ export class DocumentEntity {
     @Column({ name: 'created_by' })
     createdBy: string;
 
-    @Column({ name: 'signer_id' })
-    signerId: string;
-
     @ManyToOne(() => UserEntity, (user) => user.createdDocuments)
     @JoinColumn({ name: 'created_by' })
     requestedBy: UserEntity;
 
-    @ManyToOne(() => UserEntity, (user) => user.documentsToSign)
-    @JoinColumn({ name: 'signer_id' })
-    signer: UserEntity;
+    @OneToMany(() => DocumentParticipantEntity, (participant) => participant.document, { cascade: true })
+    participants: DocumentParticipantEntity[];
 
 }
