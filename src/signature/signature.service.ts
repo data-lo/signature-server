@@ -44,6 +44,24 @@ export class SignatureService {
   }
 
   /**
+   * Verifica que la firma pertenezca al usuario autenticado consultando
+   * el FK signatureId del lado de User (dueño real de la relación).
+   */
+  private async assertOwnership(
+    signatureId: string,
+    currentUserId: string,
+  ): Promise<void> {
+    const user = await this.userRepository.findOne({
+      where: { id: currentUserId },
+    });
+    if (!user || user.signatureId !== signatureId) {
+      throw new ForbiddenException(
+        'La firma no pertenece al usuario autenticado',
+      );
+    }
+  }
+
+  /**
    * Elimina un objeto de Minio de forma idempotente: si el archivo ya no existe
    * (por ejemplo, un intento de borrado previo que falló a mitad de camino),
    * no lanza error para permitir que el registro en BD se termine de limpiar.
@@ -90,13 +108,7 @@ export class SignatureService {
       throw new NotFoundException(`Usuario con id ${userId} no encontrado`);
     }
 
-    const signature = await this.signatureRepository.findOne({
-      where: {
-        userId: user.id,
-      },
-    });
-
-    if (signature) {
+    if (user.signatureId) {
       throw new ConflictException('El usuario ya tiene una firma registrada');
     }
 
@@ -126,7 +138,10 @@ export class SignatureService {
       );
     }
 
-    if (officialCardObjectKeyResponse?.status !== 'FILE_CREATED') {
+    if (
+      officialFile &&
+      officialCardObjectKeyResponse?.status !== 'FILE_CREATED'
+    ) {
       throw new InternalServerErrorException(
         'Error al subir la imagen de identificación oficial a nuestros servidores',
       );
@@ -134,10 +149,8 @@ export class SignatureService {
 
     const newSignature = this.signatureRepository.create({
       signatureObjectKey: signatureObjectKeyResponse.fileId,
-      officialCardObjectKey: officialCardObjectKeyResponse.fileId,
-      createdBy: userId,
+      officialCardObjectKey: officialCardObjectKeyResponse?.fileId ?? null,
       isActive: true,
-      userId,
     });
 
     const saved = await this.signatureRepository.save(newSignature);
@@ -172,11 +185,7 @@ export class SignatureService {
       throw new NotFoundException(`Firma con id ${id} no encontrada`);
     }
 
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
-      );
-    }
+    await this.assertOwnership(id, currentUserId);
 
     let message = 'Firma actualizada correctamente';
 
@@ -257,11 +266,7 @@ export class SignatureService {
   ): Promise<BaseResponse<null>> {
     const signature = await this.findOne(id);
 
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
-      );
-    }
+    await this.assertOwnership(id, currentUserId);
 
     if (!signature.signatureObjectKey) {
       throw new BadRequestException(
@@ -277,7 +282,7 @@ export class SignatureService {
 
     if (!signature.officialCardObjectKey) {
       await this.signatureRepository.delete({ id });
-      await this.userRepository.update(signature.userId, { signatureId: null });
+      await this.userRepository.update(currentUserId, { signatureId: null });
     } else {
       await this.signatureRepository.update(
         { id },
@@ -303,11 +308,7 @@ export class SignatureService {
   ): Promise<BaseResponse<null>> {
     const signature = await this.findOne(id);
 
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
-      );
-    }
+    await this.assertOwnership(id, currentUserId);
 
     if (!signature.officialCardObjectKey) {
       throw new BadRequestException(
@@ -323,7 +324,7 @@ export class SignatureService {
 
     if (!signature.signatureObjectKey) {
       await this.signatureRepository.delete({ id });
-      await this.userRepository.update(signature.userId, { signatureId: null });
+      await this.userRepository.update(currentUserId, { signatureId: null });
     } else {
       await this.signatureRepository.update(
         { id },
@@ -345,11 +346,7 @@ export class SignatureService {
       throw new NotFoundException(`Firma con ID ${id} no encontrada`);
     }
 
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
-      );
-    }
+    await this.assertOwnership(id, currentUserId);
 
     if (!signature.isActive) {
       throw new BadRequestException(

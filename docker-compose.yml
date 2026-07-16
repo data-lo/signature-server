@@ -82,38 +82,56 @@ services:
     networks:
       - signature_network
 
-  nestjs:
-    image: dataloplatforms/signature-server:1.0.0
-    container_name: nestjs
-    restart: always
-    ports: 
-      - "4000:4000"
-    depends_on:
-      - postgres
-      - mongo
-      - minio
-      - redis
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: signature_kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    ports:
+      - "9094:9094"
+    volumes:
+      - kafka_data:/tmp/kraft-combined-logs
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks:
       - signature_network
 
-  nextjs:
-    image: dataloplatforms/signature-app:1.0.0
-    container_name: nextjs
-    restart: always
-    ports: 
-      - "4005:4005"
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: signature_kafka_ui
+    restart: unless-stopped
+    environment:
+      KAFKA_CLUSTERS_0_NAME: signature-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "${KAFKA_UI_PORT}:8080"
     depends_on:
-      - postgres
-      - mongo
-      - minio
+      - kafka
     networks:
       - signature_network
-
+      
 volumes:
   minio_data_v2:
   postgres_data:
   mongo_data:
   redis_data:
+  kafka_data:
 
 networks:
   signature_network:
