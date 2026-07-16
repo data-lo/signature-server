@@ -10,7 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 
 // TypeORM
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 // Entities
 import { DocumentEntity } from './entities/document.entity';
@@ -41,6 +41,7 @@ import { SignatureService } from 'src/signature/signature.service';
 import { EmailService } from 'src/shared/email/email.service';
 import { AuditService } from 'src/audit/audit.service';
 import { AuditAction } from 'src/audit/schema/audit-document';
+import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
@@ -77,6 +78,7 @@ export class DocumentService {
     private readonly signatureService: SignatureService,
     private readonly emailService: EmailService,
     private readonly auditService: AuditService,
+    private readonly documentEventsProducer: DocumentEventsProducer,
   ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus participantes (firmantes/espectadores) en la base de datos. */
@@ -94,10 +96,32 @@ export class DocumentService {
       const { signerIds, spectatorIds, signatureCoordinates } =
         createDocumentDto;
 
+      const allParticipantIds = [...signerIds, ...(spectatorIds ?? [])];
+      const uniqueParticipantIds = new Set(allParticipantIds);
+      if (uniqueParticipantIds.size !== allParticipantIds.length) {
+        throw new BadRequestException(
+          'No puedes seleccionar al mismo usuario más de una vez entre firmantes y espectadores',
+        );
+      }
+
+      const duplicateNameDocument = await this.documentRepository.findOne({
+        where: {
+          createdBy,
+          fileName: file.originalname,
+          status: In([
+            DOCUMENT_STATUS_ENUM.CREATED,
+            DOCUMENT_STATUS_ENUM.PENDING,
+          ]),
+        },
+      });
+      if (duplicateNameDocument) {
+        throw new BadRequestException(
+          `Ya tienes un documento con el nombre "${file.originalname}" pendiente de firma. Renómbralo o espera a que finalice su proceso de firma.`,
+        );
+      }
+
       await Promise.all(
-        [...signerIds, ...(spectatorIds ?? [])].map((userId) =>
-          this.userService.findOne(userId),
-        ),
+        allParticipantIds.map((userId) => this.userService.findOne(userId)),
       );
 
       const minioUploadDocumentResponse = await this.minioService.uploadObject(
@@ -146,6 +170,18 @@ export class DocumentService {
       ];
 
       await this.participantRepository.save(participants);
+
+      void this.auditService.create({
+        documentId: savedDocument.id,
+        operation: AuditAction.DOCUMENT_CREATED,
+        ipAddress: ip,
+        users: [{ userId: createdBy, action: AuditAction.DOCUMENT_CREATED }],
+      });
+      this.documentEventsProducer.emitCreated({
+        documentId: savedDocument.id,
+        fileName: savedDocument.fileName,
+        actorUserId: createdBy,
+      });
 
       const url = await this.getDocumentMinioURL(savedDocument.id);
       const { signers, spectators } = await this.getParticipantNames(
@@ -413,6 +449,13 @@ export class DocumentService {
       isMyTurn &&
       myParticipant?.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING;
 
+    const canRequestCancellation =
+      isCreator && document.status === DOCUMENT_STATUS_ENUM.SIGNED;
+
+    const canConfirmCancellation =
+      document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING &&
+      myParticipant?.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER;
+
     return {
       success: true,
       message: 'Documento obtenido correctamente',
@@ -438,6 +481,8 @@ export class DocumentService {
         myStatus: myParticipant?.status ?? null,
         canSign: canAct,
         canReject: canAct,
+        canRequestCancellation,
+        canConfirmCancellation,
       },
     };
   }
@@ -633,6 +678,20 @@ export class DocumentService {
     document.status = DOCUMENT_STATUS_ENUM.PENDING;
     await this.documentRepository.save(document);
 
+    void this.auditService.create({
+      documentId,
+      operation: AuditAction.DOCUMENT_SENT_TO_SIGN,
+      ipAddress: document.ipAddress ?? '0.0.0.0',
+      users: [
+        { userId: currentUserId, action: AuditAction.DOCUMENT_SENT_TO_SIGN },
+      ],
+    });
+    this.documentEventsProducer.emitSentToSign({
+      documentId,
+      fileName: document.fileName,
+      actorUserId: currentUserId,
+    });
+
     try {
       await this.notifyNextSigner(documentId);
     } catch (error) {
@@ -761,6 +820,11 @@ export class DocumentService {
     // quedan marcados como firmados, y la firma puede reintentarse sin quedar atascada.
     if (remainingSigners.length === 0) {
       await this.finalizeSignedDocument(document, signerParticipants);
+      this.documentEventsProducer.emitSigned({
+        documentId,
+        fileName: document.fileName,
+        actorUserId: currentUserId,
+      });
     }
 
     myParticipant.status = DOCUMENT_PARTICIPANT_STATUS_ENUM.SIGNED;
@@ -989,6 +1053,11 @@ export class DocumentService {
       ipAddress: document.ipAddress ?? '0.0.0.0',
       users: [{ userId: currentUserId, action: AuditAction.DOCUMENT_REJECTED }],
     });
+    this.documentEventsProducer.emitRejected({
+      documentId,
+      fileName: document.fileName,
+      actorUserId: currentUserId,
+    });
 
     const creator = await this.userService.findOne(document.createdBy);
     try {
@@ -1012,9 +1081,18 @@ export class DocumentService {
     };
   }
 
-  /** Pasa un documento ya firmado a estatus CANCELLATION_PENDING y notifica a los firmantes. */
-  async requestCancellation(documentId: string): Promise<BaseResponse<null>> {
+  /** Pasa un documento ya firmado a estatus CANCELLATION_PENDING y notifica a los firmantes. Solo el creador puede solicitarlo. */
+  async requestCancellation(
+    documentId: string,
+    currentUserId: string,
+  ): Promise<BaseResponse<null>> {
     const document = await this.findOne(documentId);
+
+    if (document.createdBy !== currentUserId) {
+      throw new ForbiddenException(
+        'El documento no pertenece al usuario autenticado',
+      );
+    }
 
     if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
       throw new BadRequestException(
@@ -1050,6 +1128,97 @@ export class DocumentService {
       success: true,
       message: 'Solicitud de cancelación enviada exitosamente',
       data: null,
+    };
+  }
+
+  /**
+   * Confirma la cancelación de un documento: cualquier firmante puede aprobarla (basta una
+   * confirmación, igual que el rechazo). Estampa "CANCELADO", mueve el archivo a cancelados y
+   * notifica a todos los participantes.
+   */
+  async confirmCancellation(
+    documentId: string,
+    currentUserId: string,
+  ): Promise<BaseResponse<{ id: string }>> {
+    const document = await this.findOne(documentId);
+
+    if (document.status !== DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING) {
+      throw new BadRequestException(
+        `El documento no puede cancelarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING}', el estatus actual es '${document.status}'`,
+      );
+    }
+
+    const participants = await this.participantRepository.find({
+      where: { documentId },
+      relations: { user: true },
+    });
+
+    const isSigner = participants.some(
+      (p) =>
+        p.userId === currentUserId &&
+        p.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER,
+    );
+    if (!isSigner) {
+      throw new ForbiddenException('No eres firmante de este documento');
+    }
+
+    const documentBuffer = await this.minioService.getFileInBytesFormat(
+      document.objectKey,
+      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    );
+    const cancelledDocument =
+      await this.documentSigningSerivice.stampCancelledWatermark(
+        documentBuffer,
+      );
+
+    await this.minioService.uploadObject(
+      {
+        file: cancelledDocument,
+        name: document.fileName,
+        mimetype: 'application/pdf',
+      },
+      BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+      document.objectKey,
+    );
+
+    document.cancelledAt = new Date();
+    document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
+    await this.documentRepository.save(document);
+
+    void this.auditService.create({
+      documentId,
+      operation: AuditAction.DOCUMENT_CANCELLED,
+      ipAddress: document.ipAddress ?? '0.0.0.0',
+      users: [
+        { userId: currentUserId, action: AuditAction.DOCUMENT_CANCELLED },
+      ],
+    });
+    this.documentEventsProducer.emitCancelled({
+      documentId,
+      fileName: document.fileName,
+      actorUserId: currentUserId,
+    });
+
+    try {
+      await Promise.all(
+        participants.map((participant) =>
+          this.emailService.sendDocumentCancelledNotification(
+            participant.user.email,
+            `${participant.user.firstName} ${participant.user.lastName}`,
+            document.fileName,
+          ),
+        ),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error notificando la cancelación del documento ${documentId}: ${error}`,
+      );
+    }
+
+    return {
+      success: true,
+      message: 'Documento cancelado exitosamente',
+      data: { id: documentId },
     };
   }
 }

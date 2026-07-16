@@ -8,6 +8,7 @@ import { SharedModule } from 'src/shared/shared.module';
 import { UserModule } from 'src/user/user.module';
 import { SignatureModule } from 'src/signature/signature.module';
 import { AuditModule } from 'src/audit/audit.module';
+import { KafkaModule } from 'src/kafka/kafka.module';
 
 @Module({
   controllers: [DocumentController],
@@ -18,6 +19,7 @@ import { AuditModule } from 'src/audit/audit.module';
     UserModule,
     SignatureModule,
     AuditModule,
+    KafkaModule,
   ],
   exports: [DocumentService],
 })
