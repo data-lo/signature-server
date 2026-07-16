@@ -1,4 +1,8 @@
-import { ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AccountService } from './account.service';
@@ -45,7 +49,10 @@ describe('AccountService', () => {
   let dataSource: { createQueryRunner: jest.Mock };
   let queryRunner: ReturnType<typeof createMockQueryRunner>;
   let redisService: { set: jest.Mock; get: jest.Mock };
-  let rolesService: { findSystemRoleByName: jest.Mock };
+  let rolesService: {
+    findSystemRoleByName: jest.Mock;
+    findByIdOrFail: jest.Mock;
+  };
 
   beforeEach(async () => {
     accountRepository = createMockRepository();
@@ -56,6 +63,7 @@ describe('AccountService', () => {
     redisService = { set: jest.fn(), get: jest.fn() };
     rolesService = {
       findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
+      findByIdOrFail: jest.fn().mockResolvedValue({ id: 'member-role-1' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -390,6 +398,91 @@ describe('AccountService', () => {
       const result = await service.getAccountsCatalog('user-1');
 
       expect(result.data).toEqual([]);
+    });
+  });
+
+  describe('inviteMember', () => {
+    const dto = { email: 'nuevo@empresa.com', roleId: 'member-role-1' };
+
+    it('responde éxito si el llamador es ADMIN de una organización y el roleId existe', async () => {
+      accountMemberRepository.findOne.mockResolvedValue({
+        userId: 'admin-1',
+        accountId: 'org-1',
+        roleId: ADMIN_ROLE.id,
+        role: ADMIN_ROLE,
+        isActive: true,
+      });
+      accountRepository.findOne.mockResolvedValue({
+        id: 'org-1',
+        type: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      });
+
+      const result = await service.inviteMember('admin-1', 'org-1', dto);
+
+      expect(rolesService.findByIdOrFail).toHaveBeenCalledWith('member-role-1');
+      expect(result).toEqual({
+        success: true,
+        message: 'Invitación registrada correctamente',
+        data: null,
+      });
+    });
+
+    it('lanza BadRequestException si falta accountId (header X-Account-Id)', async () => {
+      await expect(service.inviteMember('admin-1', '', dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(accountMemberRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN de la cuenta', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.inviteMember('intruder', 'org-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('lanza BadRequestException si la cuenta activa no es de tipo ORGANIZATION', async () => {
+      accountMemberRepository.findOne.mockResolvedValue({
+        userId: 'admin-1',
+        accountId: 'personal-1',
+        roleId: ADMIN_ROLE.id,
+        role: ADMIN_ROLE,
+        isActive: true,
+      });
+      accountRepository.findOne.mockResolvedValue({
+        id: 'personal-1',
+        type: ACCOUNT_TYPE_ENUM.PERSONAL,
+      });
+
+      await expect(
+        service.inviteMember('admin-1', 'personal-1', dto),
+      ).rejects.toThrow(BadRequestException);
+      expect(rolesService.findByIdOrFail).not.toHaveBeenCalled();
+    });
+
+    it('lanza NotFoundException si el roleId no corresponde a un rol existente', async () => {
+      accountMemberRepository.findOne.mockResolvedValue({
+        userId: 'admin-1',
+        accountId: 'org-1',
+        roleId: ADMIN_ROLE.id,
+        role: ADMIN_ROLE,
+        isActive: true,
+      });
+      accountRepository.findOne.mockResolvedValue({
+        id: 'org-1',
+        type: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      });
+      rolesService.findByIdOrFail.mockRejectedValue(
+        new NotFoundException('Rol con ID bad-role no encontrado'),
+      );
+
+      await expect(
+        service.inviteMember('admin-1', 'org-1', {
+          ...dto,
+          roleId: 'bad-role',
+        }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

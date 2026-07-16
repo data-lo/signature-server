@@ -5,7 +5,10 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 describe('OrganizationsController', () => {
   let controller: OrganizationsController;
-  let accountService: { createOrganization: jest.Mock };
+  let accountService: {
+    createOrganization: jest.Mock;
+    inviteMember: jest.Mock;
+  };
 
   const user: JwtPayload = {
     sub: 'user-1',
@@ -16,7 +19,7 @@ describe('OrganizationsController', () => {
   };
 
   beforeEach(async () => {
-    accountService = { createOrganization: jest.fn() };
+    accountService = { createOrganization: jest.fn(), inviteMember: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrganizationsController],
@@ -36,6 +39,17 @@ describe('OrganizationsController', () => {
 
     expect(accountService.createOrganization).toHaveBeenCalledWith(
       'user-1',
+      dto,
+    );
+  });
+
+  it('invite delega en accountService.inviteMember con el userId del JWT y el accountId del header', () => {
+    const dto = { email: 'nuevo@empresa.com', roleId: 'role-1' };
+    controller.invite(user, 'org-1', dto);
+
+    expect(accountService.inviteMember).toHaveBeenCalledWith(
+      'user-1',
+      'org-1',
       dto,
     );
   });

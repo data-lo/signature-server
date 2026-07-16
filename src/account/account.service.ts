@@ -1,5 +1,6 @@
 // External dependencies
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -12,6 +13,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { InviteMemberDto } from './dto/invite-member.dto';
 
 // Entities
 import { AccountEntity } from './entities/account.entity';
@@ -278,6 +280,43 @@ export class AccountService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  /**
+   * Invitar a un nuevo miembro a la organización activa — alcance delimitado
+   * a propósito (ver historia [STORY] Módulo de Invitación de Miembros):
+   * valida el payload, que el llamador sea ADMIN de esa cuenta y que el
+   * roleId exista, y responde éxito. No envía correo, no genera token de
+   * invitación, ni inserta ninguna membresía/entrada de catálogo todavía —
+   * eso es explícitamente una siguiente iteración.
+   */
+  async inviteMember(
+    callerId: string,
+    accountId: string,
+    dto: InviteMemberDto,
+  ): Promise<BaseResponse<null>> {
+    if (!accountId) {
+      throw new BadRequestException(
+        'Falta el header X-Account-Id de la organización activa',
+      );
+    }
+
+    await this.assertIsAccountAdmin(callerId, accountId);
+
+    const account = await this.findEntityById(accountId);
+    if (account.type !== ACCOUNT_TYPE_ENUM.ORGANIZATION) {
+      throw new BadRequestException(
+        'Solo se pueden invitar miembros a una cuenta de tipo ORGANIZATION',
+      );
+    }
+
+    await this.rolesService.findByIdOrFail(dto.roleId);
+
+    return {
+      success: true,
+      message: 'Invitación registrada correctamente',
+      data: null,
+    };
   }
 
   /**
