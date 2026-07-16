@@ -45,7 +45,7 @@ describe('AccountMemberController', () => {
   });
 
   it('create delega en accountMemberService.create con el userId del JWT', () => {
-    const dto = { accountId: 'account-1', userId: 'user-2', role: ['ADMIN'] };
+    const dto = { accountId: 'account-1', userId: 'user-2', roleId: 'role-1' };
     controller.create(user, dto as any);
 
     expect(accountMemberService.create).toHaveBeenCalledWith('owner-1', dto);

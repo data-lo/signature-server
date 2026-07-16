@@ -8,7 +8,11 @@ import {
 import { AccountMemberService } from './account-member.service';
 import { AccountMemberEntity } from './entities/account-member.entity';
 import { AccountService } from './account.service';
-import { ACCOUNT_MEMBER_ROLE_ENUM } from './enums/account-member-role.enum';
+import { RolesService } from 'src/roles/roles.service';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+
+const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
+const MEMBER_ROLE = { id: 'member-role-1', name: SYSTEM_ROLE_NAME_ENUM.MEMBER };
 
 function createMockRepository() {
   return {
@@ -20,12 +24,13 @@ function createMockRepository() {
   };
 }
 
-function ownerMembership(overrides: Partial<AccountMemberEntity> = {}) {
+function adminMembership(overrides: Partial<AccountMemberEntity> = {}) {
   return {
-    id: 'owner-membership-1',
+    id: 'admin-membership-1',
     userId: 'owner-1',
     accountId: 'account-1',
-    role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+    roleId: ADMIN_ROLE.id,
+    role: ADMIN_ROLE,
     isActive: true,
     ...overrides,
   };
@@ -35,10 +40,14 @@ describe('AccountMemberService', () => {
   let service: AccountMemberService;
   let accountMemberRepository: ReturnType<typeof createMockRepository>;
   let accountService: { removeAccountFromCatalog: jest.Mock };
+  let rolesService: { findByIdOrFail: jest.Mock };
 
   beforeEach(async () => {
     accountMemberRepository = createMockRepository();
     accountService = { removeAccountFromCatalog: jest.fn() };
+    rolesService = {
+      findByIdOrFail: jest.fn().mockResolvedValue(MEMBER_ROLE),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -48,6 +57,7 @@ describe('AccountMemberService', () => {
           useValue: accountMemberRepository,
         },
         { provide: AccountService, useValue: accountService },
+        { provide: RolesService, useValue: rolesService },
       ],
     }).compile();
 
@@ -61,42 +71,57 @@ describe('AccountMemberService', () => {
   describe('create', () => {
     it('rechaza con ConflictException si el usuario ya tiene acceso a la cuenta', async () => {
       accountMemberRepository.findOne
-        .mockResolvedValueOnce(ownerMembership()) // ownership check del llamador
+        .mockResolvedValueOnce(adminMembership()) // ownership check del llamador
         .mockResolvedValueOnce({ id: 'existing' }); // ya existe la membresía a crear
 
       await expect(
         service.create('owner-1', {
           accountId: 'account-1',
           userId: 'user-1',
-          role: [ACCOUNT_MEMBER_ROLE_ENUM.ADMIN],
+          roleId: MEMBER_ROLE.id,
         }),
       ).rejects.toThrow(ConflictException);
     });
 
-    it('lanza ForbiddenException si el llamador no es OWNER activo de la cuenta', async () => {
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la cuenta', async () => {
       accountMemberRepository.findOne.mockResolvedValue(null);
 
       await expect(
         service.create('not-owner', {
           accountId: 'account-1',
           userId: 'user-1',
-          role: [ACCOUNT_MEMBER_ROLE_ENUM.ADMIN],
+          roleId: MEMBER_ROLE.id,
         }),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('lanza NotFoundException si el roleId no corresponde a un rol existente', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(adminMembership());
+      rolesService.findByIdOrFail.mockRejectedValue(
+        new NotFoundException('Rol con ID bad-role no encontrado'),
+      );
+
+      await expect(
+        service.create('owner-1', {
+          accountId: 'account-1',
+          userId: 'user-1',
+          roleId: 'bad-role',
+        }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('findByAccount', () => {
-    it('retorna los miembros si el llamador es OWNER activo de la cuenta', async () => {
-      accountMemberRepository.findOne.mockResolvedValue(ownerMembership());
-      accountMemberRepository.find.mockResolvedValue([ownerMembership()]);
+    it('retorna los miembros si el llamador es ADMIN activo de la cuenta', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(adminMembership());
+      accountMemberRepository.find.mockResolvedValue([adminMembership()]);
 
       const result = await service.findByAccount('owner-1', 'account-1');
 
       expect(result.data).toHaveLength(1);
     });
 
-    it('lanza ForbiddenException si el llamador no es OWNER activo de la cuenta', async () => {
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la cuenta', async () => {
       accountMemberRepository.findOne.mockResolvedValue(null);
 
       await expect(
@@ -107,7 +132,7 @@ describe('AccountMemberService', () => {
   });
 
   describe('findOne / update', () => {
-    it('findOne permite al OWNER de la cuenta ver la membresía', async () => {
+    it('findOne permite al ADMIN de la cuenta ver la membresía', async () => {
       accountMemberRepository.findOne
         .mockResolvedValueOnce({
           id: 'member-2',
@@ -115,14 +140,14 @@ describe('AccountMemberService', () => {
           userId: 'user-2',
           isActive: true,
         }) // findEntityById
-        .mockResolvedValueOnce(ownerMembership()); // ownership check
+        .mockResolvedValueOnce(adminMembership()); // ownership check
 
       const result = await service.findOne('owner-1', 'member-2');
 
       expect(result.data.id).toBe('member-2');
     });
 
-    it('findOne lanza ForbiddenException si el llamador no es OWNER de esa cuenta', async () => {
+    it('findOne lanza ForbiddenException si el llamador no es ADMIN de esa cuenta', async () => {
       accountMemberRepository.findOne
         .mockResolvedValueOnce({
           id: 'member-2',
@@ -137,7 +162,7 @@ describe('AccountMemberService', () => {
       );
     });
 
-    it('update lanza ForbiddenException si el llamador no es OWNER de esa cuenta', async () => {
+    it('update lanza ForbiddenException si el llamador no es ADMIN de esa cuenta', async () => {
       accountMemberRepository.findOne
         .mockResolvedValueOnce({
           id: 'member-2',
@@ -148,10 +173,27 @@ describe('AccountMemberService', () => {
         .mockResolvedValueOnce(null);
 
       await expect(
-        service.update('intruder', 'member-2', {
-          role: [ACCOUNT_MEMBER_ROLE_ENUM.ADMIN],
-        }),
+        service.update('intruder', 'member-2', { roleId: MEMBER_ROLE.id }),
       ).rejects.toThrow(ForbiddenException);
+      expect(accountMemberRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('update lanza NotFoundException si el nuevo roleId no existe', async () => {
+      accountMemberRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'member-2',
+          accountId: 'account-1',
+          userId: 'user-2',
+          isActive: true,
+        })
+        .mockResolvedValueOnce(adminMembership());
+      rolesService.findByIdOrFail.mockRejectedValue(
+        new NotFoundException('Rol con ID bad-role no encontrado'),
+      );
+
+      await expect(
+        service.update('owner-1', 'member-2', { roleId: 'bad-role' }),
+      ).rejects.toThrow(NotFoundException);
       expect(accountMemberRepository.update).not.toHaveBeenCalled();
     });
   });
@@ -165,7 +207,7 @@ describe('AccountMemberService', () => {
           userId: 'user-1',
           isActive: true,
         }) // membresía objetivo
-        .mockResolvedValueOnce(ownerMembership()); // ownership check del llamador
+        .mockResolvedValueOnce(adminMembership()); // ownership check del llamador
 
       const result = await service.remove('owner-1', 'member-1');
 
@@ -188,7 +230,7 @@ describe('AccountMemberService', () => {
       expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
     });
 
-    it('lanza ForbiddenException si el llamador no es OWNER de la cuenta de esa membresía', async () => {
+    it('lanza ForbiddenException si el llamador no es ADMIN de la cuenta de esa membresía', async () => {
       accountMemberRepository.findOne
         .mockResolvedValueOnce({
           id: 'member-1',
@@ -203,6 +245,29 @@ describe('AccountMemberService', () => {
       );
       expect(accountMemberRepository.update).not.toHaveBeenCalled();
       expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assertIsActiveMember', () => {
+    it('no lanza si el usuario es un miembro activo (sin importar su rol)', async () => {
+      accountMemberRepository.findOne.mockResolvedValue({
+        userId: 'user-1',
+        accountId: 'account-1',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      });
+
+      await expect(
+        service.assertIsActiveMember('user-1', 'account-1'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('lanza ForbiddenException si el usuario no es miembro activo', async () => {
+      accountMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.assertIsActiveMember('user-1', 'account-1'),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 });

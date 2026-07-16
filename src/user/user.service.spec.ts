@@ -58,7 +58,7 @@ describe('UserService', () => {
     accountService = {
       createDefaultPersonalAccount: jest.fn().mockResolvedValue({
         account: { id: 'personal-account-1' },
-        membership: { role: ['OWNER'], isActive: true },
+        membership: { roleId: 'admin-role-1', isActive: true },
       }),
       appendAccountToCatalog: jest.fn(),
     };
@@ -189,7 +189,7 @@ describe('UserService', () => {
       expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
         expect.any(String),
         { id: 'personal-account-1' },
-        { role: ['OWNER'], isActive: true },
+        { roleId: 'admin-role-1', isActive: true },
       );
     });
 

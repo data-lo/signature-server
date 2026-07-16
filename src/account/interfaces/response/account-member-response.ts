@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
-import { ACCOUNT_MEMBER_ROLE_ENUM } from '../../enums/account-member-role.enum';
 
 export class AccountMemberData {
   @ApiProperty({
@@ -25,14 +24,13 @@ export class AccountMemberData {
   userId: string;
 
   @ApiProperty({
-    example: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
     description:
-      'Lista de roles asignados en esa cuenta; NULL si aún no se le ha asignado un rol',
-    enum: ACCOUNT_MEMBER_ROLE_ENUM,
-    isArray: true,
+      'UUID del rol asignado en esa cuenta (ver GET /api/v1/roles); NULL si aún no se le ha asignado uno',
+    format: 'uuid',
     nullable: true,
   })
-  role: ACCOUNT_MEMBER_ROLE_ENUM[] | null;
+  roleId: string | null;
 
   @ApiProperty({
     example: 'Gerente de TI',

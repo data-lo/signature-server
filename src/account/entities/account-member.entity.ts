@@ -8,7 +8,7 @@ import {
 } from 'typeorm';
 import { AccountEntity } from './account.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { ACCOUNT_MEMBER_ROLE_ENUM } from '../enums/account-member-role.enum';
+import { RoleEntity } from 'src/roles/entities/role.entity';
 
 @Entity('account_members')
 @Unique(['accountId', 'userId'])
@@ -22,14 +22,13 @@ export class AccountMemberEntity {
   @Column({ name: 'user_id' })
   userId: string;
 
-  @Column({
-    name: 'role',
-    type: 'enum',
-    enum: ACCOUNT_MEMBER_ROLE_ENUM,
-    array: true,
-    nullable: true,
-  })
-  role: ACCOUNT_MEMBER_ROLE_ENUM[] | null;
+  /** NULL solo si a la membresía todavía no se le asignó un rol (reservado para un futuro flujo de invitación). */
+  @Column({ name: 'role_id', nullable: true })
+  roleId: string | null;
+
+  @ManyToOne(() => RoleEntity, { nullable: true })
+  @JoinColumn({ name: 'role_id' })
+  role: RoleEntity | null;
 
   @Column({ name: 'position', nullable: true })
   position: string | null;

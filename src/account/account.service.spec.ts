@@ -7,7 +7,10 @@ import { OrganizationDetailEntity } from './entities/organization-detail.entity'
 import { AccountMemberEntity } from './entities/account-member.entity';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
-import { ACCOUNT_MEMBER_ROLE_ENUM } from './enums/account-member-role.enum';
+import { RolesService } from 'src/roles/roles.service';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+
+const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
 
 function createMockRepository() {
   return {
@@ -42,6 +45,7 @@ describe('AccountService', () => {
   let dataSource: { createQueryRunner: jest.Mock };
   let queryRunner: ReturnType<typeof createMockQueryRunner>;
   let redisService: { set: jest.Mock; get: jest.Mock };
+  let rolesService: { findSystemRoleByName: jest.Mock };
 
   beforeEach(async () => {
     accountRepository = createMockRepository();
@@ -50,6 +54,9 @@ describe('AccountService', () => {
     queryRunner = createMockQueryRunner();
     dataSource = { createQueryRunner: jest.fn(() => queryRunner) };
     redisService = { set: jest.fn(), get: jest.fn() };
+    rolesService = {
+      findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -68,6 +75,7 @@ describe('AccountService', () => {
         },
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: RedisService, useValue: redisService },
+        { provide: RolesService, useValue: rolesService },
       ],
     }).compile();
 
@@ -79,7 +87,7 @@ describe('AccountService', () => {
   });
 
   describe('createDefaultPersonalAccount', () => {
-    it('crea Account(PERSONAL) + AccountMember(OWNER) usando el manager del llamador', async () => {
+    it('crea Account(PERSONAL) + AccountMember(rol ADMIN) usando el manager del llamador', async () => {
       const manager = {
         create: jest.fn((_entity, data) => data),
         save: jest.fn(async (data) => ({ id: 'personal-account-1', ...data })),
@@ -95,14 +103,17 @@ describe('AccountService', () => {
       expect(manager.save).toHaveBeenCalledTimes(2);
       expect(account.type).toBe(ACCOUNT_TYPE_ENUM.PERSONAL);
       expect(account.name).toBe('Juan Pérez');
+      expect(rolesService.findSystemRoleByName).toHaveBeenCalledWith(
+        SYSTEM_ROLE_NAME_ENUM.ADMIN,
+      );
 
       const memberSaveCall = manager.save.mock.calls[1][0];
-      expect(memberSaveCall.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(memberSaveCall.roleId).toBe('admin-role-1');
       expect(memberSaveCall.accountId).toBe('personal-account-1');
       expect(memberSaveCall.userId).toBe('user-1');
       expect(memberSaveCall.isActive).toBe(true);
 
-      expect(membership.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(membership.roleId).toBe('admin-role-1');
       expect(membership.isActive).toBe(true);
     });
   });
@@ -110,7 +121,7 @@ describe('AccountService', () => {
   describe('createOrganization', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
 
-    it('crea Account + OrganizationDetail + AccountMember(OWNER) dentro de una transacción y refresca el catálogo en Redis', async () => {
+    it('crea Account + OrganizationDetail + AccountMember(rol ADMIN) dentro de una transacción y refresca el catálogo en Redis', async () => {
       accountRepository.findOne.mockResolvedValue({
         id: 'generated-id',
         name: 'Acme',
@@ -129,19 +140,19 @@ describe('AccountService', () => {
       expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
 
       const memberSaveCall = queryRunner.manager.save.mock.calls[2][0];
-      expect(memberSaveCall.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(memberSaveCall.roleId).toBe('admin-role-1');
       expect(memberSaveCall.userId).toBe('user-1');
       expect(memberSaveCall.isActive).toBe(true);
 
       const [, cachedValue] = redisService.set.mock.calls[0];
       const cachedCatalog = JSON.parse(cachedValue);
-      expect(cachedCatalog[0].role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(cachedCatalog[0].roleId).toBe('admin-role-1');
       expect(cachedCatalog[0].isActive).toBe(true);
       expect(result.success).toBe(true);
 
-      // La respuesta HTTP debe incluir role/isActive igual que el catálogo
+      // La respuesta HTTP debe incluir roleId/isActive igual que el catálogo
       // cacheado (antes devolvía la AccountEntity cruda, sin estos campos).
-      expect(result.data.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(result.data.roleId).toBe('admin-role-1');
       expect(result.data.isActive).toBe(true);
     });
 
@@ -174,15 +185,16 @@ describe('AccountService', () => {
       name: 'Acme Renombrada',
       organizationDetail: { name: 'Acme Renombrada S.A. de C.V.' },
     };
-    const ownerMembership = {
+    const adminMembership = {
       userId: 'owner-1',
       accountId: 'account-1',
-      role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+      roleId: 'admin-role-1',
+      role: ADMIN_ROLE,
       isActive: true,
     };
 
     it('refresca el catálogo de cada miembro activo cuando cambia el nombre', async () => {
-      accountMemberRepository.findOne.mockResolvedValue(ownerMembership);
+      accountMemberRepository.findOne.mockResolvedValue(adminMembership);
       accountRepository.findOne
         .mockResolvedValueOnce(existingAccount)
         .mockResolvedValueOnce(renamedAccount);
@@ -195,7 +207,7 @@ describe('AccountService', () => {
           {
             id: 'account-1',
             name: 'Acme',
-            role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+            roleId: 'admin-role-1',
             isActive: true,
           },
         ]),
@@ -213,12 +225,12 @@ describe('AccountService', () => {
       const [, firstValue] = redisService.set.mock.calls[0];
       const updatedEntry = JSON.parse(firstValue)[0];
       expect(updatedEntry.name).toBe('Acme Renombrada');
-      expect(updatedEntry.role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(updatedEntry.roleId).toBe('admin-role-1');
       expect(updatedEntry.isActive).toBe(true);
     });
 
     it('no toca Redis si no se actualizó name ni organizationName', async () => {
-      accountMemberRepository.findOne.mockResolvedValue(ownerMembership);
+      accountMemberRepository.findOne.mockResolvedValue(adminMembership);
       accountRepository.findOne
         .mockResolvedValueOnce(existingAccount)
         .mockResolvedValueOnce(existingAccount);
@@ -229,7 +241,7 @@ describe('AccountService', () => {
       expect(redisService.set).not.toHaveBeenCalled();
     });
 
-    it('lanza ForbiddenException si el llamador no es OWNER activo de la cuenta', async () => {
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la cuenta', async () => {
       accountMemberRepository.findOne.mockResolvedValue(null);
 
       await expect(
@@ -240,11 +252,12 @@ describe('AccountService', () => {
   });
 
   describe('findOne', () => {
-    it('retorna la cuenta si el llamador es OWNER activo', async () => {
+    it('retorna la cuenta si el llamador es ADMIN activo', async () => {
       accountMemberRepository.findOne.mockResolvedValue({
         userId: 'owner-1',
         accountId: 'account-1',
-        role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        roleId: 'admin-role-1',
+        role: ADMIN_ROLE,
         isActive: true,
       });
       accountRepository.findOne.mockResolvedValue({
@@ -260,7 +273,7 @@ describe('AccountService', () => {
       expect(result.data.id).toBe('account-1');
     });
 
-    it('lanza ForbiddenException si el llamador no es OWNER activo de la cuenta', async () => {
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la cuenta', async () => {
       accountMemberRepository.findOne.mockResolvedValue(null);
 
       await expect(service.findOne('intruder', 'account-1')).rejects.toThrow(
@@ -319,7 +332,7 @@ describe('AccountService', () => {
       );
 
       await service.appendAccountToCatalog('user-1', account, {
-        role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        roleId: 'admin-role-1',
         isActive: true,
       });
 
@@ -328,7 +341,7 @@ describe('AccountService', () => {
       const saved = JSON.parse(value);
       expect(saved).toHaveLength(2);
       expect(saved[1].id).toBe('account-1');
-      expect(saved[1].role).toEqual([ACCOUNT_MEMBER_ROLE_ENUM.OWNER]);
+      expect(saved[1].roleId).toBe('admin-role-1');
       expect(saved[1].isActive).toBe(true);
     });
 
@@ -336,7 +349,7 @@ describe('AccountService', () => {
       redisService.get.mockResolvedValue(null);
 
       await service.appendAccountToCatalog('user-1', account, {
-        role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        roleId: 'admin-role-1',
         isActive: true,
       });
 
@@ -350,7 +363,7 @@ describe('AccountService', () => {
 
       await expect(
         service.appendAccountToCatalog('user-1', account, {
-          role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+          roleId: 'admin-role-1',
           isActive: true,
         }),
       ).resolves.toBeUndefined();

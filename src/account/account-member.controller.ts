@@ -51,7 +51,7 @@ export class AccountMemberController {
   @ApiOperation({
     summary: 'Otorgar acceso a una cuenta',
     description:
-      'Asocia un usuario a una cuenta con uno o más roles. Solo un OWNER activo de esa cuenta puede otorgar acceso.',
+      'Asocia un usuario a una cuenta con un rol (ver GET /api/v1/roles). Solo un ADMIN activo de esa cuenta puede otorgar acceso.',
   })
   @ApiResponse({
     status: 201,
@@ -69,7 +69,7 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es OWNER de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 409,
@@ -87,7 +87,7 @@ export class AccountMemberController {
   @ApiOperation({
     summary: 'Obtener los miembros de una cuenta',
     description:
-      'Solo un OWNER activo de esa cuenta puede listar sus miembros.',
+      'Solo un ADMIN activo de esa cuenta puede listar sus miembros.',
   })
   @ApiQuery({
     name: 'accountId',
@@ -106,7 +106,7 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es OWNER de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   findByAccount(
     @CurrentUser() user: JwtPayload,
@@ -119,7 +119,7 @@ export class AccountMemberController {
   @ApiOperation({
     summary: 'Obtener una membresía',
     description:
-      'Solo un OWNER activo de la cuenta de esa membresía puede consultarla.',
+      'Solo un ADMIN activo de la cuenta de esa membresía puede consultarla.',
   })
   @ApiParam({
     name: 'id',
@@ -138,7 +138,7 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es OWNER de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 404,
@@ -153,7 +153,7 @@ export class AccountMemberController {
   @ApiOperation({
     summary: 'Actualizar una membresía',
     description:
-      'Actualiza el rol, puesto o vigencia del acceso. Solo un OWNER activo de la cuenta de esa membresía puede hacerlo.',
+      'Actualiza el rol, puesto o vigencia del acceso. Solo un ADMIN activo de la cuenta de esa membresía puede hacerlo.',
   })
   @ApiParam({
     name: 'id',
@@ -172,7 +172,7 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es OWNER de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 404,
@@ -195,7 +195,7 @@ export class AccountMemberController {
   @ApiOperation({
     summary: 'Revocar acceso',
     description:
-      'Marca el acceso del usuario a la cuenta como no vigente. Solo un OWNER activo de esa cuenta puede revocar acceso.',
+      'Marca el acceso del usuario a la cuenta como no vigente. Solo un ADMIN activo de esa cuenta puede revocar acceso.',
   })
   @ApiParam({
     name: 'id',
@@ -214,7 +214,7 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es OWNER de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 404,

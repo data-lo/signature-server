@@ -407,7 +407,7 @@ export class UserService {
       await this.accountService.appendAccountToCatalog(
         newUser.id,
         personalAccount,
-        { role: membership.role, isActive: membership.isActive },
+        { roleId: membership.roleId, isActive: membership.isActive },
       );
 
       return {

@@ -92,7 +92,7 @@ export class AccountController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es OWNER de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 404,
@@ -122,7 +122,7 @@ export class AccountController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es OWNER de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 404,
