@@ -10,6 +10,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { DocumentParticipantEntity } from './document-participant.entity';
 
@@ -81,6 +82,13 @@ export class DocumentEntity {
   @ManyToOne(() => UserEntity, (user) => user.createdDocuments)
   @JoinColumn({ name: 'created_by' })
   requestedBy: UserEntity;
+
+  @Column({ name: 'account_id' })
+  accountId: string;
+
+  @ManyToOne(() => AccountEntity)
+  @JoinColumn({ name: 'account_id' })
+  account: AccountEntity;
 
   @OneToMany(
     () => DocumentParticipantEntity,

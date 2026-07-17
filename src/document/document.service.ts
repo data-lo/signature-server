@@ -45,6 +45,7 @@ import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
+import { AccountMemberService } from 'src/account/account-member.service';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
 
@@ -79,16 +80,28 @@ export class DocumentService {
     private readonly emailService: EmailService,
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
+    private readonly accountMemberService: AccountMemberService,
   ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus participantes (firmantes/espectadores) en la base de datos. */
   async create(
     createdBy: string,
+    accountId: string,
     createDocumentDto: CreateDocumentDto,
     file: Express.Multer.File,
     ip: string,
   ): Promise<BaseResponse> {
     try {
+      if (!accountId) {
+        throw new BadRequestException(
+          'Falta el header X-Account-Id de la cuenta activa',
+        );
+      }
+      await this.accountMemberService.assertIsActiveMember(
+        createdBy,
+        accountId,
+      );
+
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');
       }
@@ -147,6 +160,7 @@ export class DocumentService {
         originalHash: hashBefore,
         signatureCoordinates: signatureCoordinates ?? DEFAULT_COORDINATES,
         createdBy,
+        accountId,
       });
 
       const savedDocument = await this.documentRepository.save(document);
@@ -208,7 +222,8 @@ export class DocumentService {
     } catch (error) {
       if (
         error instanceof BadRequestException ||
-        error instanceof NotFoundException
+        error instanceof NotFoundException ||
+        error instanceof ForbiddenException
       )
         throw error;
       throw new Error(`Error creando documento para firma: ${error}`);
@@ -234,7 +249,18 @@ export class DocumentService {
     };
   }
 
-  async findWithFilters(query: GetDocumentsQueryDto) {
+  async findWithFilters(
+    callerId: string,
+    accountId: string,
+    query: GetDocumentsQueryDto,
+  ) {
+    if (!accountId) {
+      throw new BadRequestException(
+        'Falta el header X-Account-Id de la cuenta activa',
+      );
+    }
+    await this.accountMemberService.assertIsActiveMember(callerId, accountId);
+
     const {
       id,
       participantEmail,
@@ -254,6 +280,7 @@ export class DocumentService {
 
     const qb = this.documentRepository
       .createQueryBuilder('document')
+      .where('document.accountId = :accountId', { accountId })
       .leftJoinAndSelect('document.requestedBy', 'requester')
       .leftJoinAndSelect('document.participants', 'participant')
       .leftJoinAndSelect('participant.user', 'participantUser')

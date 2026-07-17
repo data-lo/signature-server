@@ -10,6 +10,7 @@ import { AccountEntity } from './entities/account.entity';
 import { OrganizationDetailEntity } from './entities/organization-detail.entity';
 import { AccountMemberEntity } from './entities/account-member.entity';
 import { SharedModule } from 'src/shared/shared.module';
+import { RolesModule } from 'src/roles/roles.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { SharedModule } from 'src/shared/shared.module';
       AccountMemberEntity,
     ]),
     SharedModule,
+    RolesModule,
   ],
   controllers: [
     AccountController,

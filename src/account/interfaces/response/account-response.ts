@@ -45,6 +45,22 @@ export class AccountData {
     required: false,
   })
   organizationDetail?: OrganizationDetailData | null;
+
+  @ApiProperty({
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    description:
+      'UUID del rol (ver GET /api/v1/roles) del usuario autenticado en esta cuenta; NULL si todavía no se le ha asignado uno explícitamente (la columna admite NULL, aunque hoy el creador de una cuenta personal u organización siempre queda con el rol ADMIN de inmediato)',
+    format: 'uuid',
+    nullable: true,
+  })
+  roleId: string | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Vigencia de la membresía del usuario autenticado en esta cuenta',
+  })
+  isActive: boolean;
 }
 
 export class AccountResponse extends BaseResponse<AccountData> {

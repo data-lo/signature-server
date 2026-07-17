@@ -1,0 +1,4 @@
+export enum SYSTEM_ROLE_NAME_ENUM {
+  ADMIN = 'ADMIN',
+  MEMBER = 'MEMBER',
+}

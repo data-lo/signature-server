@@ -24,6 +24,7 @@ import { HealthModule } from './health/health.module';
 import { AccountModule } from './account/account.module';
 import { KafkaModule } from './kafka/kafka.module';
 import { StripeModule } from './stripe/stripe.module';
+import { RolesModule } from './roles/roles.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { StripeModule } from './stripe/stripe.module';
     HealthModule,
     KafkaModule,
     StripeModule,
+    RolesModule,
   ],
   controllers: [AppController],
   providers: [

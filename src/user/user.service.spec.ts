@@ -56,9 +56,10 @@ describe('UserService', () => {
     };
     redisService = { set: jest.fn(), get: jest.fn() };
     accountService = {
-      createDefaultPersonalAccount: jest
-        .fn()
-        .mockResolvedValue({ id: 'personal-account-1' }),
+      createDefaultPersonalAccount: jest.fn().mockResolvedValue({
+        account: { id: 'personal-account-1' },
+        membership: { roleId: 'admin-role-1', isActive: true },
+      }),
       appendAccountToCatalog: jest.fn(),
     };
 
@@ -188,6 +189,7 @@ describe('UserService', () => {
       expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
         expect.any(String),
         { id: 'personal-account-1' },
+        { roleId: 'admin-role-1', isActive: true },
       );
     });
 
@@ -224,9 +226,10 @@ describe('UserService', () => {
   });
 
   describe('updatePersonalInformation', () => {
-    it('actualiza phoneNumber y secondaryEmail', async () => {
+    it('actualiza phoneNumber y secondaryEmail, y refresca el cache de Redis por CURP', async () => {
       userRepository.findOne.mockResolvedValue({
         id: 'user-1',
+        nationalId: 'CURP1',
         personalInformationId: 'pi-1',
       });
       personalInformationRepository.findOne.mockResolvedValue({
@@ -245,6 +248,10 @@ describe('UserService', () => {
         { phoneNumber: '5512345678', secondaryEmail: 'secundario@correo.com' },
       );
       expect(result.data.phoneNumber).toBe('5512345678');
+      expect(redisService.set).toHaveBeenCalledWith(
+        'CURP1',
+        expect.any(String),
+      );
     });
 
     it('lanza NotFoundException si el usuario no existe', async () => {
@@ -258,6 +265,41 @@ describe('UserService', () => {
     });
   });
 
+  describe('refreshCurpCacheForUser', () => {
+    it('reconstruye el snapshot desde PostgreSQL y lo recachea por CURP', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        nationalId: 'CURP1',
+        isConfigured: false,
+        signatureId: 'sig-1',
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: '5512345678',
+          secondaryEmail: 'a@a.com',
+        },
+      });
+
+      await service.refreshCurpCacheForUser('user-1');
+
+      expect(userRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        relations: { personalInformation: true },
+      });
+      expect(redisService.set).toHaveBeenCalledWith(
+        'CURP1',
+        expect.any(String),
+      );
+    });
+
+    it('lanza NotFoundException si el usuario no existe', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.refreshCurpCacheForUser('missing-user'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
   describe('getMeFromCache', () => {
     it('retorna el snapshot cacheado en Redis sin consultar PostgreSQL', async () => {
       const cached = {
@@ -265,7 +307,11 @@ describe('UserService', () => {
         nationalId: 'CURP1',
         isConfigured: false,
         signatureId: null,
-        personalInformation: { rfc: 'RFC1', phoneNumber: null, secondaryEmail: null },
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: null,
+          secondaryEmail: null,
+        },
       };
       redisService.get.mockResolvedValue(JSON.stringify(cached));
 

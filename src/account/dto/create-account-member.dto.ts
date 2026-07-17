@@ -1,14 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  ArrayMinSize,
-  IsArray,
-  IsBoolean,
-  IsEnum,
-  IsOptional,
-  IsString,
-  IsUUID,
-} from 'class-validator';
-import { ACCOUNT_MEMBER_ROLE_ENUM } from '../enums/account-member-role.enum';
+import { IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class CreateAccountMemberDto {
   @ApiProperty({
@@ -28,15 +19,12 @@ export class CreateAccountMemberDto {
   userId: string;
 
   @ApiProperty({
-    example: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
-    description: 'Lista de roles asignados en esa cuenta',
-    enum: ACCOUNT_MEMBER_ROLE_ENUM,
-    isArray: true,
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    description: 'UUID del rol asignado en esa cuenta (ver GET /api/v1/roles)',
+    format: 'uuid',
   })
-  @IsArray()
-  @ArrayMinSize(1)
-  @IsEnum(ACCOUNT_MEMBER_ROLE_ENUM, { each: true })
-  role: ACCOUNT_MEMBER_ROLE_ENUM[];
+  @IsUUID()
+  roleId: string;
 
   @ApiProperty({
     example: 'Gerente de TI',

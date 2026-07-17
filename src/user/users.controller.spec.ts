@@ -10,6 +10,7 @@ describe('UsersController', () => {
     getMeFromCache: jest.Mock;
     updatePersonalInformation: jest.Mock;
     updateStatus: jest.Mock;
+    refreshCurpCacheForUser: jest.Mock;
   };
   let signatureService: { create: jest.Mock };
 
@@ -26,6 +27,7 @@ describe('UsersController', () => {
       getMeFromCache: jest.fn(),
       updatePersonalInformation: jest.fn(),
       updateStatus: jest.fn(),
+      refreshCurpCacheForUser: jest.fn(),
     };
     signatureService = { create: jest.fn() };
 
@@ -62,16 +64,21 @@ describe('UsersController', () => {
     );
   });
 
-  it('updateSignature delega en signatureService.create con el userId del JWT', () => {
+  it('updateSignature delega en signatureService.create y refresca el cache de Redis por CURP', async () => {
     const dto = { signatureImage: {} } as any;
     const files = { signatureImage: [{ originalname: 'firma.png' }] } as any;
-    controller.updateSignature(user, dto, files);
+    const createResult = {
+      success: true,
+      message: 'ok',
+      data: { id: 'sig-1' },
+    };
+    signatureService.create.mockResolvedValue(createResult);
 
-    expect(signatureService.create).toHaveBeenCalledWith(
-      'user-1',
-      dto,
-      files,
-    );
+    const result = await controller.updateSignature(user, dto, files);
+
+    expect(signatureService.create).toHaveBeenCalledWith('user-1', dto, files);
+    expect(userService.refreshCurpCacheForUser).toHaveBeenCalledWith('user-1');
+    expect(result).toBe(createResult);
   });
 
   it('updateStatus delega en userService.updateStatus con el userId del JWT', () => {

@@ -1,5 +1,11 @@
 // External dependencies
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 
@@ -7,6 +13,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { InviteMemberDto } from './dto/invite-member.dto';
 
 // Entities
 import { AccountEntity } from './entities/account.entity';
@@ -15,7 +22,10 @@ import { AccountMemberEntity } from './entities/account-member.entity';
 
 // Enums
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
-import { ACCOUNT_MEMBER_ROLE_ENUM } from './enums/account-member-role.enum';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+
+// Services
+import { RolesService } from 'src/roles/roles.service';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
@@ -23,6 +33,12 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { AccountData } from './interfaces/response/account-response';
 
 const ACCOUNTS_CATALOG_KEY_PREFIX = 'accounts:';
+
+/** Campos de la membresía del usuario que se cachean junto a la cuenta. */
+interface MembershipCatalogFields {
+  roleId: string | null;
+  isActive: boolean;
+}
 
 @Injectable()
 export class AccountService {
@@ -35,10 +51,14 @@ export class AccountService {
     @InjectRepository(OrganizationDetailEntity)
     private organizationDetailRepository: Repository<OrganizationDetailEntity>,
 
+    @InjectRepository(AccountMemberEntity)
+    private accountMemberRepository: Repository<AccountMemberEntity>,
+
     @InjectDataSource()
     private dataSource: DataSource,
 
     private redisService: RedisService,
+    private rolesService: RolesService,
   ) {}
 
   async create(
@@ -78,7 +98,11 @@ export class AccountService {
     };
   }
 
-  async findOne(id: string): Promise<BaseResponse<AccountEntity>> {
+  async findOne(
+    callerId: string,
+    id: string,
+  ): Promise<BaseResponse<AccountEntity>> {
+    await this.assertIsAccountAdmin(callerId, id);
     const account = await this.findEntityById(id);
 
     return {
@@ -89,9 +113,11 @@ export class AccountService {
   }
 
   async update(
+    callerId: string,
     id: string,
     updateAccountDto: UpdateAccountDto,
   ): Promise<BaseResponse<AccountEntity>> {
+    await this.assertIsAccountAdmin(callerId, id);
     const account = await this.findEntityById(id);
 
     await this.accountRepository.update(id, {
@@ -107,10 +133,16 @@ export class AccountService {
       });
     }
 
+    const updatedAccount = await this.findEntityById(id);
+
+    if (updateAccountDto.name || updateAccountDto.organizationName) {
+      await this.refreshCatalogForAccountMembers(updatedAccount);
+    }
+
     return {
       success: true,
       message: 'Cuenta actualizada correctamente',
-      data: await this.findEntityById(id),
+      data: updatedAccount,
     };
   }
 
@@ -128,15 +160,38 @@ export class AccountService {
   }
 
   /**
+   * Solo un miembro activo con rol ADMIN puede leer o actualizar la cuenta.
+   * Lanza ForbiddenException si el llamador no lo es.
+   */
+  private async assertIsAccountAdmin(
+    callerId: string,
+    accountId: string,
+  ): Promise<void> {
+    const callerMembership = await this.accountMemberRepository.findOne({
+      where: { userId: callerId, accountId, isActive: true },
+      relations: { role: true },
+    });
+
+    if (callerMembership?.role?.name !== SYSTEM_ROLE_NAME_ENUM.ADMIN) {
+      throw new ForbiddenException(
+        'No tienes permisos de administrador sobre esta cuenta',
+      );
+    }
+  }
+
+  /**
    * Crea la cuenta PERSONAL por defecto de un usuario recién registrado y su
-   * membresía como OWNER. Recibe el EntityManager del llamador para poder
-   * enlistarse en la transacción de registro (no abre su propia transacción).
+   * membresía con el rol de sistema ADMIN. Recibe el EntityManager del
+   * llamador para poder enlistarse en la transacción de registro (no abre su
+   * propia transacción). Retorna también la membresía creada para que el
+   * llamador pueda cachearla en el catálogo de Redis sin duplicar el
+   * conocimiento de qué roleId/isActive le corresponde a la cuenta personal.
    */
   async createDefaultPersonalAccount(
     manager: EntityManager,
     userId: string,
     accountName: string,
-  ): Promise<AccountEntity> {
+  ): Promise<{ account: AccountEntity; membership: AccountMemberEntity }> {
     const account = await manager.save(
       manager.create(AccountEntity, {
         name: accountName,
@@ -144,27 +199,33 @@ export class AccountService {
       }),
     );
 
-    await manager.save(
+    const adminRole = await this.rolesService.findSystemRoleByName(
+      SYSTEM_ROLE_NAME_ENUM.ADMIN,
+    );
+
+    const membership = await manager.save(
       manager.create(AccountMemberEntity, {
         accountId: account.id,
         userId,
-        role: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
+        roleId: adminRole.id,
+        isActive: true,
       }),
     );
 
-    return account;
+    return { account, membership };
   }
 
   /**
    * Crea una Organización de forma transaccional: Account(type=ORGANIZATION),
-   * OrganizationDetail, y la membresía del usuario autenticado con role NULL
-   * (se asigna en un paso posterior). Al confirmar, refresca el catálogo de
-   * cuentas cacheado en Redis.
+   * OrganizationDetail, y la membresía del usuario autenticado con el rol de
+   * sistema ADMIN (el creador de una organización queda como su administrador
+   * de inmediato, igual que en la cuenta personal). Al confirmar, refresca el
+   * catálogo de cuentas cacheado en Redis.
    */
   async createOrganization(
     userId: string,
     dto: CreateOrganizationDto,
-  ): Promise<BaseResponse<AccountEntity>> {
+  ): Promise<BaseResponse<AccountData>> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -184,23 +245,34 @@ export class AccountService {
         }),
       );
 
-      await queryRunner.manager.save(
+      const adminRole = await this.rolesService.findSystemRoleByName(
+        SYSTEM_ROLE_NAME_ENUM.ADMIN,
+      );
+
+      const membership = await queryRunner.manager.save(
         queryRunner.manager.create(AccountMemberEntity, {
           accountId: account.id,
           userId,
-          role: null,
+          roleId: adminRole.id,
+          isActive: true,
         }),
       );
 
       await queryRunner.commitTransaction();
 
       const fullAccount = await this.findEntityById(account.id);
-      await this.appendAccountToCatalog(userId, fullAccount);
+      const membershipFields: MembershipCatalogFields = {
+        roleId: membership.roleId,
+        isActive: membership.isActive,
+      };
+      await this.appendAccountToCatalog(userId, fullAccount, membershipFields);
 
       return {
         success: true,
         message: 'Organización creada correctamente',
-        data: fullAccount,
+        // toCatalogEntry (no la AccountEntity cruda) para que la respuesta
+        // HTTP incluya role/isActive, igual que el catálogo cacheado.
+        data: this.toCatalogEntry(fullAccount, membershipFields),
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -211,6 +283,43 @@ export class AccountService {
   }
 
   /**
+   * Invitar a un nuevo miembro a la organización activa — alcance delimitado
+   * a propósito (ver historia [STORY] Módulo de Invitación de Miembros):
+   * valida el payload, que el llamador sea ADMIN de esa cuenta y que el
+   * roleId exista, y responde éxito. No envía correo, no genera token de
+   * invitación, ni inserta ninguna membresía/entrada de catálogo todavía —
+   * eso es explícitamente una siguiente iteración.
+   */
+  async inviteMember(
+    callerId: string,
+    accountId: string,
+    dto: InviteMemberDto,
+  ): Promise<BaseResponse<null>> {
+    if (!accountId) {
+      throw new BadRequestException(
+        'Falta el header X-Account-Id de la organización activa',
+      );
+    }
+
+    await this.assertIsAccountAdmin(callerId, accountId);
+
+    const account = await this.findEntityById(accountId);
+    if (account.type !== ACCOUNT_TYPE_ENUM.ORGANIZATION) {
+      throw new BadRequestException(
+        'Solo se pueden invitar miembros a una cuenta de tipo ORGANIZATION',
+      );
+    }
+
+    await this.rolesService.findByIdOrFail(dto.roleId);
+
+    return {
+      success: true,
+      message: 'Invitación registrada correctamente',
+      data: null,
+    };
+  }
+
+  /**
    * Agrega una cuenta al catálogo cacheado en Redis DB 0 bajo la key
    * accounts:{userId} (lectura-modificación-escritura). Un fallo de Redis
    * nunca debe tumbar la operación que lo dispara.
@@ -218,18 +327,105 @@ export class AccountService {
   async appendAccountToCatalog(
     userId: string,
     account: AccountEntity,
+    membership: MembershipCatalogFields,
   ): Promise<void> {
     try {
       const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
       const existingRaw = await this.redisService.get(key);
       const catalog: AccountData[] = existingRaw ? JSON.parse(existingRaw) : [];
 
-      catalog.push(this.toCatalogEntry(account));
+      catalog.push(this.toCatalogEntry(account, membership));
 
       await this.redisService.set(key, JSON.stringify(catalog));
     } catch (error) {
       this.logger.warn(
         `No se pudo refrescar el catálogo de cuentas en Redis para el usuario ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Refresca la entrada de esta cuenta dentro del catálogo cacheado en Redis
+   * de cada miembro activo. Se usa tras renombrar una cuenta/organización
+   * (`update()`) para que el switcher del frontend no muestre un nombre
+   * obsoleto indefinidamente.
+   */
+  private async refreshCatalogForAccountMembers(
+    account: AccountEntity,
+  ): Promise<void> {
+    const members = await this.accountMemberRepository.find({
+      where: { accountId: account.id, isActive: true },
+    });
+
+    await Promise.all(
+      members.map((member) =>
+        this.replaceAccountInCatalog(member.userId, account),
+      ),
+    );
+  }
+
+  private async replaceAccountInCatalog(
+    userId: string,
+    account: AccountEntity,
+  ): Promise<void> {
+    try {
+      const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
+      const existingRaw = await this.redisService.get(key);
+      if (!existingRaw) {
+        return;
+      }
+
+      const catalog: AccountData[] = JSON.parse(existingRaw);
+      const index = catalog.findIndex((entry) => entry.id === account.id);
+      if (index === -1) {
+        return;
+      }
+
+      // Renombrar una cuenta no toca la membresía: se preserva el roleId/isActive
+      // ya cacheado en vez de requerir una consulta extra a account_members.
+      catalog[index] = this.toCatalogEntry(account, {
+        roleId: catalog[index].roleId,
+        isActive: catalog[index].isActive,
+      });
+      await this.redisService.set(key, JSON.stringify(catalog));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo refrescar el catálogo de cuentas en Redis para el usuario ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Quita una cuenta del catálogo cacheado en Redis del usuario. Se usa al
+   * revocar el acceso de un miembro (`AccountMemberService.remove`), para que
+   * el switcher del frontend no siga ofreciendo una cuenta a la que el
+   * usuario ya no tiene acceso.
+   */
+  async removeAccountFromCatalog(
+    userId: string,
+    accountId: string,
+  ): Promise<void> {
+    try {
+      const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
+      const existingRaw = await this.redisService.get(key);
+      if (!existingRaw) {
+        return;
+      }
+
+      const catalog: AccountData[] = JSON.parse(existingRaw);
+      const filtered = catalog.filter((entry) => entry.id !== accountId);
+      if (filtered.length === catalog.length) {
+        return;
+      }
+
+      await this.redisService.set(key, JSON.stringify(filtered));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo actualizar el catálogo de cuentas en Redis para el usuario ${userId} al revocar la cuenta ${accountId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -256,7 +452,10 @@ export class AccountService {
     };
   }
 
-  private toCatalogEntry(account: AccountEntity): AccountData {
+  private toCatalogEntry(
+    account: AccountEntity,
+    membership: MembershipCatalogFields,
+  ): AccountData {
     return {
       id: account.id,
       name: account.name,
@@ -265,6 +464,8 @@ export class AccountService {
       organizationDetail: account.organizationDetail
         ? { name: account.organizationDetail.name }
         : null,
+      roleId: membership.roleId,
+      isActive: membership.isActive,
     };
   }
 }

@@ -394,7 +394,7 @@ export class UserService {
 
       const newUser = await queryRunner.manager.save(user);
 
-      const personalAccount =
+      const { account: personalAccount, membership } =
         await this.accountService.createDefaultPersonalAccount(
           queryRunner.manager,
           newUser.id,
@@ -407,6 +407,7 @@ export class UserService {
       await this.accountService.appendAccountToCatalog(
         newUser.id,
         personalAccount,
+        { roleId: membership.roleId, isActive: membership.isActive },
       );
 
       return {
@@ -541,6 +542,24 @@ export class UserService {
     };
   }
 
+  /**
+   * Refresca el cache de Redis por CURP con el estado actual del usuario en
+   * PostgreSQL. Se usa desde operaciones ajenas a este servicio (p. ej. subir
+   * la firma digital) que modifican datos incluidos en el snapshot cacheado
+   * pero no pasan por `updatePersonalInformation`/`updateStatus`.
+   */
+  async refreshCurpCacheForUser(userId: string): Promise<void> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: { personalInformation: true },
+    });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    await this.refreshUserCurpCache(user, user.personalInformation);
+  }
+
   async updatePersonalInformation(
     userId: string,
     dto: UpdatePersonalInformationDto,
@@ -558,6 +577,8 @@ export class UserService {
     const updated = await this.personalInformationRepository.findOne({
       where: { id: user.personalInformationId },
     });
+
+    await this.refreshUserCurpCache(user, updated);
 
     return {
       success: true,

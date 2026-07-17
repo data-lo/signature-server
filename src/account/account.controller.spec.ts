@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AccountController } from './account.controller';
 import { AccountService } from './account.service';
+import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 describe('AccountController', () => {
   let controller: AccountController;
@@ -9,6 +10,14 @@ describe('AccountController', () => {
     findAll: jest.Mock;
     findOne: jest.Mock;
     update: jest.Mock;
+  };
+
+  const user: JwtPayload = {
+    sub: 'user-1',
+    email: 'juan@empresa.com',
+    roles: ['signer'],
+    nationalId: 'PELJ850101HDFRNN08',
+    jti: 'jti-1',
   };
 
   beforeEach(async () => {
@@ -29,5 +38,22 @@ describe('AccountController', () => {
 
   it('should be defined', () => {
     expect(controller).toBeDefined();
+  });
+
+  it('findOne delega en accountService.findOne con el userId del JWT', () => {
+    controller.findOne(user, 'account-1');
+
+    expect(accountService.findOne).toHaveBeenCalledWith('user-1', 'account-1');
+  });
+
+  it('update delega en accountService.update con el userId del JWT', () => {
+    const dto = { name: 'Acme Renombrada' };
+    controller.update(user, 'account-1', dto);
+
+    expect(accountService.update).toHaveBeenCalledWith(
+      'user-1',
+      'account-1',
+      dto,
+    );
   });
 });

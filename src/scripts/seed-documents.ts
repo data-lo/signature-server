@@ -11,6 +11,8 @@ import { UserEntity } from '../user/entities/user.entity';
 import { PersonalInformationEntity } from '../user/entities/personal-information.entity';
 import { DocumentEntity } from '../document/entities/document.entity';
 import { DocumentParticipantEntity } from '../document/entities/document-participant.entity';
+import { AccountMemberEntity } from '../account/entities/account-member.entity';
+import { ACCOUNT_TYPE_ENUM } from '../account/enums/account-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../document/enum/document-status.enum';
 import { DOCUMENT_PARTICIPANT_ROLE_ENUM } from '../document/enum/document-participant-role.enum';
 import { DOCUMENT_PARTICIPANT_STATUS_ENUM } from '../document/enum/document-participant-status.enum';
@@ -122,7 +124,34 @@ interface DocumentSpec {
   participants: ParticipantSpec[];
 }
 
-async function upsertDocument(dataSource: DataSource, spec: DocumentSpec) {
+/** Busca la cuenta PERSONAL de un usuario (misma lógica que el backfill de la migración AddAccountIdToDocuments). */
+async function findPersonalAccountId(
+  dataSource: DataSource,
+  userId: string,
+): Promise<string> {
+  const accountMemberRepository = dataSource.getRepository(AccountMemberEntity);
+  const memberships = await accountMemberRepository.find({
+    where: { userId },
+    relations: { account: true },
+  });
+  const personalMembership = memberships.find(
+    (m) => m.account?.type === ACCOUNT_TYPE_ENUM.PERSONAL,
+  );
+
+  if (!personalMembership) {
+    throw new Error(
+      `No se encontró una cuenta PERSONAL para el usuario ${userId}. Los documentos de prueba necesitan account_id.`,
+    );
+  }
+
+  return personalMembership.accountId;
+}
+
+async function upsertDocument(
+  dataSource: DataSource,
+  spec: DocumentSpec,
+  accountId: string,
+) {
   const documentRepository = dataSource.getRepository(DocumentEntity);
   const participantRepository = dataSource.getRepository(
     DocumentParticipantEntity,
@@ -148,6 +177,7 @@ async function upsertDocument(dataSource: DataSource, spec: DocumentSpec) {
       status: spec.status,
       signatureCoordinates: null,
       createdBy: spec.createdBy.id,
+      accountId,
     }),
   );
 
@@ -205,6 +235,10 @@ async function main() {
   }
 
   console.log(`Usuario principal de pruebas: ${primaryUser.email}`);
+  const primaryAccountId = await findPersonalAccountId(
+    dataSource,
+    primaryUser.id,
+  );
 
   console.log('Creando/verificando usuarios participantes de prueba...');
   const [ana, luis] = await Promise.all(
@@ -377,7 +411,7 @@ async function main() {
 
   console.log('Creando documentos de prueba...');
   for (const spec of documents) {
-    await upsertDocument(dataSource, spec);
+    await upsertDocument(dataSource, spec, primaryAccountId);
   }
 
   await dataSource.destroy();
