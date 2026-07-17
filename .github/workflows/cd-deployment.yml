@@ -26,7 +26,7 @@ jobs:
           context: .
           push: true
           no-cache: true
-        
+          tags: |
             dataloplatforms/signature-server:latest
             dataloplatforms/signature-server:${{ github.sha }}
 
