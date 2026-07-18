@@ -64,3 +64,44 @@ export class AccountMemberListResponse extends BaseResponse<
   })
   data: AccountMemberData[];
 }
+
+class OrganizationMemberRole {
+  @ApiProperty({ format: 'uuid' })
+  id: string;
+
+  @ApiProperty({ example: 'MEMBER' })
+  name: string;
+}
+
+/**
+ * Shape delgado para la sección de gestión de miembros (ver historia [STORY] Gestión de
+ * Miembros): solo lo que la tabla del frontend necesita, en vez de la AccountEntity completa
+ * que devuelve AccountMemberData. `rfc` sale de `users.personal_information` (join adicional,
+ * ver `AccountMemberService.findMembersForOrganizationDetailed`).
+ */
+export class OrganizationMemberData {
+  @ApiProperty({ format: 'uuid' })
+  accountId: string;
+
+  @ApiProperty({ format: 'uuid' })
+  userId: string;
+
+  @ApiProperty({ example: 'usuario@mail.com' })
+  email: string;
+
+  @ApiProperty({ example: 'XAXX010101000', nullable: true })
+  rfc: string | null;
+
+  @ApiProperty({ type: OrganizationMemberRole, nullable: true })
+  role: OrganizationMemberRole | null;
+
+  @ApiProperty({ example: '2023-10-25T10:00:00Z', nullable: true })
+  joinedAt: Date | null;
+}
+
+export class OrganizationMemberListResponse extends BaseResponse<
+  OrganizationMemberData[]
+> {
+  @ApiProperty({ type: [OrganizationMemberData] })
+  data: OrganizationMemberData[];
+}

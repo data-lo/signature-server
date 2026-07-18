@@ -20,6 +20,7 @@ function createMockRepository() {
   return {
     findOne: jest.fn(),
     find: jest.fn(),
+    count: jest.fn(),
     create: jest.fn((data) => data),
     save: jest.fn(async (data) => ({ id: 'new-member-1', ...data })),
     update: jest.fn(),
@@ -47,14 +48,17 @@ describe('AccountMemberService', () => {
   let rolesService: {
     findByIdOrFail: jest.Mock;
     assertHasPermission: jest.Mock;
+    findSystemRoleByName: jest.Mock;
   };
 
   beforeEach(async () => {
     accountRepository = createMockRepository();
     userRepository = createMockRepository();
+    accountRepository.count.mockResolvedValue(2); // por defecto: hay más de un ADMIN activo, nada que proteger
     accountService = { removeAccountFromCatalog: jest.fn() };
     rolesService = {
       findByIdOrFail: jest.fn().mockResolvedValue(MEMBER_ROLE),
+      findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
       // Espeja el seed real: ADMIN tiene los 12 permisos (incluye todo ORGANIZATION),
       // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
       assertHasPermission: jest
@@ -170,6 +174,79 @@ describe('AccountMemberService', () => {
       ).rejects.toThrow(ForbiddenException);
       expect(accountRepository.find).not.toHaveBeenCalled();
     });
+
+    it('solo consulta miembros activos (un miembro eliminado no debe reaparecer)', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      accountRepository.find.mockResolvedValue([]);
+
+      await service.findByOrganization('owner-1', 'org-1');
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+      });
+    });
+  });
+
+  describe('findMembersForOrganizationDetailed', () => {
+    it('mapea email/rfc/rol/fecha de ingreso desde el join a user.personalInformation y role', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      accountRepository.find.mockResolvedValue([
+        {
+          id: 'account-1',
+          userId: 'user-1',
+          email: 'miembro@empresa.com',
+          role: { id: 'member-role-1', name: 'MEMBER' },
+          joinedAt: new Date('2023-10-25T10:00:00Z'),
+          user: { personalInformation: { rfc: 'XAXX010101000' } },
+        },
+        {
+          id: 'account-2',
+          userId: 'user-2',
+          email: 'sin-rfc@empresa.com',
+          role: null,
+          joinedAt: null,
+          user: { personalInformation: { rfc: null } },
+        },
+      ]);
+
+      const result = await service.findMembersForOrganizationDetailed(
+        'owner-1',
+        'org-1',
+      );
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+        relations: { user: { personalInformation: true }, role: true },
+        order: { joinedAt: 'ASC' },
+      });
+      expect(result.data).toEqual([
+        {
+          accountId: 'account-1',
+          userId: 'user-1',
+          email: 'miembro@empresa.com',
+          rfc: 'XAXX010101000',
+          role: { id: 'member-role-1', name: 'MEMBER' },
+          joinedAt: new Date('2023-10-25T10:00:00Z'),
+        },
+        {
+          accountId: 'account-2',
+          userId: 'user-2',
+          email: 'sin-rfc@empresa.com',
+          rfc: null,
+          role: null,
+          joinedAt: null,
+        },
+      ]);
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.findMembersForOrganizationDetailed('not-owner', 'org-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(accountRepository.find).not.toHaveBeenCalled();
+    });
   });
 
   describe('findOne / update', () => {
@@ -237,6 +314,55 @@ describe('AccountMemberService', () => {
       ).rejects.toThrow(NotFoundException);
       expect(accountRepository.update).not.toHaveBeenCalled();
     });
+
+    it('update lanza ConflictException al degradar el rol del único ADMIN activo de la organización', async () => {
+      const targetAdmin = adminAccount({ id: 'admin-account-1' });
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetAdmin) // findEntityById: el objetivo es ADMIN
+        .mockResolvedValueOnce(adminAccount()); // ownership check del llamador
+      accountRepository.count.mockResolvedValue(1); // es el único ADMIN activo
+
+      await expect(
+        service.update('owner-1', 'admin-account-1', {
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('update permite degradar a un ADMIN si hay otro ADMIN activo en la organización', async () => {
+      const targetAdmin = adminAccount({ id: 'admin-account-2' });
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetAdmin) // findEntityById
+        .mockResolvedValueOnce(adminAccount()) // ownership check del llamador
+        .mockResolvedValueOnce(targetAdmin); // findEntityById final, para retornar la data actualizada
+      accountRepository.count.mockResolvedValue(2); // hay otro ADMIN activo además del objetivo
+
+      await service.update('owner-1', 'admin-account-2', {
+        roleId: MEMBER_ROLE.id,
+      });
+
+      expect(accountRepository.update).toHaveBeenCalled();
+    });
+
+    it('update permite desactivar (isActive:false) a un MEMBER sin pasar por la protección de último ADMIN', async () => {
+      const targetMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetMember) // findEntityById
+        .mockResolvedValueOnce(adminAccount()) // ownership check del llamador
+        .mockResolvedValueOnce(targetMember); // findEntityById final, para retornar la data actualizada
+
+      await service.update('owner-1', 'member-2', { isActive: false });
+
+      expect(accountRepository.count).not.toHaveBeenCalled();
+      expect(accountRepository.update).toHaveBeenCalled();
+    });
   });
 
   describe('remove', () => {
@@ -287,6 +413,31 @@ describe('AccountMemberService', () => {
       );
       expect(accountRepository.update).not.toHaveBeenCalled();
       expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+
+    it('lanza ConflictException al eliminar al único ADMIN activo de la organización', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount()) // membresía objetivo: es ADMIN
+        .mockResolvedValueOnce(adminAccount()); // ownership check del llamador
+      accountRepository.count.mockResolvedValue(1); // es el único ADMIN activo
+
+      await expect(
+        service.remove('owner-1', 'admin-account-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+      expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+
+    it('permite eliminar a un ADMIN si hay otro ADMIN activo en la organización', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.count.mockResolvedValue(2); // hay otro ADMIN activo además del objetivo
+
+      const result = await service.remove('owner-1', 'admin-account-1');
+
+      expect(result.success).toBe(true);
+      expect(accountRepository.update).toHaveBeenCalled();
     });
   });
 

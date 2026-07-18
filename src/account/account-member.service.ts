@@ -25,9 +25,11 @@ import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
+import { OrganizationMemberData } from './interfaces/response/account-member-response';
 
 /**
  * Gestiona membresías de organización — desde la fusión Account/AccountMember (ver plan de
@@ -112,13 +114,54 @@ export class AccountMemberService {
     );
 
     const members = await this.accountRepository.find({
-      where: { organizationId },
+      where: { organizationId, isActive: true },
     });
 
     return {
       success: true,
       message: 'Miembros obtenidos correctamente',
       data: members,
+    };
+  }
+
+  /**
+   * Shape delgado para la sección de gestión de miembros (ver historia [STORY] Gestión de
+   * Miembros: Listado, Edición de Roles y Eliminación en Organización) — email/rfc/rol/fecha de
+   * ingreso, en vez de la AccountEntity completa. `email` ya vive en `accounts` (sincronizado
+   * desde la credencial única del usuario, decisión D6 del plan ER-V2) así que no hace falta
+   * tocar `users` para eso; `rfc` sí requiere el join `accounts -> users -> personal_information`
+   * porque solo vive ahí. Solo devuelve miembros activos — un miembro eliminado (soft-delete) no
+   * debe reaparecer en la tabla de gestión.
+   */
+  async findMembersForOrganizationDetailed(
+    callerId: string,
+    organizationId: string,
+  ): Promise<BaseResponse<OrganizationMemberData[]>> {
+    await this.assertHasOrganizationPermission(
+      callerId,
+      organizationId,
+      ACTION_KEY_ENUM.READ,
+    );
+
+    const members = await this.accountRepository.find({
+      where: { organizationId, isActive: true },
+      relations: { user: { personalInformation: true }, role: true },
+      order: { joinedAt: 'ASC' },
+    });
+
+    return {
+      success: true,
+      message: 'Miembros obtenidos correctamente',
+      data: members.map((member) => ({
+        accountId: member.id,
+        userId: member.userId,
+        email: member.email,
+        rfc: member.user?.personalInformation?.rfc ?? null,
+        role: member.role
+          ? { id: member.role.id, name: member.role.name }
+          : null,
+        joinedAt: member.joinedAt,
+      })),
     };
   }
 
@@ -158,6 +201,14 @@ export class AccountMemberService {
       ACTION_KEY_ENUM.UPDATE,
     );
 
+    const changesRole =
+      updateAccountMemberDto.roleId !== undefined &&
+      updateAccountMemberDto.roleId !== member.roleId;
+    const deactivates = updateAccountMemberDto.isActive === false;
+    if (changesRole || deactivates) {
+      await this.assertNotLastAdmin(member.organizationId, member);
+    }
+
     if (updateAccountMemberDto.roleId) {
       await this.rolesService.findByIdOrFail(updateAccountMemberDto.roleId);
     }
@@ -196,6 +247,8 @@ export class AccountMemberService {
       membership.organizationId,
       ACTION_KEY_ENUM.DELETE,
     );
+
+    await this.assertNotLastAdmin(membership.organizationId, membership);
 
     await this.accountRepository.update(id, {
       isActive: false,
@@ -249,6 +302,37 @@ export class AccountMemberService {
       action,
       'No tienes permisos de administrador sobre esta organización',
     );
+  }
+
+  /**
+   * Protección del último administrador (ver historia [STORY] Gestión de Miembros, sección
+   * "Reglas de Negocio y Seguridad"): si `target` es hoy el único miembro ADMIN activo de la
+   * organización, ni degradar su rol ni desactivar su acceso está permitido — dejaría la
+   * organización sin nadie que pueda gestionarla. Se aplica sin importar si el llamador es el
+   * propio `target` u otro ADMIN, porque el riesgo es el mismo en ambos casos (el sistema no
+   * tiene un rol OWNER separado de ADMIN, así que "el último dueño" se traduce aquí como "el
+   * último ADMIN"). No-op si `target` no es ADMIN hoy (nada que proteger).
+   */
+  private async assertNotLastAdmin(
+    organizationId: string,
+    target: AccountEntity,
+  ): Promise<void> {
+    const adminRole = await this.rolesService.findSystemRoleByName(
+      SYSTEM_ROLE_NAME_ENUM.ADMIN,
+    );
+    if (target.roleId !== adminRole.id) {
+      return;
+    }
+
+    const activeAdminCount = await this.accountRepository.count({
+      where: { organizationId, isActive: true, roleId: adminRole.id },
+    });
+
+    if (activeAdminCount <= 1) {
+      throw new ConflictException(
+        'No puedes cambiar el rol ni eliminar al único administrador activo de la organización',
+      );
+    }
   }
 
   /**
