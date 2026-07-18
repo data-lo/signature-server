@@ -394,11 +394,12 @@ export class UserService {
 
       const newUser = await queryRunner.manager.save(user);
 
-      const { account: personalAccount, membership } =
+      const { account: personalAccount } =
         await this.accountService.createDefaultPersonalAccount(
           queryRunner.manager,
           newUser.id,
-          `${dto.firstName} ${dto.lastName}`,
+          newUser.email,
+          newUser.password,
         );
 
       await queryRunner.commitTransaction();
@@ -407,7 +408,6 @@ export class UserService {
       await this.accountService.appendAccountToCatalog(
         newUser.id,
         personalAccount,
-        { roleId: membership.roleId, isActive: membership.isActive },
       );
 
       return {

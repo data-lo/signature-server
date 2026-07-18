@@ -266,6 +266,7 @@ export class AuditService {
         }
         break;
 
+      case AuditAction.DOCUMENT_CANCELLATION_REQUESTED:
       case AuditAction.DOCUMENT_CANCELLED:
       case AuditAction.DOCUMENT_REJECTED:
         break;

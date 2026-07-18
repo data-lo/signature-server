@@ -11,10 +11,11 @@ export class AccountMemberData {
 
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    description: 'UUID de la cuenta a la que se le da acceso',
+    description: 'UUID de la organización a la que se le da acceso',
     format: 'uuid',
+    nullable: true,
   })
-  accountId: string;
+  organizationId: string | null;
 
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',

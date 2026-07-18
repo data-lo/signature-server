@@ -155,4 +155,20 @@ export class EmailService {
       EmailType.NOTIFICATION,
     );
   }
+
+  /** Envía el código de verificación de un firmante para un documento con requiresVerification=true (ver Fase 7 del plan de migración ER-V2). */
+  async sendVerificationCodeNotification(
+    to: string,
+    documentName: string,
+    code: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.VERIFICATION_CODE,
+      `<p>Tu código de verificación para firmar "<strong>${documentName}</strong>" es:</p>` +
+        `<p style="font-size:24px;font-weight:bold;letter-spacing:4px;">${code}</p>` +
+        `<p>Este código vence en 15 minutos.</p>`,
+      EmailType.NOTIFICATION,
+    );
+  }
 }

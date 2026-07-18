@@ -14,7 +14,7 @@ import { In, Repository } from 'typeorm';
 
 // Entities
 import { DocumentEntity } from './entities/document.entity';
-import { DocumentParticipantEntity } from './entities/document-participant.entity';
+import { CollaboratorEntity } from './entities/collaborator.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 
 // DTOs
@@ -22,15 +22,15 @@ import { CreateDocumentDto } from './dto/create-document.dto';
 
 // Enums
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
-import { DOCUMENT_PARTICIPANT_ROLE_ENUM } from './enum/document-participant-role.enum';
-import { DOCUMENT_PARTICIPANT_STATUS_ENUM } from './enum/document-participant-status.enum';
+import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
+import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 
 // Interfaces & payloads
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
-import { SignatureCoordinates } from './interfaces/signature-coordinates';
+import { SignatureCoordinates } from 'src/shared/document-signing/interfaces/signature-coordinates.interface';
 
 // Services
 import { MinioService } from '../shared/minio/minio.service';
@@ -46,8 +46,23 @@ import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
 import { AccountMemberService } from 'src/account/account-member.service';
+import { getNextPendingSigner, isSignerTurn } from './utils/next-signer.util';
+import { VerificationCodeService } from './verification-code.service';
+import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
+
+/** Nombre a mostrar de un colaborador: el de su cuenta si existe, o su email si fue invitado solo por correo. */
+function collaboratorDisplayName(collaborator: CollaboratorEntity): string {
+  return collaborator.user
+    ? `${collaborator.user.firstName} ${collaborator.user.lastName}`
+    : (collaborator.email ?? '');
+}
+
+/** Email de contacto de un colaborador: el de su cuenta si existe, o el email con el que fue invitado. */
+function collaboratorEmail(collaborator: CollaboratorEntity): string {
+  return collaborator.user?.email ?? collaborator.email ?? '';
+}
 
 @Injectable()
 export class DocumentService {
@@ -70,8 +85,8 @@ export class DocumentService {
   constructor(
     @InjectRepository(DocumentEntity)
     private readonly documentRepository: Repository<DocumentEntity>,
-    @InjectRepository(DocumentParticipantEntity)
-    private readonly participantRepository: Repository<DocumentParticipantEntity>,
+    @InjectRepository(CollaboratorEntity)
+    private readonly collaboratorRepository: Repository<CollaboratorEntity>,
     private readonly minioService: MinioService,
     private readonly hashService: HashService,
     private readonly userService: UserService,
@@ -81,9 +96,10 @@ export class DocumentService {
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly accountMemberService: AccountMemberService,
+    private readonly verificationCodeService: VerificationCodeService,
   ) {}
 
-  /** Sube el archivo a Minio, genera su hash y registra el documento y sus participantes (firmantes/espectadores) en la base de datos. */
+  /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
   async create(
     createdBy: string,
     accountId: string,
@@ -97,7 +113,7 @@ export class DocumentService {
           'Falta el header X-Account-Id de la cuenta activa',
         );
       }
-      await this.accountMemberService.assertIsActiveMember(
+      const activeAccount = await this.accountMemberService.assertIsActiveMember(
         createdBy,
         accountId,
       );
@@ -106,14 +122,40 @@ export class DocumentService {
         throw new BadRequestException('Archivo no proporcionado');
       }
 
-      const { signerIds, spectatorIds, signatureCoordinates } =
-        createDocumentDto;
+      const {
+        signerIds,
+        watcherIds,
+        watcherEmails,
+        reviewerIds,
+        reviewerEmails,
+        signatureCoordinates,
+      } = createDocumentDto;
 
-      const allParticipantIds = [...signerIds, ...(spectatorIds ?? [])];
+      // Solo los firmantes deben tener cuenta en la plataforma (necesitan firma/INE
+      // registradas para poder firmar) — watchers y reviewers sí pueden invitarse solo por
+      // email, ya que no necesitan cuenta para observar/revisar.
+      const allParticipantIds = [
+        ...signerIds,
+        ...(watcherIds ?? []),
+        ...(reviewerIds ?? []),
+      ];
       const uniqueParticipantIds = new Set(allParticipantIds);
       if (uniqueParticipantIds.size !== allParticipantIds.length) {
         throw new BadRequestException(
-          'No puedes seleccionar al mismo usuario más de una vez entre firmantes y espectadores',
+          'No puedes seleccionar al mismo usuario más de una vez entre firmantes, watchers y reviewers',
+        );
+      }
+
+      const allParticipantEmails = [
+        ...(watcherEmails ?? []),
+        ...(reviewerEmails ?? []),
+      ];
+      const uniqueParticipantEmails = new Set(
+        allParticipantEmails.map((email) => email.toLowerCase()),
+      );
+      if (uniqueParticipantEmails.size !== allParticipantEmails.length) {
+        throw new BadRequestException(
+          'No puedes invitar al mismo correo más de una vez entre watchers y reviewers',
         );
       }
 
@@ -161,29 +203,60 @@ export class DocumentService {
         signatureCoordinates: signatureCoordinates ?? DEFAULT_COORDINATES,
         createdBy,
         accountId,
+        // Clave real de aislamiento multi-tenant para contexto de organización (ver plan de
+        // migración ER-V2, Fase 5, decisión D5): accountId ahora es una fila por usuario, así
+        // que ya no agrupa a todos los miembros de una misma organización. organizationId sí.
+        organizationId: activeAccount.organizationId,
+        totalSigners: signerIds.length,
       });
 
       const savedDocument = await this.documentRepository.save(document);
 
-      const participants = [
+      const collaborators = [
         ...signerIds.map((userId, index) =>
-          this.participantRepository.create({
+          this.collaboratorRepository.create({
             documentId: savedDocument.id,
             userId,
-            role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER,
-            signOrder: index,
+            colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+            signingOrder: index,
+            ipAddress: ip,
           }),
         ),
-        ...(spectatorIds ?? []).map((userId) =>
-          this.participantRepository.create({
+        ...(watcherIds ?? []).map((userId) =>
+          this.collaboratorRepository.create({
             documentId: savedDocument.id,
             userId,
-            role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SPECTATOR,
+            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            ipAddress: ip,
+          }),
+        ),
+        ...(watcherEmails ?? []).map((email) =>
+          this.collaboratorRepository.create({
+            documentId: savedDocument.id,
+            email,
+            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            ipAddress: ip,
+          }),
+        ),
+        ...(reviewerIds ?? []).map((userId) =>
+          this.collaboratorRepository.create({
+            documentId: savedDocument.id,
+            userId,
+            colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+            ipAddress: ip,
+          }),
+        ),
+        ...(reviewerEmails ?? []).map((email) =>
+          this.collaboratorRepository.create({
+            documentId: savedDocument.id,
+            email,
+            colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+            ipAddress: ip,
           }),
         ),
       ];
 
-      await this.participantRepository.save(participants);
+      await this.collaboratorRepository.save(collaborators);
 
       void this.auditService.create({
         documentId: savedDocument.id,
@@ -198,7 +271,7 @@ export class DocumentService {
       });
 
       const url = await this.getDocumentMinioURL(savedDocument.id);
-      const { signers, spectators } = await this.getParticipantNames(
+      const { signers, watchers, reviewers } = await this.getCollaboratorNames(
         savedDocument.id,
       );
       const requestedBy = await this.userService.findOne(createdBy);
@@ -212,7 +285,8 @@ export class DocumentService {
           fileType: savedDocument.fileType,
           totalPages: savedDocument.totalPages,
           signers,
-          spectators,
+          watchers,
+          reviewers,
           creator: `${requestedBy.firstName} ${requestedBy.lastName}`,
           status: savedDocument.status,
           secureUrl: url.secureUrl,
@@ -230,22 +304,26 @@ export class DocumentService {
     }
   }
 
-  private async getParticipantNames(
-    documentId: string,
-  ): Promise<{ signers: string[]; spectators: string[] }> {
-    const participants = await this.participantRepository.find({
+  private async getCollaboratorNames(documentId: string): Promise<{
+    signers: string[];
+    watchers: string[];
+    reviewers: string[];
+  }> {
+    const collaborators = await this.collaboratorRepository.find({
       where: { documentId },
       relations: { user: true },
-      order: { signOrder: 'ASC' },
+      order: { signingOrder: 'ASC' },
     });
 
+    const byType = (type: COLABORATOR_TYPE_ENUM) =>
+      collaborators
+        .filter((c) => c.colaboratorType === type)
+        .map(collaboratorDisplayName);
+
     return {
-      signers: participants
-        .filter((p) => p.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER)
-        .map((p) => `${p.user.firstName} ${p.user.lastName}`),
-      spectators: participants
-        .filter((p) => p.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SPECTATOR)
-        .map((p) => `${p.user.firstName} ${p.user.lastName}`),
+      signers: byType(COLABORATOR_TYPE_ENUM.SIGNER),
+      watchers: byType(COLABORATOR_TYPE_ENUM.WATCHER),
+      reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
     };
   }
 
@@ -259,7 +337,10 @@ export class DocumentService {
         'Falta el header X-Account-Id de la cuenta activa',
       );
     }
-    await this.accountMemberService.assertIsActiveMember(callerId, accountId);
+    const activeAccount = await this.accountMemberService.assertIsActiveMember(
+      callerId,
+      accountId,
+    );
 
     const {
       id,
@@ -278,12 +359,22 @@ export class DocumentService {
       withUrl,
     } = query;
 
+    // Contexto de organización: todos los miembros comparten organizationId, así que ese es el
+    // filtro real (accountId es una fila por usuario desde la Fase 5, ver decisión D5 del plan
+    // de migración ER-V2). Contexto personal: accountId sigue sirviendo (1 miembro = 1 fila).
     const qb = this.documentRepository
       .createQueryBuilder('document')
-      .where('document.accountId = :accountId', { accountId })
+      .where(
+        activeAccount.organizationId
+          ? 'document.organizationId = :organizationId'
+          : 'document.accountId = :accountId',
+        activeAccount.organizationId
+          ? { organizationId: activeAccount.organizationId }
+          : { accountId },
+      )
       .leftJoinAndSelect('document.requestedBy', 'requester')
-      .leftJoinAndSelect('document.participants', 'participant')
-      .leftJoinAndSelect('participant.user', 'participantUser')
+      .leftJoinAndSelect('document.collaborators', 'collaborator')
+      .leftJoinAndSelect('collaborator.user', 'collaboratorUser')
       .orderBy('document.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
@@ -294,14 +385,22 @@ export class DocumentService {
 
     if (participantEmail) {
       qb.andWhere(
-        'document.id IN (SELECT dp.document_id FROM document_participants dp INNER JOIN users u ON u.id = dp.user_id WHERE u.email = :participantEmail)',
+        `document.id IN (
+          SELECT c.document_id FROM collaborators c
+          LEFT JOIN users u ON u.id = c.user_id
+          WHERE u.email = :participantEmail OR c.email = :participantEmail
+        )`,
         { participantEmail },
       );
     }
 
     if (email) {
       qb.andWhere(
-        '(requester.email = :email OR document.id IN (SELECT dp.document_id FROM document_participants dp INNER JOIN users u ON u.id = dp.user_id WHERE u.email = :email))',
+        `(requester.email = :email OR document.id IN (
+          SELECT c.document_id FROM collaborators c
+          LEFT JOIN users u ON u.id = c.user_id
+          WHERE u.email = :email OR c.email = :email
+        ))`,
         { email },
       );
     }
@@ -343,11 +442,12 @@ export class DocumentService {
     if (participantName) {
       qb.andWhere(
         `document.id IN (
-          SELECT dp.document_id FROM document_participants dp
-          INNER JOIN users u ON u.id = dp.user_id
+          SELECT c.document_id FROM collaborators c
+          LEFT JOIN users u ON u.id = c.user_id
           WHERE u.first_name ILIKE :participantName
              OR u.last_name ILIKE :participantName
              OR u.email ILIKE :participantName
+             OR c.email ILIKE :participantName
         )`,
         { participantName: `%${participantName}%` },
       );
@@ -356,16 +456,16 @@ export class DocumentService {
     if (myTurnOnly && participantEmail) {
       qb.andWhere(
         `document.id IN (
-          SELECT dp.document_id FROM document_participants dp
-          INNER JOIN users u ON u.id = dp.user_id
+          SELECT c.document_id FROM collaborators c
+          INNER JOIN users u ON u.id = c.user_id
           WHERE u.email = :participantEmail
-            AND dp.role = 'signer'
-            AND dp.status = 'pending'
-            AND dp.sign_order = (
-              SELECT MIN(dp2.sign_order) FROM document_participants dp2
-              WHERE dp2.document_id = dp.document_id
-                AND dp2.role = 'signer'
-                AND dp2.status = 'pending'
+            AND c.colaborator_type = 'signer'
+            AND c.status = 'pending'
+            AND c.signing_order = (
+              SELECT MIN(c2.signing_order) FROM collaborators c2
+              WHERE c2.document_id = c.document_id
+                AND c2.colaborator_type = 'signer'
+                AND c2.status = 'pending'
             )
         )`,
         { participantEmail },
@@ -376,20 +476,19 @@ export class DocumentService {
 
     const data = await Promise.all(
       documents.map(async (doc) => {
-        const signers = (doc.participants ?? [])
-          .filter((p) => p.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER)
-          .sort((a, b) => a.signOrder - b.signOrder)
-          .map((p) => `${p.user.firstName} ${p.user.lastName}`);
-        const spectators = (doc.participants ?? [])
-          .filter((p) => p.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SPECTATOR)
-          .map((p) => `${p.user.firstName} ${p.user.lastName}`);
+        const byType = (type: COLABORATOR_TYPE_ENUM) =>
+          (doc.collaborators ?? [])
+            .filter((c) => c.colaboratorType === type)
+            .sort((a, b) => (a.signingOrder ?? 0) - (b.signingOrder ?? 0))
+            .map(collaboratorDisplayName);
 
         const base = {
           id: doc.id,
           fileName: doc.fileName,
           fileType: doc.fileType,
-          signers,
-          spectators,
+          signers: byType(COLABORATOR_TYPE_ENUM.SIGNER),
+          watchers: byType(COLABORATOR_TYPE_ENUM.WATCHER),
+          reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
           creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
           totalPages: doc.totalPages,
           status: doc.status,
@@ -431,7 +530,7 @@ export class DocumentService {
   async findDetailForUser(documentId: string, currentUserId: string) {
     const document = await this.documentRepository.findOne({
       where: { id: documentId },
-      relations: { requestedBy: true, participants: { user: true } },
+      relations: { requestedBy: true, collaborators: { user: true } },
     });
 
     if (!document) {
@@ -441,25 +540,19 @@ export class DocumentService {
     }
 
     const isCreator = document.createdBy === currentUserId;
-    const myParticipant = document.participants.find(
-      (p) => p.userId === currentUserId,
+    const myParticipant = document.collaborators.find(
+      (c) => c.userId === currentUserId,
     );
 
     if (!isCreator && !myParticipant) {
       throw new ForbiddenException('No tienes acceso a este documento');
     }
 
-    const signerParticipants = document.participants
-      .filter((p) => p.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER)
-      .sort((a, b) => a.signOrder - b.signOrder);
-
-    const nextSigner = signerParticipants.find(
-      (p) => p.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
-    );
+    const nextSigner = getNextPendingSigner(document.collaborators);
 
     const isMyTurn = Boolean(
       myParticipant &&
-      myParticipant.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER &&
+      myParticipant.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER &&
       nextSigner?.id === myParticipant.id,
     );
 
@@ -474,14 +567,14 @@ export class DocumentService {
     const canAct =
       document.status === DOCUMENT_STATUS_ENUM.PENDING &&
       isMyTurn &&
-      myParticipant?.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING;
+      myParticipant?.status === SIGNEE_STATUS_ENUM.PENDING;
 
     const canRequestCancellation =
       isCreator && document.status === DOCUMENT_STATUS_ENUM.SIGNED;
 
     const canConfirmCancellation =
       document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING &&
-      myParticipant?.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER;
+      myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
 
     return {
       success: true,
@@ -495,16 +588,18 @@ export class DocumentService {
         creator: `${document.requestedBy.firstName} ${document.requestedBy.lastName}`,
         secureUrl,
         expiresIn,
-        participants: document.participants
-          .sort((a, b) => a.signOrder - b.signOrder)
-          .map((p) => ({
-            userId: p.userId,
-            name: `${p.user.firstName} ${p.user.lastName}`,
-            role: p.role,
-            status: p.status,
-            rejectionReason: p.rejectionReason,
+        participants: document.collaborators
+          .sort((a, b) => (a.signingOrder ?? 0) - (b.signingOrder ?? 0))
+          .map((c) => ({
+            id: c.id,
+            userId: c.userId,
+            email: collaboratorEmail(c),
+            name: collaboratorDisplayName(c),
+            role: c.colaboratorType,
+            status: c.status,
+            cancellationReason: c.cancellationReason,
           })),
-        myRole: myParticipant?.role ?? (isCreator ? 'creator' : null),
+        myRole: myParticipant?.colaboratorType ?? (isCreator ? 'creator' : null),
         myStatus: myParticipant?.status ?? null,
         canSign: canAct,
         canReject: canAct,
@@ -543,7 +638,7 @@ export class DocumentService {
     return document;
   }
 
-  /** Verifica si el usuario tiene acceso al documento (creador o participante). Usado para proteger la descarga del archivo. */
+  /** Verifica si el usuario tiene acceso al documento (creador o colaborador). Usado para proteger la descarga del archivo. */
   async assertUserHasAccess(
     documentId: string,
     userId: string,
@@ -552,10 +647,10 @@ export class DocumentService {
     if (document.createdBy === userId) {
       return document;
     }
-    const participant = await this.participantRepository.findOne({
+    const collaborator = await this.collaboratorRepository.findOne({
       where: { documentId, userId },
     });
-    if (!participant) {
+    if (!collaborator) {
       throw new ForbiddenException('No tienes acceso a este documento');
     }
     return document;
@@ -736,15 +831,11 @@ export class DocumentService {
 
   /** Envía el correo de solicitud de firma al siguiente firmante pendiente en el orden establecido. */
   private async notifyNextSigner(documentId: string): Promise<void> {
-    const nextSigner = await this.participantRepository.findOne({
-      where: {
-        documentId,
-        role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER,
-        status: DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
-      },
-      order: { signOrder: 'ASC' },
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
       relations: { user: true },
     });
+    const nextSigner = getNextPendingSigner(signerCollaborators);
 
     if (!nextSigner) return;
 
@@ -753,8 +844,8 @@ export class DocumentService {
     const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3001';
 
     await this.emailService.sendDocumentPendingNotification(
-      nextSigner.user.email,
-      `${nextSigner.user.firstName} ${nextSigner.user.lastName}`,
+      collaboratorEmail(nextSigner),
+      collaboratorDisplayName(nextSigner),
       creator.email,
       document.fileName,
       `${frontendUrl}/documents/${documentId}`,
@@ -789,8 +880,89 @@ export class DocumentService {
   }
 
   /**
+   * Encuentra la fila de Collaborator (SIGNER) del usuario autenticado en este documento, o
+   * lanza ForbiddenException. Usado por el flujo de verificación (emitir/validar código) —
+   * mismo criterio de acceso que sign()/reject().
+   */
+  private async findMySignerCollaborator(
+    documentId: string,
+    currentUserId: string,
+  ): Promise<CollaboratorEntity> {
+    const myParticipant = await this.collaboratorRepository.findOne({
+      where: {
+        documentId,
+        userId: currentUserId,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { user: true },
+    });
+
+    if (!myParticipant) {
+      throw new ForbiddenException('No eres firmante de este documento');
+    }
+
+    return myParticipant;
+  }
+
+  /** Emite y envía por correo un código de verificación para que el firmante autenticado pueda firmar un documento con requiresVerification=true. */
+  async requestVerificationCode(
+    documentId: string,
+    currentUserId: string,
+    ipAddress: string,
+  ): Promise<BaseResponse<null>> {
+    const document = await this.findOne(documentId);
+    const myParticipant = await this.findMySignerCollaborator(
+      documentId,
+      currentUserId,
+    );
+
+    const verificationCode = await this.verificationCodeService.issue(
+      documentId,
+      myParticipant.id,
+      VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      ipAddress,
+    );
+
+    await this.emailService.sendVerificationCodeNotification(
+      collaboratorEmail(myParticipant),
+      document.fileName,
+      verificationCode.code,
+    );
+
+    return {
+      success: true,
+      message: 'Código de verificación enviado correctamente',
+      data: null,
+    };
+  }
+
+  /** Valida el código de verificación enviado por el firmante autenticado, consumiéndolo de un solo uso. */
+  async verifyCode(
+    documentId: string,
+    currentUserId: string,
+    code: string,
+  ): Promise<BaseResponse<null>> {
+    const myParticipant = await this.findMySignerCollaborator(
+      documentId,
+      currentUserId,
+    );
+
+    await this.verificationCodeService.verifyAndConsume(
+      documentId,
+      myParticipant.id,
+      code,
+    );
+
+    return {
+      success: true,
+      message: 'Código verificado correctamente',
+      data: null,
+    };
+  }
+
+  /**
    * Registra la firma del usuario autenticado si es su turno. Si era el último firmante pendiente,
-   * estampa el PDF con todas las firmas, lo mueve al bucket de firmados y notifica a todos los participantes.
+   * estampa el PDF con todas las firmas, lo mueve al bucket de firmados y notifica a todos los colaboradores.
    */
   async sign(
     documentId: string,
@@ -804,31 +976,25 @@ export class DocumentService {
       );
     }
 
-    const signerParticipants = await this.participantRepository.find({
-      where: { documentId, role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER },
-      relations: { user: true },
-      order: { signOrder: 'ASC' },
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
+      relations: { user: true, simpleSignature: true },
+      order: { signingOrder: 'ASC' },
     });
 
-    const myParticipant = signerParticipants.find(
-      (p) => p.userId === currentUserId,
+    const myParticipant = signerCollaborators.find(
+      (c) => c.userId === currentUserId,
     );
 
     if (!myParticipant) {
       throw new ForbiddenException('No eres firmante de este documento');
     }
 
-    if (myParticipant.status !== DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING) {
+    if (myParticipant.status !== SIGNEE_STATUS_ENUM.PENDING) {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
 
-    const pendingBeforeMe = signerParticipants.some(
-      (p) =>
-        p.signOrder < myParticipant.signOrder &&
-        p.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
-    );
-
-    if (pendingBeforeMe) {
+    if (!isSignerTurn(myParticipant, signerCollaborators)) {
       throw new ForbiddenException(
         'Aún no es tu turno para firmar este documento',
       );
@@ -836,27 +1002,48 @@ export class DocumentService {
 
     await this.assertUserHasSignatureOnFile(myParticipant.user);
 
-    const remainingSigners = signerParticipants.filter(
-      (p) =>
-        p.id !== myParticipant.id &&
-        p.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
+    // Gateo por código de verificación (ver plan de migración ER-V2, Fase 7): opt-in por
+    // documento vía requiresVerification (default false) — si está apagado, el flujo de firma
+    // sigue exactamente igual que siempre, sin ningún riesgo para el caso dominante.
+    if (document.requiresVerification) {
+      const hasVerified = await this.verificationCodeService.hasConsumedCode(
+        documentId,
+        myParticipant.id,
+        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      );
+      if (!hasVerified) {
+        throw new BadRequestException(
+          'Este documento requiere verificación. Solicita y valida tu código antes de firmar.',
+        );
+      }
+    }
+
+    const remainingSigners = signerCollaborators.filter(
+      (c) => c.id !== myParticipant.id && c.status === SIGNEE_STATUS_ENUM.PENDING,
     );
 
     // Si soy el último firmante pendiente, estampo y finalizo el documento ANTES de
-    // registrar mi firma: si el estampado falla, ni el participante ni el documento
+    // registrar mi firma: si el estampado falla, ni el colaborador ni el documento
     // quedan marcados como firmados, y la firma puede reintentarse sin quedar atascada.
+    document.completedSignersCount = (document.completedSignersCount ?? 0) + 1;
+
     if (remainingSigners.length === 0) {
-      await this.finalizeSignedDocument(document, signerParticipants);
+      // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado).
+      await this.finalizeSignedDocument(document, signerCollaborators);
       this.documentEventsProducer.emitSigned({
         documentId,
         fileName: document.fileName,
         actorUserId: currentUserId,
       });
+    } else {
+      await this.documentRepository.update(documentId, {
+        completedSignersCount: document.completedSignersCount,
+      });
     }
 
-    myParticipant.status = DOCUMENT_PARTICIPANT_STATUS_ENUM.SIGNED;
+    myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
-    await this.participantRepository.save(myParticipant);
+    await this.collaboratorRepository.save(myParticipant);
 
     void this.auditService.create({
       documentId,
@@ -889,10 +1076,10 @@ export class DocumentService {
     };
   }
 
-  /** Estampa las firmas de todos los firmantes (apiladas), mueve el archivo a firmados y notifica a todos los participantes. */
+  /** Estampa las firmas de todos los firmantes (apiladas), mueve el archivo a firmados y notifica a todos los colaboradores. */
   private async finalizeSignedDocument(
     document: DocumentEntity,
-    signerParticipants: DocumentParticipantEntity[],
+    signerCollaborators: CollaboratorEntity[],
   ): Promise<void> {
     try {
       let documentBuffer = await this.minioService.getFileInBytesFormat(
@@ -905,10 +1092,17 @@ export class DocumentService {
       const verticalStep =
         baseCoordinates.height + SIGNATURE_STAMP_VERTICAL_GAP;
 
-      for (const [index, participant] of signerParticipants.entries()) {
+      // Coordenadas por colaborador (ver Fase 4 del plan de migración ER-V2): quien tiene
+      // simpleSignature explícita se estampa ahí; el resto se apila automáticamente desde el
+      // ancla del documento, exactamente como antes — el índice de apilado solo avanza para
+      // los colaboradores SIN coordenadas explícitas, para que no colisionen entre sí.
+      let autoStackIndex = 0;
+      for (const collaborator of signerCollaborators) {
+        // Los firmantes siempre tienen cuenta de plataforma (userId no-nulo): solo watchers
+        // y reviewers pueden invitarse por email únicamente (ver create()).
         const signerUser =
-          participant.user ??
-          (await this.userService.findOne(participant.userId));
+          collaborator.user ??
+          (await this.userService.findOne(collaborator.userId as string));
         const signature = await this.signatureService.findOne(
           signerUser.signatureId,
         );
@@ -917,10 +1111,16 @@ export class DocumentService {
           BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
         );
 
-        const coordinates: SignatureCoordinates = {
-          ...baseCoordinates,
-          y: baseCoordinates.y + index * verticalStep,
-        };
+        let coordinates: SignatureCoordinates;
+        if (collaborator.simpleSignature) {
+          coordinates = collaborator.simpleSignature.signatureCoordinates;
+        } else {
+          coordinates = {
+            ...baseCoordinates,
+            y: baseCoordinates.y + autoStackIndex * verticalStep,
+          };
+          autoStackIndex += 1;
+        }
 
         documentBuffer =
           await this.documentSigningSerivice.mergeSignatureIntoPdf(
@@ -936,8 +1136,8 @@ export class DocumentService {
         );
       }
 
-      const signerNames = signerParticipants
-        .map((p) => `${p.user.firstName} ${p.user.lastName}`)
+      const signerNames = signerCollaborators
+        .map(collaboratorDisplayName)
         .join(', ');
 
       await this.minioService.uploadPdfAObject(
@@ -970,10 +1170,10 @@ export class DocumentService {
     }
   }
 
-  /** Envía el PDF final firmado por correo a todos los participantes (firmantes y espectadores). */
+  /** Envía el PDF final firmado por correo a todos los colaboradores (firmantes, watchers y reviewers). */
   private async sendCompletionEmails(documentId: string): Promise<void> {
     const document = await this.findOne(documentId);
-    const participants = await this.participantRepository.find({
+    const collaborators = await this.collaboratorRepository.find({
       where: { documentId },
       relations: { user: true },
     });
@@ -984,10 +1184,10 @@ export class DocumentService {
     );
 
     await Promise.all(
-      participants.map((participant) =>
+      collaborators.map((collaborator) =>
         this.emailService.sendDocumentSignedNotification(
-          participant.user.email,
-          `${participant.user.firstName} ${participant.user.lastName}`,
+          collaboratorEmail(collaborator),
+          collaboratorDisplayName(collaborator),
           document.fileName,
           signedBuffer,
         ),
@@ -1009,31 +1209,25 @@ export class DocumentService {
       );
     }
 
-    const signerParticipants = await this.participantRepository.find({
-      where: { documentId, role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER },
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
       relations: { user: true },
-      order: { signOrder: 'ASC' },
+      order: { signingOrder: 'ASC' },
     });
 
-    const myParticipant = signerParticipants.find(
-      (p) => p.userId === currentUserId,
+    const myParticipant = signerCollaborators.find(
+      (c) => c.userId === currentUserId,
     );
 
     if (!myParticipant) {
       throw new ForbiddenException('No eres firmante de este documento');
     }
 
-    if (myParticipant.status !== DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING) {
+    if (myParticipant.status !== SIGNEE_STATUS_ENUM.PENDING) {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
 
-    const pendingBeforeMe = signerParticipants.some(
-      (p) =>
-        p.signOrder < myParticipant.signOrder &&
-        p.status === DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
-    );
-
-    if (pendingBeforeMe) {
+    if (!isSignerTurn(myParticipant, signerCollaborators)) {
       throw new ForbiddenException(
         'Aún no es tu turno para revisar este documento',
       );
@@ -1041,8 +1235,8 @@ export class DocumentService {
 
     await this.assertUserHasSignatureOnFile(myParticipant.user);
 
-    // Estampo y muevo el documento a rechazados ANTES de marcar al participante como
-    // rechazado: si el estampado o la subida a MinIO fallan, ni el participante ni el
+    // Estampo y muevo el documento a rechazados ANTES de marcar al colaborador como
+    // rechazado: si el estampado o la subida a MinIO fallan, ni el colaborador ni el
     // documento quedan marcados, y el rechazo puede reintentarse sin quedar atascado.
     const documentBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
@@ -1069,10 +1263,9 @@ export class DocumentService {
     document.status = DOCUMENT_STATUS_ENUM.REJECTED;
     await this.documentRepository.save(document);
 
-    myParticipant.status = DOCUMENT_PARTICIPANT_STATUS_ENUM.REJECTED;
-    myParticipant.rejectedAt = new Date();
-    myParticipant.rejectionReason = reason;
-    await this.participantRepository.save(myParticipant);
+    myParticipant.status = SIGNEE_STATUS_ENUM.REJECTED;
+    myParticipant.cancellationReason = reason;
+    await this.collaboratorRepository.save(myParticipant);
 
     void this.auditService.create({
       documentId,
@@ -1091,7 +1284,7 @@ export class DocumentService {
       await this.emailService.sendDocumentRejectedNotification(
         creator.email,
         `${creator.firstName} ${creator.lastName}`,
-        `${myParticipant.user.firstName} ${myParticipant.user.lastName}`,
+        collaboratorDisplayName(myParticipant),
         document.fileName,
         reason,
       );
@@ -1108,7 +1301,10 @@ export class DocumentService {
     };
   }
 
-  /** Pasa un documento ya firmado a estatus CANCELLATION_PENDING y notifica a los firmantes. Solo el creador puede solicitarlo. */
+  /**
+   * Pasa un documento ya firmado a estatus CANCELLATION_PENDING y notifica a los firmantes.
+   * Solo el creador puede solicitarlo.
+   */
   async requestCancellation(
     documentId: string,
     currentUserId: string,
@@ -1127,21 +1323,38 @@ export class DocumentService {
       );
     }
 
-    const signerParticipants = await this.participantRepository.find({
-      where: { documentId, role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER },
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
       relations: { user: true },
     });
 
     document.status = DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING;
     await this.documentRepository.save(document);
 
+    void this.auditService.create({
+      documentId,
+      operation: AuditAction.DOCUMENT_CANCELLATION_REQUESTED,
+      ipAddress: document.ipAddress ?? '0.0.0.0',
+      users: [
+        {
+          userId: currentUserId,
+          action: AuditAction.DOCUMENT_CANCELLATION_REQUESTED,
+        },
+      ],
+    });
+    this.documentEventsProducer.emitCancellationRequested({
+      documentId,
+      fileName: document.fileName,
+      actorUserId: currentUserId,
+    });
+
     try {
       await Promise.all(
-        signerParticipants.map((participant) =>
+        signerCollaborators.map((collaborator) =>
           this.emailService.sendDocumentCancellationPendingNotification(
-            participant.user.email,
+            collaboratorEmail(collaborator),
             document.fileName,
-            `${participant.user.firstName} ${participant.user.lastName}`,
+            collaboratorDisplayName(collaborator),
           ),
         ),
       );
@@ -1161,7 +1374,7 @@ export class DocumentService {
   /**
    * Confirma la cancelación de un documento: cualquier firmante puede aprobarla (basta una
    * confirmación, igual que el rechazo). Estampa "CANCELADO", mueve el archivo a cancelados y
-   * notifica a todos los participantes.
+   * notifica a todos los colaboradores.
    */
   async confirmCancellation(
     documentId: string,
@@ -1175,15 +1388,15 @@ export class DocumentService {
       );
     }
 
-    const participants = await this.participantRepository.find({
+    const collaborators = await this.collaboratorRepository.find({
       where: { documentId },
       relations: { user: true },
     });
 
-    const isSigner = participants.some(
-      (p) =>
-        p.userId === currentUserId &&
-        p.role === DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER,
+    const isSigner = collaborators.some(
+      (c) =>
+        c.userId === currentUserId &&
+        c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER,
     );
     if (!isSigner) {
       throw new ForbiddenException('No eres firmante de este documento');
@@ -1228,10 +1441,10 @@ export class DocumentService {
 
     try {
       await Promise.all(
-        participants.map((participant) =>
+        collaborators.map((collaborator) =>
           this.emailService.sendDocumentCancelledNotification(
-            participant.user.email,
-            `${participant.user.firstName} ${participant.user.lastName}`,
+            collaboratorEmail(collaborator),
+            collaboratorDisplayName(collaborator),
             document.fileName,
           ),
         ),

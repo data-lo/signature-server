@@ -58,7 +58,6 @@ describe('UserService', () => {
     accountService = {
       createDefaultPersonalAccount: jest.fn().mockResolvedValue({
         account: { id: 'personal-account-1' },
-        membership: { roleId: 'admin-role-1', isActive: true },
       }),
       appendAccountToCatalog: jest.fn(),
     };
@@ -184,12 +183,12 @@ describe('UserService', () => {
       expect(accountService.createDefaultPersonalAccount).toHaveBeenCalledWith(
         queryRunner.manager,
         expect.any(String),
-        `${dto.firstName} ${dto.lastName}`,
+        dto.email,
+        'hashed-password',
       );
       expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
         expect.any(String),
         { id: 'personal-account-1' },
-        { roleId: 'admin-role-1', isActive: true },
       );
     });
 

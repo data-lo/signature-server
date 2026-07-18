@@ -13,23 +13,36 @@ import { CreateAccountMemberDto } from './dto/create-account-member.dto';
 import { UpdateAccountMemberDto } from './dto/update-account-member.dto';
 
 // Entities
-import { AccountMemberEntity } from './entities/account-member.entity';
+import { AccountEntity } from './entities/account.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
 
 // Services
 import { AccountService } from './account.service';
 import { RolesService } from 'src/roles/roles.service';
 
 // Enums
+import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
+import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 
+/**
+ * Gestiona membresías de organización — desde la fusión Account/AccountMember (ver plan de
+ * migración ER-V2, Fase 5) esto ya no es una entidad separada: una "membresía" es una fila más
+ * de `accounts`, filtrada por `organizationId`. Este servicio queda enfocado en el flujo de
+ * gestión explícita de acceso (otorgar/listar/actualizar/revocar), separado del flujo
+ * transaccional de creación (`AccountService.createOrganization`/`createDefaultPersonalAccount`).
+ */
 @Injectable()
 export class AccountMemberService {
   constructor(
-    @InjectRepository(AccountMemberEntity)
-    private accountMemberRepository: Repository<AccountMemberEntity>,
+    @InjectRepository(AccountEntity)
+    private accountRepository: Repository<AccountEntity>,
+
+    @InjectRepository(UserEntity)
+    private userRepository: Repository<UserEntity>,
 
     private readonly accountService: AccountService,
     private readonly rolesService: RolesService,
@@ -37,31 +50,44 @@ export class AccountMemberService {
 
   async create(
     callerId: string,
-    createAccountMemberDto: CreateAccountMemberDto,
-  ): Promise<BaseResponse<AccountMemberEntity>> {
-    await this.assertIsAccountAdmin(callerId, createAccountMemberDto.accountId);
-    await this.rolesService.findByIdOrFail(createAccountMemberDto.roleId);
+    dto: CreateAccountMemberDto,
+  ): Promise<BaseResponse<AccountEntity>> {
+    await this.assertIsOrganizationAdmin(callerId, dto.organizationId);
+    await this.rolesService.findByIdOrFail(dto.roleId);
 
-    const existingMembership = await this.accountMemberRepository.findOne({
-      where: {
-        accountId: createAccountMemberDto.accountId,
-        userId: createAccountMemberDto.userId,
-      },
+    const existingMembership = await this.accountRepository.findOne({
+      where: { organizationId: dto.organizationId, userId: dto.userId },
     });
-
     if (existingMembership) {
-      throw new ConflictException('El usuario ya tiene acceso a esta cuenta');
+      throw new ConflictException(
+        'El usuario ya tiene acceso a esta organización',
+      );
     }
 
-    const member = this.accountMemberRepository.create({
-      accountId: createAccountMemberDto.accountId,
-      userId: createAccountMemberDto.userId,
-      roleId: createAccountMemberDto.roleId,
-      position: createAccountMemberDto.position,
-      isActive: createAccountMemberDto.isActive ?? true,
+    const invitedUser = await this.userRepository.findOne({
+      where: { id: dto.userId },
+    });
+    if (!invitedUser) {
+      throw new NotFoundException(`Usuario con ID ${dto.userId} no encontrado`);
+    }
+
+    const member = this.accountRepository.create({
+      userId: dto.userId,
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      organizationId: dto.organizationId,
+      roleId: dto.roleId,
+      position: dto.position ?? null,
+      isActive: dto.isActive ?? true,
+      status:
+        (dto.isActive ?? true)
+          ? ACCOUNT_STATUS_ENUM.ACTIVE
+          : ACCOUNT_STATUS_ENUM.SUSPENDED,
+      email: invitedUser.email,
+      password: invitedUser.password,
+      joinedAt: new Date(),
     });
 
-    const newMember = await this.accountMemberRepository.save(member);
+    const newMember = await this.accountRepository.save(member);
 
     return {
       success: true,
@@ -70,14 +96,14 @@ export class AccountMemberService {
     };
   }
 
-  async findByAccount(
+  async findByOrganization(
     callerId: string,
-    accountId: string,
-  ): Promise<BaseResponse<AccountMemberEntity[]>> {
-    await this.assertIsAccountAdmin(callerId, accountId);
+    organizationId: string,
+  ): Promise<BaseResponse<AccountEntity[]>> {
+    await this.assertIsOrganizationAdmin(callerId, organizationId);
 
-    const members = await this.accountMemberRepository.find({
-      where: { accountId },
+    const members = await this.accountRepository.find({
+      where: { organizationId },
     });
 
     return {
@@ -90,9 +116,12 @@ export class AccountMemberService {
   async findOne(
     callerId: string,
     id: string,
-  ): Promise<BaseResponse<AccountMemberEntity>> {
+  ): Promise<BaseResponse<AccountEntity>> {
     const member = await this.findEntityById(id);
-    await this.assertIsAccountAdmin(callerId, member.accountId);
+    if (!member.organizationId) {
+      throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
+    }
+    await this.assertIsOrganizationAdmin(callerId, member.organizationId);
 
     return {
       success: true,
@@ -105,15 +134,18 @@ export class AccountMemberService {
     callerId: string,
     id: string,
     updateAccountMemberDto: UpdateAccountMemberDto,
-  ): Promise<BaseResponse<AccountMemberEntity>> {
+  ): Promise<BaseResponse<AccountEntity>> {
     const member = await this.findEntityById(id);
-    await this.assertIsAccountAdmin(callerId, member.accountId);
+    if (!member.organizationId) {
+      throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
+    }
+    await this.assertIsOrganizationAdmin(callerId, member.organizationId);
 
     if (updateAccountMemberDto.roleId) {
       await this.rolesService.findByIdOrFail(updateAccountMemberDto.roleId);
     }
 
-    await this.accountMemberRepository.update(id, {
+    await this.accountRepository.update(id, {
       ...(updateAccountMemberDto.roleId && {
         roleId: updateAccountMemberDto.roleId,
       }),
@@ -122,6 +154,9 @@ export class AccountMemberService {
       }),
       ...(updateAccountMemberDto.isActive !== undefined && {
         isActive: updateAccountMemberDto.isActive,
+        status: updateAccountMemberDto.isActive
+          ? ACCOUNT_STATUS_ENUM.ACTIVE
+          : ACCOUNT_STATUS_ENUM.SUSPENDED,
       }),
     });
 
@@ -133,19 +168,23 @@ export class AccountMemberService {
   }
 
   async remove(callerId: string, id: string): Promise<BaseResponse> {
-    const membership = await this.accountMemberRepository.findOne({
+    const membership = await this.accountRepository.findOne({
       where: { id, isActive: true },
     });
-    if (!membership) {
+    if (!membership || !membership.organizationId) {
       throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
     }
-    await this.assertIsAccountAdmin(callerId, membership.accountId);
+    await this.assertIsOrganizationAdmin(callerId, membership.organizationId);
 
-    await this.accountMemberRepository.update(id, { isActive: false });
+    await this.accountRepository.update(id, {
+      isActive: false,
+      status: ACCOUNT_STATUS_ENUM.REMOVED,
+      leftAt: new Date(),
+    });
 
     await this.accountService.removeAccountFromCatalog(
       membership.userId,
-      membership.accountId,
+      membership.id,
     );
 
     return {
@@ -154,8 +193,8 @@ export class AccountMemberService {
     };
   }
 
-  private async findEntityById(id: string): Promise<AccountMemberEntity> {
-    const member = await this.accountMemberRepository.findOne({
+  private async findEntityById(id: string): Promise<AccountEntity> {
+    const member = await this.accountRepository.findOne({
       where: { id },
     });
 
@@ -167,40 +206,45 @@ export class AccountMemberService {
   }
 
   /**
-   * Solo un miembro activo con rol ADMIN puede leer/otorgar/revocar/actualizar
-   * las membresías de la cuenta. Lanza ForbiddenException si el llamador no
-   * lo es.
+   * Solo un miembro activo con rol ADMIN de esa organización puede otorgar/listar/actualizar/
+   * revocar membresías. Lanza ForbiddenException si el llamador no lo es.
    */
-  private async assertIsAccountAdmin(
+  private async assertIsOrganizationAdmin(
     callerId: string,
-    accountId: string,
+    organizationId: string,
   ): Promise<void> {
-    const callerMembership = await this.accountMemberRepository.findOne({
-      where: { userId: callerId, accountId, isActive: true },
+    const callerMembership = await this.accountRepository.findOne({
+      where: { userId: callerId, organizationId, isActive: true },
       relations: { role: true },
     });
 
     if (callerMembership?.role?.name !== SYSTEM_ROLE_NAME_ENUM.ADMIN) {
       throw new ForbiddenException(
-        'No tienes permisos de administrador sobre esta cuenta',
+        'No tienes permisos de administrador sobre esta organización',
       );
     }
   }
 
   /**
-   * Check de tenant más laxo que assertIsAccountAdmin: cualquier miembro
-   * activo de la cuenta (sin importar su rol) puede operar dentro de ese
-   * contexto — usado por módulos donde pertenecer a la cuenta basta (p. ej.
-   * crear o listar documentos scopeados por la cuenta activa), a diferencia
-   * de gestionar la membresía misma, que sigue siendo solo-ADMIN.
+   * Check de tenant más laxo que assertIsOrganizationAdmin: cualquier miembro activo de la
+   * cuenta (sin importar su rol) puede operar dentro de ese contexto — usado por módulos donde
+   * pertenecer a la cuenta basta (p. ej. crear o listar documentos scopeados por la cuenta
+   * activa), a diferencia de gestionar la membresía misma, que sigue siendo solo-ADMIN.
+   * Retorna la cuenta resuelta para que el llamador (p. ej. DocumentService) no tenga que
+   * volver a consultarla para saber su organizationId.
    */
-  async assertIsActiveMember(userId: string, accountId: string): Promise<void> {
-    const membership = await this.accountMemberRepository.findOne({
-      where: { userId, accountId, isActive: true },
+  async assertIsActiveMember(
+    userId: string,
+    accountId: string,
+  ): Promise<AccountEntity> {
+    const membership = await this.accountRepository.findOne({
+      where: { id: accountId, userId, isActive: true },
     });
 
     if (!membership) {
       throw new ForbiddenException('No perteneces a esta cuenta');
     }
+
+    return membership;
   }
 }

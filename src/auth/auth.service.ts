@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
 import { UserService } from '../user/user.service';
+import { AccountService } from '../account/account.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
 import { RegisterDto } from './dto/register.dto';
@@ -14,6 +15,7 @@ import { UserEntity } from '../user/entities/user.entity';
 export class AuthService {
   constructor(
     private readonly userService: UserService,
+    private readonly accountService: AccountService,
     private readonly jwtService: JwtService,
     private readonly passwordService: PasswordService,
     private readonly redisService: RedisService,
@@ -24,19 +26,36 @@ export class AuthService {
     return this.userService.createFromSignup(dto, hashedPassword);
   }
 
+  /**
+   * Resuelve la credencial contra `Account.email`/`Account.password` (ver plan de migración
+   * ER-V2, Fase 5) en vez de `User.email`/`.password` directamente. `Account.email`/`.password`
+   * son una copia sincronizada de la credencial única del usuario (decisión D6) — un usuario
+   * con varias cuentas (personal + organizaciones) tiene el mismo email/password en cada fila,
+   * así que cualquiera de ellas resuelve el mismo `userId`. `sub`/`roles`/`nationalId` del JWT
+   * siguen viniendo de `UserEntity`, que sigue siendo la identidad de la persona.
+   */
   async login(
     dto: LoginDto,
   ): Promise<BaseResponse<{ user: UserEntity; token: string }>> {
-    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
-    if (!user || !user.isActive) {
+    const account = await this.accountService.findActiveAccountByEmail(
+      dto.email.toLowerCase(),
+    );
+    if (!account) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
     const matches = await this.passwordService.compare(
       dto.password,
-      user.password,
+      account.password,
     );
     if (!matches) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    const user = await this.userService
+      .findOne(account.userId)
+      .catch(() => null);
+    if (!user || !user.isActive) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 

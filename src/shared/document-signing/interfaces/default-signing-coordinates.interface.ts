@@ -1,4 +1,4 @@
-import { SignatureCoordinates } from 'src/document/interfaces/signature-coordinates';
+import { SignatureCoordinates } from './signature-coordinates.interface';
 
 export const DEFAULT_COORDINATES: SignatureCoordinates = {
   x: 50,

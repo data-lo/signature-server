@@ -7,7 +7,7 @@ describe('AccountMemberController', () => {
   let controller: AccountMemberController;
   let accountMemberService: {
     create: jest.Mock;
-    findByAccount: jest.Mock;
+    findByOrganization: jest.Mock;
     findOne: jest.Mock;
     update: jest.Mock;
     remove: jest.Mock;
@@ -24,7 +24,7 @@ describe('AccountMemberController', () => {
   beforeEach(async () => {
     accountMemberService = {
       create: jest.fn(),
-      findByAccount: jest.fn(),
+      findByOrganization: jest.fn(),
       findOne: jest.fn(),
       update: jest.fn(),
       remove: jest.fn(),
@@ -45,18 +45,18 @@ describe('AccountMemberController', () => {
   });
 
   it('create delega en accountMemberService.create con el userId del JWT', () => {
-    const dto = { accountId: 'account-1', userId: 'user-2', roleId: 'role-1' };
+    const dto = { organizationId: 'org-1', userId: 'user-2', roleId: 'role-1' };
     controller.create(user, dto as any);
 
     expect(accountMemberService.create).toHaveBeenCalledWith('owner-1', dto);
   });
 
-  it('findByAccount delega en accountMemberService.findByAccount con el userId del JWT', () => {
-    controller.findByAccount(user, 'account-1');
+  it('findByOrganization delega en accountMemberService.findByOrganization con el userId del JWT', () => {
+    controller.findByOrganization(user, 'org-1');
 
-    expect(accountMemberService.findByAccount).toHaveBeenCalledWith(
+    expect(accountMemberService.findByOrganization).toHaveBeenCalledWith(
       'owner-1',
-      'account-1',
+      'org-1',
     );
   });
 

@@ -54,8 +54,11 @@ export class AccountController {
     status: 401,
     description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
-  create(@Body() createAccountDto: CreateAccountDto) {
-    return this.accountService.create(createAccountDto);
+  create(
+    @CurrentUser() user: JwtPayload,
+    @Body() createAccountDto: CreateAccountDto,
+  ) {
+    return this.accountService.create(user.sub, createAccountDto);
   }
 
   @Get()

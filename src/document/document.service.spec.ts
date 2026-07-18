@@ -7,10 +7,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentService } from './document.service';
 import { DocumentEntity } from './entities/document.entity';
-import { DocumentParticipantEntity } from './entities/document-participant.entity';
+import { CollaboratorEntity } from './entities/collaborator.entity';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
-import { DOCUMENT_PARTICIPANT_ROLE_ENUM } from './enum/document-participant-role.enum';
-import { DOCUMENT_PARTICIPANT_STATUS_ENUM } from './enum/document-participant-status.enum';
+import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
+import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { HashService } from 'src/shared/hash/hash.service';
@@ -21,6 +21,7 @@ import { EmailService } from 'src/shared/email/email.service';
 import { AuditService } from 'src/audit/audit.service';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { AccountMemberService } from 'src/account/account-member.service';
+import { VerificationCodeService } from './verification-code.service';
 
 function createMockRepository() {
   return {
@@ -34,14 +35,16 @@ function createMockRepository() {
   };
 }
 
-function buildSigner(overrides: Partial<DocumentParticipantEntity> = {}) {
+function buildSigner(overrides: Partial<CollaboratorEntity> = {}) {
   return {
-    id: overrides.id ?? 'participant-1',
+    id: overrides.id ?? 'collaborator-1',
     documentId: 'doc-1',
     userId: overrides.userId ?? 'user-1',
-    role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER,
-    status: DOCUMENT_PARTICIPANT_STATUS_ENUM.PENDING,
-    signOrder: overrides.signOrder ?? 0,
+    email: null,
+    colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+    status: SIGNEE_STATUS_ENUM.PENDING,
+    signingOrder: overrides.signingOrder ?? 0,
+    ipAddress: '127.0.0.1',
     user: {
       id: overrides.userId ?? 'user-1',
       firstName: 'Firmante',
@@ -50,13 +53,13 @@ function buildSigner(overrides: Partial<DocumentParticipantEntity> = {}) {
       signatureId: 'signature-1',
     },
     ...overrides,
-  } as unknown as DocumentParticipantEntity;
+  } as unknown as CollaboratorEntity;
 }
 
 describe('DocumentService', () => {
   let service: DocumentService;
   let documentRepository: ReturnType<typeof createMockRepository>;
-  let participantRepository: ReturnType<typeof createMockRepository>;
+  let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let minioService: Record<string, jest.Mock>;
   let hashService: Record<string, jest.Mock>;
   let userService: Record<string, jest.Mock>;
@@ -66,10 +69,11 @@ describe('DocumentService', () => {
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
   let accountMemberService: Record<string, jest.Mock>;
+  let verificationCodeService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
-    participantRepository = createMockRepository();
+    collaboratorRepository = createMockRepository();
     minioService = {
       uploadObject: jest.fn().mockResolvedValue({
         status: FILE_STATUS_ENUM.FILE_CREATED,
@@ -123,10 +127,18 @@ describe('DocumentService', () => {
       emitSentToSign: jest.fn(),
       emitSigned: jest.fn(),
       emitRejected: jest.fn(),
+      emitCancellationRequested: jest.fn(),
       emitCancelled: jest.fn(),
     };
     accountMemberService = {
-      assertIsActiveMember: jest.fn().mockResolvedValue(undefined),
+      assertIsActiveMember: jest
+        .fn()
+        .mockResolvedValue({ id: 'account-1', organizationId: null }),
+    };
+    verificationCodeService = {
+      issue: jest.fn(),
+      verifyAndConsume: jest.fn(),
+      hasConsumedCode: jest.fn().mockResolvedValue(true),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -137,8 +149,8 @@ describe('DocumentService', () => {
           useValue: documentRepository,
         },
         {
-          provide: getRepositoryToken(DocumentParticipantEntity),
-          useValue: participantRepository,
+          provide: getRepositoryToken(CollaboratorEntity),
+          useValue: collaboratorRepository,
         },
         { provide: MinioService, useValue: minioService },
         { provide: HashService, useValue: hashService },
@@ -149,6 +161,10 @@ describe('DocumentService', () => {
         { provide: AuditService, useValue: auditService },
         { provide: DocumentEventsProducer, useValue: documentEventsProducer },
         { provide: AccountMemberService, useValue: accountMemberService },
+        {
+          provide: VerificationCodeService,
+          useValue: verificationCodeService,
+        },
       ],
     }).compile();
 
@@ -165,7 +181,7 @@ describe('DocumentService', () => {
       mimetype: 'application/pdf',
     } as Express.Multer.File;
 
-    const dto = { signerIds: ['user-1'], spectatorIds: [] } as any;
+    const dto = { signerIds: ['user-1'], watcherIds: [] } as any;
 
     beforeEach(() => {
       // findOne se usa para dos cosas distintas en create(): el chequeo de nombre
@@ -183,15 +199,15 @@ describe('DocumentService', () => {
         id: 'doc-1',
         ...data,
       }));
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         {
           ...buildSigner(),
-          role: DOCUMENT_PARTICIPANT_ROLE_ENUM.SIGNER,
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
         },
       ]);
     });
 
-    it('crea el documento y sus participantes cuando todo es válido', async () => {
+    it('crea el documento y sus colaboradores cuando todo es válido', async () => {
       const result = await service.create(
         'creator-1',
         'account-1',
@@ -202,7 +218,7 @@ describe('DocumentService', () => {
 
       expect(result.success).toBe(true);
       expect(minioService.uploadObject).toHaveBeenCalled();
-      expect(participantRepository.save).toHaveBeenCalled();
+      expect(collaboratorRepository.save).toHaveBeenCalled();
       expect(auditService.create).toHaveBeenCalledWith(
         expect.objectContaining({ operation: 'DOCUMENT_CREATED' }),
       );
@@ -214,6 +230,51 @@ describe('DocumentService', () => {
 
       const savedDocumentCall = documentRepository.save.mock.calls[0][0];
       expect(savedDocumentCall.accountId).toBe('account-1');
+    });
+
+    it('setea totalSigners igual a la cantidad de firmantes seleccionados', async () => {
+      const dtoConVariosFirmantes = {
+        signerIds: ['user-1', 'user-2', 'user-3'],
+        watcherIds: [],
+      } as any;
+
+      await service.create(
+        'creator-1',
+        'account-1',
+        dtoConVariosFirmantes,
+        file,
+        '127.0.0.1',
+      );
+
+      const savedDocumentCall = documentRepository.save.mock.calls[0][0];
+      expect(savedDocumentCall.totalSigners).toBe(3);
+    });
+
+    it('crea colaboradores WATCHER solo-por-email sin llamar a userService.findOne para ellos', async () => {
+      const dtoConWatcherPorEmail = {
+        signerIds: ['user-1'],
+        watcherEmails: ['invitado@correo.com'],
+      } as any;
+
+      await service.create(
+        'creator-1',
+        'account-1',
+        dtoConWatcherPorEmail,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(userService.findOne).not.toHaveBeenCalledWith(
+        'invitado@correo.com',
+      );
+      const savedCollaborators = collaboratorRepository.save.mock.calls[0][0];
+      const watcherByEmail = savedCollaborators.find(
+        (c: any) => c.email === 'invitado@correo.com',
+      );
+      expect(watcherByEmail).toMatchObject({
+        colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+      });
+      expect(watcherByEmail.userId).toBeUndefined();
     });
 
     it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
@@ -246,8 +307,21 @@ describe('DocumentService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('rechaza si el mismo usuario está entre firmantes y espectadores', async () => {
-      const dupDto = { signerIds: ['user-1'], spectatorIds: ['user-1'] } as any;
+    it('rechaza si el mismo usuario está entre firmantes y watchers', async () => {
+      const dupDto = { signerIds: ['user-1'], watcherIds: ['user-1'] } as any;
+
+      await expect(
+        service.create('creator-1', 'account-1', dupDto, file, '127.0.0.1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('rechaza si el mismo email se repite entre watchers y reviewers', async () => {
+      const dupDto = {
+        signerIds: ['user-1'],
+        watcherEmails: ['x@correo.com'],
+        reviewerEmails: ['x@correo.com'],
+      } as any;
 
       await expect(
         service.create('creator-1', 'account-1', dupDto, file, '127.0.0.1'),
@@ -304,9 +378,13 @@ describe('DocumentService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('filtra el listado por la cuenta activa', async () => {
+    it('filtra el listado por accountId cuando la cuenta activa es PERSONAL', async () => {
       const qb = createMockQueryBuilder();
       documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
 
       await service.findWithFilters('user-1', 'account-1', query);
 
@@ -317,6 +395,22 @@ describe('DocumentService', () => {
       expect(qb.where).toHaveBeenCalledWith('document.accountId = :accountId', {
         accountId: 'account-1',
       });
+    });
+
+    it('filtra el listado por organizationId cuando la cuenta activa es de una organización (Fase 5)', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+
+      await service.findWithFilters('user-1', 'account-org-member-1', query);
+
+      expect(qb.where).toHaveBeenCalledWith(
+        'document.organizationId = :organizationId',
+        { organizationId: 'org-1' },
+      );
     });
   });
 
@@ -336,34 +430,37 @@ describe('DocumentService', () => {
     it('registra la firma y notifica al siguiente firmante si quedan pendientes', async () => {
       const document = mockDocument();
       documentRepository.findOne.mockResolvedValue(document);
-      const signerA = buildSigner({ userId: 'user-1', signOrder: 0 });
+      const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
       const signerB = buildSigner({
-        id: 'participant-2',
+        id: 'collaborator-2',
         userId: 'user-2',
-        signOrder: 1,
+        signingOrder: 1,
       });
-      participantRepository.find.mockResolvedValue([signerA, signerB]);
-      participantRepository.findOne = jest.fn().mockResolvedValue(signerB);
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
 
       const result = await service.sign('doc-1', 'user-1');
 
       expect(result.success).toBe(true);
-      expect(participantRepository.save).toHaveBeenCalledWith(
+      expect(collaboratorRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          status: DOCUMENT_PARTICIPANT_STATUS_ENUM.SIGNED,
+          status: SIGNEE_STATUS_ENUM.SIGNED,
         }),
       );
       expect(documentEventsProducer.emitSigned).not.toHaveBeenCalled();
       expect(emailService.sendDocumentPendingNotification).toHaveBeenCalled();
+      expect(documentRepository.update).toHaveBeenCalledWith('doc-1', {
+        completedSignersCount: 1,
+      });
     });
 
     it('finaliza el documento (estampa y notifica a todos) cuando es el último firmante', async () => {
       const document = mockDocument();
       documentRepository.findOne.mockResolvedValue(document);
-      const onlySigner = buildSigner({ userId: 'user-1', signOrder: 0 });
-      participantRepository.find
-        .mockResolvedValueOnce([onlySigner]) // signerParticipants en sign()
-        .mockResolvedValueOnce([onlySigner]); // participantRepository.find en sendCompletionEmails
+      const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      collaboratorRepository.find
+        .mockResolvedValueOnce([onlySigner]) // signerCollaborators en sign()
+        .mockResolvedValueOnce([onlySigner]); // collaboratorRepository.find en sendCompletionEmails
 
       const result = await service.sign('doc-1', 'user-1');
 
@@ -372,6 +469,46 @@ describe('DocumentService', () => {
       expect(minioService.uploadPdfAObject).toHaveBeenCalled();
       expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
       expect(emailService.sendDocumentSignedNotification).toHaveBeenCalled();
+      expect(document.completedSignersCount).toBe(1);
+    });
+
+    it('sin coordenadas explícitas, estampa en el ancla por defecto del documento (regresión del apilado automático)', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      collaboratorRepository.find
+        .mockResolvedValueOnce([onlySigner])
+        .mockResolvedValueOnce([onlySigner]);
+
+      await service.sign('doc-1', 'user-1');
+
+      expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        { x: 50, y: 200, width: 100, height: 80 },
+      );
+    });
+
+    it('mezcla coordenadas explícitas y apiladas automáticamente sin colisionar (Fase 4)', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const explicitCoords = { x: 10, y: 10, width: 50, height: 50 };
+      const signerA = buildSigner({
+        userId: 'user-a',
+        signingOrder: 0,
+        status: SIGNEE_STATUS_ENUM.SIGNED,
+        simpleSignature: { id: 'ss-1', signatureCoordinates: explicitCoords },
+      } as any);
+      const signerB = buildSigner({ userId: 'user-b', signingOrder: 1 });
+      collaboratorRepository.find
+        .mockResolvedValueOnce([signerA, signerB])
+        .mockResolvedValueOnce([signerA, signerB]);
+
+      await service.sign('doc-1', 'user-b');
+
+      const calls = documentSigningService.mergeSignatureIntoPdf.mock.calls;
+      expect(calls[0][2]).toEqual(explicitCoords);
+      expect(calls[1][2]).toEqual({ x: 50, y: 200, width: 100, height: 80 });
     });
 
     it('rechaza si el documento no está en estatus PENDING', async () => {
@@ -386,7 +523,7 @@ describe('DocumentService', () => {
 
     it('rechaza si el usuario no es firmante del documento', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({ userId: 'otro-usuario' }),
       ]);
 
@@ -397,10 +534,10 @@ describe('DocumentService', () => {
 
     it('rechaza si el firmante ya respondió antes', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({
           userId: 'user-1',
-          status: DOCUMENT_PARTICIPANT_STATUS_ENUM.SIGNED,
+          status: SIGNEE_STATUS_ENUM.SIGNED,
         }),
       ]);
 
@@ -411,9 +548,9 @@ describe('DocumentService', () => {
 
     it('rechaza si aún no es el turno del firmante', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
-        buildSigner({ id: 'p-0', userId: 'user-0', signOrder: 0 }),
-        buildSigner({ id: 'p-1', userId: 'user-1', signOrder: 1 }),
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ id: 'p-0', userId: 'user-0', signingOrder: 0 }),
+        buildSigner({ id: 'p-1', userId: 'user-1', signingOrder: 1 }),
       ]);
 
       await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
@@ -423,7 +560,7 @@ describe('DocumentService', () => {
 
     it('rechaza si el firmante no tiene credencial de firma activa', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({ userId: 'user-1' }),
       ]);
       signatureService.findOne.mockResolvedValue({
@@ -435,6 +572,44 @@ describe('DocumentService', () => {
       await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
         BadRequestException,
       );
+    });
+
+    it('rechaza si el documento requiere verificación y el firmante no ha validado su código (Fase 7)', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        mockDocument({ requiresVerification: true } as any),
+      );
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+      verificationCodeService.hasConsumedCode.mockResolvedValue(false);
+
+      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(verificationCodeService.hasConsumedCode).toHaveBeenCalledWith(
+        'doc-1',
+        'collaborator-1',
+        'sign_document',
+      );
+    });
+
+    it('permite firmar si el documento requiere verificación y el firmante ya validó su código', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        mockDocument({ requiresVerification: true } as any),
+      );
+      const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      const signerB = buildSigner({
+        id: 'collaborator-2',
+        userId: 'user-2',
+        signingOrder: 1,
+      });
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
+      verificationCodeService.hasConsumedCode.mockResolvedValue(true);
+
+      const result = await service.sign('doc-1', 'user-1');
+
+      expect(result.success).toBe(true);
     });
   });
 
@@ -453,7 +628,7 @@ describe('DocumentService', () => {
 
     it('rechaza el documento, estampa marca de agua y notifica al creador', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({ userId: 'user-1' }),
       ]);
 
@@ -477,7 +652,7 @@ describe('DocumentService', () => {
 
     it('rechaza con ForbiddenException si el usuario no es firmante', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({ userId: 'otro-usuario' }),
       ]);
 
@@ -500,7 +675,7 @@ describe('DocumentService', () => {
 
     it('pasa el documento a CANCELLATION_PENDING y notifica a los firmantes', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({ userId: 'user-1' }),
       ]);
 
@@ -515,6 +690,29 @@ describe('DocumentService', () => {
       expect(
         emailService.sendDocumentCancellationPendingNotification,
       ).toHaveBeenCalled();
+    });
+
+    it('registra auditoría y emite evento Kafka (gap cerrado en la Fase 6)', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+
+      await service.requestCancellation('doc-1', 'creator-1');
+
+      expect(auditService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: 'DOCUMENT_CANCELLATION_REQUESTED',
+          documentId: 'doc-1',
+        }),
+      );
+      expect(
+        documentEventsProducer.emitCancellationRequested,
+      ).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        fileName: 'contrato.pdf',
+        actorUserId: 'creator-1',
+      });
     });
 
     it('rechaza con ForbiddenException si quien solicita no es el creador', async () => {
@@ -550,7 +748,7 @@ describe('DocumentService', () => {
 
     it('cancela el documento cuando lo confirma un firmante', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({ userId: 'user-1' }),
       ]);
 
@@ -576,7 +774,7 @@ describe('DocumentService', () => {
 
     it('rechaza con ForbiddenException si quien confirma no es firmante', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
-      participantRepository.find.mockResolvedValue([
+      collaboratorRepository.find.mockResolvedValue([
         buildSigner({ userId: 'otro-usuario' }),
       ]);
 
@@ -593,6 +791,62 @@ describe('DocumentService', () => {
       await expect(service.findOne('missing-doc')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  // Test de caracterización (Fase 0/3 de la migración ER-V2): findDetailForUser() y sign()
+  // calculan "a quién le toca firmar" de forma independiente (una en memoria sobre
+  // document.collaborators, la otra sobre signerCollaborators cargados del repositorio).
+  // Ambas pasan por la misma función compartida (getNextPendingSigner/isSignerTurn), así que
+  // deben concordar siempre en el mismo escenario.
+  describe('consistencia del turno de firma entre findDetailForUser y sign', () => {
+    // A ya firmó; le toca a B (menor signingOrder entre los pendientes); C debe esperar.
+    const signerA = buildSigner({
+      id: 'p-a',
+      userId: 'user-a',
+      signingOrder: 0,
+      status: SIGNEE_STATUS_ENUM.SIGNED,
+    });
+    const signerB = buildSigner({ id: 'p-b', userId: 'user-b', signingOrder: 1 });
+    const signerC = buildSigner({ id: 'p-c', userId: 'user-c', signingOrder: 2 });
+    const participants = [signerA, signerB, signerC];
+
+    function mockDetailDocument() {
+      return {
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        fileType: 'application/pdf',
+        totalPages: 1,
+        objectKey: 'object-key-1',
+        status: DOCUMENT_STATUS_ENUM.PENDING,
+        createdBy: 'creator-1',
+        requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+        collaborators: participants,
+      } as unknown as DocumentEntity;
+    }
+
+    it('findDetailForUser marca canSign solo para el firmante B (A ya firmó, C debe esperar)', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDetailDocument());
+
+      const resultB = await service.findDetailForUser('doc-1', 'user-b');
+      expect(resultB.data.canSign).toBe(true);
+
+      const resultC = await service.findDetailForUser('doc-1', 'user-c');
+      expect(resultC.data.canSign).toBe(false);
+    });
+
+    it('sign() acepta al firmante B y rechaza a C con ForbiddenException, igual que findDetailForUser', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        mockDetailDocument() as unknown as DocumentEntity,
+      );
+      collaboratorRepository.find.mockResolvedValue(participants);
+
+      await expect(service.sign('doc-1', 'user-c')).rejects.toThrow(
+        ForbiddenException,
+      );
+
+      const resultB = await service.sign('doc-1', 'user-b');
+      expect(resultB.success).toBe(true);
     });
   });
 });

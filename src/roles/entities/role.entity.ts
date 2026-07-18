@@ -5,7 +5,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { AccountEntity } from 'src/account/entities/account.entity';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
 
 @Entity('roles')
 export class RoleEntity {
@@ -23,7 +23,11 @@ export class RoleEntity {
   @Column({ name: 'organization_id', nullable: true })
   organizationId: string | null;
 
-  @ManyToOne(() => AccountEntity, { nullable: true, onDelete: 'CASCADE' })
+  /** Significado de negocio por definir (ver migración AddVisibilityToRoles) — aterrizada sin enforcement todavía. */
+  @Column({ default: 0 })
+  visibility: number;
+
+  @ManyToOne(() => OrganizationEntity, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'organization_id' })
-  organization: AccountEntity | null;
+  organization: OrganizationEntity | null;
 }

@@ -85,15 +85,15 @@ export class AccountMemberController {
 
   @Get()
   @ApiOperation({
-    summary: 'Obtener los miembros de una cuenta',
+    summary: 'Obtener los miembros de una organización',
     description:
-      'Solo un ADMIN activo de esa cuenta puede listar sus miembros.',
+      'Solo un ADMIN activo de esa organización puede listar sus miembros.',
   })
   @ApiQuery({
-    name: 'accountId',
+    name: 'organizationId',
     required: true,
     type: String,
-    description: 'UUID de la cuenta',
+    description: 'UUID de la organización',
   })
   @ApiResponse({
     status: 200,
@@ -106,13 +106,16 @@ export class AccountMemberController {
   })
   @ApiResponse({
     status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta cuenta',
+    description: 'El usuario autenticado no es ADMIN de esta organización',
   })
-  findByAccount(
+  findByOrganization(
     @CurrentUser() user: JwtPayload,
-    @Query('accountId') accountId: string,
+    @Query('organizationId') organizationId: string,
   ) {
-    return this.accountMemberService.findByAccount(user.sub, accountId);
+    return this.accountMemberService.findByOrganization(
+      user.sub,
+      organizationId,
+    );
   }
 
   @Get(':id')
