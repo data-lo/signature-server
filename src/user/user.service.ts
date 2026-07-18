@@ -587,6 +587,25 @@ export class UserService {
     };
   }
 
+  /**
+   * Público (sin JWT, ver UsersController) — consumido desde /join y /signup en
+   * signature-app para bifurcar el flujo de invitación a organización (ver historia [STORY]
+   * Eventos Kafka, Email (SendGrid) y Miembros (/join)): si el RFC ya existe, el usuario puede
+   * "unirse con su cuenta"; si no, se le manda a registrarse.
+   */
+  async checkRfcAvailability(
+    rfc: string,
+  ): Promise<BaseResponse<{ exists: boolean }>> {
+    const existing = await this.personalInformationRepository.findOne({
+      where: { rfc: rfc.toUpperCase() },
+    });
+    return {
+      success: true,
+      message: 'Disponibilidad del RFC consultada correctamente',
+      data: { exists: !!existing },
+    };
+  }
+
   /** Lanza ConflictException si otro usuario activo ya tiene ese CURP registrado. */
   private async assertCurpNotTaken(curp: string): Promise<void> {
     const existing = await this.userRepository.findOne({

@@ -5,6 +5,7 @@ import {
   Get,
   Patch,
   Put,
+  Query,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
@@ -16,12 +17,14 @@ import {
   ApiBody,
   ApiConsumes,
   ApiOperation,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
 // Auth
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
+import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 // Services
@@ -48,6 +51,22 @@ export class UsersController {
     private readonly userService: UserService,
     private readonly signatureService: SignatureService,
   ) {}
+
+  @Get('check-rfc')
+  @SkipJwtAuth()
+  @ApiOperation({
+    summary: 'Consultar si un RFC ya pertenece a un usuario registrado',
+    description:
+      'Público (sin JWT) — usado desde /join y /signup en signature-app para bifurcar el flujo de invitación a organización: RFC existente → unirse con la cuenta actual; RFC nuevo → registrarse.',
+  })
+  @ApiQuery({ name: 'rfc', required: true, type: String })
+  @ApiResponse({
+    status: 200,
+    description: 'Disponibilidad del RFC consultada correctamente',
+  })
+  checkRfc(@Query('rfc') rfc: string) {
+    return this.userService.checkRfcAvailability(rfc);
+  }
 
   @Get('me')
   @ApiOperation({

@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { UserService } from '../user/user.service';
 import { AccountService } from '../account/account.service';
+import { OrganizationInvitationService } from '../account/organization-invitation.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
 
@@ -15,6 +16,7 @@ describe('AuthService', () => {
     sanitize: jest.Mock;
   };
   let accountService: { findActiveAccountByEmail: jest.Mock };
+  let organizationInvitationService: { acceptForUser: jest.Mock };
   let passwordService: { hash: jest.Mock; compare: jest.Mock };
   let jwtService: { sign: jest.Mock };
   let redisService: { set: jest.Mock };
@@ -43,6 +45,9 @@ describe('AuthService', () => {
     accountService = {
       findActiveAccountByEmail: jest.fn().mockResolvedValue(account),
     };
+    organizationInvitationService = {
+      acceptForUser: jest.fn().mockResolvedValue(undefined),
+    };
     passwordService = {
       hash: jest.fn().mockResolvedValue('hashed-pw'),
       compare: jest.fn().mockResolvedValue(true),
@@ -55,6 +60,10 @@ describe('AuthService', () => {
         AuthService,
         { provide: UserService, useValue: userService },
         { provide: AccountService, useValue: accountService },
+        {
+          provide: OrganizationInvitationService,
+          useValue: organizationInvitationService,
+        },
         { provide: JwtService, useValue: jwtService },
         { provide: PasswordService, useValue: passwordService },
         { provide: RedisService, useValue: redisService },
@@ -116,18 +125,22 @@ describe('AuthService', () => {
   });
 
   describe('register', () => {
+    const dto = {
+      firstName: 'Ana',
+      lastName: 'Gómez',
+      email: 'ana@empresa.com',
+      position: 'Analista',
+      nationalId: 'GOMA900101MDFRNN01',
+      rfc: 'GOMA900101XYZ',
+      password: 'Password123!',
+      confirmPassword: 'Password123!',
+    };
+
     it('hashea el password y delega en userService.createFromSignup', async () => {
-      userService.createFromSignup.mockResolvedValue({ success: true });
-      const dto = {
-        firstName: 'Ana',
-        lastName: 'Gómez',
-        email: 'ana@empresa.com',
-        position: 'Analista',
-        nationalId: 'GOMA900101MDFRNN01',
-        rfc: 'GOMA900101XYZ',
-        password: 'Password123!',
-        confirmPassword: 'Password123!',
-      };
+      userService.createFromSignup.mockResolvedValue({
+        success: true,
+        data: { id: 'user-1' },
+      });
 
       await service.register(dto as any);
 
@@ -136,6 +149,41 @@ describe('AuthService', () => {
         dto,
         'hashed-pw',
       );
+      expect(organizationInvitationService.acceptForUser).not.toHaveBeenCalled();
+    });
+
+    it('si el dto trae invitationToken, une al usuario recién creado a esa organización', async () => {
+      userService.createFromSignup.mockResolvedValue({
+        success: true,
+        data: { id: 'user-1' },
+      });
+
+      await service.register({
+        ...dto,
+        invitationToken: 'invite-token-1',
+      } as any);
+
+      expect(organizationInvitationService.acceptForUser).toHaveBeenCalledWith(
+        'invite-token-1',
+        'user-1',
+      );
+    });
+
+    it('no falla el registro si acceptForUser rechaza (best-effort)', async () => {
+      userService.createFromSignup.mockResolvedValue({
+        success: true,
+        data: { id: 'user-1' },
+      });
+      organizationInvitationService.acceptForUser.mockRejectedValue(
+        new Error('Invitación no encontrada'),
+      );
+
+      const result = await service.register({
+        ...dto,
+        invitationToken: 'bad-token',
+      } as any);
+
+      expect(result.success).toBe(true);
     });
   });
 });

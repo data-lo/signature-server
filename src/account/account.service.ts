@@ -361,18 +361,21 @@ export class AccountService {
   }
 
   /**
-   * Invitar a un nuevo miembro a la organización activa — alcance delimitado
-   * a propósito (ver historia [STORY] Módulo de Invitación de Miembros):
-   * valida el payload, que el llamador sea ADMIN de esa cuenta y que el
-   * roleId exista, y responde éxito. No envía correo, no genera token de
-   * invitación, ni inserta ninguna membresía/entrada de catálogo todavía —
-   * eso es explícitamente una siguiente iteración.
+   * Valida que el llamador pueda invitar a la organización activa: ADMIN de esa cuenta, cuenta
+   * de tipo ORGANIZATION, roleId existente. Devuelve el `organizationId` resuelto (distinto del
+   * `accountId` recibido — ese es la fila de membresía del propio llamador) para que el caller
+   * (`OrganizationsController.invite`, ver historia [STORY] Eventos Kafka, Email (SendGrid) y
+   * Miembros (/join)) pueda persistir la invitación real y publicar el evento de Kafka. Esta
+   * validación vive aquí (no en `OrganizationInvitationService`) para no crear una dependencia
+   * circular entre ambos servicios — `OrganizationInvitationService` ya depende de
+   * `AccountService` (para refrescar el catálogo de Redis al aceptar), así que el sentido
+   * contrario se evita a propósito orquestando desde el controller.
    */
   async inviteMember(
     callerId: string,
     accountId: string,
     dto: InviteMemberDto,
-  ): Promise<BaseResponse<null>> {
+  ): Promise<BaseResponse<{ organizationId: string }>> {
     if (!accountId) {
       throw new BadRequestException(
         'Falta el header X-Account-Id de la organización activa',
@@ -395,8 +398,8 @@ export class AccountService {
 
     return {
       success: true,
-      message: 'Invitación registrada correctamente',
-      data: null,
+      message: 'Invitación validada correctamente',
+      data: { organizationId: account.organizationId as string },
     };
   }
 

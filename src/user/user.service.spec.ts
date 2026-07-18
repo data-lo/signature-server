@@ -264,6 +264,30 @@ describe('UserService', () => {
     });
   });
 
+  describe('checkRfcAvailability', () => {
+    it('retorna exists:true si ya existe un registro de información personal con ese RFC', async () => {
+      personalInformationRepository.findOne.mockResolvedValue({
+        id: 'pi-1',
+        rfc: 'PELJ850101ABC',
+      });
+
+      const result = await service.checkRfcAvailability('pelj850101abc');
+
+      expect(personalInformationRepository.findOne).toHaveBeenCalledWith({
+        where: { rfc: 'PELJ850101ABC' },
+      });
+      expect(result.data).toEqual({ exists: true });
+    });
+
+    it('retorna exists:false si no existe ningún registro con ese RFC', async () => {
+      personalInformationRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.checkRfcAvailability('XAXX010101000');
+
+      expect(result.data).toEqual({ exists: false });
+    });
+  });
+
   describe('refreshCurpCacheForUser', () => {
     it('reconstruye el snapshot desde PostgreSQL y lo recachea por CURP', async () => {
       userRepository.findOne.mockResolvedValue({

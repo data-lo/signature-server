@@ -456,8 +456,8 @@ describe('AccountService', () => {
       expect(rolesService.findByIdOrFail).toHaveBeenCalledWith('member-role-1');
       expect(result).toEqual({
         success: true,
-        message: 'Invitación registrada correctamente',
-        data: null,
+        message: 'Invitación validada correctamente',
+        data: { organizationId: 'org-1' },
       });
     });
 

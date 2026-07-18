@@ -28,6 +28,7 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 // Service
 import { AccountService } from './account.service';
 import { AccountMemberService } from './account-member.service';
+import { OrganizationInvitationService } from './organization-invitation.service';
 
 // DTOs
 import { CreateOrganizationDto } from './dto/create-organization.dto';
@@ -47,6 +48,7 @@ export class OrganizationsController {
   constructor(
     private readonly accountService: AccountService,
     private readonly accountMemberService: AccountMemberService,
+    private readonly organizationInvitationService: OrganizationInvitationService,
   ) {}
 
   @Post()
@@ -77,7 +79,7 @@ export class OrganizationsController {
   @ApiOperation({
     summary: 'Invitar a un nuevo miembro a la organización activa',
     description:
-      'Alcance delimitado: valida el payload y que el llamador sea ADMIN de la organización activa (X-Account-Id), y responde éxito. No envía correo, no genera token de invitación, ni inserta ninguna membresía todavía (ver README, sección Pendientes).',
+      'Valida el payload y que el llamador sea ADMIN de la organización activa (X-Account-Id), persiste la invitación (PENDING) con un token único y publica el evento organization.member.invited en Kafka — el worker consumidor envía el correo vía SendGrid (ver OrganizationInvitationEventsConsumer). Responde en cuanto persiste, sin esperar al envío del correo.',
   })
   @ApiHeader({
     name: 'X-Account-Id',
@@ -88,7 +90,7 @@ export class OrganizationsController {
   @ApiBody({ type: InviteMemberDto })
   @ApiResponse({
     status: 201,
-    description: 'Invitación registrada correctamente',
+    description: 'Invitación enviada correctamente',
   })
   @ApiResponse({
     status: 400,
@@ -104,12 +106,29 @@ export class OrganizationsController {
     status: 403,
     description: 'El usuario autenticado no es ADMIN de la organización activa',
   })
-  invite(
+  async invite(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
     @Body() dto: InviteMemberDto,
   ) {
-    return this.accountService.inviteMember(user.sub, accountId, dto);
+    const { data } = await this.accountService.inviteMember(
+      user.sub,
+      accountId,
+      dto,
+    );
+
+    await this.organizationInvitationService.create({
+      organizationId: data.organizationId,
+      roleId: dto.roleId,
+      invitedBy: user.sub,
+      email: dto.email,
+    });
+
+    return {
+      success: true,
+      message: 'Invitación enviada correctamente',
+      data: null,
+    };
   }
 
   @Get(':organizationId/members')

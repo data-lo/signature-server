@@ -16,6 +16,7 @@ import {
   documentPendingTemplate,
   documentRejectedTemplate,
   documentSignedTemplate,
+  organizationInvitationTemplate,
 } from './templates/email.templates';
 import { EmailType } from './enums/email-type.enum';
 import { EmailSubject } from './enums/subject-type.enum';
@@ -168,6 +169,20 @@ export class EmailService {
       `<p>Tu código de verificación para firmar "<strong>${documentName}</strong>" es:</p>` +
         `<p style="font-size:24px;font-weight:bold;letter-spacing:4px;">${code}</p>` +
         `<p>Este código vence en 15 minutos.</p>`,
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /** Notifica a un correo invitado a una organización, con el enlace a /join (ver OrganizationInvitationEventsConsumer). */
+  async sendOrganizationInvitationNotification(
+    to: string,
+    organizationName: string,
+    joinUrl: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.ORGANIZATION_INVITATION,
+      organizationInvitationTemplate(organizationName, joinUrl),
       EmailType.NOTIFICATION,
     );
   }

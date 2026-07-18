@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { OrganizationsController } from './organizations.controller';
 import { AccountService } from './account.service';
 import { AccountMemberService } from './account-member.service';
+import { OrganizationInvitationService } from './organization-invitation.service';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 describe('OrganizationsController', () => {
@@ -15,6 +16,7 @@ describe('OrganizationsController', () => {
     update: jest.Mock;
     remove: jest.Mock;
   };
+  let organizationInvitationService: { create: jest.Mock };
 
   const user: JwtPayload = {
     sub: 'user-1',
@@ -25,18 +27,30 @@ describe('OrganizationsController', () => {
   };
 
   beforeEach(async () => {
-    accountService = { createOrganization: jest.fn(), inviteMember: jest.fn() };
+    accountService = {
+      createOrganization: jest.fn(),
+      inviteMember: jest.fn().mockResolvedValue({
+        success: true,
+        message: 'Invitación validada correctamente',
+        data: { organizationId: 'org-1' },
+      }),
+    };
     accountMemberService = {
       findMembersForOrganizationDetailed: jest.fn(),
       update: jest.fn(),
       remove: jest.fn(),
     };
+    organizationInvitationService = { create: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrganizationsController],
       providers: [
         { provide: AccountService, useValue: accountService },
         { provide: AccountMemberService, useValue: accountMemberService },
+        {
+          provide: OrganizationInvitationService,
+          useValue: organizationInvitationService,
+        },
       ],
     }).compile();
 
@@ -57,15 +71,26 @@ describe('OrganizationsController', () => {
     );
   });
 
-  it('invite delega en accountService.inviteMember con el userId del JWT y el accountId del header', () => {
+  it('invite valida con accountService.inviteMember y persiste+publica la invitación con organizationInvitationService.create', async () => {
     const dto = { email: 'nuevo@empresa.com', roleId: 'role-1' };
-    controller.invite(user, 'org-1', dto);
+    const result = await controller.invite(user, 'account-1', dto);
 
     expect(accountService.inviteMember).toHaveBeenCalledWith(
       'user-1',
-      'org-1',
+      'account-1',
       dto,
     );
+    expect(organizationInvitationService.create).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      roleId: 'role-1',
+      invitedBy: 'user-1',
+      email: 'nuevo@empresa.com',
+    });
+    expect(result).toEqual({
+      success: true,
+      message: 'Invitación enviada correctamente',
+      data: null,
+    });
   });
 
   it('findMembers delega en accountMemberService.findMembersForOrganizationDetailed con el userId del JWT y el organizationId de la ruta', () => {
