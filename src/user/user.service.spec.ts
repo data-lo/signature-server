@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { UserService } from './user.service';
@@ -390,7 +394,16 @@ describe('UserService', () => {
   describe('updateStatus', () => {
     it('fija isConfigured=true y refresca el cache de Redis por CURP', async () => {
       userRepository.findOne
-        .mockResolvedValueOnce({ id: 'user-1', nationalId: 'CURP1' }) // existencia
+        .mockResolvedValueOnce({
+          id: 'user-1',
+          nationalId: 'CURP1',
+          signatureId: 'sig-1',
+          personalInformation: {
+            rfc: 'RFC1',
+            phoneNumber: '123',
+            secondaryEmail: 'a@a.com',
+          },
+        }) // existencia + validación
         .mockResolvedValueOnce({
           id: 'user-1',
           nationalId: 'CURP1',
@@ -423,6 +436,38 @@ describe('UserService', () => {
       await expect(
         service.updateStatus('missing-user', { isConfigured: true }),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('bug corregido: lanza BadRequestException si falta información personal, sin importar lo que mande el DTO', async () => {
+      userRepository.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        nationalId: 'CURP1',
+        signatureId: 'sig-1',
+        personalInformation: { rfc: 'RFC1', phoneNumber: null, secondaryEmail: null },
+      });
+
+      await expect(
+        service.updateStatus('user-1', { isConfigured: true }),
+      ).rejects.toThrow(BadRequestException);
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('bug corregido: lanza BadRequestException si falta la firma digital (signatureId nulo)', async () => {
+      userRepository.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        nationalId: 'CURP1',
+        signatureId: null,
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: '123',
+          secondaryEmail: 'a@a.com',
+        },
+      });
+
+      await expect(
+        service.updateStatus('user-1', { isConfigured: true }),
+      ).rejects.toThrow(BadRequestException);
+      expect(userRepository.update).not.toHaveBeenCalled();
     });
   });
 });

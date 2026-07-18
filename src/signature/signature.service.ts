@@ -8,8 +8,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { CreateSignatureDto } from './dto/create-signature.dto';
@@ -33,6 +33,8 @@ export class SignatureService {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly minioService: MinioService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -332,15 +334,7 @@ export class SignatureService {
       'Error al eliminar la imagen de firma en el almacenamiento',
     );
 
-    if (!signature.officialCardObjectKey) {
-      await this.signatureRepository.delete({ id });
-      await this.userRepository.update(currentUserId, { signatureId: null });
-    } else {
-      await this.signatureRepository.update(
-        { id },
-        { signatureObjectKey: null },
-      );
-    }
+    await this.clearFieldOrDeleteRow(id, currentUserId, 'signatureObjectKey');
 
     return {
       success: true,
@@ -374,21 +368,59 @@ export class SignatureService {
       'Error al eliminar la identificación oficial en el almacenamiento',
     );
 
-    if (!signature.signatureObjectKey) {
-      await this.signatureRepository.delete({ id });
-      await this.userRepository.update(currentUserId, { signatureId: null });
-    } else {
-      await this.signatureRepository.update(
-        { id },
-        { officialCardObjectKey: null },
-      );
-    }
+    await this.clearFieldOrDeleteRow(id, currentUserId, 'officialCardObjectKey');
 
     return {
       success: true,
       message: 'Identificación oficial eliminada correctamente',
       data: null,
     };
+  }
+
+  /**
+   * Bug corregido: `deleteSignatureImage`/`deleteOfficialFile` cada uno leía `signature` por su
+   * cuenta al inicio del método y decidía "¿el OTRO campo también está vacío?" contra esa
+   * lectura. Si ambos se ejecutaban casi al mismo tiempo (dos pestañas, doble clic en cada
+   * botón), ambas lecturas veían todavía el otro campo presente → ambos tomaban la rama
+   * "solo limpiar mi campo" → los dos archivos quedaban borrados de MinIO pero NINGUNA
+   * limpiaba `user.signatureId`, dejando una fila `signatures` "vacía" a la que el usuario
+   * seguía apuntando — `create()` la rechaza para siempre con "ya tienes una firma registrada",
+   * sin intervención manual en BD.
+   *
+   * El lock pesimista (`SELECT ... FOR UPDATE`) serializa las dos llamadas sobre la misma fila:
+   * la segunda transacción espera a que la primera confirme, y entonces lee el estado YA
+   * actualizado por la primera — así que la decisión "¿limpiar solo mi campo, o borrar toda la
+   * fila?" siempre se toma sobre datos frescos, nunca sobre una lectura obsoleta.
+   */
+  private async clearFieldOrDeleteRow(
+    id: string,
+    currentUserId: string,
+    clearedField: 'signatureObjectKey' | 'officialCardObjectKey',
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const locked = await manager.findOne(SignatureEntity, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) return;
+
+      const otherField =
+        clearedField === 'signatureObjectKey'
+          ? 'officialCardObjectKey'
+          : 'signatureObjectKey';
+
+      if (!locked[otherField]) {
+        // Bug independiente encontrado de paso: `users.signature_id` tiene una FK
+        // `ON DELETE NO ACTION` hacia `signatures.id` (ver InitialSchema) — hay que limpiar la
+        // referencia en `users` ANTES de borrar la fila de `signatures`, o Postgres rechaza el
+        // delete por violar la constraint. El orden anterior (borrar primero) nunca funcionaba
+        // en este código, en carrera o no.
+        await manager.update(UserEntity, currentUserId, { signatureId: null });
+        await manager.delete(SignatureEntity, { id });
+      } else {
+        await manager.update(SignatureEntity, { id }, { [clearedField]: null });
+      }
+    });
   }
 
   async deactivate(id: string, currentUserId: string): Promise<BaseResponse> {

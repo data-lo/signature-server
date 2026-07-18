@@ -887,6 +887,32 @@ export class DocumentService {
   }
 
   /**
+   * Copia la imagen de firma activa del usuario (ya validada por `assertUserHasSignatureOnFile`)
+   * a un object key nuevo e inmutable en MinIO, y retorna esa clave. Ver docblock de
+   * `CollaboratorEntity.signatureSnapshotObjectKey` para el porqué: sin este snapshot, el PDF
+   * final quedaría vinculado a lo que sea que el usuario tenga en su perfil al momento en que
+   * el ÚLTIMO firmante termine, no a lo que realmente firmó.
+   */
+  private async snapshotSignatureImage(user: UserEntity): Promise<string> {
+    const signature = await this.signatureService.findOne(
+      user.signatureId as string,
+    );
+    const signatureBuffer = await this.minioService.getFileInBytesFormat(
+      signature.signatureObjectKey,
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+    );
+    const snapshot = await this.minioService.uploadObject(
+      {
+        file: signatureBuffer,
+        name: 'signature-snapshot.png',
+        mimetype: 'image/png',
+      },
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+    );
+    return snapshot.fileId;
+  }
+
+  /**
    * Encuentra la fila de Collaborator (SIGNER) del usuario autenticado en este documento, o
    * lanza ForbiddenException. Usado por el flujo de verificación (emitir/validar código) —
    * mismo criterio de acceso que sign()/reject().
@@ -1025,6 +1051,34 @@ export class DocumentService {
       }
     }
 
+    // Claim atómico (bug corregido): un UPDATE condicionado a status=PENDING es lo único que
+    // realmente cierra la ventana de carrera entre dos peticiones casi simultáneas para el
+    // mismo firmante (doble clic, dos pestañas, reintento por timeout) — la validación en
+    // memoria de arriba (`myParticipant.status !== PENDING`) no alcanza porque ambas peticiones
+    // pueden pasarla antes de que cualquiera escriba. Si `affected !== 1`, alguien más ya ganó
+    // la carrera; se aborta aquí, antes de tocar MinIO/estampado/correos, así que no hay
+    // estampado duplicado, correos duplicados a todos los colaboradores, ni auditoría duplicada.
+    const claim = await this.collaboratorRepository.update(
+      { id: myParticipant.id, status: SIGNEE_STATUS_ENUM.PENDING },
+      { status: SIGNEE_STATUS_ENUM.SIGNED, signedAt: new Date() },
+    );
+    if (claim.affected !== 1) {
+      throw new BadRequestException('Ya respondiste a esta solicitud de firma');
+    }
+    myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
+    myParticipant.signedAt = new Date();
+
+    // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
+    // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()
+    // (que corre después, cuando firma el ÚLTIMO firmante) volvería a leer la firma EN VIVO de
+    // cada colaborador, y un firmante que desactivó su firma entre que firmó y que el último
+    // terminó quedaría con un PNG en blanco estampado en el PDF legal final, sin ningún error.
+    // Se toma después del claim a propósito: si el claim se pierde, no se desperdicia esta
+    // llamada a MinIO.
+    myParticipant.signatureSnapshotObjectKey = await this.snapshotSignatureImage(
+      myParticipant.user as UserEntity,
+    );
+
     const remainingSigners = signerCollaborators.filter(
       (c) => c.id !== myParticipant.id && c.status === SIGNEE_STATUS_ENUM.PENDING,
     );
@@ -1048,8 +1102,8 @@ export class DocumentService {
       });
     }
 
-    myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
-    myParticipant.signedAt = new Date();
+    // El claim atómico ya persistió status/signedAt — este save solo persiste
+    // signatureSnapshotObjectKey (y re-escribe status/signedAt con el mismo valor, sin efecto).
     await this.collaboratorRepository.save(myParticipant);
 
     void this.auditService.create({
@@ -1110,11 +1164,18 @@ export class DocumentService {
         const signerUser =
           collaborator.user ??
           (await this.userService.findOne(collaborator.userId as string));
-        const signature = await this.signatureService.findOne(
-          signerUser.signatureId,
-        );
+
+        // Usa el snapshot inmutable tomado en el momento real de la firma (ver
+        // `signatureSnapshotObjectKey` / `snapshotSignatureImage`) — NO la firma en vivo del
+        // perfil del usuario, que pudo haber sido desactivada/reemplazada después de firmar.
+        // El fallback a la firma en vivo es solo defensivo, para filas ya firmadas antes de
+        // este fix que todavía no tienen snapshot.
+        const signatureObjectKey =
+          collaborator.signatureSnapshotObjectKey ??
+          (await this.signatureService.findOne(signerUser.signatureId))
+            .signatureObjectKey;
         const signatureBuffer = await this.minioService.getFileInBytesFormat(
-          signature.signatureObjectKey,
+          signatureObjectKey,
           BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
         );
 
@@ -1242,6 +1303,18 @@ export class DocumentService {
 
     await this.assertUserHasSignatureOnFile(myParticipant.user);
 
+    // Claim atómico (mismo criterio que sign(), ver su comentario): cierra la ventana de
+    // carrera de un doble clic/doble pestaña rechazando antes de tocar MinIO/estampado.
+    const claim = await this.collaboratorRepository.update(
+      { id: myParticipant.id, status: SIGNEE_STATUS_ENUM.PENDING },
+      { status: SIGNEE_STATUS_ENUM.REJECTED, cancellationReason: reason },
+    );
+    if (claim.affected !== 1) {
+      throw new BadRequestException('Ya respondiste a esta solicitud de firma');
+    }
+    myParticipant.status = SIGNEE_STATUS_ENUM.REJECTED;
+    myParticipant.cancellationReason = reason;
+
     // Estampo y muevo el documento a rechazados ANTES de marcar al colaborador como
     // rechazado: si el estampado o la subida a MinIO fallan, ni el colaborador ni el
     // documento quedan marcados, y el rechazo puede reintentarse sin quedar atascado.
@@ -1270,9 +1343,7 @@ export class DocumentService {
     document.status = DOCUMENT_STATUS_ENUM.REJECTED;
     await this.documentRepository.save(document);
 
-    myParticipant.status = SIGNEE_STATUS_ENUM.REJECTED;
-    myParticipant.cancellationReason = reason;
-    await this.collaboratorRepository.save(myParticipant);
+    // status/cancellationReason ya se persistieron atómicamente en el claim de arriba.
 
     void this.auditService.create({
       documentId,
@@ -1409,6 +1480,23 @@ export class DocumentService {
       throw new ForbiddenException('No eres firmante de este documento');
     }
 
+    // Claim atómico (mismo criterio que sign()/reject()): "cualquier firmante puede confirmar"
+    // significa que dos firmantes distintos (o el mismo, doblemente) podrían pasar el check de
+    // arriba casi al mismo tiempo — sin este UPDATE condicionado, ambos estamparían y subirían
+    // a MinIO, y todos los colaboradores recibirían el correo de cancelación duplicado.
+    const cancelledAt = new Date();
+    const claim = await this.documentRepository.update(
+      { id: documentId, status: DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING },
+      { status: DOCUMENT_STATUS_ENUM.CANCELLED, cancelledAt },
+    );
+    if (claim.affected !== 1) {
+      throw new BadRequestException(
+        'La cancelación de este documento ya fue confirmada',
+      );
+    }
+    document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
+    document.cancelledAt = cancelledAt;
+
     const documentBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
       BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
@@ -1428,9 +1516,7 @@ export class DocumentService {
       document.objectKey,
     );
 
-    document.cancelledAt = new Date();
-    document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
-    await this.documentRepository.save(document);
+    // status/cancelledAt ya se persistieron atómicamente en el claim de arriba.
 
     void this.auditService.create({
       documentId,

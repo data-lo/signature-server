@@ -97,6 +97,16 @@ export class CollaboratorEntity {
   @Column({ name: 'fiel_signature_id', nullable: true })
   fielSignatureId: string | null;
 
+  /**
+   * Copia inmutable de la imagen de firma tomada en el momento en que este colaborador firmó
+   * (ver migración `AddSignatureSnapshotToCollaborators`). `finalizeSignedDocument` usa esto en
+   * vez de volver a resolver `user.signatureId` en vivo — si el usuario desactiva o reemplaza
+   * su firma después de firmar este documento, el PDF final no debe verse afectado. NULL hasta
+   * que el colaborador firma.
+   */
+  @Column({ name: 'signature_snapshot_object_key', nullable: true })
+  signatureSnapshotObjectKey: string | null;
+
   @ManyToOne(() => FielSignatureEntity, { nullable: true })
   @JoinColumn({ name: 'fiel_signature_id' })
   fielSignature: FielSignatureEntity | null;

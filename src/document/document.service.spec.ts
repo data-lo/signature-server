@@ -30,7 +30,10 @@ function createMockRepository() {
     find: jest.fn(),
     create: jest.fn((data) => data),
     save: jest.fn(async (data) => data),
-    update: jest.fn(),
+    // { affected: 1 } por defecto: simula un UPDATE condicional exitoso (ver el claim atómico
+    // en sign()/reject()/confirmCancellation()) — los tests que quieren simular una carrera
+    // perdida sobreescriben esto explícitamente con { affected: 0 }.
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
   };
@@ -473,6 +476,21 @@ describe('DocumentService', () => {
       });
     });
 
+    it('bug corregido: rechaza con BadRequestException si dos peticiones casi simultáneas firman lo mismo (carrera perdida)', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      collaboratorRepository.find.mockResolvedValue([onlySigner]);
+      collaboratorRepository.update.mockResolvedValue({ affected: 0 });
+
+      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      // No debe desperdiciarse ningún trabajo de MinIO/estampado en una carrera perdida.
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+      expect(documentSigningService.mergeSignatureIntoPdf).not.toHaveBeenCalled();
+    });
+
     it('finaliza el documento (estampa y notifica a todos) cuando es el último firmante', async () => {
       const document = mockDocument();
       documentRepository.findOne.mockResolvedValue(document);
@@ -489,6 +507,60 @@ describe('DocumentService', () => {
       expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
       expect(emailService.sendDocumentSignedNotification).toHaveBeenCalled();
       expect(document.completedSignersCount).toBe(1);
+    });
+
+    it('guarda un snapshot inmutable de la firma al firmar (bug: firma en vivo podía cambiar después)', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      const signerB = buildSigner({
+        id: 'collaborator-2',
+        userId: 'user-2',
+        signingOrder: 1,
+      });
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
+
+      await service.sign('doc-1', 'user-1');
+
+      expect(minioService.getFileInBytesFormat).toHaveBeenCalledWith(
+        'sig-key',
+        expect.anything(),
+      );
+      expect(minioService.uploadObject).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'signature-snapshot.png' }),
+        expect.anything(),
+      );
+      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ signatureSnapshotObjectKey: 'object-key-1' }),
+      );
+    });
+
+    it('al finalizar, usa el snapshot ya guardado de un firmante anterior en vez de su firma en vivo (bug crítico corregido)', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      // signerA ya firmó antes (en otro momento) y su snapshot quedó guardado con una clave
+      // distinta a la firma "en vivo" (sig-key) — si el usuario desactivó/reemplazó su firma
+      // después de firmar, signatureService.findOne ya no reflejaría lo que realmente firmó.
+      const signerA = buildSigner({
+        userId: 'user-a',
+        signingOrder: 0,
+        status: SIGNEE_STATUS_ENUM.SIGNED,
+        signatureSnapshotObjectKey: 'signerA-snapshot-key',
+      } as any);
+      const signerB = buildSigner({ userId: 'user-b', signingOrder: 1 });
+      collaboratorRepository.find
+        .mockResolvedValueOnce([signerA, signerB])
+        .mockResolvedValueOnce([signerA, signerB]);
+
+      await service.sign('doc-1', 'user-b');
+
+      // El PDF final debe estampar el snapshot ya guardado de signerA (tomado cuando signerA
+      // realmente firmó), no volver a resolver su firma "en vivo" en este momento.
+      expect(minioService.getFileInBytesFormat).toHaveBeenCalledWith(
+        'signerA-snapshot-key',
+        expect.anything(),
+      );
     });
 
     it('sin coordenadas explícitas, estampa en el ancla por defecto del documento (regresión del apilado automático)', async () => {
@@ -679,6 +751,19 @@ describe('DocumentService', () => {
         ForbiddenException,
       );
     });
+
+    it('bug corregido: rechaza con BadRequestException si dos peticiones casi simultáneas rechazan lo mismo (carrera perdida)', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+      collaboratorRepository.update.mockResolvedValue({ affected: 0 });
+
+      await expect(
+        service.reject('doc-1', 'user-1', 'motivo'),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.getFileInBytesFormat).not.toHaveBeenCalled();
+    });
   });
 
   describe('requestCancellation', () => {
@@ -775,7 +860,8 @@ describe('DocumentService', () => {
 
       expect(result.success).toBe(true);
       expect(documentSigningService.stampCancelledWatermark).toHaveBeenCalled();
-      expect(documentRepository.save).toHaveBeenCalledWith(
+      expect(documentRepository.update).toHaveBeenCalledWith(
+        { id: 'doc-1', status: DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING },
         expect.objectContaining({ status: DOCUMENT_STATUS_ENUM.CANCELLED }),
       );
       expect(documentEventsProducer.emitCancelled).toHaveBeenCalled();
@@ -800,6 +886,19 @@ describe('DocumentService', () => {
       await expect(
         service.confirmCancellation('doc-1', 'user-1'),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('bug corregido: rechaza con BadRequestException si dos firmantes confirman casi simultáneamente (carrera perdida)', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+      documentRepository.update.mockResolvedValue({ affected: 0 });
+
+      await expect(
+        service.confirmCancellation('doc-1', 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.getFileInBytesFormat).not.toHaveBeenCalled();
     });
   });
 

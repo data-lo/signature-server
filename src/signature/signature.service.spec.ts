@@ -1,6 +1,6 @@
 import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { SignatureService } from './signature.service';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
@@ -32,6 +32,8 @@ describe('SignatureService', () => {
     deleteFile: jest.Mock;
     replaceFile: jest.Mock;
   };
+  let manager: { findOne: jest.Mock; delete: jest.Mock; update: jest.Mock };
+  let dataSource: { transaction: jest.Mock };
 
   beforeEach(async () => {
     signatureRepository = createMockRepository();
@@ -42,6 +44,10 @@ describe('SignatureService', () => {
       getFileInBytesFormat: jest.fn(),
       deleteFile: jest.fn(),
       replaceFile: jest.fn(),
+    };
+    manager = { findOne: jest.fn(), delete: jest.fn(), update: jest.fn() };
+    dataSource = {
+      transaction: jest.fn((callback) => callback(manager)),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -58,6 +64,10 @@ describe('SignatureService', () => {
         {
           provide: MinioService,
           useValue: minioService,
+        },
+        {
+          provide: getDataSourceToken(),
+          useValue: dataSource,
         },
       ],
     }).compile();
@@ -268,6 +278,129 @@ describe('SignatureService', () => {
         }),
       ).rejects.toThrow(BadRequestException);
       expect(minioService.replaceFile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteSignatureImage / deleteOfficialFile', () => {
+    function mockOwnedSignature(overrides: Partial<SignatureEntity> = {}) {
+      const signature = {
+        id: 'signature-1',
+        signatureObjectKey: 'sig-key',
+        officialCardObjectKey: 'ine-key',
+        ...overrides,
+      };
+      signatureRepository.findOne.mockResolvedValue(signature);
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: 'signature-1',
+      });
+      return signature;
+    }
+
+    it('deleteSignatureImage: si la INE todavía existe, solo limpia signatureObjectKey (no borra la fila)', async () => {
+      mockOwnedSignature();
+      manager.findOne.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: 'sig-key',
+        officialCardObjectKey: 'ine-key',
+      });
+
+      await service.deleteSignatureImage('signature-1', 'user-1');
+
+      expect(minioService.deleteFile).toHaveBeenCalledWith(
+        'sig-key',
+        expect.anything(),
+      );
+      expect(manager.update).toHaveBeenCalledWith(
+        SignatureEntity,
+        { id: 'signature-1' },
+        { signatureObjectKey: null },
+      );
+      expect(manager.delete).not.toHaveBeenCalled();
+    });
+
+    it('deleteSignatureImage: si la INE ya estaba vacía, borra la fila completa y limpia user.signatureId', async () => {
+      mockOwnedSignature();
+      // Estado FRESCO leído dentro de la transacción (con lock) — officialCardObjectKey ya null.
+      manager.findOne.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: 'sig-key',
+        officialCardObjectKey: null,
+      });
+
+      await service.deleteSignatureImage('signature-1', 'user-1');
+
+      expect(manager.delete).toHaveBeenCalledWith(SignatureEntity, {
+        id: 'signature-1',
+      });
+      expect(manager.update).toHaveBeenCalledWith(UserEntity, 'user-1', {
+        signatureId: null,
+      });
+    });
+
+    it('bug corregido: dos eliminaciones casi simultáneas (firma + INE) no dejan una fila huérfana', async () => {
+      // Simula la condición de carrera: cuando esta transacción adquiere el lock, la OTRA
+      // eliminación (INE) ya corrió y confirmó — el lock pesimista garantiza que esta lectura
+      // vea ese estado fresco (officialCardObjectKey ya en null), no el que había cuando
+      // deleteSignatureImage() leyó `signature` al principio del método (mockOwnedSignature).
+      mockOwnedSignature({ officialCardObjectKey: 'ine-key' });
+      manager.findOne.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: 'sig-key',
+        officialCardObjectKey: null,
+      });
+
+      await service.deleteSignatureImage('signature-1', 'user-1');
+
+      // Debe tomar la rama de "borrar todo", no la de "solo limpiar mi campo" — sin esto, la
+      // fila queda huérfana (ambos object keys en null, pero user.signatureId sigue apuntando
+      // ahí) y el usuario no puede volver a registrar una firma nunca más.
+      expect(manager.delete).toHaveBeenCalledWith(SignatureEntity, {
+        id: 'signature-1',
+      });
+      expect(manager.update).toHaveBeenCalledWith(UserEntity, 'user-1', {
+        signatureId: null,
+      });
+    });
+
+    it('deleteOfficialFile: si la firma todavía existe, solo limpia officialCardObjectKey', async () => {
+      mockOwnedSignature();
+      manager.findOne.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: 'sig-key',
+        officialCardObjectKey: 'ine-key',
+      });
+
+      await service.deleteOfficialFile('signature-1', 'user-1');
+
+      expect(minioService.deleteFile).toHaveBeenCalledWith(
+        'ine-key',
+        expect.anything(),
+      );
+      expect(manager.update).toHaveBeenCalledWith(
+        SignatureEntity,
+        { id: 'signature-1' },
+        { officialCardObjectKey: null },
+      );
+      expect(manager.delete).not.toHaveBeenCalled();
+    });
+
+    it('deleteSignatureImage lanza BadRequestException si no hay imagen de firma que eliminar', async () => {
+      mockOwnedSignature({ signatureObjectKey: null });
+
+      await expect(
+        service.deleteSignatureImage('signature-1', 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.deleteFile).not.toHaveBeenCalled();
+    });
+
+    it('deleteOfficialFile lanza BadRequestException si no hay identificación que eliminar', async () => {
+      mockOwnedSignature({ officialCardObjectKey: null });
+
+      await expect(
+        service.deleteOfficialFile('signature-1', 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.deleteFile).not.toHaveBeenCalled();
     });
   });
 });
