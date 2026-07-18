@@ -17,6 +17,10 @@ import { MinioService } from 'src/shared/minio/minio.service';
 import 'multer';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
+import {
+  MAX_IMAGE_FILE_SIZE_BYTES,
+  MAX_PDF_FILE_SIZE_BYTES,
+} from 'src/shared/constants/file-upload.constants';
 import sharp = require('sharp');
 
 @Injectable()
@@ -57,6 +61,24 @@ export class SignatureService {
     if (!user || user.signatureId !== signatureId) {
       throw new ForbiddenException(
         'La firma no pertenece al usuario autenticado',
+      );
+    }
+  }
+
+  /**
+   * El `limits.fileSize` de multer en el controller ya rechaza cualquier archivo por encima de
+   * `MAX_UPLOAD_SAFETY_NET_BYTES` (25MB) antes de que llegue aquí — ese es solo un techo de
+   * seguridad. Este check aplica el límite real de negocio, más estricto y específico por tipo
+   * de archivo, con un mensaje claro en español en vez del error genérico de multer.
+   */
+  private assertWithinSizeLimit(
+    file: Express.Multer.File,
+    maxBytes: number,
+    label: string,
+  ): void {
+    if (file.size > maxBytes) {
+      throw new BadRequestException(
+        `${label} debe pesar menos de ${Math.floor(maxBytes / (1024 * 1024))}MB`,
       );
     }
   }
@@ -117,6 +139,21 @@ export class SignatureService {
 
     const signatureFile = files?.signatureImage?.[0];
     const officialFile = files?.officialFile?.[0];
+
+    if (signatureFile) {
+      this.assertWithinSizeLimit(
+        signatureFile,
+        MAX_IMAGE_FILE_SIZE_BYTES,
+        'La imagen de firma',
+      );
+    }
+    if (officialFile) {
+      this.assertWithinSizeLimit(
+        officialFile,
+        MAX_PDF_FILE_SIZE_BYTES,
+        'La identificación oficial',
+      );
+    }
 
     if (signatureFile) {
       signatureObjectKeyResponse = await this.minioService.uploadObject(
@@ -187,6 +224,21 @@ export class SignatureService {
 
     await this.assertOwnership(id, currentUserId);
 
+    if (files.signatureImage) {
+      this.assertWithinSizeLimit(
+        files.signatureImage,
+        MAX_IMAGE_FILE_SIZE_BYTES,
+        'La imagen de firma',
+      );
+    }
+    if (files.officialFile) {
+      this.assertWithinSizeLimit(
+        files.officialFile,
+        MAX_PDF_FILE_SIZE_BYTES,
+        'La identificación oficial',
+      );
+    }
+
     let message = 'Firma actualizada correctamente';
 
     if (!signature.isActive) {
@@ -203,7 +255,7 @@ export class SignatureService {
           objectKey,
           {
             file: files.signatureImage,
-            name: files.signatureImage.fieldname,
+            name: files.signatureImage.originalname,
           },
           BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
         );
@@ -231,7 +283,7 @@ export class SignatureService {
           objectKey,
           {
             file: files.officialFile,
-            name: files.officialFile.filename,
+            name: files.officialFile.originalname,
           },
           BUCKET_TYPES_ENUM.OFICIAL_CARDS,
         );

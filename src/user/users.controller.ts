@@ -26,6 +26,7 @@ import {
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
 // Services
 import { UserService } from './user.service';
@@ -142,10 +143,13 @@ export class UsersController {
     description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
   @UseInterceptors(
-    FileFieldsInterceptor([
-      { name: 'signatureImage', maxCount: 1 },
-      { name: 'officialFile', maxCount: 1 },
-    ]),
+    FileFieldsInterceptor(
+      [
+        { name: 'signatureImage', maxCount: 1 },
+        { name: 'officialFile', maxCount: 1 },
+      ],
+      { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES } },
+    ),
   )
   async updateSignature(
     @CurrentUser() user: JwtPayload,

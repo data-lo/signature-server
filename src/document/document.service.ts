@@ -49,6 +49,7 @@ import { AccountMemberService } from 'src/account/account-member.service';
 import { getNextPendingSigner, isSignerTurn } from './utils/next-signer.util';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
+import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
 
@@ -120,6 +121,12 @@ export class DocumentService {
 
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');
+      }
+
+      if (file.size > MAX_PDF_FILE_SIZE_BYTES) {
+        throw new BadRequestException(
+          `El documento debe pesar menos de ${Math.floor(MAX_PDF_FILE_SIZE_BYTES / (1024 * 1024))}MB`,
+        );
       }
 
       const {

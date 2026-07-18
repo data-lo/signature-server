@@ -1,10 +1,14 @@
-import { InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { SignatureService } from './signature.service';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
+import {
+  MAX_IMAGE_FILE_SIZE_BYTES,
+  MAX_PDF_FILE_SIZE_BYTES,
+} from 'src/shared/constants/file-upload.constants';
 
 function createMockRepository() {
   return {
@@ -113,6 +117,157 @@ describe('SignatureService', () => {
           officialFile: [{ originalname: 'ine.pdf' } as Express.Multer.File],
         }),
       ).rejects.toThrow(InternalServerErrorException);
+    });
+
+    it('lanza BadRequestException si la imagen de firma excede el límite de tamaño', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: null,
+      });
+
+      await expect(
+        service.create('user-1', {} as any, {
+          signatureImage: [
+            {
+              originalname: 'firma.png',
+              size: MAX_IMAGE_FILE_SIZE_BYTES + 1,
+            } as Express.Multer.File,
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('lanza BadRequestException si la identificación oficial excede el límite de tamaño', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: null,
+      });
+
+      await expect(
+        service.create('user-1', {} as any, {
+          signatureImage: [
+            { originalname: 'firma.png', size: 1000 } as Express.Multer.File,
+          ],
+          officialFile: [
+            {
+              originalname: 'ine.pdf',
+              size: MAX_PDF_FILE_SIZE_BYTES + 1,
+            } as Express.Multer.File,
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('permite archivos justo en el límite de tamaño', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: null,
+      });
+      minioService.uploadObject.mockResolvedValue({
+        status: 'FILE_CREATED',
+        fileId: 'signature-object-key',
+      });
+      signatureRepository.create.mockImplementation((data) => data);
+      signatureRepository.save.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: 'signature-object-key',
+        officialCardObjectKey: null,
+      });
+
+      await expect(
+        service.create('user-1', {} as any, {
+          signatureImage: [
+            {
+              originalname: 'firma.png',
+              size: MAX_IMAGE_FILE_SIZE_BYTES,
+            } as Express.Multer.File,
+          ],
+        }),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('update', () => {
+    function mockOwnedSignature(overrides: Partial<SignatureEntity> = {}) {
+      signatureRepository.findOne.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: 'existing-signature-key',
+        officialCardObjectKey: 'existing-ine-key',
+        isActive: true,
+        ...overrides,
+      });
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: 'signature-1',
+      });
+    }
+
+    it('reemplaza la imagen de firma existente pasando el originalname correcto a Minio (bug .fieldname/.filename corregido)', async () => {
+      mockOwnedSignature();
+      minioService.replaceFile.mockResolvedValue({});
+
+      await service.update('signature-1', 'user-1', {
+        signatureImage: {
+          fieldname: 'signatureImage',
+          originalname: 'nueva-firma.png',
+          size: 1000,
+        } as Express.Multer.File,
+      });
+
+      expect(minioService.replaceFile).toHaveBeenCalledWith(
+        'existing-signature-key',
+        expect.objectContaining({ name: 'nueva-firma.png' }),
+        expect.anything(),
+      );
+    });
+
+    it('reemplaza la identificación oficial existente pasando el originalname correcto a Minio (bug .fieldname/.filename corregido)', async () => {
+      mockOwnedSignature();
+      minioService.replaceFile.mockResolvedValue({});
+
+      await service.update('signature-1', 'user-1', {
+        officialFile: {
+          fieldname: 'officialFile',
+          originalname: 'nueva-ine.pdf',
+          size: 1000,
+        } as Express.Multer.File,
+      });
+
+      expect(minioService.replaceFile).toHaveBeenCalledWith(
+        'existing-ine-key',
+        expect.objectContaining({ name: 'nueva-ine.pdf' }),
+        expect.anything(),
+      );
+    });
+
+    it('lanza BadRequestException si la nueva imagen de firma excede el límite de tamaño', async () => {
+      mockOwnedSignature();
+
+      await expect(
+        service.update('signature-1', 'user-1', {
+          signatureImage: {
+            originalname: 'firma.png',
+            size: MAX_IMAGE_FILE_SIZE_BYTES + 1,
+          } as Express.Multer.File,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.replaceFile).not.toHaveBeenCalled();
+    });
+
+    it('lanza BadRequestException si la nueva identificación oficial excede el límite de tamaño', async () => {
+      mockOwnedSignature();
+
+      await expect(
+        service.update('signature-1', 'user-1', {
+          officialFile: {
+            originalname: 'ine.pdf',
+            size: MAX_PDF_FILE_SIZE_BYTES + 1,
+          } as Express.Multer.File,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.replaceFile).not.toHaveBeenCalled();
     });
   });
 });

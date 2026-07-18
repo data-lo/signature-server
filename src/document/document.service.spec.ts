@@ -22,6 +22,7 @@ import { AuditService } from 'src/audit/audit.service';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
+import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 
 function createMockRepository() {
   return {
@@ -230,6 +231,24 @@ describe('DocumentService', () => {
 
       const savedDocumentCall = documentRepository.save.mock.calls[0][0];
       expect(savedDocumentCall.accountId).toBe('account-1');
+    });
+
+    it('lanza BadRequestException si el PDF excede el límite de tamaño', async () => {
+      const oversizedFile = {
+        ...file,
+        size: MAX_PDF_FILE_SIZE_BYTES + 1,
+      } as Express.Multer.File;
+
+      await expect(
+        service.create(
+          'creator-1',
+          'account-1',
+          dto,
+          oversizedFile,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
     });
 
     it('setea totalSigners igual a la cantidad de firmantes seleccionados', async () => {

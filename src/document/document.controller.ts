@@ -54,6 +54,7 @@ import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { DocumentUpdateResponse } from './interfaces/responses/document-update-response';
 import { SubmitForAuthorizationResponse } from './interfaces/responses/submit-for-authorization-response';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
@@ -107,7 +108,12 @@ export class DocumentController {
       'Algún firmante o espectador especificado no existe en el sistema',
     type: NotFoundResponse,
   })
-  @UseInterceptors(FileInterceptor('file'), IpInterceptor)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES },
+    }),
+    IpInterceptor,
+  )
   async create(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
