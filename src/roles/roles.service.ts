@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -6,15 +7,21 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoleEntity } from './entities/role.entity';
+import { RolePermissionEntity } from './entities/role-permission.entity';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { RoleData } from './interfaces/response/role-response';
 import { SYSTEM_ROLE_NAME_ENUM } from './enums/system-role-name.enum';
+import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from './enums/action-key.enum';
 
 @Injectable()
 export class RolesService {
   constructor(
     @InjectRepository(RoleEntity)
     private readonly roleRepository: Repository<RoleEntity>,
+
+    @InjectRepository(RolePermissionEntity)
+    private readonly rolePermissionRepository: Repository<RolePermissionEntity>,
   ) {}
 
   /**
@@ -46,6 +53,49 @@ export class RolesService {
     }
 
     return role;
+  }
+
+  /**
+   * Consulta granular real contra `role_permissions` (resource+action), en vez de comparar un
+   * nombre de rol fijo (`role.name === 'ADMIN'`) como hacían los checks de autorización hasta
+   * ahora. El seed (`npm run seed:roles`) le da a ADMIN los 12 permisos (3 resources × 4
+   * actions) y a MEMBER solo DOCUMENT:READ/CREATE, así que reemplazar un check "es ADMIN" por
+   * "tiene el permiso X" no cambia el comportamiento actual — pero sí permite que un futuro rol
+   * custom de organización con permisos parciales funcione sin tocar el código que llama esto.
+   */
+  async hasPermission(
+    roleId: string | null | undefined,
+    resourceKey: RESOURCE_KEY_ENUM,
+    actionKey: ACTION_KEY_ENUM,
+  ): Promise<boolean> {
+    if (!roleId) return false;
+
+    const match = await this.rolePermissionRepository.findOne({
+      where: {
+        roleId,
+        permission: {
+          resource: { key: resourceKey },
+          action: { key: actionKey },
+        },
+      },
+      relations: { permission: { resource: true, action: true } },
+    });
+
+    return !!match;
+  }
+
+  async assertHasPermission(
+    roleId: string | null | undefined,
+    resourceKey: RESOURCE_KEY_ENUM,
+    actionKey: ACTION_KEY_ENUM,
+    message?: string,
+  ): Promise<void> {
+    const allowed = await this.hasPermission(roleId, resourceKey, actionKey);
+    if (!allowed) {
+      throw new ForbiddenException(
+        message ?? 'No tienes permisos suficientes para realizar esta acción',
+      );
+    }
   }
 
   async findAllSystemRoles(): Promise<BaseResponse<RoleData[]>> {

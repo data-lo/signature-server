@@ -44,7 +44,10 @@ describe('AccountMemberService', () => {
   let accountRepository: ReturnType<typeof createMockRepository>;
   let userRepository: ReturnType<typeof createMockRepository>;
   let accountService: { removeAccountFromCatalog: jest.Mock };
-  let rolesService: { findByIdOrFail: jest.Mock };
+  let rolesService: {
+    findByIdOrFail: jest.Mock;
+    assertHasPermission: jest.Mock;
+  };
 
   beforeEach(async () => {
     accountRepository = createMockRepository();
@@ -52,6 +55,19 @@ describe('AccountMemberService', () => {
     accountService = { removeAccountFromCatalog: jest.fn() };
     rolesService = {
       findByIdOrFail: jest.fn().mockResolvedValue(MEMBER_ROLE),
+      // Espeja el seed real: ADMIN tiene los 12 permisos (incluye todo ORGANIZATION),
+      // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
+      assertHasPermission: jest
+        .fn()
+        .mockImplementation(
+          async (roleId: string | null | undefined, _resource, _action, message) => {
+            if (roleId !== ADMIN_ROLE.id) {
+              throw new ForbiddenException(
+                message ?? 'No tienes permisos suficientes para realizar esta acción',
+              );
+            }
+          },
+        ),
     };
 
     const module: TestingModule = await Test.createTestingModule({

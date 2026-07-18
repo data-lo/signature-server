@@ -53,6 +53,7 @@ describe('AccountService', () => {
   let rolesService: {
     findSystemRoleByName: jest.Mock;
     findByIdOrFail: jest.Mock;
+    hasPermission: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -66,6 +67,13 @@ describe('AccountService', () => {
     rolesService = {
       findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
       findByIdOrFail: jest.fn().mockResolvedValue({ id: 'member-role-1' }),
+      // Espeja el seed real: ADMIN tiene los 12 permisos (incluye todo ORGANIZATION),
+      // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
+      hasPermission: jest
+        .fn()
+        .mockImplementation(async (roleId: string | null | undefined) =>
+          roleId === ADMIN_ROLE.id,
+        ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -241,7 +249,7 @@ describe('AccountService', () => {
 
     it('refresca el catálogo de cada miembro activo cuando cambia el nombre de la organización', async () => {
       accountRepository.findOne
-        .mockResolvedValueOnce(adminAccount) // assertIsAccountAdmin
+        .mockResolvedValueOnce(adminAccount) // assertHasOrganizationPermission
         .mockResolvedValueOnce(renamedAccount); // findEntityById tras el update
       accountRepository.find.mockResolvedValue([
         { id: 'account-1', userId: 'user-1', organizationId: 'org-1', isActive: true },

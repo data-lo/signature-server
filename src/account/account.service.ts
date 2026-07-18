@@ -24,6 +24,8 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 // Services
 import { RolesService } from 'src/roles/roles.service';
@@ -136,7 +138,11 @@ export class AccountService {
     callerId: string,
     id: string,
   ): Promise<BaseResponse<AccountData>> {
-    const account = await this.assertIsAccountAdmin(callerId, id);
+    const account = await this.assertHasOrganizationPermission(
+      callerId,
+      id,
+      ACTION_KEY_ENUM.READ,
+    );
 
     return {
       success: true,
@@ -150,7 +156,11 @@ export class AccountService {
     id: string,
     updateAccountDto: UpdateAccountDto,
   ): Promise<BaseResponse<AccountData>> {
-    const account = await this.assertIsAccountAdmin(callerId, id);
+    const account = await this.assertHasOrganizationPermission(
+      callerId,
+      id,
+      ACTION_KEY_ENUM.UPDATE,
+    );
 
     const hasOrganizationDetailChanges =
       updateAccountDto.organizationName !== undefined ||
@@ -214,21 +224,30 @@ export class AccountService {
   }
 
   /**
-   * Solo el propio dueño de esa fila de Account, con rol ADMIN, puede leer/actualizar la
-   * cuenta. `accountId` siempre se refiere al contexto propio del llamador (mismo criterio que
-   * `X-Account-Id` en el resto de la API) — nunca a la fila de otro usuario. Retorna la cuenta
-   * para que el caller no tenga que volver a consultarla.
+   * Solo el propio dueño de esa fila de Account, con permiso ORGANIZATION:{action}, puede
+   * leer/actualizar la cuenta o invitar miembros. `accountId` siempre se refiere al contexto
+   * propio del llamador (mismo criterio que `X-Account-Id` en el resto de la API) — nunca a la
+   * fila de otro usuario. Retorna la cuenta para que el caller no tenga que volver a
+   * consultarla. Permiso granular vía `RolesService.hasPermission` en vez de comparar
+   * `role.name === 'ADMIN'` a mano — ver docblock de `hasPermission` para el porqué.
    */
-  private async assertIsAccountAdmin(
+  private async assertHasOrganizationPermission(
     callerId: string,
     accountId: string,
+    action: ACTION_KEY_ENUM,
   ): Promise<AccountEntity> {
     const account = await this.accountRepository.findOne({
       where: { id: accountId, userId: callerId, isActive: true },
       relations: { role: true, organization: true },
     });
 
-    if (account?.role?.name !== SYSTEM_ROLE_NAME_ENUM.ADMIN) {
+    const allowed = await this.rolesService.hasPermission(
+      account?.roleId,
+      RESOURCE_KEY_ENUM.ORGANIZATION,
+      action,
+    );
+
+    if (!account || !allowed) {
       throw new ForbiddenException(
         'No tienes permisos de administrador sobre esta cuenta',
       );
@@ -360,7 +379,11 @@ export class AccountService {
       );
     }
 
-    const account = await this.assertIsAccountAdmin(callerId, accountId);
+    const account = await this.assertHasOrganizationPermission(
+      callerId,
+      accountId,
+      ACTION_KEY_ENUM.CREATE,
+    );
 
     if (account.accountType !== ACCOUNT_TYPE_ENUM.ORGANIZATION) {
       throw new BadRequestException(

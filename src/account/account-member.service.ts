@@ -23,7 +23,8 @@ import { RolesService } from 'src/roles/roles.service';
 // Enums
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
-import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
@@ -52,7 +53,11 @@ export class AccountMemberService {
     callerId: string,
     dto: CreateAccountMemberDto,
   ): Promise<BaseResponse<AccountEntity>> {
-    await this.assertIsOrganizationAdmin(callerId, dto.organizationId);
+    await this.assertHasOrganizationPermission(
+      callerId,
+      dto.organizationId,
+      ACTION_KEY_ENUM.CREATE,
+    );
     await this.rolesService.findByIdOrFail(dto.roleId);
 
     const existingMembership = await this.accountRepository.findOne({
@@ -100,7 +105,11 @@ export class AccountMemberService {
     callerId: string,
     organizationId: string,
   ): Promise<BaseResponse<AccountEntity[]>> {
-    await this.assertIsOrganizationAdmin(callerId, organizationId);
+    await this.assertHasOrganizationPermission(
+      callerId,
+      organizationId,
+      ACTION_KEY_ENUM.READ,
+    );
 
     const members = await this.accountRepository.find({
       where: { organizationId },
@@ -121,7 +130,11 @@ export class AccountMemberService {
     if (!member.organizationId) {
       throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
     }
-    await this.assertIsOrganizationAdmin(callerId, member.organizationId);
+    await this.assertHasOrganizationPermission(
+      callerId,
+      member.organizationId,
+      ACTION_KEY_ENUM.READ,
+    );
 
     return {
       success: true,
@@ -139,7 +152,11 @@ export class AccountMemberService {
     if (!member.organizationId) {
       throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
     }
-    await this.assertIsOrganizationAdmin(callerId, member.organizationId);
+    await this.assertHasOrganizationPermission(
+      callerId,
+      member.organizationId,
+      ACTION_KEY_ENUM.UPDATE,
+    );
 
     if (updateAccountMemberDto.roleId) {
       await this.rolesService.findByIdOrFail(updateAccountMemberDto.roleId);
@@ -174,7 +191,11 @@ export class AccountMemberService {
     if (!membership || !membership.organizationId) {
       throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
     }
-    await this.assertIsOrganizationAdmin(callerId, membership.organizationId);
+    await this.assertHasOrganizationPermission(
+      callerId,
+      membership.organizationId,
+      ACTION_KEY_ENUM.DELETE,
+    );
 
     await this.accountRepository.update(id, {
       isActive: false,
@@ -206,27 +227,32 @@ export class AccountMemberService {
   }
 
   /**
-   * Solo un miembro activo con rol ADMIN de esa organización puede otorgar/listar/actualizar/
-   * revocar membresías. Lanza ForbiddenException si el llamador no lo es.
+   * Solo un miembro activo con permiso ORGANIZATION:{action} puede otorgar/listar/actualizar/
+   * revocar membresías. Permiso granular vía `RolesService.hasPermission` en vez de comparar
+   * `role.name === 'ADMIN'` a mano — mismo criterio que `AccountService`
+   * (`assertHasOrganizationPermission`), duplicado aquí porque este servicio resuelve la
+   * membresía del llamador por `organizationId`, no por `accountId` propio.
    */
-  private async assertIsOrganizationAdmin(
+  private async assertHasOrganizationPermission(
     callerId: string,
     organizationId: string,
+    action: ACTION_KEY_ENUM,
   ): Promise<void> {
     const callerMembership = await this.accountRepository.findOne({
       where: { userId: callerId, organizationId, isActive: true },
       relations: { role: true },
     });
 
-    if (callerMembership?.role?.name !== SYSTEM_ROLE_NAME_ENUM.ADMIN) {
-      throw new ForbiddenException(
-        'No tienes permisos de administrador sobre esta organización',
-      );
-    }
+    await this.rolesService.assertHasPermission(
+      callerMembership?.roleId,
+      RESOURCE_KEY_ENUM.ORGANIZATION,
+      action,
+      'No tienes permisos de administrador sobre esta organización',
+    );
   }
 
   /**
-   * Check de tenant más laxo que assertIsOrganizationAdmin: cualquier miembro activo de la
+   * Check de tenant más laxo que assertHasOrganizationPermission: cualquier miembro activo de la
    * cuenta (sin importar su rol) puede operar dentro de ese contexto — usado por módulos donde
    * pertenecer a la cuenta basta (p. ej. crear o listar documentos scopeados por la cuenta
    * activa), a diferencia de gestionar la membresía misma, que sigue siendo solo-ADMIN.
