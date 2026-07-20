@@ -90,6 +90,7 @@ export class OrganizationInvitationService {
       organizationName: organization.name,
       roleId: params.roleId,
       invitationToken: token,
+      invitedBy: params.invitedBy,
     });
   }
 

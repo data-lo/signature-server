@@ -127,6 +127,7 @@ describe('OrganizationInvitationService', () => {
         organizationName: 'Acme Corp',
         roleId: 'role-1',
         invitationToken: savedInvitation.token,
+        invitedBy: 'admin-1',
       });
     });
   });

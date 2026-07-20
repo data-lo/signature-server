@@ -13,6 +13,7 @@ import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { SharedModule } from 'src/shared/shared.module';
+import { EventModule } from 'src/event/event.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { SharedModule } from 'src/shared/shared.module';
       DocumentEntity,
     ]),
     SharedModule,
+    EventModule,
     ClientsModule.registerAsync([
       {
         name: KAFKA_SERVICE,
