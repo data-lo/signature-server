@@ -13,4 +13,5 @@ export enum EVENT_TYPE_ENUM {
   DOCUMENT_CANCELLATION_REQUESTED = 'document.cancellation_requested',
   DOCUMENT_CANCELLED = 'document.cancelled',
   ORGANIZATION_MEMBER_INVITED = 'organization.member.invited',
+  NOTIFICATION_CREATED = 'notification.created',
 }

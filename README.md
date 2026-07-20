@@ -288,6 +288,22 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 
 ## 7. Pendientes / trabajo futuro
 
+### Resuelto en esta ronda ([STORY] Backend: Orquestación para Creación de Documento y Flujo de Firmas)
+Endpoint nuevo `POST /api/v1/documents/signatures` (`DocumentSignaturesController`/`DocumentSignaturesService`, `src/document/`), separado de `POST /document` existente — payload y orquestación distintos, coexisten.
+
+**Decisiones tomadas antes de implementar (el ticket no las especificaba)**, confirmadas con el equipo:
+- **El archivo ya está subido**: el payload es JSON puro (`documentData.objectKey/fileName/fileType`), no multipart — este endpoint lee el archivo de MinIO (para calcular `originalHash`/`totalPages`) pero no lo sube. La subida en sí (ej. vía URL prefirmada) queda fuera de esta historia.
+- **Colaboradores siempre por email**: `collaborators`/`viewers` no traen `userId` — se crean con `accountId = null` siempre (invitación por email), sin intentar resolver si ese correo ya tiene cuenta en la plataforma. `viewers` mapea a `colaboratorType: WATCHER`.
+- **Tópico Kafka dedicado**: `notification.created` (`NotificationEventsProducer`, `src/kafka/`), un evento por `Notification` creada — distinto de `DocumentEventsProducer` (eventos de ciclo de vida del documento, uno por documento). También integrado con `EventModule` (mismo patrón que los otros 2 producers).
+
+**Transacción** (`DataSource.transaction`, ver `DocumentSignaturesService.create()`): Document → Collaborator (uno por cada `collaborators`+`viewers`) → Notification (`isNotified: false`) → `verification_code` si el colaborador es SIGNER y (`requiresVerification` del payload === true O `signatureType` efectivo es ADVANCED). Los eventos de Kafka (uno por notificación) se publican **fuera** de la transacción, después de que el `await this.dataSource.transaction(...)` resuelve — si cualquier paso de adentro lanza, el rollback ya ocurrió antes de que el código de publish sea alcanzable (Escenario 2). `VerificationCodeService.issue()` se extendió con un parámetro `manager?: EntityManager` opcional (retrocompatible) para que el INSERT del código participe de la misma transacción en vez de correr en una conexión aparte.
+
+**RFC obligatorio en ADVANCED** (Escenario 3): se valida en el service, antes de leer MinIO o abrir la transacción — no es una regla expresable con `class-validator` sobre un solo colaborador porque el `signatureType` efectivo puede venir heredado del default a nivel documento (`dto.signatureType`), no solo del propio objeto.
+
+**Fuera de esta ronda a propósito**: no se crea una fila en `SimpleSignatureEntity`/`FielSignatureEntity` para los colaboradores ADVANCED (el DoD de esta historia solo lista Document/Collaborator/Notification/verification_code) — el `rfc` se valida pero no se persiste todavía; conectarlo a `collaborator.fielSignatureId` sería el siguiente paso natural si se necesita. Tampoco se construyó un consumer para `notification.created` — el DoD solo pide el productor, el consumo real ("workers de correos") es explícitamente externo a este repo.
+
+Verificado en vivo contra Postgres + MinIO + Kafka reales, no solo mocks: subí un PDF directo a MinIO (simulando el paso de upload previo), llamé al endpoint con 1 signer ADVANCED+rfc, 1 reviewer y 1 viewer, y confirmé 1 documento (`status: pending`, `requires_verification: true`), 3 colaboradores, 3 notificaciones, 1 `verification_code` (solo el ADVANCED) y 3 filas en `events` (`notification.created`) — HTTP 201 con los conteos correctos. Probé también el rollback real (objectKey inexistente → 400, cero filas nuevas) y la validación de RFC (ADVANCED sin rfc → 400 antes de tocar MinIO). Build, lint y 242 tests (6 nuevos en `document-signatures.service.spec.ts`, cubriendo los 3 escenarios de la historia con mocks) pasan.
+
 ### Resuelto en esta ronda (EventModule conectado a los producers Kafka existentes)
 Cerraba el pendiente de la ronda anterior: `EventService.create()` ahora se llama desde ambos producers reales, no solo desde el módulo aislado.
 
