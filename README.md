@@ -272,9 +272,31 @@ npm run migration:revert                                         # revierte la �
 
 `migrationsRun: true` en `app.module.ts` significa que `npm run start:dev`/`start:prod` aplican automáticamente cualquier migración pendiente al arrancar — no hace falta correr `migration:run` a mano en el flujo normal, solo al generar una migración nueva para probarla antes de commitear.
 
+### Seed en Docker (post-build)
+
+`npm run seed:roles`/`seed:documents` (ver sección 3) usan `ts-node` sobre `src/*.ts` — no sirven dentro de la imagen de producción, que solo tiene `dist/` compilado y `node_modules --omit=dev` (sin `ts-node`, ver `Dockerfile`). Para esos casos existen `seed:roles:prod`/`seed:documents:prod`, que corren el `.js` ya compilado directo con `node`:
+
+```bash
+docker compose up -d              # o el compose real del entorno (staging/prod)
+docker exec <nombre-o-id-del-contenedor-api> npm run seed:roles:prod
+docker exec <nombre-o-id-del-contenedor-api> npm run seed:documents:prod   # requiere el usuario fixture PRIMARY_TEST_EMAIL, ver src/scripts/seed-documents.ts — normalmente solo seed:roles:prod aplica en un ambiente real
+```
+
+Correrlo **después** de que el contenedor de la API y el de la base de datos ya estén arriba (nunca durante el `RUN` del build) — el seed abre su propia conexión a Postgres vía `POSTGRES_DB_URL`, así que la base tiene que estar alcanzable en ese momento. Es idempotente: correrlo más de una vez no duplica filas.
+
 ---
 
 ## 7. Pendientes / trabajo futuro
+
+### Resuelto en esta ronda (seed en entorno compilado + verificación post-build en Docker)
+El seed (`seed-roles.ts`/`seed-documents.ts`) nunca se había probado corriendo desde el código compilado (`dist/`) ni dentro de un contenedor — solo vía `ts-node` en dev. Dos bugs encontrados y corregidos:
+
+- **Glob de entidades hardcodeado a `.ts`**: ambos scripts creaban su propio `DataSource` con `entities: [join(__dirname, '..', '**', '*.entity.ts')]`. En `dist/` esas entidades son `.entity.js` — el glob no matcheaba nada, así que corrido con `node dist/scripts/seed-roles.js` conectaba a la base pero `dataSource.getRepository(...)` fallaba (sin metadata registrada para ninguna entidad). Fix: mismo patrón que ya usaba `src/data-source.ts` para las migraciones, `*.entity{.ts,.js}` — un solo glob que resuelve al archivo que exista en disco en cada entorno, sin variable de entorno aparte. Se agregaron `seed:roles:prod`/`seed:documents:prod` (`node dist/scripts/seed-*.js`, sin `ts-node`) a `package.json` para el caso compilado.
+- **La imagen Docker no arrancaba en absoluto** (bug bloqueante encontrado al intentar la verificación post-build, no reportado en el ticket original): `node:18-alpine` — usado en ambos stages del `Dockerfile` — tiene un bug conocido donde `globalThis.crypto` solo existe en modo `node -e`, no al correr un archivo (`node dist/main.js`); `@nestjs/typeorm` lo usa a nivel de módulo (`crypto.randomUUID()` en `typeorm.utils.js`) y el proceso moría con `ReferenceError: crypto is not defined` antes de levantar. `node:20-alpine`/`node:22-alpine` no tienen este problema. Fix: `Dockerfile` actualizado a `node:22-alpine` en ambos stages, alineado con el Node 22 que ya usa `ci-deployment.yml`.
+
+**Verificación end-to-end real** (no solo "compila"): `docker build` de la imagen ya corregida → `docker compose up -d postgres mongo redis minio kafka` → contenedor de la API levantado con `docker run --network <red-de-compose> --env-file .env` (apuntando a los hostnames internos del compose, no `localhost`) → confirmado `healthy` vía el healthcheck existente → `docker exec <contenedor> npm run seed:roles:prod` corrido contra Postgres real. Para probar inserción real (no solo idempotencia) se vaciaron las tablas RBAC (`role_permissions`/`permissions`/`actions`/`resources`, `roles` se mantuvo por una FK real desde `account_members_deprecated`) y se corrió el seed de nuevo: mismos conteos finales que antes de vaciar (2 roles/3 resources/4 actions/12 permissions/14 role_permissions), confirmando que efectivamente reinsertó todo desde una base vacía y no solo no-opeó.
+
+Ver comando exacto para correrlo en Docker en la sección 6, "Seed en Docker (post-build)".
 
 ### Resuelto en esta ronda (chequeo end-to-end completo: todos los servicios y procesos)
 Se levantaron Docker (Postgres/Mongo/Redis/Kafka/MinIO) + backend + frontend limpios y se ejerció un flujo real completo vía HTTP (no mocks): registro → login → `GET /api/v1/users/me` → `GET /api/v1/accounts/me` → crear organización → `GET /api/v1/roles` → invitar miembro (éxito y los 4 caminos de error: sin header, cuenta no-ORGANIZATION, no-ADMIN, roleId inexistente) → agregar un segundo usuario como MEMBER real vía `/account-member` → crear un documento con archivo real → listar documentos filtrados por cuenta. En cada paso se confirmó el efecto real en la base de datos correspondiente, no solo el código 2xx de la respuesta:

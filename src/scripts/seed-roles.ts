@@ -122,7 +122,11 @@ async function main() {
   const dataSource = new DataSource({
     type: 'postgres',
     url: process.env.POSTGRES_DB_URL,
-    entities: [join(__dirname, '..', '**', '*.entity.ts')],
+    // Glob doble extensión: en dev corre vía ts-node sobre src/**/*.entity.ts, en
+    // Docker/producción corre con `node` directo sobre dist/**/*.entity.js (ver DoD del
+    // ticket de seeding post-build) — __dirname apunta a la carpeta real en ambos casos, así
+    // que un solo glob cubre los dos entornos sin necesidad de una variable de entorno aparte.
+    entities: [join(__dirname, '..', '**', '*.entity{.ts,.js}')],
     synchronize: false,
     logging: false,
   });
