@@ -21,9 +21,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * queda de solo lectura un ciclo como referencia de rollback de emergencia; el DROP real
  * queda para una migración de limpieza posterior.
  */
-export class CreateCollaboratorsFromDocumentParticipants1784300000003
-  implements MigrationInterface
-{
+export class CreateCollaboratorsFromDocumentParticipants1784300000003 implements MigrationInterface {
   name = 'CreateCollaboratorsFromDocumentParticipants1784300000003';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

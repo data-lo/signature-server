@@ -20,9 +20,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *   existentes no queden en 0 de forma incorrecta.
  * - reviewed_by: no-op hasta el flujo de revisión (Fase 6, rol REVIEWER).
  */
-export class AddDocumentAdditiveColumns1784300000002
-  implements MigrationInterface
-{
+export class AddDocumentAdditiveColumns1784300000002 implements MigrationInterface {
   name = 'AddDocumentAdditiveColumns1784300000002';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

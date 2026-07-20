@@ -9,9 +9,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * esa columna se declaró desde InitialSchema pero ningún caller la escribió jamás — limpieza
  * de columna muerta, no una migración de datos (no hay nada que preservar).
  */
-export class CreateVerificationCodes1784300000007
-  implements MigrationInterface
-{
+export class CreateVerificationCodes1784300000007 implements MigrationInterface {
   name = 'CreateVerificationCodes1784300000007';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

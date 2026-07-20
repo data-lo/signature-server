@@ -24,7 +24,9 @@ function createMockRepository() {
 
 const ORGANIZATION = { id: 'org-1', name: 'Acme Corp' };
 
-function pendingInvitation(overrides: Partial<OrganizationInvitationEntity> = {}) {
+function pendingInvitation(
+  overrides: Partial<OrganizationInvitationEntity> = {},
+) {
   return {
     id: 'invitation-1',
     organizationId: 'org-1',
@@ -63,7 +65,10 @@ describe('OrganizationInvitationService', () => {
           provide: getRepositoryToken(OrganizationInvitationEntity),
           useValue: invitationRepository,
         },
-        { provide: getRepositoryToken(AccountEntity), useValue: accountRepository },
+        {
+          provide: getRepositoryToken(AccountEntity),
+          useValue: accountRepository,
+        },
         {
           provide: getRepositoryToken(OrganizationEntity),
           useValue: organizationRepository,
@@ -168,9 +173,9 @@ describe('OrganizationInvitationService', () => {
         pendingInvitation({ status: INVITATION_STATUS_ENUM.ACCEPTED }),
       );
 
-      await expect(service.acceptByRfc('token-1', 'RFC123456789')).rejects.toThrow(
-        ConflictException,
-      );
+      await expect(
+        service.acceptByRfc('token-1', 'RFC123456789'),
+      ).rejects.toThrow(ConflictException);
     });
 
     it('lanza GoneException si la invitación ya expiró', async () => {
@@ -181,18 +186,18 @@ describe('OrganizationInvitationService', () => {
         }),
       );
 
-      await expect(service.acceptByRfc('token-1', 'RFC123456789')).rejects.toThrow(
-        GoneException,
-      );
+      await expect(
+        service.acceptByRfc('token-1', 'RFC123456789'),
+      ).rejects.toThrow(GoneException);
     });
 
     it('lanza NotFoundException si el RFC no corresponde a ningún usuario', async () => {
       invitationRepository.findOne.mockResolvedValue(pendingInvitation());
       userRepository.findOne.mockResolvedValue(null);
 
-      await expect(service.acceptByRfc('token-1', 'RFC123456789')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.acceptByRfc('token-1', 'RFC123456789'),
+      ).rejects.toThrow(NotFoundException);
     });
 
     it('lanza ConflictException si el usuario ya es miembro activo de la organización', async () => {
@@ -204,9 +209,9 @@ describe('OrganizationInvitationService', () => {
       });
       accountRepository.findOne.mockResolvedValue({ id: 'existing-account' });
 
-      await expect(service.acceptByRfc('token-1', 'RFC123456789')).rejects.toThrow(
-        ConflictException,
-      );
+      await expect(
+        service.acceptByRfc('token-1', 'RFC123456789'),
+      ).rejects.toThrow(ConflictException);
       expect(accountRepository.save).not.toHaveBeenCalled();
     });
 

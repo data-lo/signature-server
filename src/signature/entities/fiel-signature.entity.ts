@@ -5,7 +5,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { VerificationCodeEntity } from './verification-code.entity';
+import { VerificationCodeEntity } from 'src/document/entities/verification-code.entity';
 
 /**
  * Modelo de datos únicamente (ver plan de migración ER-V2, Fase 8) — sin ninguna lógica de
@@ -13,6 +13,9 @@ import { VerificationCodeEntity } from './verification-code.entity';
  * dice cómo ocurre la firma real (integración con un proveedor certificado de e.firma/PKI
  * mexicano, manejo de llaves, requisitos de retención legal). Esa decisión es de
  * producto/legal, no de ingeniería — ver TODO abajo y el docblock de la migración asociada.
+ *
+ * Vive en el módulo `signature` (no en `document`, ver diagrama ER-V2 más reciente) — mismo
+ * criterio que `SimpleSignatureEntity`.
  *
  * TODO(producto/legal): antes de construir cualquier lógica de firma sobre esta tabla, resolver:
  *   1. Qué proveedor de e.firma/PKI se integra (o si el producto maneja las llaves directo).

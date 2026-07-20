@@ -149,7 +149,9 @@ describe('AuthService', () => {
         dto,
         'hashed-pw',
       );
-      expect(organizationInvitationService.acceptForUser).not.toHaveBeenCalled();
+      expect(
+        organizationInvitationService.acceptForUser,
+      ).not.toHaveBeenCalled();
     });
 
     it('si el dto trae invitationToken, une al usuario recién creado a esa organización', async () => {

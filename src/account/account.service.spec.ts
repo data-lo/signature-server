@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AccountService } from './account.service';
@@ -71,8 +75,8 @@ describe('AccountService', () => {
       // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
       hasPermission: jest
         .fn()
-        .mockImplementation(async (roleId: string | null | undefined) =>
-          roleId === ADMIN_ROLE.id,
+        .mockImplementation(
+          async (roleId: string | null | undefined) => roleId === ADMIN_ROLE.id,
         ),
     };
 
@@ -252,8 +256,18 @@ describe('AccountService', () => {
         .mockResolvedValueOnce(adminAccount) // assertHasOrganizationPermission
         .mockResolvedValueOnce(renamedAccount); // findEntityById tras el update
       accountRepository.find.mockResolvedValue([
-        { id: 'account-1', userId: 'user-1', organizationId: 'org-1', isActive: true },
-        { id: 'account-2', userId: 'user-2', organizationId: 'org-1', isActive: true },
+        {
+          id: 'account-1',
+          userId: 'user-1',
+          organizationId: 'org-1',
+          isActive: true,
+        },
+        {
+          id: 'account-2',
+          userId: 'user-2',
+          organizationId: 'org-1',
+          isActive: true,
+        },
       ]);
       redisService.get.mockResolvedValue(
         JSON.stringify([
@@ -291,7 +305,9 @@ describe('AccountService', () => {
       accountRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.update('intruder', 'account-1', { organizationName: 'Hackeada' }),
+        service.update('intruder', 'account-1', {
+          organizationName: 'Hackeada',
+        }),
       ).rejects.toThrow(ForbiddenException);
     });
   });
@@ -451,7 +467,11 @@ describe('AccountService', () => {
     it('responde éxito si el llamador es ADMIN de una organización y el roleId existe', async () => {
       accountRepository.findOne.mockResolvedValue(adminOrgAccount);
 
-      const result = await service.inviteMember('admin-1', 'org-account-1', dto);
+      const result = await service.inviteMember(
+        'admin-1',
+        'org-account-1',
+        dto,
+      );
 
       expect(rolesService.findByIdOrFail).toHaveBeenCalledWith('member-role-1');
       expect(result).toEqual({

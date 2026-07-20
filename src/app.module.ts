@@ -25,6 +25,7 @@ import { AccountModule } from './account/account.module';
 import { KafkaModule } from './kafka/kafka.module';
 import { StripeModule } from './stripe/stripe.module';
 import { RolesModule } from './roles/roles.module';
+import { EventModule } from './event/event.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { RolesModule } from './roles/roles.module';
     KafkaModule,
     StripeModule,
     RolesModule,
+    EventModule,
   ],
   controllers: [AppController],
   providers: [

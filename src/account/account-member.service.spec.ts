@@ -64,10 +64,16 @@ describe('AccountMemberService', () => {
       assertHasPermission: jest
         .fn()
         .mockImplementation(
-          async (roleId: string | null | undefined, _resource, _action, message) => {
+          async (
+            roleId: string | null | undefined,
+            _resource,
+            _action,
+            message,
+          ) => {
             if (roleId !== ADMIN_ROLE.id) {
               throw new ForbiddenException(
-                message ?? 'No tienes permisos suficientes para realizar esta acción',
+                message ??
+                  'No tienes permisos suficientes para realizar esta acción',
               );
             }
           },

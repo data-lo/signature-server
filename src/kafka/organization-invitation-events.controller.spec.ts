@@ -21,7 +21,9 @@ describe('OrganizationInvitationEventsConsumer', () => {
 
   beforeEach(async () => {
     emailService = {
-      sendOrganizationInvitationNotification: jest.fn().mockResolvedValue(undefined),
+      sendOrganizationInvitationNotification: jest
+        .fn()
+        .mockResolvedValue(undefined),
     };
     configService = { get: jest.fn().mockReturnValue('http://localhost:3001') };
 
@@ -41,7 +43,9 @@ describe('OrganizationInvitationEventsConsumer', () => {
   it('construye el enlace de /join con token+orgId y despacha el correo vía SendGrid', async () => {
     await consumer.handleInvited(payload);
 
-    expect(emailService.sendOrganizationInvitationNotification).toHaveBeenCalledWith(
+    expect(
+      emailService.sendOrganizationInvitationNotification,
+    ).toHaveBeenCalledWith(
       'nuevo@empresa.com',
       'Acme Corp',
       'http://localhost:3001/join?token=token-1&orgId=org-1',
@@ -53,7 +57,9 @@ describe('OrganizationInvitationEventsConsumer', () => {
 
     await consumer.handleInvited(payload);
 
-    expect(emailService.sendOrganizationInvitationNotification).toHaveBeenCalledWith(
+    expect(
+      emailService.sendOrganizationInvitationNotification,
+    ).toHaveBeenCalledWith(
       'nuevo@empresa.com',
       'Acme Corp',
       'http://localhost:3001/join?token=token-1&orgId=org-1',

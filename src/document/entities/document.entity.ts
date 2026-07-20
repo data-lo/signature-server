@@ -131,8 +131,12 @@ export class DocumentEntity {
   @Column({ default: false, name: 'index_document' })
   indexDocument: boolean;
 
-  @OneToMany(() => CollaboratorEntity, (collaborator) => collaborator.document, {
-    cascade: true,
-  })
+  @OneToMany(
+    () => CollaboratorEntity,
+    (collaborator) => collaborator.document,
+    {
+      cascade: true,
+    },
+  )
   collaborators: CollaboratorEntity[];
 }

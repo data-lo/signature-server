@@ -14,9 +14,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * colaboradores que ya firmaron (o firman después de este fix) lo tienen — los que aún no
  * firman no necesitan snapshot todavía.
  */
-export class AddSignatureSnapshotToCollaborators1784300000010
-  implements MigrationInterface
-{
+export class AddSignatureSnapshotToCollaborators1784300000010 implements MigrationInterface {
   name = 'AddSignatureSnapshotToCollaborators1784300000010';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
