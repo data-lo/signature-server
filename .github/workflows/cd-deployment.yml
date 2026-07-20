@@ -30,23 +30,9 @@ jobs:
             dataloplatforms/signature-server:latest
             dataloplatforms/signature-server:${{ github.sha }}
 
-      - name: Actualizar contenedor en el Servidor
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            echo "Conectado al servidor de desarrollo $(curl -s ifconfig.me)"
-             cd /root/signature-development
-
-             echo "Descargando la última versión de la imagen desde Docker Hub"
-             docker compose pull backend
-
-             echo "Recreando el contenedor de signature-backend-dev (Actualizando versión)"
-             docker compose up -d --remove-orphans backend
-
-             echo "Limpiando imágenes huérfanas en el servidor para liberar espacio"
-             docker image prune -f
-
-             echo "¡Despliegue completado con éxito en el servidor!"
+      - name: Disparar despliegue en Dokploy
+        run: |
+          echo "Enviando solicitud de despliegue a Dokploy..."
+          RESPONSE=$(curl -s -X POST "https://dokploy.data-lo.online/api/deploy/compose/LfalPhwe9vfvstQuQ8y5n")
+          echo "Respuesta del servidor: $RESPONSE"
+          echo "¡Despliegue solicitado con éxito!"
