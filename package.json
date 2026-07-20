@@ -20,6 +20,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed:documents": "ts-node -r tsconfig-paths/register src/scripts/seed-documents.ts",
     "seed:roles": "ts-node -r tsconfig-paths/register src/scripts/seed-roles.ts",
+    "seed:documents:prod": "node dist/scripts/seed-documents.js",
+    "seed:roles:prod": "node dist/scripts/seed-roles.js",
     "typeorm": "typeorm-ts-node-commonjs",
     "migration:generate": "npm run typeorm -- migration:generate -d src/data-source.ts",
     "migration:create": "npm run typeorm -- migration:create",
