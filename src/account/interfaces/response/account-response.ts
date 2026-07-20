@@ -13,16 +13,11 @@ export class OrganizationDetailData {
 export class AccountData {
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    description: 'UUID de la cuenta',
+    description:
+      'UUID de esta membresía/contexto (una fila por usuario × cuenta desde la fusión Account/AccountMember — ver plan de migración ER-V2, Fase 5)',
     format: 'uuid',
   })
   id: string;
-
-  @ApiProperty({
-    example: 'Acme Corp',
-    description: 'Nombre de visualización del espacio de trabajo',
-  })
-  name: string;
 
   @ApiProperty({
     example: ACCOUNT_TYPE_ENUM.ORGANIZATION,
@@ -36,6 +31,15 @@ export class AccountData {
     description: 'Fecha de creación del espacio de trabajo',
   })
   createdAt: Date;
+
+  @ApiProperty({
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    description:
+      'UUID de la organización (tabla organizations); NULL para cuentas PERSONAL. Varias filas de Account (una por miembro) comparten el mismo organizationId.',
+    format: 'uuid',
+    nullable: true,
+  })
+  organizationId: string | null;
 
   @ApiProperty({
     type: OrganizationDetailData,

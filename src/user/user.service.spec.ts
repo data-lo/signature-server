@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { UserService } from './user.service';
@@ -58,7 +62,6 @@ describe('UserService', () => {
     accountService = {
       createDefaultPersonalAccount: jest.fn().mockResolvedValue({
         account: { id: 'personal-account-1' },
-        membership: { roleId: 'admin-role-1', isActive: true },
       }),
       appendAccountToCatalog: jest.fn(),
     };
@@ -184,12 +187,12 @@ describe('UserService', () => {
       expect(accountService.createDefaultPersonalAccount).toHaveBeenCalledWith(
         queryRunner.manager,
         expect.any(String),
-        `${dto.firstName} ${dto.lastName}`,
+        dto.email,
+        'hashed-password',
       );
       expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
         expect.any(String),
         { id: 'personal-account-1' },
-        { roleId: 'admin-role-1', isActive: true },
       );
     });
 
@@ -262,6 +265,30 @@ describe('UserService', () => {
           phoneNumber: '5512345678',
         }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('checkRfcAvailability', () => {
+    it('retorna exists:true si ya existe un registro de información personal con ese RFC', async () => {
+      personalInformationRepository.findOne.mockResolvedValue({
+        id: 'pi-1',
+        rfc: 'PELJ850101ABC',
+      });
+
+      const result = await service.checkRfcAvailability('pelj850101abc');
+
+      expect(personalInformationRepository.findOne).toHaveBeenCalledWith({
+        where: { rfc: 'PELJ850101ABC' },
+      });
+      expect(result.data).toEqual({ exists: true });
+    });
+
+    it('retorna exists:false si no existe ningún registro con ese RFC', async () => {
+      personalInformationRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.checkRfcAvailability('XAXX010101000');
+
+      expect(result.data).toEqual({ exists: false });
     });
   });
 
@@ -367,7 +394,16 @@ describe('UserService', () => {
   describe('updateStatus', () => {
     it('fija isConfigured=true y refresca el cache de Redis por CURP', async () => {
       userRepository.findOne
-        .mockResolvedValueOnce({ id: 'user-1', nationalId: 'CURP1' }) // existencia
+        .mockResolvedValueOnce({
+          id: 'user-1',
+          nationalId: 'CURP1',
+          signatureId: 'sig-1',
+          personalInformation: {
+            rfc: 'RFC1',
+            phoneNumber: '123',
+            secondaryEmail: 'a@a.com',
+          },
+        }) // existencia + validación
         .mockResolvedValueOnce({
           id: 'user-1',
           nationalId: 'CURP1',
@@ -400,6 +436,38 @@ describe('UserService', () => {
       await expect(
         service.updateStatus('missing-user', { isConfigured: true }),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('bug corregido: lanza BadRequestException si falta información personal, sin importar lo que mande el DTO', async () => {
+      userRepository.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        nationalId: 'CURP1',
+        signatureId: 'sig-1',
+        personalInformation: { rfc: 'RFC1', phoneNumber: null, secondaryEmail: null },
+      });
+
+      await expect(
+        service.updateStatus('user-1', { isConfigured: true }),
+      ).rejects.toThrow(BadRequestException);
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('bug corregido: lanza BadRequestException si falta la firma digital (signatureId nulo)', async () => {
+      userRepository.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        nationalId: 'CURP1',
+        signatureId: null,
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: '123',
+          secondaryEmail: 'a@a.com',
+        },
+      });
+
+      await expect(
+        service.updateStatus('user-1', { isConfigured: true }),
+      ).rejects.toThrow(BadRequestException);
+      expect(userRepository.update).not.toHaveBeenCalled();
     });
   });
 });

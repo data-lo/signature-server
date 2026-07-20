@@ -1,7 +1,7 @@
 import { DocumentEntity } from 'src/document/entities/document.entity';
-import { DocumentParticipantEntity } from 'src/document/entities/document-participant.entity';
+import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { SignatureEntity } from 'src/signature/entities/signature.entity';
-import { AccountMemberEntity } from 'src/account/entities/account-member.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { PersonalInformationEntity } from './personal-information.entity';
 import {
   Column,
@@ -72,9 +72,9 @@ export class UserEntity {
   @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
   createdDocuments: DocumentEntity[];
 
-  @OneToMany(() => DocumentParticipantEntity, (participant) => participant.user)
-  documentsToSign: DocumentParticipantEntity[];
+  @OneToMany(() => CollaboratorEntity, (collaborator) => collaborator.user)
+  documentsToSign: CollaboratorEntity[];
 
-  @OneToMany(() => AccountMemberEntity, (member) => member.user)
-  accountMemberships: AccountMemberEntity[];
+  @OneToMany(() => AccountEntity, (account) => account.user)
+  accountMemberships: AccountEntity[];
 }

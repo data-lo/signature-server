@@ -130,21 +130,35 @@ export class StripeWebhookService {
     await this.subscriptionRepository.save(created);
   }
 
-  private findByCustomerOrSubscription(
+  /**
+   * Bug corregido: Stripe no garantiza el orden entre `checkout.session.completed` (que es
+   * quien primero graba `stripeSubscriptionId` en la fila local, ver `handleCheckoutSessionCompleted`)
+   * e `invoice.paid`/`customer.subscription.deleted`. Si `invoice.paid` llega primero, la fila
+   * local todavía tiene `stripeSubscriptionId = NULL` aunque el evento sí traiga uno — antes,
+   * la búsqueda por `stripeSubscriptionId` fallaba y el método se rendía ahí mismo sin probar
+   * `stripeCustomerId` (que sí coincide, porque `stripeCustomerId` se graba desde la creación
+   * del checkout), dejando la suscripción atascada en INCOMPLETE para siempre. Ahora cae al
+   * fallback por `stripeCustomerId` cuando la primera búsqueda no encuentra nada, no solo
+   * cuando `stripeSubscriptionId` viene vacío.
+   */
+  private async findByCustomerOrSubscription(
     stripeCustomerId: string | null,
     stripeSubscriptionId: string | null,
   ): Promise<AccountSubscriptionEntity | null> {
     if (stripeSubscriptionId) {
-      return this.subscriptionRepository.findOne({
+      const bySubscription = await this.subscriptionRepository.findOne({
         where: { stripeSubscriptionId },
       });
+      if (bySubscription) {
+        return bySubscription;
+      }
     }
     if (stripeCustomerId) {
       return this.subscriptionRepository.findOne({
         where: { stripeCustomerId },
       });
     }
-    return Promise.resolve(null);
+    return null;
   }
 
   private toId(

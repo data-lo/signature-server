@@ -11,6 +11,7 @@ describe('UsersController', () => {
     updatePersonalInformation: jest.Mock;
     updateStatus: jest.Mock;
     refreshCurpCacheForUser: jest.Mock;
+    checkRfcAvailability: jest.Mock;
   };
   let signatureService: { create: jest.Mock };
 
@@ -28,6 +29,7 @@ describe('UsersController', () => {
       updatePersonalInformation: jest.fn(),
       updateStatus: jest.fn(),
       refreshCurpCacheForUser: jest.fn(),
+      checkRfcAvailability: jest.fn(),
     };
     signatureService = { create: jest.fn() };
 
@@ -86,5 +88,13 @@ describe('UsersController', () => {
     controller.updateStatus(user, dto);
 
     expect(userService.updateStatus).toHaveBeenCalledWith('user-1', dto);
+  });
+
+  it('checkRfc delega en userService.checkRfcAvailability con el rfc del query param', () => {
+    controller.checkRfc('PELJ850101ABC');
+
+    expect(userService.checkRfcAvailability).toHaveBeenCalledWith(
+      'PELJ850101ABC',
+    );
   });
 });

@@ -5,7 +5,9 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -33,7 +35,14 @@ import {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // Bug corregido: ThrottlerModule ya estaba configurado en app.module.ts (10 req/60s) pero
+  // ThrottlerGuard nunca se aplicaba en ningún lado — la configuración daba una falsa
+  // sensación de protección. Se aplica aquí explícitamente (no como APP_GUARD global, para no
+  // arriesgar romper el uso normal del resto de la API sin haberlo probado contra tráfico
+  // real) con un límite más estricto que el default, específico para frenar fuerza bruta.
   @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('register')
   @ApiOperation({ summary: 'Registro público de usuario (self-service)' })
   @ApiResponse({ status: 201, type: RegisterResponse })
@@ -43,6 +52,8 @@ export class AuthController {
   }
 
   @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @Post('login')
   @ApiOperation({ summary: 'Inicio de sesión' })

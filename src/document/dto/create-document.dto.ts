@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsEmail,
   IsOptional,
   IsUUID,
   ValidateNested,
@@ -36,14 +37,50 @@ export class CreateDocumentDto {
   @ApiPropertyOptional({
     example: ['b2c3d4e5-f6a7-8901-bcde-f12345678901'],
     description:
-      'UUIDs de los usuarios que solo observarán el estado del documento (espectadores)',
+      'UUIDs de los usuarios de la plataforma que solo observarán el estado del documento (watchers)',
     type: [String],
   })
   @Transform(parseJsonArray)
   @IsArray()
   @IsOptional()
   @IsUUID('4', { each: true })
-  spectatorIds?: string[];
+  watcherIds?: string[];
+
+  @ApiPropertyOptional({
+    example: ['invitado@correo.com'],
+    description:
+      'Correos de personas sin cuenta en la plataforma, invitadas solo a observar (watchers)',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @IsOptional()
+  @IsEmail({}, { each: true })
+  watcherEmails?: string[];
+
+  @ApiPropertyOptional({
+    example: ['c3d4e5f6-a7b8-9012-cdef-123456789012'],
+    description:
+      'UUIDs de los usuarios de la plataforma que revisarán el documento (reviewers), sin bloquear el flujo de firma todavía',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @IsOptional()
+  @IsUUID('4', { each: true })
+  reviewerIds?: string[];
+
+  @ApiPropertyOptional({
+    example: ['revisor@correo.com'],
+    description:
+      'Correos de personas sin cuenta en la plataforma, invitadas a revisar (reviewers)',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @IsOptional()
+  @IsEmail({}, { each: true })
+  reviewerEmails?: string[];
 
   @ApiProperty({ type: SignatureCoordinatesDto })
   @ValidateNested()

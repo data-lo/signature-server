@@ -4,11 +4,11 @@ import { IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
 export class CreateAccountMemberDto {
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    description: 'UUID de la cuenta a la que se otorga acceso',
+    description: 'UUID de la organización a la que se otorga acceso',
     format: 'uuid',
   })
   @IsUUID()
-  accountId: string;
+  organizationId: string;
 
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',

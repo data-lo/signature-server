@@ -3,6 +3,7 @@ export enum DOCUMENT_KAFKA_TOPICS {
   SENT_TO_SIGN = 'document.sent_to_sign',
   SIGNED = 'document.signed',
   REJECTED = 'document.rejected',
+  CANCELLATION_REQUESTED = 'document.cancellation_requested',
   CANCELLED = 'document.cancelled',
 }
 

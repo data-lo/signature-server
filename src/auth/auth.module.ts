@@ -7,6 +7,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { UserModule } from '../user/user.module';
+import { AccountModule } from '../account/account.module';
 import { SharedModule } from '../shared/shared.module';
 
 /**
@@ -18,6 +19,7 @@ import { SharedModule } from '../shared/shared.module';
 @Module({
   imports: [
     UserModule,
+    AccountModule,
     SharedModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

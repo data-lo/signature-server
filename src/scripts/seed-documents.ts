@@ -10,12 +10,12 @@ import { DataSource } from 'typeorm';
 import { UserEntity } from '../user/entities/user.entity';
 import { PersonalInformationEntity } from '../user/entities/personal-information.entity';
 import { DocumentEntity } from '../document/entities/document.entity';
-import { DocumentParticipantEntity } from '../document/entities/document-participant.entity';
-import { AccountMemberEntity } from '../account/entities/account-member.entity';
+import { CollaboratorEntity } from '../document/entities/collaborator.entity';
+import { AccountEntity } from '../account/entities/account.entity';
 import { ACCOUNT_TYPE_ENUM } from '../account/enums/account-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../document/enum/document-status.enum';
-import { DOCUMENT_PARTICIPANT_ROLE_ENUM } from '../document/enum/document-participant-role.enum';
-import { DOCUMENT_PARTICIPANT_STATUS_ENUM } from '../document/enum/document-participant-status.enum';
+import { COLABORATOR_TYPE_ENUM } from '../document/enum/colaborator-type.enum';
+import { SIGNEE_STATUS_ENUM } from '../document/enum/signee-status.enum';
 import { UserRoles } from '../user/enums/user-roles';
 
 /**
@@ -105,11 +105,10 @@ async function upsertUser(
 
 interface ParticipantSpec {
   user: UserEntity;
-  role: DOCUMENT_PARTICIPANT_ROLE_ENUM;
-  status: DOCUMENT_PARTICIPANT_STATUS_ENUM;
+  role: COLABORATOR_TYPE_ENUM;
+  status: SIGNEE_STATUS_ENUM;
   signOrder: number;
   signedAt?: Date;
-  rejectedAt?: Date;
   rejectionReason?: string;
 }
 
@@ -124,27 +123,23 @@ interface DocumentSpec {
   participants: ParticipantSpec[];
 }
 
-/** Busca la cuenta PERSONAL de un usuario (misma lógica que el backfill de la migración AddAccountIdToDocuments). */
+/** Busca la cuenta PERSONAL de un usuario (Account es una fila por usuario×contexto desde la Fase 5 — ver plan de migración ER-V2). */
 async function findPersonalAccountId(
   dataSource: DataSource,
   userId: string,
 ): Promise<string> {
-  const accountMemberRepository = dataSource.getRepository(AccountMemberEntity);
-  const memberships = await accountMemberRepository.find({
-    where: { userId },
-    relations: { account: true },
+  const accountRepository = dataSource.getRepository(AccountEntity);
+  const personalAccount = await accountRepository.findOne({
+    where: { userId, accountType: ACCOUNT_TYPE_ENUM.PERSONAL },
   });
-  const personalMembership = memberships.find(
-    (m) => m.account?.type === ACCOUNT_TYPE_ENUM.PERSONAL,
-  );
 
-  if (!personalMembership) {
+  if (!personalAccount) {
     throw new Error(
       `No se encontró una cuenta PERSONAL para el usuario ${userId}. Los documentos de prueba necesitan account_id.`,
     );
   }
 
-  return personalMembership.accountId;
+  return personalAccount.id;
 }
 
 async function upsertDocument(
@@ -153,9 +148,7 @@ async function upsertDocument(
   accountId: string,
 ) {
   const documentRepository = dataSource.getRepository(DocumentEntity);
-  const participantRepository = dataSource.getRepository(
-    DocumentParticipantEntity,
-  );
+  const collaboratorRepository = dataSource.getRepository(CollaboratorEntity);
 
   const existing = await documentRepository.findOne({
     where: { fileName: spec.fileName, createdBy: spec.createdBy.id },
@@ -164,6 +157,13 @@ async function upsertDocument(
     console.log(`  ↳ ya existe, se omite: ${spec.fileName}`);
     return existing;
   }
+
+  const signerSpecs = spec.participants.filter(
+    (p) => p.role === COLABORATOR_TYPE_ENUM.SIGNER,
+  );
+  const completedSignerSpecs = signerSpecs.filter(
+    (p) => p.status === SIGNEE_STATUS_ENUM.SIGNED,
+  );
 
   const document = await documentRepository.save(
     documentRepository.create({
@@ -178,6 +178,8 @@ async function upsertDocument(
       signatureCoordinates: null,
       createdBy: spec.createdBy.id,
       accountId,
+      totalSigners: signerSpecs.length,
+      completedSignersCount: completedSignerSpecs.length,
     }),
   );
 
@@ -191,17 +193,17 @@ async function upsertDocument(
     cancelledAt: spec.cancelledAt ?? null,
   });
 
-  await participantRepository.save(
+  await collaboratorRepository.save(
     spec.participants.map((p) =>
-      participantRepository.create({
+      collaboratorRepository.create({
         documentId: document.id,
         userId: p.user.id,
-        role: p.role,
+        colaboratorType: p.role,
         status: p.status,
-        signOrder: p.signOrder,
+        signingOrder: p.signOrder,
         signedAt: p.signedAt ?? null,
-        rejectedAt: p.rejectedAt ?? null,
-        rejectionReason: p.rejectionReason ?? null,
+        cancellationReason: p.rejectionReason ?? null,
+        ipAddress: '127.0.0.1',
       }),
     ),
   );
@@ -245,8 +247,8 @@ async function main() {
     SEED_USERS.map((spec) => upsertUser(dataSource, spec)),
   );
 
-  const S = DOCUMENT_PARTICIPANT_STATUS_ENUM;
-  const R = DOCUMENT_PARTICIPANT_ROLE_ENUM;
+  const S = SIGNEE_STATUS_ENUM;
+  const R = COLABORATOR_TYPE_ENUM;
 
   const documents: DocumentSpec[] = [
     {
@@ -314,7 +316,7 @@ async function main() {
           signOrder: 1,
           signedAt: daysAgo(35),
         },
-        { user: luis, role: R.SPECTATOR, status: S.PENDING, signOrder: 0 },
+        { user: luis, role: R.WATCHER, status: S.PENDING, signOrder: 0 },
       ],
     },
     {
@@ -345,7 +347,6 @@ async function main() {
           role: R.SIGNER,
           status: S.REJECTED,
           signOrder: 0,
-          rejectedAt: daysAgo(17),
           rejectionReason: 'No corresponde con lo acordado.',
         },
       ],
@@ -404,7 +405,7 @@ async function main() {
       createdAt: daysAgo(5),
       participants: [
         { user: ana, role: R.SIGNER, status: S.PENDING, signOrder: 0 },
-        { user: luis, role: R.SPECTATOR, status: S.PENDING, signOrder: 0 },
+        { user: luis, role: R.WATCHER, status: S.PENDING, signOrder: 0 },
       ],
     },
   ];

@@ -44,6 +44,7 @@ import {
 import { SignatureUpdateReponse } from './interfaces/signature-update-response';
 import { SignatureDeactivateResponse } from './interfaces/signature-deactivate-response';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
 @ApiTags('Signature')
 @ApiBearerAuth('access-token')
@@ -137,10 +138,13 @@ export class SignatureController {
     type: NotFoundResponse,
   })
   @UseInterceptors(
-    FileFieldsInterceptor([
-      { name: 'signatureImage', maxCount: 1 },
-      { name: 'officialFile', maxCount: 1 },
-    ]),
+    FileFieldsInterceptor(
+      [
+        { name: 'signatureImage', maxCount: 1 },
+        { name: 'officialFile', maxCount: 1 },
+      ],
+      { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES } },
+    ),
   )
   update(
     @CurrentUser() user: JwtPayload,

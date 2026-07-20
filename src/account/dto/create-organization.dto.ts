@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class CreateOrganizationDto {
   @ApiProperty({
@@ -17,4 +17,29 @@ export class CreateOrganizationDto {
   @IsString()
   @IsNotEmpty()
   organizationName: string;
+
+  @ApiPropertyOptional({ example: 'Av. Reforma 123, CDMX' })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional({ example: 'ACM010101AAA' })
+  @IsOptional()
+  @IsString()
+  rfc?: string;
+
+  @ApiPropertyOptional({ example: 'acme.com' })
+  @IsOptional()
+  @IsString()
+  domainAllowed?: string;
+
+  @ApiPropertyOptional({ example: '5512345678' })
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @IsBoolean()
+  indexDocuments?: boolean;
 }

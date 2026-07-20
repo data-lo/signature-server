@@ -45,6 +45,10 @@ export class DocumentEventsProducer {
     this.emitEvent(DOCUMENT_KAFKA_TOPICS.REJECTED, params);
   }
 
+  emitCancellationRequested(params: EmitDocumentEventParams) {
+    this.emitEvent(DOCUMENT_KAFKA_TOPICS.CANCELLATION_REQUESTED, params);
+  }
+
   emitCancelled(params: EmitDocumentEventParams) {
     this.emitEvent(DOCUMENT_KAFKA_TOPICS.CANCELLED, params);
   }

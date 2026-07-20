@@ -1,14 +1,27 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { KafkaProducerService } from './kafka-producer.service';
 import { KafkaTestController } from './kafka-test.controller';
 import { DocumentEventsProducer } from './document-events.producer';
 import { DocumentEventsConsumer } from './document-events.controller';
+import { OrganizationInvitationEventsProducer } from './organization-invitation.producer';
+import { OrganizationInvitationEventsConsumer } from './organization-invitation-events.controller';
 import { KAFKA_SERVICE } from './kafka.constants';
+import { NotificationEntity } from 'src/document/entities/notification.entity';
+import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
+import { DocumentEntity } from 'src/document/entities/document.entity';
+import { SharedModule } from 'src/shared/shared.module';
 
 @Module({
   imports: [
+    TypeOrmModule.forFeature([
+      NotificationEntity,
+      CollaboratorEntity,
+      DocumentEntity,
+    ]),
+    SharedModule,
     ClientsModule.registerAsync([
       {
         name: KAFKA_SERVICE,
@@ -29,8 +42,21 @@ import { KAFKA_SERVICE } from './kafka.constants';
       },
     ]),
   ],
-  controllers: [KafkaTestController, DocumentEventsConsumer],
-  providers: [KafkaProducerService, DocumentEventsProducer],
-  exports: [ClientsModule, KafkaProducerService, DocumentEventsProducer],
+  controllers: [
+    KafkaTestController,
+    DocumentEventsConsumer,
+    OrganizationInvitationEventsConsumer,
+  ],
+  providers: [
+    KafkaProducerService,
+    DocumentEventsProducer,
+    OrganizationInvitationEventsProducer,
+  ],
+  exports: [
+    ClientsModule,
+    KafkaProducerService,
+    DocumentEventsProducer,
+    OrganizationInvitationEventsProducer,
+  ],
 })
 export class KafkaModule {}

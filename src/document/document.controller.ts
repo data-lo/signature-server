@@ -28,6 +28,7 @@ import {
 // DTOs
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import { VerifyCodeDto } from './dto/verify-code.dto';
 
 // Services
 import { DocumentService } from './document.service';
@@ -53,6 +54,7 @@ import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { DocumentUpdateResponse } from './interfaces/responses/document-update-response';
 import { SubmitForAuthorizationResponse } from './interfaces/responses/submit-for-authorization-response';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
@@ -106,7 +108,12 @@ export class DocumentController {
       'Algún firmante o espectador especificado no existe en el sistema',
     type: NotFoundResponse,
   })
-  @UseInterceptors(FileInterceptor('file'), IpInterceptor)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES },
+    }),
+    IpInterceptor,
+  )
   async create(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -322,6 +329,59 @@ export class DocumentController {
   })
   sign(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.documentService.sign(id, user.sub);
+  }
+
+  @Post(':id/verification-codes')
+  @ApiOperation({
+    summary:
+      'Solicitar un código de verificación para firmar (documentos con requiresVerification=true)',
+  })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiResponse({
+    status: 201,
+    description: 'Código de verificación enviado por correo',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No eres firmante de este documento',
+  })
+  @UseInterceptors(IpInterceptor)
+  requestVerificationCode(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @ClientIp() ip: string,
+  ) {
+    return this.documentService.requestVerificationCode(id, user.sub, ip);
+  }
+
+  @Post(':id/verification-codes/verify')
+  @ApiOperation({ summary: 'Validar el código de verificación recibido' })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiBody({ type: VerifyCodeDto })
+  @ApiResponse({ status: 201, description: 'Código verificado correctamente' })
+  @ApiResponse({
+    status: 400,
+    description: 'Código inválido, expirado o ya usado',
+    type: BadRequestResponse,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No eres firmante de este documento',
+  })
+  verifyCode(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: VerifyCodeDto,
+  ) {
+    return this.documentService.verifyCode(id, user.sub, dto.code);
   }
 
   @Patch(':id/reject')

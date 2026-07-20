@@ -1,4 +1,4 @@
-import { SignatureCoordinates } from '../interfaces/signature-coordinates';
+import { SignatureCoordinates } from 'src/shared/document-signing/interfaces/signature-coordinates.interface';
 import {
   Column,
   CreateDateColumn,
@@ -11,8 +11,9 @@ import {
 } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
-import { DocumentParticipantEntity } from './document-participant.entity';
+import { CollaboratorEntity } from './collaborator.entity';
 
 // document.entity.ts
 @Entity('documents')
@@ -37,9 +38,6 @@ export class DocumentEntity {
 
   @Column({ name: 'ip_address' })
   ipAddress: string;
-
-  @Column({ name: 'verification_code_id', nullable: true })
-  verificationCodeId: string;
 
   @Column({ name: 'original_hash' })
   originalHash: string;
@@ -90,10 +88,51 @@ export class DocumentEntity {
   @JoinColumn({ name: 'account_id' })
   account: AccountEntity;
 
-  @OneToMany(
-    () => DocumentParticipantEntity,
-    (participant) => participant.document,
-    { cascade: true },
-  )
-  participants: DocumentParticipantEntity[];
+  /** Ya es el comportamiento implícito hoy (sign_order siempre se exige en orden) — default true. */
+  @Column({ default: true, name: 'is_sequential' })
+  isSequential: boolean;
+
+  @Column({ nullable: true, name: 'expiration_date' })
+  expirationDate: Date | null;
+
+  /**
+   * Clave real de aislamiento multi-tenant para documentos en contexto de organización (ver
+   * plan de migración ER-V2, Fase 5, decisión D5). NULL para documentos en contexto personal,
+   * donde `accountId` (única por usuario) ya es suficiente. `Account` es una fila por
+   * (usuario × contexto) desde la fusión de la Fase 5, así que ya no sirve para agrupar a
+   * todos los miembros de una misma organización — `organizationId` sí.
+   */
+  @Column({ nullable: true, name: 'organization_id' })
+  organizationId: string | null;
+
+  @ManyToOne(() => OrganizationEntity, { nullable: true })
+  @JoinColumn({ name: 'organization_id' })
+  organization: OrganizationEntity | null;
+
+  @Column({ default: 0, name: 'visibility_level' })
+  visibilityLevel: number;
+
+  @Column({ name: 'seal_key' })
+  sealKey: string;
+
+  @Column({ name: 'total_signers' })
+  totalSigners: number;
+
+  @Column({ default: 0, name: 'completed_signers_count' })
+  completedSignersCount: number;
+
+  /** No-op hasta el flujo de revisión (ver Fase 6 del plan, rol REVIEWER). */
+  @Column({ nullable: true, name: 'reviewed_by' })
+  reviewedBy: string | null;
+
+  @Column({ default: false, name: 'requires_verification' })
+  requiresVerification: boolean;
+
+  @Column({ default: false, name: 'index_document' })
+  indexDocument: boolean;
+
+  @OneToMany(() => CollaboratorEntity, (collaborator) => collaborator.document, {
+    cascade: true,
+  })
+  collaborators: CollaboratorEntity[];
 }

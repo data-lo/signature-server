@@ -5,6 +5,7 @@ import {
   Get,
   Patch,
   Put,
+  Query,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
@@ -16,13 +17,16 @@ import {
   ApiBody,
   ApiConsumes,
   ApiOperation,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
 // Auth
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
+import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
 // Services
 import { UserService } from './user.service';
@@ -48,6 +52,22 @@ export class UsersController {
     private readonly userService: UserService,
     private readonly signatureService: SignatureService,
   ) {}
+
+  @Get('check-rfc')
+  @SkipJwtAuth()
+  @ApiOperation({
+    summary: 'Consultar si un RFC ya pertenece a un usuario registrado',
+    description:
+      'Público (sin JWT) — usado desde /join y /signup en signature-app para bifurcar el flujo de invitación a organización: RFC existente → unirse con la cuenta actual; RFC nuevo → registrarse.',
+  })
+  @ApiQuery({ name: 'rfc', required: true, type: String })
+  @ApiResponse({
+    status: 200,
+    description: 'Disponibilidad del RFC consultada correctamente',
+  })
+  checkRfc(@Query('rfc') rfc: string) {
+    return this.userService.checkRfcAvailability(rfc);
+  }
 
   @Get('me')
   @ApiOperation({
@@ -123,10 +143,13 @@ export class UsersController {
     description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
   @UseInterceptors(
-    FileFieldsInterceptor([
-      { name: 'signatureImage', maxCount: 1 },
-      { name: 'officialFile', maxCount: 1 },
-    ]),
+    FileFieldsInterceptor(
+      [
+        { name: 'signatureImage', maxCount: 1 },
+        { name: 'officialFile', maxCount: 1 },
+      ],
+      { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES } },
+    ),
   )
   async updateSignature(
     @CurrentUser() user: JwtPayload,

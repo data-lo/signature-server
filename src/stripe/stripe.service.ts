@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import Stripe = require('stripe');
-import { AccountMemberEntity } from 'src/account/entities/account-member.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
 import { PLAN_ID_ENUM } from './enums/plan-id.enum';
 import { SUBSCRIPTION_STATUS_ENUM } from './enums/subscription-status.enum';
@@ -21,8 +21,8 @@ export class StripeService {
     private readonly configService: ConfigService,
     @InjectRepository(AccountSubscriptionEntity)
     private readonly subscriptionRepository: Repository<AccountSubscriptionEntity>,
-    @InjectRepository(AccountMemberEntity)
-    private readonly accountMemberRepository: Repository<AccountMemberEntity>,
+    @InjectRepository(AccountEntity)
+    private readonly accountRepository: Repository<AccountEntity>,
   ) {
     this.client = new Stripe(
       this.configService.get<string>('STRIPE_SECRET_KEY'),
@@ -34,8 +34,16 @@ export class StripeService {
     return this.plans;
   }
 
+  /**
+   * Resuelve la cuenta activa del usuario para efectos de facturación. Tras la fusión
+   * Account/AccountMember (ver plan de migración ER-V2, Fase 5), `membership.id` ES el
+   * identificador de contexto (antes era `membership.accountId`, apuntando al tenant
+   * compartido). Simplificación conocida: sigue sin distinguir cuenta PERSONAL vs
+   * ORGANIZATION al elegir cuál usar si el usuario tiene varias — mismo comportamiento
+   * pre-existente, no una regresión de esta migración.
+   */
   async resolveAccountId(userId: string): Promise<string> {
-    const membership = await this.accountMemberRepository.findOne({
+    const membership = await this.accountRepository.findOne({
       where: { userId, isActive: true },
     });
 
@@ -45,7 +53,7 @@ export class StripeService {
       );
     }
 
-    return membership.accountId;
+    return membership.id;
   }
 
   async createCheckoutSession(

@@ -1,5 +1,6 @@
 // External dependencies
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -394,11 +395,12 @@ export class UserService {
 
       const newUser = await queryRunner.manager.save(user);
 
-      const { account: personalAccount, membership } =
+      const { account: personalAccount } =
         await this.accountService.createDefaultPersonalAccount(
           queryRunner.manager,
           newUser.id,
-          `${dto.firstName} ${dto.lastName}`,
+          newUser.email,
+          newUser.password,
         );
 
       await queryRunner.commitTransaction();
@@ -407,7 +409,6 @@ export class UserService {
       await this.accountService.appendAccountToCatalog(
         newUser.id,
         personalAccount,
-        { roleId: membership.roleId, isActive: membership.isActive },
       );
 
       return {
@@ -429,14 +430,37 @@ export class UserService {
    * en el DTO no se usa: este endpoint es un disparador de consolidación de un solo
    * sentido, no un toggle genérico de estado.
    */
+  /**
+   * Bug corregido (ver README, Historia 2): este endpoint confiaba 100% en que el frontend
+   * solo lo llamara cuando personalConfigured/signatureConfigured realmente estuvieran en
+   * true — no validaba nada server-side, así que cualquier request autenticado a este endpoint
+   * marcaba isConfigured=true sin importar el estado real de los datos del usuario. Ahora
+   * recalcula ambas condiciones aquí mismo (mismo criterio que el frontend en
+   * `auth.slice.ts`: teléfono+correo secundario, y signatureId presente) antes de consolidar.
+   */
   async updateStatus(
     userId: string,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     dto: UpdateUserStatusDto,
   ): Promise<BaseResponse<{ isConfigured: boolean }>> {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: { personalInformation: true },
+    });
     if (!user) {
       throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    const personalConfigured = !!(
+      user.personalInformation?.phoneNumber &&
+      user.personalInformation?.secondaryEmail
+    );
+    const signatureConfigured = !!user.signatureId;
+
+    if (!personalConfigured || !signatureConfigured) {
+      throw new BadRequestException(
+        'No puedes consolidar el onboarding todavía: falta completar tu información personal o tu firma digital',
+      );
     }
 
     await this.userRepository.update(userId, { isConfigured: true });
@@ -584,6 +608,25 @@ export class UserService {
       success: true,
       message: 'Información personal actualizada correctamente',
       data: updated,
+    };
+  }
+
+  /**
+   * Público (sin JWT, ver UsersController) — consumido desde /join y /signup en
+   * signature-app para bifurcar el flujo de invitación a organización (ver historia [STORY]
+   * Eventos Kafka, Email (SendGrid) y Miembros (/join)): si el RFC ya existe, el usuario puede
+   * "unirse con su cuenta"; si no, se le manda a registrarse.
+   */
+  async checkRfcAvailability(
+    rfc: string,
+  ): Promise<BaseResponse<{ exists: boolean }>> {
+    const existing = await this.personalInformationRepository.findOne({
+      where: { rfc: rfc.toUpperCase() },
+    });
+    return {
+      success: true,
+      message: 'Disponibilidad del RFC consultada correctamente',
+      data: { exists: !!existing },
     };
   }
 
