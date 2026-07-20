@@ -1,4 +1,4 @@
-import { NestFactory } from '@nestjs/core';
+import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
@@ -9,6 +9,7 @@ import { UserModule } from './user/user.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
+import { MulterExceptionFilter } from './shared/filters/multer-exception.filter';
 
 process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
 
@@ -43,6 +44,9 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  const { httpAdapter } = app.get(HttpAdapterHost);
+  app.useGlobalFilters(new MulterExceptionFilter(httpAdapter));
 
   // Swagger Público
   const publicSwaggerConfig = new DocumentBuilder()
