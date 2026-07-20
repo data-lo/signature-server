@@ -5,12 +5,14 @@ import { DocumentSignaturesService } from './document-signatures.service';
 import { DocumentEntity } from './entities/document.entity';
 import { CollaboratorEntity } from './entities/collaborator.entity';
 import { NotificationEntity } from './entities/notification.entity';
+import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { HashService } from 'src/shared/hash/hash.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
+import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
 import {
@@ -36,6 +38,7 @@ describe('DocumentSignaturesService', () => {
   let documentRepo: ReturnType<typeof createMockRepository>;
   let collaboratorRepo: ReturnType<typeof createMockRepository>;
   let notificationRepo: ReturnType<typeof createMockRepository>;
+  let simpleSignatureRepo: ReturnType<typeof createMockRepository>;
   let dataSource: { transaction: jest.Mock };
   let minioService: Record<string, jest.Mock>;
   let hashService: Record<string, jest.Mock>;
@@ -44,33 +47,58 @@ describe('DocumentSignaturesService', () => {
   let verificationCodeService: Record<string, jest.Mock>;
   let notificationEventsProducer: Record<string, jest.Mock>;
 
+  const file = {
+    buffer: Buffer.from('%PDF-1.4'),
+    originalname: 'contrato.pdf',
+    mimetype: 'application/pdf',
+    size: 1024,
+  } as Express.Multer.File;
+
   const baseDto: CreateDocumentSignaturesDto = {
-    documentData: {
-      objectKey: 'object-key-1.pdf',
-      fileName: 'contrato.pdf',
-      fileType: 'application/pdf',
-    },
+    documentData: { fileName: 'contrato_prestacion_servicios.pdf' },
     collaborators: [
       {
-        email: 'firmante@correo.com',
-        colaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+        firstName: 'Juan',
+        lastName: 'Pérez',
+        email: 'juan.perez@mail.com',
+        rfc: 'PEAJ800101XXX',
+        signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
+        signaturePosition: { page: 1, x: 150, y: 600 },
+        requiresTwoFactorAuth: true,
+      },
+      {
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+        firstName: 'María',
+        lastName: 'Gómez',
+        email: 'maria.gomez@mail.com',
+        rfc: null,
         signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE,
-        signingOrder: 0,
+        signaturePosition: { page: 1, x: 100, y: 100 },
+        requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
+      },
+      {
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER,
+        firstName: 'Carlos',
+        lastName: 'Solares',
+        email: 'auditor@mail.com',
+        rfc: 'AUDI990101YYY',
       },
     ],
-    viewers: [{ email: 'viewer@correo.com' }],
   };
 
   beforeEach(async () => {
     documentRepo = createMockRepository();
     collaboratorRepo = createMockRepository();
     notificationRepo = createMockRepository();
+    simpleSignatureRepo = createMockRepository();
 
     const manager = {
       getRepository: jest.fn((entity: unknown) => {
         if (entity === DocumentEntity) return documentRepo;
         if (entity === CollaboratorEntity) return collaboratorRepo;
         if (entity === NotificationEntity) return notificationRepo;
+        if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
         throw new Error('repositorio no mockeado');
       }),
     };
@@ -82,9 +110,10 @@ describe('DocumentSignaturesService', () => {
     };
 
     minioService = {
-      getFileInBytesFormat: jest
-        .fn()
-        .mockResolvedValue(Buffer.from('%PDF-1.4')),
+      uploadObject: jest.fn().mockResolvedValue({
+        status: FILE_STATUS_ENUM.FILE_CREATED,
+        fileId: 'object-key-1.pdf',
+      }),
     };
     hashService = { generateFileHash: jest.fn().mockResolvedValue('hash-123') };
     documentSigningService = { getPdfPages: jest.fn().mockResolvedValue(3) };
@@ -118,104 +147,101 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('Escenario 1: crea Document + N Collaborators + N Notifications + verification_code y publica N eventos Kafka', async () => {
-    const dtoConVerificacion: CreateDocumentSignaturesDto = {
-      ...baseDto,
-      collaborators: [
-        {
-          ...baseDto.collaborators[0],
-          signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
-          rfc: 'PEGJ850101ABC',
-        },
-      ],
-    };
-
     const result = await service.create(
       'creator-1',
       'account-1',
-      dtoConVerificacion,
+      baseDto,
+      file,
       '127.0.0.1',
     );
 
     expect(result.success).toBe(true);
     expect(result.data.status).toBe(DOCUMENT_STATUS_ENUM.PENDING);
-    // 1 signer + 1 viewer = 2 colaboradores, 2 notificaciones
-    expect(collaboratorRepo.save).toHaveBeenCalledTimes(2);
-    expect(notificationRepo.save).toHaveBeenCalledTimes(2);
-    expect(result.data.collaboratorsCount).toBe(2);
-    expect(result.data.notificationsCount).toBe(2);
-    // Solo el firmante ADVANCED necesita verification_code
-    expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
-    expect(result.data.verificationCodesCount).toBe(1);
-    // documento marcado requiresVerification porque alguien lo necesitó
+    expect(minioService.uploadObject).toHaveBeenCalled();
+    // 2 signers + 1 viewer = 3 colaboradores/notificaciones
+    expect(collaboratorRepo.save).toHaveBeenCalledTimes(3);
+    expect(notificationRepo.save).toHaveBeenCalledTimes(3);
+    expect(result.data.collaboratorsCount).toBe(3);
+    // ADVANCED (explícito true) + SIMPLE (forzado true) = 2 verification_codes
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
+    expect(result.data.verificationCodesCount).toBe(2);
     expect(documentRepo.update).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ requiresVerification: true }),
     );
-    // N eventos Kafka = N notificaciones
-    expect(notificationEventsProducer.emitCreated).toHaveBeenCalledTimes(2);
+    expect(notificationEventsProducer.emitCreated).toHaveBeenCalledTimes(3);
   });
 
-  it('el colaborador watcher tiene colaboratorType WATCHER y no genera verification_code', async () => {
-    await service.create('creator-1', 'account-1', baseDto, '127.0.0.1');
+  it('SIMPLE fuerza verification_code aunque el payload mande requiresTwoFactorAuth:false', async () => {
+    const dtoSoloSimpleSinFlag: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: [
+        {
+          ...baseDto.collaborators[1], // María, SIMPLE, requiresTwoFactorAuth: false
+        },
+      ],
+    };
 
-    const viewerCollaboratorCall = collaboratorRepo.create.mock.calls.find(
-      (call) => call[0].email === 'viewer@correo.com',
+    await service.create(
+      'creator-1',
+      'account-1',
+      dtoSoloSimpleSinFlag,
+      file,
+      '127.0.0.1',
     );
-    expect(viewerCollaboratorCall[0].colaboratorType).toBe(
-      COLABORATOR_TYPE_ENUM.WATCHER,
+
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+  });
+
+  it('el viewer se crea con colaboratorType WATCHER, sin signatureType ni verification_code', async () => {
+    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    const viewerCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'auditor@mail.com',
     );
-    expect(verificationCodeService.issue).not.toHaveBeenCalled();
+    expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WATCHER);
+    expect(viewerCall[0].signatureType).toBeNull();
+    expect(viewerCall[0].rfc).toBe('AUDI990101YYY');
+    // Solo 2 verification_codes en total (los 2 signers), ninguno para el viewer.
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
+  });
+
+  it('crea una SimpleSignatureEntity por firmante con las coordenadas del payload', async () => {
+    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(simpleSignatureRepo.save).toHaveBeenCalledTimes(2);
+    expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureCoordinates: expect.objectContaining({
+          x: 150,
+          y: 600,
+          page: 1,
+        }),
+      }),
+    );
   });
 
   it('Escenario 2: si falla la inserción dentro de la transacción, no se publica ningún evento a Kafka', async () => {
     collaboratorRepo.save.mockRejectedValueOnce(new Error('DB caída'));
 
     await expect(
-      service.create('creator-1', 'account-1', baseDto, '127.0.0.1'),
+      service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
     ).rejects.toThrow('DB caída');
 
     expect(notificationEventsProducer.emitCreated).not.toHaveBeenCalled();
   });
 
-  it('Escenario 3: firma ADVANCED sin rfc se rechaza con BadRequestException antes de abrir la transacción', async () => {
-    const dtoSinRfc: CreateDocumentSignaturesDto = {
-      ...baseDto,
-      collaborators: [
-        {
-          ...baseDto.collaborators[0],
-          signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
-          // sin rfc
-        },
-      ],
-    };
-
+  it('rechaza con BadRequestException si no se proporciona archivo', async () => {
     await expect(
-      service.create('creator-1', 'account-1', dtoSinRfc, '127.0.0.1'),
+      service.create(
+        'creator-1',
+        'account-1',
+        baseDto,
+        undefined as unknown as Express.Multer.File,
+        '127.0.0.1',
+      ),
     ).rejects.toThrow(BadRequestException);
-
-    expect(minioService.getFileInBytesFormat).not.toHaveBeenCalled();
-    expect(dataSource.transaction).not.toHaveBeenCalled();
-    expect(notificationEventsProducer.emitCreated).not.toHaveBeenCalled();
-  });
-
-  it('el signatureType a nivel documento se hereda cuando el colaborador no trae el suyo propio', async () => {
-    const dtoConDefault: CreateDocumentSignaturesDto = {
-      ...baseDto,
-      signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
-      collaborators: [
-        {
-          email: 'firmante@correo.com',
-          colaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-          rfc: 'PEGJ850101ABC',
-          // sin signatureType propio: hereda ADVANCED del documento
-        },
-      ],
-    };
-
-    await service.create('creator-1', 'account-1', dtoConDefault, '127.0.0.1');
-
-    // Heredó ADVANCED -> requiere verification_code aunque no lo haya marcado explícito
-    expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+    expect(minioService.uploadObject).not.toHaveBeenCalled();
   });
 
   it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
@@ -224,9 +250,29 @@ describe('DocumentSignaturesService', () => {
         'creator-1',
         undefined as unknown as string,
         baseDto,
+        file,
         '127.0.0.1',
       ),
     ).rejects.toThrow(BadRequestException);
     expect(accountMemberService.assertIsActiveMember).not.toHaveBeenCalled();
+  });
+
+  it('documentData.requiresApproval se guarda en el documento', async () => {
+    const dtoConAprobacion: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      documentData: { ...baseDto.documentData, requiresApproval: true },
+    };
+
+    await service.create(
+      'creator-1',
+      'account-1',
+      dtoConAprobacion,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresApproval: true }),
+    );
   });
 });

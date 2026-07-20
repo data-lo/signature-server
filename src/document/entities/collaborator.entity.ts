@@ -58,6 +58,22 @@ export class CollaboratorEntity {
   @Column({ nullable: true })
   email: string | null;
 
+  /**
+   * Nombre/apellido capturados al invitar (ver historia "Frontend: Carga de Documentos y
+   * Configuración de Firmantes") — NULL para colaboradores creados antes de esa historia o por
+   * flujos que no los piden. `collaboratorDisplayName()` en document.service.ts los usa como
+   * fallback antes de caer al email crudo.
+   */
+  @Column({ name: 'first_name', nullable: true })
+  firstName: string | null;
+
+  @Column({ name: 'last_name', nullable: true })
+  lastName: string | null;
+
+  /** Solo para colaboradores VIEWER, o SIGNER con signatureType ADVANCED (ver historia de frontend). */
+  @Column({ nullable: true })
+  rfc: string | null;
+
   @Column({ name: 'signing_order', nullable: true })
   signingOrder: number | null;
 

@@ -55,9 +55,13 @@ const SIGNATURE_STAMP_VERTICAL_GAP = 40;
 
 /** Nombre a mostrar de un colaborador: el de su cuenta si existe, o su email si fue invitado solo por correo. */
 function collaboratorDisplayName(collaborator: CollaboratorEntity): string {
-  return collaborator.account?.user
-    ? `${collaborator.account.user.firstName} ${collaborator.account.user.lastName}`
-    : (collaborator.email ?? '');
+  if (collaborator.account?.user) {
+    return `${collaborator.account.user.firstName} ${collaborator.account.user.lastName}`;
+  }
+  if (collaborator.firstName || collaborator.lastName) {
+    return `${collaborator.firstName ?? ''} ${collaborator.lastName ?? ''}`.trim();
+  }
+  return collaborator.email ?? '';
 }
 
 /** Email de contacto de un colaborador: el de su cuenta si existe, o el email con el que fue invitado. */

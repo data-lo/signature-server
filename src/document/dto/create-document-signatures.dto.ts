@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type, plainToInstance } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
@@ -8,16 +8,18 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
 /**
- * Vocabulario del payload en inglés (pedido por la historia), distinto de los enums internos
- * del dominio (`SIGNATURE_TYPE_ENUM`/`COLABORATOR_TYPE_ENUM`, en español/minúsculas) — el
- * mapeo entre ambos vive en `DocumentSignaturesService`.
+ * Vocabulario del payload en inglés (pedido por la historia de frontend), distinto de los
+ * enums internos del dominio (`SIGNATURE_TYPE_ENUM`/`COLABORATOR_TYPE_ENUM`, en
+ * español/minúsculas) — el mapeo entre ambos vive en `DocumentSignaturesService`.
  */
 export enum PAYLOAD_SIGNATURE_TYPE_ENUM {
   SIMPLE = 'SIMPLE',
@@ -26,116 +28,161 @@ export enum PAYLOAD_SIGNATURE_TYPE_ENUM {
 
 export enum PAYLOAD_COLABORATOR_TYPE_ENUM {
   SIGNER = 'SIGNER',
-  REVIEWER = 'REVIEWER',
+  VIEWER = 'VIEWER',
+}
+
+export enum REQUIRES_DIFFERENT_SIGNATURES_ENUM {
+  SIMPLE = 'SIMPLE',
+  FIEL = 'FIEL',
+  MIX = 'MIX',
+}
+
+/**
+ * Multipart entrega documentData/collaborators como texto plano (JSON serializado). No basta
+ * con JSON.parse: hay que construir instancias reales de la clase destino con
+ * `plainToInstance` (mismo patrón que ya usaba `signatureCoordinates` en create-document.dto.ts)
+ * — si el `@Transform` deja un objeto plano en vez de una instancia, `ValidationPipe` con
+ * `whitelist: true` no reconoce sus propiedades como parte del DTO anidado y las descarta en
+ * silencio (bug real encontrado al probar contra un servidor corriendo: `documentData.fileName`
+ * llegaba `null` al service pese a venir bien armado en el request).
+ */
+function parseJson<T>(cls: new () => T) {
+  return ({ value }: { value: unknown }): T | T[] | unknown => {
+    let parsed: unknown = value;
+    if (typeof value === 'string') {
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+    return plainToInstance(cls, parsed);
+  };
+}
+
+export class SignaturePositionDto {
+  @ApiProperty({ example: 1 })
+  @IsInt()
+  @Min(1)
+  page: number;
+
+  @ApiProperty({ example: 150 })
+  @IsNumber()
+  x: number;
+
+  @ApiProperty({ example: 600 })
+  @IsNumber()
+  y: number;
 }
 
 export class DocumentDataDto {
-  @ApiProperty({
-    description:
-      'Object key del archivo ya subido a MinIO (bucket de documentos creados) — este endpoint no recibe el archivo, solo su referencia.',
-    example: '3f9a1e2b-....pdf',
-  })
-  @IsString()
-  @IsNotEmpty()
-  objectKey: string;
-
-  @ApiProperty({ example: 'Contrato_2026.pdf' })
+  @ApiProperty({ example: 'contrato_prestacion_servicios.pdf' })
   @IsString()
   @IsNotEmpty()
   fileName: string;
 
-  @ApiProperty({ example: 'application/pdf' })
-  @IsString()
-  @IsNotEmpty()
-  fileType: string;
-
-  @ApiPropertyOptional({
-    example: 0,
-    description: 'Default 0 si se omite.',
-  })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  visibilityLevel?: number;
-}
-
-export class CollaboratorPayloadDto {
-  @ApiProperty({ example: 'firmante@empresa.com' })
-  @IsEmail()
-  email: string;
-
-  @ApiProperty({ enum: PAYLOAD_COLABORATOR_TYPE_ENUM })
-  @IsEnum(PAYLOAD_COLABORATOR_TYPE_ENUM)
-  colaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM;
-
-  @ApiPropertyOptional({
-    enum: PAYLOAD_SIGNATURE_TYPE_ENUM,
-    description:
-      'Si se omite, hereda el signatureType a nivel documento (ver CreateDocumentSignaturesDto.signatureType).',
-  })
-  @IsOptional()
-  @IsEnum(PAYLOAD_SIGNATURE_TYPE_ENUM)
-  signatureType?: PAYLOAD_SIGNATURE_TYPE_ENUM;
-
-  @ApiPropertyOptional({ example: 0 })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  signingOrder?: number;
-
-  /**
-   * Obligatorio si el signatureType efectivo (propio o heredado del documento) es ADVANCED —
-   * se valida en el service, no aquí, porque depende del default a nivel documento (fuera del
-   * alcance de este objeto individual para class-validator).
-   */
-  @ApiPropertyOptional({ example: 'PEGJ850101ABC' })
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  rfc?: string;
-
   @ApiPropertyOptional({
     default: false,
     description:
-      'Flag explícito de UI para exigir código de verificación (2FA) además del gateo automático por firma ADVANCED.',
+      'Si el documento debe pasar primero por un usuario con permisos de revisión antes de notificar a los firmantes.',
   })
   @IsOptional()
   @IsBoolean()
-  requiresVerification?: boolean;
+  requiresApproval?: boolean;
 }
 
-export class ViewerPayloadDto {
-  @ApiProperty({ example: 'observador@empresa.com' })
+export class CollaboratorPayloadDto {
+  @ApiProperty({ enum: PAYLOAD_COLABORATOR_TYPE_ENUM })
+  @IsEnum(PAYLOAD_COLABORATOR_TYPE_ENUM)
+  collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM;
+
+  @ApiProperty({ example: 'Juan' })
+  @IsString()
+  @IsNotEmpty()
+  firstName: string;
+
+  @ApiProperty({ example: 'Pérez' })
+  @IsString()
+  @IsNotEmpty()
+  lastName: string;
+
+  @ApiProperty({ example: 'juan.perez@mail.com' })
   @IsEmail()
   email: string;
+
+  /**
+   * Obligatorio si collaboratorType es VIEWER, o si es SIGNER con signatureType ADVANCED —
+   * ambas condiciones se resuelven sobre el propio objeto (sin depender de ningún default a
+   * nivel documento, a diferencia de la versión anterior de este DTO).
+   */
+  @ApiPropertyOptional({ example: 'PEAJ800101XXX', nullable: true })
+  @ValidateIf(
+    (c: CollaboratorPayloadDto) =>
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER ||
+      c.signatureType === PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
+  )
+  @IsString()
+  @IsNotEmpty()
+  rfc?: string | null;
+
+  /** Obligatorio (y solo aplica) cuando collaboratorType es SIGNER. */
+  @ApiPropertyOptional({ enum: PAYLOAD_SIGNATURE_TYPE_ENUM })
+  @ValidateIf(
+    (c: CollaboratorPayloadDto) =>
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+  )
+  @IsEnum(PAYLOAD_SIGNATURE_TYPE_ENUM)
+  signatureType?: PAYLOAD_SIGNATURE_TYPE_ENUM;
+
+  /**
+   * Sin UI para esto todavía (ver historia) — el frontend inyecta un default. Solo aplica a
+   * SIGNER; el backend además refuerza requiresTwoFactorAuth=true para SIMPLE sin importar lo
+   * que llegue en el payload (ver DocumentSignaturesService).
+   */
+  @ApiPropertyOptional({ type: SignaturePositionDto })
+  @ValidateIf(
+    (c: CollaboratorPayloadDto) =>
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+  )
+  @ValidateNested()
+  @Type(() => SignaturePositionDto)
+  signaturePosition?: SignaturePositionDto;
+
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @IsBoolean()
+  requiresTwoFactorAuth?: boolean;
 }
 
 export class CreateDocumentSignaturesDto {
   @ApiProperty({ type: DocumentDataDto })
+  @Transform(parseJson(DocumentDataDto))
   @ValidateNested()
   @Type(() => DocumentDataDto)
   documentData: DocumentDataDto;
 
   @ApiProperty({ type: [CollaboratorPayloadDto] })
+  @Transform(parseJson(CollaboratorPayloadDto))
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => CollaboratorPayloadDto)
   collaborators: CollaboratorPayloadDto[];
 
-  @ApiPropertyOptional({ type: [ViewerPayloadDto] })
+  /**
+   * Calculado por el frontend a partir de los SIGNER del arreglo (ver historia) — el backend lo
+   * acepta por compatibilidad de contrato pero no confía en él para nada: recalcula el
+   * signatureType real de cada documento a partir de los propios `collaborators`.
+   */
+  @ApiPropertyOptional({ enum: REQUIRES_DIFFERENT_SIGNATURES_ENUM })
   @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ViewerPayloadDto)
-  viewers?: ViewerPayloadDto[];
+  @IsEnum(REQUIRES_DIFFERENT_SIGNATURES_ENUM)
+  requiresDifferentSignatures?: REQUIRES_DIFFERENT_SIGNATURES_ENUM;
 
-  @ApiPropertyOptional({
-    enum: PAYLOAD_SIGNATURE_TYPE_ENUM,
-    description:
-      'Tipo de firma por defecto del documento — cada colaborador puede sobreescribirlo con el suyo propio.',
+  @ApiProperty({
+    type: 'string',
+    format: 'binary',
+    description: 'PDF del documento a firmar.',
   })
-  @IsOptional()
-  @IsEnum(PAYLOAD_SIGNATURE_TYPE_ENUM)
-  signatureType?: PAYLOAD_SIGNATURE_TYPE_ENUM;
+  file?: unknown;
 }
