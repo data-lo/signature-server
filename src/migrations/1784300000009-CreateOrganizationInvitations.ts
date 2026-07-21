@@ -7,9 +7,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * tabla, junto con el token único que lleva el enlace del correo (`/join?token=...`), es lo
  * que conecta esa invitación con una aceptación real (crear la membresía en `accounts`).
  */
-export class CreateOrganizationInvitations1784300000009
-  implements MigrationInterface
-{
+export class CreateOrganizationInvitations1784300000009 implements MigrationInterface {
   name = 'CreateOrganizationInvitations1784300000009';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

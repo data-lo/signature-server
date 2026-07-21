@@ -34,9 +34,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * clave real de aislamiento multi-tenant para documentos en contexto de organización — ver
  * document.service.ts, decisión D5.
  */
-export class MergeAccountAndOrganization1784300000005
-  implements MigrationInterface
-{
+export class MergeAccountAndOrganization1784300000005 implements MigrationInterface {
   name = 'MergeAccountAndOrganization1784300000005';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -68,7 +66,9 @@ export class MergeAccountAndOrganization1784300000005
     `);
 
     // ---- U2: renombrar el tenant-container viejo (referencia de solo lectura) ----
-    await queryRunner.query(`ALTER TABLE "accounts" RENAME TO "accounts_legacy_tenant"`);
+    await queryRunner.query(
+      `ALTER TABLE "accounts" RENAME TO "accounts_legacy_tenant"`,
+    );
 
     // ---- U3: Account fusionado — una fila por (usuario × contexto) ----
     await queryRunner.query(
@@ -267,7 +267,9 @@ export class MergeAccountAndOrganization1784300000005
     await queryRunner.query(`DROP TYPE "public"."accounts_status_enum"`);
 
     // D2 (deshace U2)
-    await queryRunner.query(`ALTER TABLE "accounts_legacy_tenant" RENAME TO "accounts"`);
+    await queryRunner.query(
+      `ALTER TABLE "accounts_legacy_tenant" RENAME TO "accounts"`,
+    );
 
     // D1 (deshace U1)
     await queryRunner.query(`DROP TABLE "organizations"`);

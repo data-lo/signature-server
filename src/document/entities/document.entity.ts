@@ -128,11 +128,24 @@ export class DocumentEntity {
   @Column({ default: false, name: 'requires_verification' })
   requiresVerification: boolean;
 
+  /**
+   * Ver historia "Frontend: Carga de Documentos y Configuración de Firmantes" — si true, el
+   * documento debe pasar por un usuario con permisos de revisión antes de notificar a los
+   * firmantes. Solo el flag: el enrutamiento real hacia un aprobador no se construyó en esa
+   * historia (era explícitamente de frontend) — ver sección de pendientes del README.
+   */
+  @Column({ default: false, name: 'requires_approval' })
+  requiresApproval: boolean;
+
   @Column({ default: false, name: 'index_document' })
   indexDocument: boolean;
 
-  @OneToMany(() => CollaboratorEntity, (collaborator) => collaborator.document, {
-    cascade: true,
-  })
+  @OneToMany(
+    () => CollaboratorEntity,
+    (collaborator) => collaborator.document,
+    {
+      cascade: true,
+    },
+  )
   collaborators: CollaboratorEntity[];
 }

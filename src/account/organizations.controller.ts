@@ -39,7 +39,10 @@ import {
   AccountMemberResponse,
   OrganizationMemberListResponse,
 } from './interfaces/response/account-member-response';
-import { BadRequestResponse, BaseResponse } from 'src/interfaces/api-response.dto';
+import {
+  BadRequestResponse,
+  BaseResponse,
+} from 'src/interfaces/api-response.dto';
 
 @ApiTags('Organizations')
 @ApiBearerAuth('access-token')
@@ -191,7 +194,8 @@ export class OrganizationsController {
   })
   @ApiResponse({
     status: 409,
-    description: 'El miembro objetivo es el único ADMIN activo de la organización',
+    description:
+      'El miembro objetivo es el único ADMIN activo de la organización',
   })
   updateMemberRole(
     @CurrentUser() user: JwtPayload,
@@ -229,7 +233,8 @@ export class OrganizationsController {
   })
   @ApiResponse({
     status: 409,
-    description: 'El miembro objetivo es el único ADMIN activo de la organización',
+    description:
+      'El miembro objetivo es el único ADMIN activo de la organización',
   })
   removeMember(
     @CurrentUser() user: JwtPayload,

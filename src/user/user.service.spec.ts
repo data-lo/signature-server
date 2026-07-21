@@ -443,7 +443,11 @@ describe('UserService', () => {
         id: 'user-1',
         nationalId: 'CURP1',
         signatureId: 'sig-1',
-        personalInformation: { rfc: 'RFC1', phoneNumber: null, secondaryEmail: null },
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: null,
+          secondaryEmail: null,
+        },
       });
 
       await expect(

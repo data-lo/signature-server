@@ -20,7 +20,7 @@ function buildCollaborator(overrides: Partial<CollaboratorEntity> = {}) {
   return {
     id: 'collaborator-1',
     documentId: 'doc-1',
-    userId: 'user-1',
+    accountId: 'account-1',
     email: null,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     status: SIGNEE_STATUS_ENUM.PENDING,
@@ -95,7 +95,7 @@ describe('DocumentEventsConsumer', () => {
       buildCollaborator({
         id: 'p-b',
         colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
-        userId: null,
+        accountId: null,
         email: 'watcher@correo.com',
       }),
     ];

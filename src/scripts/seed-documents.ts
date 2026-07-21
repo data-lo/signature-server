@@ -194,17 +194,19 @@ async function upsertDocument(
   });
 
   await collaboratorRepository.save(
-    spec.participants.map((p) =>
-      collaboratorRepository.create({
-        documentId: document.id,
-        userId: p.user.id,
-        colaboratorType: p.role,
-        status: p.status,
-        signingOrder: p.signOrder,
-        signedAt: p.signedAt ?? null,
-        cancellationReason: p.rejectionReason ?? null,
-        ipAddress: '127.0.0.1',
-      }),
+    await Promise.all(
+      spec.participants.map(async (p) =>
+        collaboratorRepository.create({
+          documentId: document.id,
+          accountId: await findPersonalAccountId(dataSource, p.user.id),
+          colaboratorType: p.role,
+          status: p.status,
+          signingOrder: p.signOrder,
+          signedAt: p.signedAt ?? null,
+          cancellationReason: p.rejectionReason ?? null,
+          ipAddress: '127.0.0.1',
+        }),
+      ),
     ),
   );
 

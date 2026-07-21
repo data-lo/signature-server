@@ -4,7 +4,8 @@ import { IsNotEmpty, IsString, Length } from 'class-validator';
 export class AcceptInvitationDto {
   @ApiProperty({
     example: 'PELJ850101ABC',
-    description: 'RFC del usuario que acepta la invitación (12 o 13 caracteres alfanuméricos)',
+    description:
+      'RFC del usuario que acepta la invitación (12 o 13 caracteres alfanuméricos)',
   })
   @IsString()
   @IsNotEmpty()

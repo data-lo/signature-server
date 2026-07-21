@@ -16,7 +16,9 @@ import { EmailService } from 'src/shared/email/email.service';
  */
 @Controller()
 export class OrganizationInvitationEventsConsumer {
-  private readonly logger = new Logger(OrganizationInvitationEventsConsumer.name);
+  private readonly logger = new Logger(
+    OrganizationInvitationEventsConsumer.name,
+  );
 
   constructor(
     private readonly emailService: EmailService,

@@ -51,6 +51,26 @@ export class AccountMemberService {
     private readonly rolesService: RolesService,
   ) {}
 
+  /**
+   * Resuelve la cuenta PERSONAL (1:1 con el usuario) de un usuario dado — usada donde un
+   * recurso necesita anclarse a "esta persona" sin la ambigüedad de "cuál membresía" (ver
+   * `CollaboratorEntity.accountId`, ER-V2). Mismo patrón que ya usaban `seed-documents.ts` y
+   * varias migraciones para backfill, centralizado acá para no duplicarlo.
+   */
+  async findPersonalAccountId(userId: string): Promise<string> {
+    const personalAccount = await this.accountRepository.findOne({
+      where: { userId, accountType: ACCOUNT_TYPE_ENUM.PERSONAL },
+    });
+
+    if (!personalAccount) {
+      throw new NotFoundException(
+        `No se encontró una cuenta PERSONAL para el usuario ${userId}`,
+      );
+    }
+
+    return personalAccount.id;
+  }
+
   async create(
     callerId: string,
     dto: CreateAccountMemberDto,

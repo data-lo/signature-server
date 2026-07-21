@@ -9,7 +9,6 @@ function buildCollaborator(
   return {
     id: 'p',
     documentId: 'doc-1',
-    userId: 'u',
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     status: SIGNEE_STATUS_ENUM.PENDING,
     signingOrder: 0,

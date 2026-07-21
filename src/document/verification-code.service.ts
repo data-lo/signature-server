@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { EntityManager, IsNull, Repository } from 'typeorm';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 import { OTPService } from 'src/shared/otp/otp.service';
@@ -20,16 +20,27 @@ export class VerificationCodeService {
     private readonly otpService: OTPService,
   ) {}
 
+  /**
+   * `manager` opcional: cuando se emite dentro de una transacción más grande (ver
+   * DocumentSignaturesService), pasar el `EntityManager` transaccional para que el INSERT
+   * corra en la misma transacción y participe del rollback si algo más falla después. Sin
+   * `manager`, usa el repositorio inyectado normal (comportamiento previo, sin cambios).
+   */
   async issue(
     documentId: string,
     signerId: string | null,
     event: VERIFICATION_EVENT_ENUM,
     ipAddress: string,
+    manager?: EntityManager,
   ): Promise<VerificationCodeEntity> {
+    const repository = manager
+      ? manager.getRepository(VerificationCodeEntity)
+      : this.verificationCodeRepository;
+
     const code = this.otpService.generate();
     const expiredAt = new Date(Date.now() + CODE_VALIDITY_MINUTES * 60 * 1000);
 
-    const entity = this.verificationCodeRepository.create({
+    const entity = repository.create({
       documentId,
       signerId,
       event,
@@ -39,7 +50,7 @@ export class VerificationCodeService {
       isUsed: false,
     });
 
-    return this.verificationCodeRepository.save(entity);
+    return repository.save(entity);
   }
 
   /**

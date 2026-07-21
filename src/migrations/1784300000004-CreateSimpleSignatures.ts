@@ -13,9 +13,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * (con FK, ya que simple_signatures existe) + `fiel_signature_id` (sin FK todavía —
  * fiel_signatures se crea en la Fase 8).
  */
-export class CreateSimpleSignatures1784300000004
-  implements MigrationInterface
-{
+export class CreateSimpleSignatures1784300000004 implements MigrationInterface {
   name = 'CreateSimpleSignatures1784300000004';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

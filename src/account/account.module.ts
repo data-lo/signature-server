@@ -35,7 +35,15 @@ import { KafkaModule } from 'src/kafka/kafka.module';
     AccountMemberController,
     OrganizationInvitationsController,
   ],
-  providers: [AccountService, AccountMemberService, OrganizationInvitationService],
-  exports: [AccountService, AccountMemberService, OrganizationInvitationService],
+  providers: [
+    AccountService,
+    AccountMemberService,
+    OrganizationInvitationService,
+  ],
+  exports: [
+    AccountService,
+    AccountMemberService,
+    OrganizationInvitationService,
+  ],
 })
 export class AccountModule {}

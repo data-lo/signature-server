@@ -121,7 +121,7 @@ export class DocumentEventsConsumer {
         collaboratorId: collaborator.id,
         documentId,
         isNotified: true,
-        actorType: collaborator.userId
+        actorType: collaborator.accountId
           ? ACTOR_TYPE_ENUM.ACCOUNT
           : ACTOR_TYPE_ENUM.WATCHER,
         notificationChannelSource: NOTIFICATION_CHANNEL_ENUM.EMAIL,

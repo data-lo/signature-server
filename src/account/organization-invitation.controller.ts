@@ -2,12 +2,7 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 
 // Swagger
-import {
-  ApiOperation,
-  ApiParam,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 // Auth
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
@@ -18,7 +13,10 @@ import { OrganizationInvitationService } from './organization-invitation.service
 // DTOs
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import { OrganizationInvitationPreviewResponse } from './interfaces/response/organization-invitation-response';
-import { BaseResponse, NotFoundResponse } from 'src/interfaces/api-response.dto';
+import {
+  BaseResponse,
+  NotFoundResponse,
+} from 'src/interfaces/api-response.dto';
 
 /**
  * Rutas públicas (sin JWT ni x-api-key, ver SkipJwtAuth) consumidas desde /join antes de que
@@ -69,12 +67,14 @@ export class OrganizationInvitationsController {
   })
   @ApiResponse({
     status: 404,
-    description: 'Invitación no encontrada, o ningún usuario registrado con ese RFC',
+    description:
+      'Invitación no encontrada, o ningún usuario registrado con ese RFC',
     type: NotFoundResponse,
   })
   @ApiResponse({
     status: 409,
-    description: 'La invitación ya fue utilizada, o el usuario ya es miembro de la organización',
+    description:
+      'La invitación ya fue utilizada, o el usuario ya es miembro de la organización',
   })
   @ApiResponse({
     status: 410,

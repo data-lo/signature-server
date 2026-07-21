@@ -39,24 +39,32 @@ function createMockRepository() {
   };
 }
 
-function buildSigner(overrides: Partial<CollaboratorEntity> = {}) {
+function buildSigner(
+  overrides: Partial<CollaboratorEntity> & { userId?: string } = {},
+) {
+  const userId = overrides.userId ?? 'user-1';
+  const { userId: _omit, ...entityOverrides } = overrides;
   return {
     id: overrides.id ?? 'collaborator-1',
     documentId: 'doc-1',
-    userId: overrides.userId ?? 'user-1',
+    accountId: `account-of-${userId}`,
     email: null,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     status: SIGNEE_STATUS_ENUM.PENDING,
     signingOrder: overrides.signingOrder ?? 0,
     ipAddress: '127.0.0.1',
-    user: {
-      id: overrides.userId ?? 'user-1',
-      firstName: 'Firmante',
-      lastName: 'Uno',
-      email: 'firmante@correo.com',
-      signatureId: 'signature-1',
+    account: {
+      id: `account-of-${userId}`,
+      userId,
+      user: {
+        id: userId,
+        firstName: 'Firmante',
+        lastName: 'Uno',
+        email: 'firmante@correo.com',
+        signatureId: 'signature-1',
+      },
     },
-    ...overrides,
+    ...entityOverrides,
   } as unknown as CollaboratorEntity;
 }
 
@@ -138,6 +146,11 @@ describe('DocumentService', () => {
       assertIsActiveMember: jest
         .fn()
         .mockResolvedValue({ id: 'account-1', organizationId: null }),
+      findPersonalAccountId: jest
+        .fn()
+        .mockImplementation((userId: string) =>
+          Promise.resolve(`account-of-${userId}`),
+        ),
     };
     verificationCodeService = {
       issue: jest.fn(),
@@ -296,7 +309,7 @@ describe('DocumentService', () => {
       expect(watcherByEmail).toMatchObject({
         colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
       });
-      expect(watcherByEmail.userId).toBeUndefined();
+      expect(watcherByEmail.accountId).toBeUndefined();
     });
 
     it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
@@ -488,7 +501,9 @@ describe('DocumentService', () => {
       );
       // No debe desperdiciarse ningún trabajo de MinIO/estampado en una carrera perdida.
       expect(minioService.uploadObject).not.toHaveBeenCalled();
-      expect(documentSigningService.mergeSignatureIntoPdf).not.toHaveBeenCalled();
+      expect(
+        documentSigningService.mergeSignatureIntoPdf,
+      ).not.toHaveBeenCalled();
     });
 
     it('finaliza el documento (estampa y notifica a todos) cuando es el último firmante', async () => {
@@ -759,9 +774,9 @@ describe('DocumentService', () => {
       ]);
       collaboratorRepository.update.mockResolvedValue({ affected: 0 });
 
-      await expect(
-        service.reject('doc-1', 'user-1', 'motivo'),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.reject('doc-1', 'user-1', 'motivo')).rejects.toThrow(
+        BadRequestException,
+      );
       expect(minioService.getFileInBytesFormat).not.toHaveBeenCalled();
     });
   });
@@ -925,8 +940,16 @@ describe('DocumentService', () => {
       signingOrder: 0,
       status: SIGNEE_STATUS_ENUM.SIGNED,
     });
-    const signerB = buildSigner({ id: 'p-b', userId: 'user-b', signingOrder: 1 });
-    const signerC = buildSigner({ id: 'p-c', userId: 'user-c', signingOrder: 2 });
+    const signerB = buildSigner({
+      id: 'p-b',
+      userId: 'user-b',
+      signingOrder: 1,
+    });
+    const signerC = buildSigner({
+      id: 'p-c',
+      userId: 'user-c',
+      signingOrder: 2,
+    });
     const participants = [signerA, signerB, signerC];
 
     function mockDetailDocument() {

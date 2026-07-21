@@ -78,7 +78,9 @@ export class AccountService {
       where: { id: currentUserId },
     });
     if (!currentUser) {
-      throw new NotFoundException(`Usuario con ID ${currentUserId} no encontrado`);
+      throw new NotFoundException(
+        `Usuario con ID ${currentUserId} no encontrado`,
+      );
     }
 
     const adminRole = await this.rolesService.findSystemRoleByName(
@@ -182,7 +184,9 @@ export class AccountService {
         ...(updateAccountDto.address !== undefined && {
           address: updateAccountDto.address,
         }),
-        ...(updateAccountDto.rfc !== undefined && { rfc: updateAccountDto.rfc }),
+        ...(updateAccountDto.rfc !== undefined && {
+          rfc: updateAccountDto.rfc,
+        }),
         ...(updateAccountDto.domainAllowed !== undefined && {
           domainAllowed: updateAccountDto.domainAllowed,
         }),
