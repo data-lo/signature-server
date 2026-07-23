@@ -12,6 +12,7 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
+import { EmailService } from 'src/shared/email/email.service';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
@@ -46,6 +47,7 @@ describe('DocumentSignaturesService', () => {
   let accountMemberService: Record<string, jest.Mock>;
   let verificationCodeService: Record<string, jest.Mock>;
   let notificationEventsProducer: Record<string, jest.Mock>;
+  let emailService: Record<string, jest.Mock>;
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -126,6 +128,11 @@ describe('DocumentSignaturesService', () => {
       issue: jest.fn().mockResolvedValue({ id: 'vc-1' }),
     };
     notificationEventsProducer = { emitCreated: jest.fn() };
+    emailService = {
+      sendDocumentInvitationNotification: jest
+        .fn()
+        .mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -140,6 +147,7 @@ describe('DocumentSignaturesService', () => {
           provide: NotificationEventsProducer,
           useValue: notificationEventsProducer,
         },
+        { provide: EmailService, useValue: emailService },
       ],
     }).compile();
 
@@ -191,6 +199,65 @@ describe('DocumentSignaturesService', () => {
     );
 
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+  });
+
+  it('documento secuencial (default, sin isSequential en el payload): no envía invitaciones de firma simple', async () => {
+    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(
+      emailService.sendDocumentInvitationNotification,
+    ).not.toHaveBeenCalled();
+    const savedDocumentCall = documentRepo.save.mock.calls[0][0];
+    expect(savedDocumentCall.isSequential).toBe(true);
+  });
+
+  it('documento sin orden (isSequential:false): invita por correo solo a los firmantes SIMPLE, no a ADVANCED ni al viewer', async () => {
+    const dtoSinOrden: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      documentData: { ...baseDto.documentData, isSequential: false },
+    };
+
+    await service.create(
+      'creator-1',
+      'account-1',
+      dtoSinOrden,
+      file,
+      '127.0.0.1',
+    );
+
+    const savedDocumentCall = documentRepo.save.mock.calls[0][0];
+    expect(savedDocumentCall.isSequential).toBe(false);
+    expect(
+      emailService.sendDocumentInvitationNotification,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      emailService.sendDocumentInvitationNotification,
+    ).toHaveBeenCalledWith(
+      'maria.gomez@mail.com',
+      'María Gómez',
+      dtoSinOrden.documentData.fileName,
+      expect.stringContaining('/access-document?docId='),
+    );
+  });
+
+  it('un fallo al enviar la invitación no tumba la creación del documento', async () => {
+    emailService.sendDocumentInvitationNotification.mockRejectedValue(
+      new Error('SendGrid caído'),
+    );
+    const dtoSinOrden: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      documentData: { ...baseDto.documentData, isSequential: false },
+    };
+
+    const result = await service.create(
+      'creator-1',
+      'account-1',
+      dtoSinOrden,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(result.success).toBe(true);
   });
 
   it('el viewer se crea con colaboratorType WATCHER, sin signatureType ni verification_code', async () => {

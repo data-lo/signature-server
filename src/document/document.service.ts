@@ -10,7 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 
 // TypeORM
-import { In, Repository } from 'typeorm';
+import { ILike, In, IsNull, Repository } from 'typeorm';
 
 // Entities
 import { DocumentEntity } from './entities/document.entity';
@@ -583,12 +583,14 @@ export class DocumentService {
       throw new ForbiddenException('No tienes acceso a este documento');
     }
 
-    const nextSigner = getNextPendingSigner(document.collaborators);
-
     const isMyTurn = Boolean(
       myParticipant &&
       myParticipant.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER &&
-      nextSigner?.id === myParticipant.id,
+      isSignerTurn(
+        myParticipant,
+        document.collaborators,
+        document.isSequential,
+      ),
     );
 
     const bucket =
@@ -642,6 +644,54 @@ export class DocumentService {
         canRequestCancellation,
         canConfirmCancellation,
       },
+    };
+  }
+
+  /**
+   * Vincula al usuario autenticado como Collaborator de un documento al que fue invitado solo
+   * por email (accountId todavía null) — ver historia "Notificación por Email para Firma
+   * Simple y Vinculación de Cuenta". Empareja por email (case-insensitive) porque, mientras el
+   * colaborador no tiene accountId, el email es la única señal disponible para identificarlo.
+   *
+   * Dos callers:
+   *  - PATCH /document/:id/link-collaborator (Casos B/C: recién completado registro/login desde
+   *    el enlace del correo, el frontend lo llama explícitamente antes de redirigir al documento).
+   *  - sign() (Caso A: sesión ya activa al llegar desde el enlace — vinculación perezosa).
+   *
+   * No lanza si no hay nada que vincular (`linked: false`): no tener una invitación pendiente
+   * con ese email no es un error, es el caso normal para cualquier documento sin este flujo.
+   */
+  async linkPendingCollaboratorAccount(
+    documentId: string,
+    currentUserId: string,
+  ): Promise<BaseResponse<{ linked: boolean }>> {
+    const user = await this.userService.findOne(currentUserId);
+
+    const collaborator = await this.collaboratorRepository.findOne({
+      where: {
+        documentId,
+        email: ILike(user.email),
+        accountId: IsNull(),
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+    });
+
+    if (!collaborator) {
+      return {
+        success: true,
+        message: 'No hay ninguna invitación pendiente para vincular',
+        data: { linked: false },
+      };
+    }
+
+    const accountId =
+      await this.accountMemberService.findPersonalAccountId(currentUserId);
+    await this.collaboratorRepository.update(collaborator.id, { accountId });
+
+    return {
+      success: true,
+      message: 'Cuenta vinculada correctamente al documento',
+      data: { linked: true },
     };
   }
 
@@ -1038,15 +1088,37 @@ export class DocumentService {
       );
     }
 
-    const signerCollaborators = await this.collaboratorRepository.find({
+    let signerCollaborators = await this.collaboratorRepository.find({
       where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
       relations: { account: { user: true }, simpleSignature: true },
       order: { signingOrder: 'ASC' },
     });
 
-    const myParticipant = signerCollaborators.find(
+    let myParticipant = signerCollaborators.find(
       (c) => c.account?.userId === currentUserId,
     );
+
+    // Caso A de "Notificación por Email para Firma Simple y Vinculación de Cuenta": el usuario
+    // llegó ya autenticado desde el enlace del correo (su fila de Collaborator todavía tiene
+    // accountId null) — se vincula aquí, de forma perezosa, en vez de exigir que haya pasado
+    // antes por PATCH /document/:id/link-collaborator (ese endpoint es solo para los Casos B/C,
+    // registro/login recién completados).
+    if (!myParticipant) {
+      const linkResult = await this.linkPendingCollaboratorAccount(
+        documentId,
+        currentUserId,
+      );
+      if (linkResult.data.linked) {
+        signerCollaborators = await this.collaboratorRepository.find({
+          where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
+          relations: { account: { user: true }, simpleSignature: true },
+          order: { signingOrder: 'ASC' },
+        });
+        myParticipant = signerCollaborators.find(
+          (c) => c.account?.userId === currentUserId,
+        );
+      }
+    }
 
     if (!myParticipant) {
       throw new ForbiddenException('No eres firmante de este documento');
@@ -1056,7 +1128,9 @@ export class DocumentService {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
 
-    if (!isSignerTurn(myParticipant, signerCollaborators)) {
+    if (
+      !isSignerTurn(myParticipant, signerCollaborators, document.isSequential)
+    ) {
       throw new ForbiddenException(
         'Aún no es tu turno para firmar este documento',
       );
@@ -1335,7 +1409,9 @@ export class DocumentService {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
 
-    if (!isSignerTurn(myParticipant, signerCollaborators)) {
+    if (
+      !isSignerTurn(myParticipant, signerCollaborators, document.isSequential)
+    ) {
       throw new ForbiddenException(
         'Aún no es tu turno para revisar este documento',
       );
