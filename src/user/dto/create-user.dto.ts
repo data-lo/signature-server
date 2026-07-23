@@ -30,13 +30,6 @@ export class CreateUserDto {
   email: string;
 
   @ApiProperty({
-    example: 'Gerente de TI',
-    description: 'Cargo o puesto del usuario',
-  })
-  @IsString()
-  position: string;
-
-  @ApiProperty({
     example: ['signer'],
     description: 'Lista de roles asignados al usuario',
     type: [String],

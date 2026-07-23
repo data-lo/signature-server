@@ -23,6 +23,7 @@ import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
+import { DocumentTransactionService } from './document-transaction.service';
 
 function createMockRepository() {
   return {
@@ -82,6 +83,7 @@ describe('DocumentService', () => {
   let documentEventsProducer: Record<string, jest.Mock>;
   let accountMemberService: Record<string, jest.Mock>;
   let verificationCodeService: Record<string, jest.Mock>;
+  let documentTransactionService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
@@ -137,6 +139,7 @@ describe('DocumentService', () => {
     documentEventsProducer = {
       emitCreated: jest.fn(),
       emitSentToSign: jest.fn(),
+      emitCollaboratorSigned: jest.fn(),
       emitSigned: jest.fn(),
       emitRejected: jest.fn(),
       emitCancellationRequested: jest.fn(),
@@ -156,6 +159,11 @@ describe('DocumentService', () => {
       issue: jest.fn(),
       verifyAndConsume: jest.fn(),
       hasConsumedCode: jest.fn().mockResolvedValue(true),
+    };
+    documentTransactionService = {
+      createInitial: jest.fn(),
+      registerSignature: jest.fn(),
+      findAllForDocument: jest.fn().mockResolvedValue([]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -181,6 +189,10 @@ describe('DocumentService', () => {
         {
           provide: VerificationCodeService,
           useValue: verificationCodeService,
+        },
+        {
+          provide: DocumentTransactionService,
+          useValue: documentTransactionService,
         },
       ],
     }).compile();
@@ -243,6 +255,10 @@ describe('DocumentService', () => {
       expect(accountMemberService.assertIsActiveMember).toHaveBeenCalledWith(
         'creator-1',
         'account-1',
+      );
+      expect(documentTransactionService.createInitial).toHaveBeenCalledWith(
+        'doc-1',
+        'hash123',
       );
 
       const savedDocumentCall = documentRepository.save.mock.calls[0][0];
@@ -483,6 +499,14 @@ describe('DocumentService', () => {
         }),
       );
       expect(documentEventsProducer.emitSigned).not.toHaveBeenCalled();
+      expect(
+        documentEventsProducer.emitCollaboratorSigned,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-1',
+          collaboratorId: 'collaborator-1',
+        }),
+      );
       expect(emailService.sendDocumentPendingNotification).toHaveBeenCalled();
       expect(documentRepository.update).toHaveBeenCalledWith('doc-1', {
         completedSignersCount: 1,

@@ -5,6 +5,7 @@ import { EventPattern, Payload } from '@nestjs/microservices';
 import {
   DOCUMENT_KAFKA_TOPICS,
   DocumentEventPayload,
+  DocumentCollaboratorSignedPayload,
 } from './document-events.topics';
 import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
@@ -12,6 +13,7 @@ import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { NOTIFICATION_CHANNEL_ENUM } from 'src/document/enum/notification-channel.enum';
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
+import { DocumentTransactionService } from 'src/document/document-transaction.service';
 
 /**
  * Consumidor real de los eventos de negocio del ciclo de vida del documento (ver
@@ -35,6 +37,7 @@ export class DocumentEventsConsumer {
     private readonly notificationRepository: Repository<NotificationEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    private readonly documentTransactionService: DocumentTransactionService,
   ) {}
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.CREATED)
@@ -58,6 +61,32 @@ export class DocumentEventsConsumer {
         await this.persistNotifications(payload.documentId, [nextSigner]);
       }
     }, payload);
+  }
+
+  /**
+   * Se dispara por CADA colaborador que firma (a diferencia de handleSigned, que solo procesa
+   * cuando el documento queda completamente firmado) — encadena un nuevo registro en
+   * DocumentTransaction (ver Registro de Transacciones / Document Transaction).
+   */
+  @EventPattern(DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED)
+  async handleCollaboratorSigned(
+    @Payload() payload: DocumentCollaboratorSignedPayload,
+  ) {
+    this.logEvent(
+      `firmado por el colaborador ${payload.collaboratorId}`,
+      payload,
+    );
+    try {
+      await this.documentTransactionService.registerSignature(
+        payload.documentId,
+        payload.collaboratorId,
+        payload.signedAt,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error encadenando Document Transaction para el documento ${payload.documentId} (colaborador ${payload.collaboratorId}): ${error}`,
+      );
+    }
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.SIGNED)

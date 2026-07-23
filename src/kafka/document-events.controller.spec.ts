@@ -6,7 +6,11 @@ import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
-import type { DocumentEventPayload } from './document-events.topics';
+import { DocumentTransactionService } from 'src/document/document-transaction.service';
+import type {
+  DocumentEventPayload,
+  DocumentCollaboratorSignedPayload,
+} from './document-events.topics';
 
 function createMockRepository() {
   return {
@@ -33,6 +37,7 @@ describe('DocumentEventsConsumer', () => {
   let consumer: DocumentEventsConsumer;
   let notificationRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
+  let documentTransactionService: Record<string, jest.Mock>;
 
   const payload: DocumentEventPayload = {
     documentId: 'doc-1',
@@ -41,9 +46,16 @@ describe('DocumentEventsConsumer', () => {
     timestamp: '2026-01-01T00:00:00.000Z',
   };
 
+  const collaboratorSignedPayload: DocumentCollaboratorSignedPayload = {
+    ...payload,
+    collaboratorId: 'collaborator-1',
+    signedAt: '2026-01-01T00:05:00.000Z',
+  };
+
   beforeEach(async () => {
     notificationRepository = createMockRepository();
     collaboratorRepository = createMockRepository();
+    documentTransactionService = { registerSignature: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -55,6 +67,10 @@ describe('DocumentEventsConsumer', () => {
         {
           provide: getRepositoryToken(CollaboratorEntity),
           useValue: collaboratorRepository,
+        },
+        {
+          provide: DocumentTransactionService,
+          useValue: documentTransactionService,
         },
       ],
     }).compile();
@@ -155,5 +171,25 @@ describe('DocumentEventsConsumer', () => {
     collaboratorRepository.find.mockRejectedValue(new Error('DB caída'));
 
     await expect(consumer.handleSigned(payload)).resolves.toBeUndefined();
+  });
+
+  it('handleCollaboratorSigned encadena un registro de Document Transaction para el colaborador que firmó', async () => {
+    await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+    expect(documentTransactionService.registerSignature).toHaveBeenCalledWith(
+      'doc-1',
+      'collaborator-1',
+      '2026-01-01T00:05:00.000Z',
+    );
+  });
+
+  it('handleCollaboratorSigned no propaga el error si falla el encadenamiento de la transacción', async () => {
+    documentTransactionService.registerSignature.mockRejectedValue(
+      new Error('DB caída'),
+    );
+
+    await expect(
+      consumer.handleCollaboratorSigned(collaboratorSignedPayload),
+    ).resolves.toBeUndefined();
   });
 });

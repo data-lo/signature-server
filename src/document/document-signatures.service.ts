@@ -32,6 +32,7 @@ import { NotificationEventsProducer } from 'src/kafka/notification-events.produc
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { EmailService } from 'src/shared/email/email.service';
+import { DocumentTransactionService } from './document-transaction.service';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -87,6 +88,7 @@ export class DocumentSignaturesService {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly notificationEventsProducer: NotificationEventsProducer,
     private readonly emailService: EmailService,
+    private readonly documentTransactionService: DocumentTransactionService,
   ) {}
 
   async create(
@@ -160,6 +162,12 @@ export class DocumentSignaturesService {
             totalSigners,
             isSequential,
           }),
+        );
+
+        await this.documentTransactionService.createInitial(
+          document.id,
+          originalHash,
+          manager,
         );
 
         const notificationEvents: {

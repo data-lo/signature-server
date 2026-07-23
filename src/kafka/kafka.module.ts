@@ -15,6 +15,7 @@ import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { SharedModule } from 'src/shared/shared.module';
 import { EventModule } from 'src/event/event.module';
+import { DocumentTransactionModule } from 'src/document/document-transaction.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { EventModule } from 'src/event/event.module';
     ]),
     SharedModule,
     EventModule,
+    DocumentTransactionModule,
     ClientsModule.registerAsync([
       {
         name: KAFKA_SERVICE,

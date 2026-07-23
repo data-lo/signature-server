@@ -29,14 +29,6 @@ export class RegisterDto {
   email: string;
 
   @ApiProperty({
-    example: 'Gerente de TI',
-    description: 'Cargo o puesto del usuario',
-  })
-  @IsString()
-  @IsNotEmpty()
-  position: string;
-
-  @ApiProperty({
     example: 'PELJ850101HDFRNN08',
     description: 'CURP del usuario (18 caracteres alfanuméricos)',
   })

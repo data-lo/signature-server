@@ -25,9 +25,6 @@ export class UserMeData {
   @ApiProperty({ example: 'juan.perez@empresa.com' })
   email: string;
 
-  @ApiProperty({ example: 'Gerente de TI' })
-  position: string;
-
   @ApiProperty({ example: ['signer'], isArray: true })
   roles: string[];
 

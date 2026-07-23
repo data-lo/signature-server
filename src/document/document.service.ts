@@ -50,6 +50,7 @@ import { getNextPendingSigner, isSignerTurn } from './utils/next-signer.util';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
+import { DocumentTransactionService } from './document-transaction.service';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
 
@@ -102,6 +103,7 @@ export class DocumentService {
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly accountMemberService: AccountMemberService,
     private readonly verificationCodeService: VerificationCodeService,
+    private readonly documentTransactionService: DocumentTransactionService,
   ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
@@ -238,6 +240,11 @@ export class DocumentService {
       });
 
       const savedDocument = await this.documentRepository.save(document);
+
+      await this.documentTransactionService.createInitial(
+        savedDocument.id,
+        hashBefore,
+      );
 
       const collaborators = [
         ...signerIds.map((userId, index) =>
@@ -613,6 +620,16 @@ export class DocumentService {
       document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING &&
       myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
 
+    // Registro de Transacciones (Document Transaction): un registro por colaborador que firmó,
+    // más el registro inicial de creación (collaboratorId null) — ver DocumentTransactionService.
+    const transactions =
+      await this.documentTransactionService.findAllForDocument(documentId);
+    const transactionByCollaboratorId = new Map(
+      transactions
+        .filter((t) => t.collaboratorId)
+        .map((t) => [t.collaboratorId as string, t]),
+    );
+
     return {
       success: true,
       message: 'Documento obtenido correctamente',
@@ -643,6 +660,30 @@ export class DocumentService {
         canReject: canAct,
         canRequestCancellation,
         canConfirmCancellation,
+        // Avance de firmas en tiempo real (ver Registro de Transacciones / Document
+        // Transaction): completedSignersCount se compara contra totalSigners para saber si al
+        // documento le falta algún firmante. completedSignedAt es la fecha en la que se
+        // completó la última firma (document.signedAt solo se fija cuando el documento pasa a
+        // SIGNED, ver finalizeSignedDocument()).
+        totalSigners: document.totalSigners,
+        completedSignersCount: document.completedSignersCount,
+        completedSignedAt: document.signedAt ?? null,
+        signatures: document.collaborators
+          .filter((c) => c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER)
+          .sort((a, b) => (a.signingOrder ?? 0) - (b.signingOrder ?? 0))
+          .map((c) => {
+            const transaction = transactionByCollaboratorId.get(c.id);
+            return {
+              collaboratorId: c.id,
+              name: collaboratorDisplayName(c),
+              email: collaboratorEmail(c),
+              status: c.status,
+              signedAt: c.signedAt,
+              actualHash: transaction?.actualHash ?? null,
+              chainHash: transaction?.chainHash ?? null,
+              transactionTimeStamp: transaction?.timeStamp ?? null,
+            };
+          }),
       },
     };
   }
@@ -1170,6 +1211,18 @@ export class DocumentService {
     }
     myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
+
+    // Se dispara por CADA firmante (no solo el último, a diferencia de emitSigned más abajo) —
+    // alimenta el encadenamiento de DocumentTransaction (ver Registro de Transacciones /
+    // Document Transaction). Va justo después del claim atómico: si la carrera se pierde, esta
+    // línea nunca se alcanza y no se encadena un registro para una firma que no ocurrió.
+    this.documentEventsProducer.emitCollaboratorSigned({
+      documentId,
+      fileName: document.fileName,
+      actorUserId: currentUserId,
+      collaboratorId: myParticipant.id,
+      signedAt: myParticipant.signedAt.toISOString(),
+    });
 
     // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
     // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()

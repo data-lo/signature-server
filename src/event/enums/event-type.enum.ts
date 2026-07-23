@@ -8,6 +8,7 @@
 export enum EVENT_TYPE_ENUM {
   DOCUMENT_CREATED = 'document.created',
   DOCUMENT_SENT_TO_SIGN = 'document.sent_to_sign',
+  DOCUMENT_COLLABORATOR_SIGNED = 'document.collaborator_signed',
   DOCUMENT_SIGNED = 'document.signed',
   DOCUMENT_REJECTED = 'document.rejected',
   DOCUMENT_CANCELLATION_REQUESTED = 'document.cancellation_requested',
