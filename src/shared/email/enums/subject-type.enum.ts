@@ -6,4 +6,5 @@ export enum EmailSubject {
   DOCUMENT_CANCELLED = 'Documento cancelado',
   VERIFICATION_CODE = 'Código de verificación',
   ORGANIZATION_INVITATION = 'Te invitaron a una organización',
+  DOCUMENT_INVITATION = 'Te invitaron a firmar un documento',
 }

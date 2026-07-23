@@ -13,6 +13,7 @@ import * as sgMail from '@sendgrid/mail';
 import {
   documentCancellationPendingTemplate,
   documentCancelledTemplate,
+  documentInvitationTemplate,
   documentPendingTemplate,
   documentRejectedTemplate,
   documentSignedTemplate,
@@ -169,6 +170,27 @@ export class EmailService {
       `<p>Tu código de verificación para firmar "<strong>${documentName}</strong>" es:</p>` +
         `<p style="font-size:24px;font-weight:bold;letter-spacing:4px;">${code}</p>` +
         `<p>Este código vence en 15 minutos.</p>`,
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /**
+   * Invita por correo a un colaborador de Firma Digital Simple en un documento sin orden
+   * (isSequential=false) a registrarse/iniciar sesión y firmar (ver historia "Notificación por
+   * Email para Firma Simple y Vinculación de Cuenta"). `accessUrl` apunta a
+   * /access-document?docId=...&collabId=...&email=..., que el frontend usa para guardar el
+   * contexto en localStorage y guiar al usuario a /login o /register.
+   */
+  async sendDocumentInvitationNotification(
+    to: string,
+    signerName: string,
+    documentName: string,
+    accessUrl: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_INVITATION,
+      documentInvitationTemplate(signerName, documentName, accessUrl),
       EmailType.NOTIFICATION,
     );
   }

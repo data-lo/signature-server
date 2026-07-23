@@ -31,6 +31,7 @@ import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
+import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from './document-transaction.service';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
@@ -86,6 +87,7 @@ export class DocumentSignaturesService {
     private readonly accountMemberService: AccountMemberService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly notificationEventsProducer: NotificationEventsProducer,
+    private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
   ) {}
 
@@ -129,9 +131,14 @@ export class DocumentSignaturesService {
     const totalSigners = dto.collaborators.filter(
       (c) => c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
     ).length;
+    const isSequential = dto.documentData.isSequential ?? true;
 
-    const { document, notificationEvents, verificationCodesCount } =
-      await this.dataSource.transaction(async (manager) => {
+    const {
+      document,
+      notificationEvents,
+      verificationCodesCount,
+      invitationEmailTargets,
+    } = await this.dataSource.transaction(async (manager) => {
         const documentRepo = manager.getRepository(DocumentEntity);
         const collaboratorRepo = manager.getRepository(CollaboratorEntity);
         const notificationRepo = manager.getRepository(NotificationEntity);
@@ -153,6 +160,7 @@ export class DocumentSignaturesService {
             organizationId: activeAccount.organizationId,
             requiresApproval: dto.documentData.requiresApproval === true,
             totalSigners,
+            isSequential,
           }),
         );
 
@@ -164,6 +172,16 @@ export class DocumentSignaturesService {
 
         const notificationEvents: {
           notification: NotificationEntity;
+          collaboratorId: string;
+        }[] = [];
+        // Firmantes de Firma Digital Simple en un documento sin orden (isSequential=false): se
+        // les invita por correo a registrarse/iniciar sesión de inmediato, ya que no hay que
+        // esperar ningún turno (ver historia "Notificación por Email para Firma Simple y
+        // Vinculación de Cuenta"). Se envían fuera de la transacción, igual que los eventos de
+        // Kafka más abajo.
+        const invitationEmailTargets: {
+          to: string;
+          name: string;
           collaboratorId: string;
         }[] = [];
         let verificationCodesCount = 0;
@@ -226,6 +244,20 @@ export class DocumentSignaturesService {
             collaboratorId: collaborator.id,
           });
 
+          if (
+            isSigner &&
+            participant.signatureType === PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE &&
+            !isSequential
+          ) {
+            invitationEmailTargets.push({
+              to: collaborator.email!,
+              name:
+                `${collaborator.firstName ?? ''} ${collaborator.lastName ?? ''}`.trim() ||
+                collaborator.email!,
+              collaboratorId: collaborator.id,
+            });
+          }
+
           if (isSigner) {
             // Regla de negocio reforzada en el backend, no solo confiada del payload (ver
             // historia): SIMPLE siempre requiere 2FA sin importar lo que mande el cliente;
@@ -255,7 +287,12 @@ export class DocumentSignaturesService {
           });
         }
 
-        return { document, notificationEvents, verificationCodesCount };
+        return {
+          document,
+          notificationEvents,
+          verificationCodesCount,
+          invitationEmailTargets,
+        };
       });
 
     // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
@@ -269,6 +306,28 @@ export class DocumentSignaturesService {
         notificationChannelSource: notification.notificationChannelSource,
         actorUserId: createdBy,
       });
+    }
+
+    // Igual que arriba: fuera de la transacción, y best-effort por destinatario — un correo que
+    // falla no debe tumbar la creación del documento ni impedir que los demás se envíen (ver
+    // historia "Notificación por Email para Firma Simple y Vinculación de Cuenta").
+    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3001';
+    for (const { to, name, collaboratorId } of invitationEmailTargets) {
+      const accessUrl =
+        `${frontendUrl}/access-document?docId=${document.id}` +
+        `&collabId=${collaboratorId}&email=${encodeURIComponent(to)}`;
+      try {
+        await this.emailService.sendDocumentInvitationNotification(
+          to,
+          name,
+          document.fileName,
+          accessUrl,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Error enviando invitación de firma simple a ${to} (documento ${document.id}): ${error}`,
+        );
+      }
     }
 
     return {

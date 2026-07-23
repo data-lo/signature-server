@@ -184,6 +184,53 @@ export const organizationInvitationTemplate = (
 </html>
 `;
 
+export const documentInvitationTemplate = (
+  signerName: string,
+  documentName: string,
+  accessUrl: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #333333; margin-top: 0;">Te invitaron a firmar un documento</h2>
+
+    <p style="color: #555555;">Hola <strong>${signerName}</strong>:</p>
+
+    <p style="color: #555555;">
+      Te invitaron a firmar el documento <strong>${documentName}</strong> con Firma Digital
+      Simple. Para continuar, inicia sesión o crea tu cuenta en Firmalo con este mismo correo.
+    </p>
+
+    <table role="presentation" style="margin: 32px 0;">
+      <tr>
+        <td>
+          <a href="${accessUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
+            Acceder para firmar
+          </a>
+        </td>
+      </tr>
+    </table>
+
+    <p style="color: #555555; font-size: 13px;">
+      O copia este enlace y pégalo en tu navegador:
+      <a href="${accessUrl}" style="color: #2E7D32;">${accessUrl}</a>
+    </p>
+
+    <p style="color: #999999; font-size: 12px;">
+      Si no esperabas este mensaje, puedes ignorarlo.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
+
 export const documentCancellationPendingTemplate = (
   documentName: string,
   signerName: string,

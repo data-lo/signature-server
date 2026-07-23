@@ -13,6 +13,7 @@ describe('DocumentController', () => {
     assertUserHasAccess: jest.Mock;
     submitForAuthorization: jest.Mock;
     sign: jest.Mock;
+    linkPendingCollaboratorAccount: jest.Mock;
     reject: jest.Mock;
     requestCancellation: jest.Mock;
     confirmCancellation: jest.Mock;
@@ -37,6 +38,7 @@ describe('DocumentController', () => {
       assertUserHasAccess: jest.fn(),
       submitForAuthorization: jest.fn(),
       sign: jest.fn(),
+      linkPendingCollaboratorAccount: jest.fn(),
       reject: jest.fn(),
       requestCancellation: jest.fn(),
       confirmCancellation: jest.fn(),
@@ -80,6 +82,15 @@ describe('DocumentController', () => {
       'user-1',
       'account-1',
       query,
+    );
+  });
+
+  it('linkCollaborator delega en documentService.linkPendingCollaboratorAccount con el userId autenticado', async () => {
+    await controller.linkCollaborator(user, 'doc-1');
+
+    expect(documentService.linkPendingCollaboratorAccount).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
     );
   });
 });

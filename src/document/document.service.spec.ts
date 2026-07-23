@@ -741,6 +741,54 @@ describe('DocumentService', () => {
 
       expect(result.success).toBe(true);
     });
+
+    it('Caso A ("Notificación por Email para Firma Simple y Vinculación de Cuenta"): si el usuario autenticado no aparece como firmante todavía, se vincula por email y firma en la misma petición', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      userService.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'maria@correo.com',
+      });
+
+      const linkedSigner = buildSigner({
+        id: 'collaborator-1',
+        userId: 'user-1',
+        signingOrder: 0,
+      });
+
+      collaboratorRepository.find
+        .mockResolvedValueOnce([]) // primer find en sign(): nadie coincide por accountId todavía
+        .mockResolvedValueOnce([linkedSigner]); // segundo find, tras vincular por email
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'collaborator-1',
+        email: 'maria@correo.com',
+        accountId: null,
+      });
+
+      const result = await service.sign('doc-1', 'user-1');
+
+      expect(result.success).toBe(true);
+      expect(collaboratorRepository.update).toHaveBeenCalledWith(
+        'collaborator-1',
+        { accountId: 'account-of-user-1' },
+      );
+    });
+
+    it('con isSequential=false, un firmante que no es el primero en signingOrder puede firmar directamente (sin esperar turno)', async () => {
+      const document = mockDocument({ isSequential: false } as any);
+      documentRepository.findOne.mockResolvedValue(document);
+      const signerA = buildSigner({ userId: 'user-a', signingOrder: 0 }); // sigue PENDING
+      const signerB = buildSigner({
+        id: 'collaborator-2',
+        userId: 'user-b',
+        signingOrder: 1,
+      });
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+      const result = await service.sign('doc-1', 'user-b');
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('reject', () => {
@@ -1012,6 +1060,57 @@ describe('DocumentService', () => {
 
       const resultB = await service.sign('doc-1', 'user-b');
       expect(resultB.success).toBe(true);
+    });
+
+    it('con isSequential=false, findDetailForUser marca canSign=true para cualquier firmante PENDING, no solo B', async () => {
+      documentRepository.findOne.mockResolvedValue({
+        ...mockDetailDocument(),
+        isSequential: false,
+      });
+
+      const resultC = await service.findDetailForUser('doc-1', 'user-c');
+      expect(resultC.data.canSign).toBe(true);
+    });
+  });
+
+  describe('linkPendingCollaboratorAccount', () => {
+    it('vincula accountId cuando hay una invitación SIGNER pendiente con el mismo email (case-insensitive)', async () => {
+      userService.findOne.mockResolvedValue({
+        id: 'user-2',
+        email: 'maria@correo.com',
+      });
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'collaborator-1',
+        email: 'Maria@Correo.com',
+        accountId: null,
+      });
+
+      const result = await service.linkPendingCollaboratorAccount(
+        'doc-1',
+        'user-2',
+      );
+
+      expect(result.data.linked).toBe(true);
+      expect(collaboratorRepository.update).toHaveBeenCalledWith(
+        'collaborator-1',
+        { accountId: 'account-of-user-2' },
+      );
+    });
+
+    it('retorna linked:false y no toca nada si no hay ninguna invitación pendiente con ese email', async () => {
+      userService.findOne.mockResolvedValue({
+        id: 'user-2',
+        email: 'nadie@correo.com',
+      });
+      collaboratorRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.linkPendingCollaboratorAccount(
+        'doc-1',
+        'user-2',
+      );
+
+      expect(result.data.linked).toBe(false);
+      expect(collaboratorRepository.update).not.toHaveBeenCalled();
     });
   });
 });

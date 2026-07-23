@@ -89,6 +89,15 @@ export class DocumentDataDto {
   @IsOptional()
   @IsBoolean()
   requiresApproval?: boolean;
+
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Si los firmantes deben firmar en el orden en que aparecen en `collaborators` (true, comportamiento por defecto) o si cualquiera puede firmar en cualquier momento (false) — ver historia "Notificación por Email para Firma Simple y Vinculación de Cuenta".',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isSequential?: boolean;
 }
 
 export class CollaboratorPayloadDto {

@@ -331,6 +331,25 @@ export class DocumentController {
     return this.documentService.sign(id, user.sub);
   }
 
+  @Patch(':id/link-collaborator')
+  @ApiOperation({
+    summary:
+      'Vincula al usuario autenticado como firmante del documento si fue invitado solo por email (Firma Digital Simple) — ver historia "Notificación por Email para Firma Simple y Vinculación de Cuenta"',
+  })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Vinculación procesada (linked=true si había una invitación pendiente que coincidía con el email del usuario autenticado, linked=false si no)',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  linkCollaborator(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.documentService.linkPendingCollaboratorAccount(id, user.sub);
+  }
+
   @Post(':id/verification-codes')
   @ApiOperation({
     summary:

@@ -72,7 +72,7 @@ describe('next-signer.util', () => {
   });
 
   describe('isSignerTurn', () => {
-    it('es true solo para el firmante pendiente con menor signingOrder', () => {
+    it('es true solo para el firmante pendiente con menor signingOrder (documento secuencial, default)', () => {
       const signers = [
         buildCollaborator({ id: 'p-1', signingOrder: 0 }),
         buildCollaborator({ id: 'p-2', signingOrder: 1 }),
@@ -80,6 +80,25 @@ describe('next-signer.util', () => {
 
       expect(isSignerTurn(signers[0], signers)).toBe(true);
       expect(isSignerTurn(signers[1], signers)).toBe(false);
+    });
+
+    it('con isSequential=false, cualquier firmante PENDING puede firmar sin importar signingOrder', () => {
+      const signers = [
+        buildCollaborator({ id: 'p-1', signingOrder: 0 }),
+        buildCollaborator({ id: 'p-2', signingOrder: 1 }),
+      ];
+
+      expect(isSignerTurn(signers[0], signers, false)).toBe(true);
+      expect(isSignerTurn(signers[1], signers, false)).toBe(true);
+    });
+
+    it('con isSequential=false, sigue siendo false para un firmante que ya no está PENDING', () => {
+      const signer = buildCollaborator({
+        id: 'p-1',
+        status: SIGNEE_STATUS_ENUM.SIGNED,
+      });
+
+      expect(isSignerTurn(signer, [signer], false)).toBe(false);
     });
   });
 });
