@@ -22,13 +22,6 @@ export class UserCreateData {
   email: string;
 
   @ApiProperty({
-    example: 'GERENTE TI',
-    description: 'Cargo o puesto del usuario',
-    nullable: true,
-  })
-  position: string | null;
-
-  @ApiProperty({
     example: ['signer'],
     description: 'Roles asignados al usuario',
     type: [String],

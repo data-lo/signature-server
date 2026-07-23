@@ -89,9 +89,6 @@ export class UserService {
         ...(createUserDto.email && {
           email: createUserDto.email.toLowerCase(),
         }),
-        ...(createUserDto.position && {
-          position: createUserDto.position.toUpperCase(),
-        }),
         roles: createUserDto.roles ?? [UserRoles.SIGNER],
         ...(createUserDto.nationalId && {
           nationalId: createUserDto.nationalId.toUpperCase(),
@@ -277,9 +274,6 @@ export class UserService {
         lastName: updateUserDto.lastName.toUpperCase(),
       }),
       ...(updateUserDto.email && { email: updateUserDto.email.toLowerCase() }),
-      ...(updateUserDto.position && {
-        position: updateUserDto.position.toUpperCase(),
-      }),
       ...(updateUserDto.roles && { roles: updateUserDto.roles }),
     });
 
@@ -350,7 +344,6 @@ export class UserService {
       firstName: string;
       lastName: string;
       email: string;
-      position: string;
       nationalId: string;
       rfc: string;
     },
@@ -386,7 +379,6 @@ export class UserService {
         firstName: dto.firstName.toUpperCase(),
         lastName: dto.lastName.toUpperCase(),
         email: dto.email.toLowerCase(),
-        position: dto.position.toUpperCase(),
         roles: [UserRoles.SIGNER],
         nationalId: dto.nationalId.toUpperCase(),
         password: hashedPassword,
@@ -496,7 +488,6 @@ export class UserService {
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
-      position: user.position,
       roles: user.roles,
       nationalId: user.nationalId,
       isConfigured: user.isConfigured,

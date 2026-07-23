@@ -43,7 +43,6 @@ interface SeedUserSpec {
   email: string;
   firstName: string;
   lastName: string;
-  position: string;
   nationalId: string;
 }
 
@@ -52,14 +51,12 @@ const SEED_USERS: SeedUserSpec[] = [
     email: 'ana.torres.qa@example.com',
     firstName: 'ANA',
     lastName: 'TORRES',
-    position: 'CONTADORA',
     nationalId: 'TOAA900101MDFRRN01',
   },
   {
     email: 'luis.fernandez.qa@example.com',
     firstName: 'LUIS',
     lastName: 'FERNANDEZ',
-    position: 'ABOGADO',
     nationalId: 'FELU880202HDFRRS02',
   },
 ];
@@ -94,7 +91,6 @@ async function upsertUser(
       firstName: spec.firstName,
       lastName: spec.lastName,
       email: spec.email,
-      position: spec.position,
       roles: [UserRoles.SIGNER],
       nationalId: spec.nationalId,
       password,
