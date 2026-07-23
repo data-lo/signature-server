@@ -96,7 +96,6 @@ describe('UserService', () => {
       firstName: 'Juan',
       lastName: 'Pérez',
       email: 'Juan.Perez@Empresa.com',
-      position: 'Gerente',
       roles: [UserRoles.SIGNER],
       nationalId: 'PELJ850101HDFRNN08',
       rfc: 'PELJ850101ABC',
@@ -167,7 +166,6 @@ describe('UserService', () => {
       firstName: 'Ana',
       lastName: 'Gómez',
       email: 'ana@empresa.com',
-      position: 'Analista',
       nationalId: 'GOMA900101MDFRNN01',
       rfc: 'GOMA900101XYZ',
     };
@@ -356,7 +354,6 @@ describe('UserService', () => {
         firstName: 'Juan',
         lastName: 'Pérez',
         email: 'juan@empresa.com',
-        position: 'Gerente',
         roles: ['signer'],
         nationalId: 'CURP1',
         isConfigured: false,

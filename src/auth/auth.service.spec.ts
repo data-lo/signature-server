@@ -129,7 +129,6 @@ describe('AuthService', () => {
       firstName: 'Ana',
       lastName: 'Gómez',
       email: 'ana@empresa.com',
-      position: 'Analista',
       nationalId: 'GOMA900101MDFRNN01',
       rfc: 'GOMA900101XYZ',
       password: 'Password123!',
