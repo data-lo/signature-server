@@ -12,6 +12,7 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
+import { DocumentTransactionService } from './document-transaction.service';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
@@ -46,6 +47,7 @@ describe('DocumentSignaturesService', () => {
   let accountMemberService: Record<string, jest.Mock>;
   let verificationCodeService: Record<string, jest.Mock>;
   let notificationEventsProducer: Record<string, jest.Mock>;
+  let documentTransactionService: Record<string, jest.Mock>;
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -126,6 +128,7 @@ describe('DocumentSignaturesService', () => {
       issue: jest.fn().mockResolvedValue({ id: 'vc-1' }),
     };
     notificationEventsProducer = { emitCreated: jest.fn() };
+    documentTransactionService = { createInitial: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -139,6 +142,10 @@ describe('DocumentSignaturesService', () => {
         {
           provide: NotificationEventsProducer,
           useValue: notificationEventsProducer,
+        },
+        {
+          provide: DocumentTransactionService,
+          useValue: documentTransactionService,
         },
       ],
     }).compile();
@@ -170,6 +177,11 @@ describe('DocumentSignaturesService', () => {
       expect.objectContaining({ requiresVerification: true }),
     );
     expect(notificationEventsProducer.emitCreated).toHaveBeenCalledTimes(3);
+    expect(documentTransactionService.createInitial).toHaveBeenCalledWith(
+      expect.any(String),
+      'hash-123',
+      expect.anything(),
+    );
   });
 
   it('SIMPLE fuerza verification_code aunque el payload mande requiresTwoFactorAuth:false', async () => {

@@ -3,6 +3,7 @@ import { KafkaProducerService } from './kafka-producer.service';
 import {
   DOCUMENT_KAFKA_TOPICS,
   DocumentEventPayload,
+  DocumentCollaboratorSignedPayload,
 } from './document-events.topics';
 import { EventService } from 'src/event/event.service';
 import { EVENT_TYPE_ENUM } from 'src/event/enums/event-type.enum';
@@ -13,6 +14,11 @@ interface EmitDocumentEventParams {
   actorUserId: string;
 }
 
+interface EmitCollaboratorSignedParams extends EmitDocumentEventParams {
+  collaboratorId: string;
+  signedAt: string;
+}
+
 /**
  * Mapeo explícito tópico Kafka -> tipo de evento persistido (ver EventModule) — evitar acoplar
  * ambos enums por coincidencia de string, aunque hoy compartan los mismos valores.
@@ -20,6 +26,8 @@ interface EmitDocumentEventParams {
 const TOPIC_TO_EVENT_TYPE: Record<DOCUMENT_KAFKA_TOPICS, EVENT_TYPE_ENUM> = {
   [DOCUMENT_KAFKA_TOPICS.CREATED]: EVENT_TYPE_ENUM.DOCUMENT_CREATED,
   [DOCUMENT_KAFKA_TOPICS.SENT_TO_SIGN]: EVENT_TYPE_ENUM.DOCUMENT_SENT_TO_SIGN,
+  [DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED]:
+    EVENT_TYPE_ENUM.DOCUMENT_COLLABORATOR_SIGNED,
   [DOCUMENT_KAFKA_TOPICS.SIGNED]: EVENT_TYPE_ENUM.DOCUMENT_SIGNED,
   [DOCUMENT_KAFKA_TOPICS.REJECTED]: EVENT_TYPE_ENUM.DOCUMENT_REJECTED,
   [DOCUMENT_KAFKA_TOPICS.CANCELLATION_REQUESTED]:
@@ -72,6 +80,44 @@ export class DocumentEventsProducer {
 
   emitSentToSign(params: EmitDocumentEventParams) {
     this.emitEvent(DOCUMENT_KAFKA_TOPICS.SENT_TO_SIGN, params);
+  }
+
+  /**
+   * A diferencia de emitSigned (solo cuando el ÚLTIMO firmante termina), esto se dispara por
+   * CADA colaborador que firma — alimenta el encadenamiento de DocumentTransaction (ver
+   * DocumentEventsConsumer.handleCollaboratorSigned).
+   */
+  emitCollaboratorSigned({
+    documentId,
+    fileName,
+    actorUserId,
+    collaboratorId,
+    signedAt,
+  }: EmitCollaboratorSignedParams) {
+    const payload: DocumentCollaboratorSignedPayload = {
+      documentId,
+      fileName,
+      actorUserId,
+      collaboratorId,
+      signedAt,
+      timestamp: new Date().toISOString(),
+    };
+    this.kafkaProducer.emit(
+      DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED,
+      payload,
+    );
+
+    this.eventService
+      .create({
+        eventType: EVENT_TYPE_ENUM.DOCUMENT_COLLABORATOR_SIGNED,
+        metadata: { documentId, fileName, collaboratorId },
+        from: actorUserId,
+      })
+      .catch((error) =>
+        this.logger.error(
+          `Error persistiendo el evento 'document.collaborator_signed' del documento ${documentId}: ${error}`,
+        ),
+      );
   }
 
   emitSigned(params: EmitDocumentEventParams) {
