@@ -37,9 +37,7 @@ import { EventModule } from './event/event.module';
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',
         autoLoadEntities: true,
-        synchronize: false,
-        migrations: [__dirname + '/migrations/*{.ts,.js}'],
-        migrationsRun: true,
+        synchronize: true,
       }),
     }),
 
