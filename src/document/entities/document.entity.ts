@@ -112,8 +112,8 @@ export class DocumentEntity {
   @Column({ default: 0, name: 'visibility_level' })
   visibilityLevel: number;
 
-  @Column({ name: 'seal_key' })
-  sealKey: string;
+  @Column({ name: 'seal_key', nullable: true })
+  sealKey?: string;
 
   @Column({ name: 'total_signers' })
   totalSigners: number;
