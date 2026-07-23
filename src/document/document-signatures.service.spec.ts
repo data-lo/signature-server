@@ -12,7 +12,6 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
-import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from './document-transaction.service';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
