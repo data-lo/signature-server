@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentTransactionService } from './document-transaction.service';
 import { DocumentTransactionEntity } from './entities/document-transaction.entity';
 import { HashService } from 'src/shared/hash/hash.service';
@@ -16,10 +16,23 @@ function createMockRepository() {
 describe('DocumentTransactionService', () => {
   let service: DocumentTransactionService;
   let repository: ReturnType<typeof createMockRepository>;
+  let transactionalRepository: ReturnType<typeof createMockRepository>;
+  let manager: { query: jest.Mock; getRepository: jest.Mock };
+  let dataSource: { transaction: jest.Mock };
   let hashService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     repository = createMockRepository();
+    transactionalRepository = createMockRepository();
+    manager = {
+      query: jest.fn().mockResolvedValue(undefined),
+      getRepository: jest.fn().mockReturnValue(transactionalRepository),
+    };
+    dataSource = {
+      transaction: jest.fn(async (cb: (manager: unknown) => Promise<unknown>) =>
+        cb(manager),
+      ),
+    };
     hashService = {
       generateRegistryHash: jest.fn().mockResolvedValue('actual-hash-nuevo'),
       generateCiperHash: jest.fn().mockResolvedValue('cipher-content'),
@@ -32,6 +45,7 @@ describe('DocumentTransactionService', () => {
           provide: getRepositoryToken(DocumentTransactionEntity),
           useValue: repository,
         },
+        { provide: getDataSourceToken(), useValue: dataSource },
         { provide: HashService, useValue: hashService },
       ],
     }).compile();
@@ -78,21 +92,35 @@ describe('DocumentTransactionService', () => {
   });
 
   describe('registerSignature', () => {
-    it('encadena chainHash = actualHash del registro anterior cuando ya existe uno', async () => {
-      repository.findOne.mockResolvedValue({
-        id: 'transaction-0',
-        documentId: 'doc-1',
-        actualHash: 'actual-hash-anterior',
-        chainHash: '',
-      });
+    it('toma el advisory lock (namespace + hashtext(documentId)) antes de leer o escribir', async () => {
+      transactionalRepository.find.mockResolvedValue([]);
 
       await service.registerSignature('doc-1', 'collaborator-1', 'sig-hash');
 
-      expect(repository.findOne).toHaveBeenCalledWith({
+      expect(manager.query).toHaveBeenCalledWith(
+        'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+        [expect.any(Number), 'doc-1'],
+      );
+    });
+
+    it('encadena chainHash = actualHash del registro anterior cuando ya existe uno', async () => {
+      transactionalRepository.find.mockResolvedValue([
+        {
+          id: 'transaction-0',
+          documentId: 'doc-1',
+          actualHash: 'actual-hash-anterior',
+          chainHash: '',
+        },
+      ]);
+
+      await service.registerSignature('doc-1', 'collaborator-1', 'sig-hash');
+
+      expect(transactionalRepository.find).toHaveBeenCalledWith({
         where: { documentId: 'doc-1' },
         order: { timeStamp: 'DESC' },
+        take: 1,
       });
-      expect(repository.save).toHaveBeenCalledWith(
+      expect(transactionalRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           documentId: 'doc-1',
           collaboratorId: 'collaborator-1',
@@ -103,11 +131,11 @@ describe('DocumentTransactionService', () => {
     });
 
     it('usa chainHash vacío si no hay ningún registro previo (documento sin transacción inicial)', async () => {
-      repository.findOne.mockResolvedValue(null);
+      transactionalRepository.find.mockResolvedValue([]);
 
       await service.registerSignature('doc-1', 'collaborator-1', 'sig-hash');
 
-      expect(repository.save).toHaveBeenCalledWith(
+      expect(transactionalRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ chainHash: '' }),
       );
     });

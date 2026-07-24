@@ -10,7 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 
 // TypeORM
-import { ILike, In, IsNull, Repository } from 'typeorm';
+import { FindOptionsRelations, ILike, In, IsNull, Repository } from 'typeorm';
 
 // Entities
 import { DocumentEntity } from './entities/document.entity';
@@ -724,6 +724,55 @@ export class DocumentService {
     };
   }
 
+  /**
+   * Resuelve `myParticipant` (+ el arreglo completo de firmantes) para un documento, e intenta
+   * vincular al usuario autenticado por email si todavía no aparece como colaborador — Caso A de
+   * "Notificación por Email para Firma Simple y Vinculación de Cuenta": llegó ya autenticado
+   * desde el enlace del correo, con su fila de Collaborator aún sin accountId.
+   *
+   * Bug corregido: antes solo sign() tenía este comportamiento — reject() (y por extensión
+   * cualquier firmante que llegara ya autenticado y su primera acción fuera rechazar, no firmar)
+   * se topaba con un ForbiddenException aunque su email sí coincidiera con una invitación
+   * pendiente. Compartir esta resolución entre ambos flujos cierra esa asimetría.
+   */
+  private async findOrLinkMySignerCollaborator(
+    documentId: string,
+    currentUserId: string,
+    relations: FindOptionsRelations<CollaboratorEntity>,
+  ): Promise<{
+    signerCollaborators: CollaboratorEntity[];
+    myParticipant: CollaboratorEntity | undefined;
+  }> {
+    let signerCollaborators = await this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
+      relations,
+      order: { signingOrder: 'ASC' },
+    });
+
+    let myParticipant = signerCollaborators.find(
+      (c) => c.account?.userId === currentUserId,
+    );
+
+    if (!myParticipant) {
+      const linkResult = await this.linkPendingCollaboratorAccount(
+        documentId,
+        currentUserId,
+      );
+      if (linkResult.data.linked) {
+        signerCollaborators = await this.collaboratorRepository.find({
+          where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
+          relations,
+          order: { signingOrder: 'ASC' },
+        });
+        myParticipant = signerCollaborators.find(
+          (c) => c.account?.userId === currentUserId,
+        );
+      }
+    }
+
+    return { signerCollaborators, myParticipant };
+  }
+
   /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
   async getDocumentMinioURL(documentId: string) {
     try {
@@ -1117,37 +1166,11 @@ export class DocumentService {
       );
     }
 
-    let signerCollaborators = await this.collaboratorRepository.find({
-      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
-      relations: { account: { user: true }, simpleSignature: true },
-      order: { signingOrder: 'ASC' },
-    });
-
-    let myParticipant = signerCollaborators.find(
-      (c) => c.account?.userId === currentUserId,
-    );
-
-    // Caso A de "Notificación por Email para Firma Simple y Vinculación de Cuenta": el usuario
-    // llegó ya autenticado desde el enlace del correo (su fila de Collaborator todavía tiene
-    // accountId null) — se vincula aquí, de forma perezosa, en vez de exigir que haya pasado
-    // antes por PATCH /document/:id/link-collaborator (ese endpoint es solo para los Casos B/C,
-    // registro/login recién completados).
-    if (!myParticipant) {
-      const linkResult = await this.linkPendingCollaboratorAccount(
-        documentId,
-        currentUserId,
-      );
-      if (linkResult.data.linked) {
-        signerCollaborators = await this.collaboratorRepository.find({
-          where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
-          relations: { account: { user: true }, simpleSignature: true },
-          order: { signingOrder: 'ASC' },
-        });
-        myParticipant = signerCollaborators.find(
-          (c) => c.account?.userId === currentUserId,
-        );
-      }
-    }
+    const { signerCollaborators, myParticipant } =
+      await this.findOrLinkMySignerCollaborator(documentId, currentUserId, {
+        account: { user: true },
+        simpleSignature: true,
+      });
 
     if (!myParticipant) {
       throw new ForbiddenException('No eres firmante de este documento');
@@ -1200,18 +1223,6 @@ export class DocumentService {
     myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
 
-    // Se dispara por CADA firmante (no solo el último, a diferencia de emitSigned más abajo) —
-    // alimenta el encadenamiento de DocumentTransaction (ver Registro de Transacciones /
-    // Document Transaction). Va justo después del claim atómico: si la carrera se pierde, esta
-    // línea nunca se alcanza y no se encadena un registro para una firma que no ocurrió.
-    this.documentEventsProducer.emitCollaboratorSigned({
-      documentId,
-      fileName: document.fileName,
-      actorUserId: currentUserId,
-      collaboratorId: myParticipant.id,
-      signedAt: myParticipant.signedAt.toISOString(),
-    });
-
     // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
     // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()
     // (que corre después, cuando firma el ÚLTIMO firmante) volvería a leer la firma EN VIVO de
@@ -1251,6 +1262,22 @@ export class DocumentService {
     // El claim atómico ya persistió status/signedAt — este save solo persiste
     // signatureSnapshotObjectKey (y re-escribe status/signedAt con el mismo valor, sin efecto).
     await this.collaboratorRepository.save(myParticipant);
+
+    // Bug corregido: este evento alimenta el encadenamiento de DocumentTransaction y del ledger
+    // global de auditoría (ver Kafka -> DocumentEventsConsumer) — se dispara AQUÍ, después de
+    // que el snapshot de la firma ya quedó tomado y persistido, no justo tras el claim atómico.
+    // Si se disparara antes y `snapshotSignatureImage` (llamada a MinIO) fallara, el evento ya
+    // publicado dejaría un registro de "firmado" en ambas cadenas para una firma cuyo
+    // signatureSnapshotObjectKey nunca se llegó a guardar — y el firmante, al reintentar, se
+    // encontraría bloqueado por el claim atómico ("ya respondiste") sin poder corregirlo. Se
+    // dispara por CADA firmante (no solo el último, a diferencia de emitSigned más abajo).
+    this.documentEventsProducer.emitCollaboratorSigned({
+      documentId,
+      fileName: document.fileName,
+      actorUserId: currentUserId,
+      collaboratorId: myParticipant.id,
+      signedAt: myParticipant.signedAt.toISOString(),
+    });
 
     void this.auditService.create({
       documentId,
@@ -1432,15 +1459,10 @@ export class DocumentService {
       );
     }
 
-    const signerCollaborators = await this.collaboratorRepository.find({
-      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
-      relations: { account: { user: true } },
-      order: { signingOrder: 'ASC' },
-    });
-
-    const myParticipant = signerCollaborators.find(
-      (c) => c.account?.userId === currentUserId,
-    );
+    const { signerCollaborators, myParticipant } =
+      await this.findOrLinkMySignerCollaborator(documentId, currentUserId, {
+        account: { user: true },
+      });
 
     if (!myParticipant) {
       throw new ForbiddenException('No eres firmante de este documento');

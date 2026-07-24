@@ -186,6 +186,13 @@ export class DocumentSignaturesService {
         }[] = [];
         let verificationCodesCount = 0;
         let anyRequiresVerification = false;
+        // Bug corregido: este loop nunca asignaba signingOrder a los firmantes (a diferencia de
+        // DocumentService.create(), que sí lo hace vía signerIds.map((_, index) => ...)) — con
+        // signingOrder siempre null, getNextPendingSigner() (base de "a quién le toca firmar" en
+        // sign()/reject()/las notificaciones) no tenía ningún orden real que respetar para
+        // documentos isSequential=true creados por este endpoint, que es el único que usa el
+        // frontend. Se numera solo entre los SIGNER, en el orden en que vienen en el payload.
+        let signerIndex = 0;
 
         for (const participant of dto.collaborators) {
           const isSigner =
@@ -222,10 +229,14 @@ export class DocumentSignaturesService {
                 ? SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN[participant.signatureType!]
                 : null,
               simpleSignatureId,
+              signingOrder: isSigner ? signerIndex : null,
               status: SIGNEE_STATUS_ENUM.PENDING,
               ipAddress: ip,
             }),
           );
+          if (isSigner) {
+            signerIndex += 1;
+          }
 
           const notification = await notificationRepo.save(
             notificationRepo.create({

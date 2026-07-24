@@ -213,6 +213,24 @@ describe('DocumentSignaturesService', () => {
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
   });
 
+  it('bug corregido: asigna signingOrder consecutivo (0,1,2...) solo entre los SIGNER, en el orden del payload; VIEWER queda en null', async () => {
+    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    const mariaCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'maria.gomez@mail.com',
+    );
+    const carlosCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'auditor@mail.com',
+    );
+
+    expect(juanCall[0].signingOrder).toBe(0);
+    expect(mariaCall[0].signingOrder).toBe(1);
+    expect(carlosCall[0].signingOrder).toBeNull();
+  });
+
   it('documento secuencial (default, sin isSequential en el payload): no envía invitaciones de firma simple', async () => {
     await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 

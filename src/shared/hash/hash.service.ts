@@ -56,6 +56,16 @@ export class HashService {
     return hash;
   }
 
+  /**
+   * SHA-256 sobre la concatenación directa (en el orden dado) de las partes recibidas — a
+   * diferencia de generateRegistryHash (que serializa un objeto con JSON.stringify y llaves
+   * ordenadas), esto es para fórmulas de hash explícitas y literales como la del Módulo de
+   * Auditoría Global (SHA256(documentId + cipher + chainHash + auditType + timestamp)).
+   */
+  async generateChainedHash(...parts: string[]): Promise<string> {
+    return crypto.createHash('sha256').update(parts.join('')).digest('hex');
+  }
+
   async generateCiperHash(cipherContent: object): Promise<string> {
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', this.CIPHER_KEY, iv);

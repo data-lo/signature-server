@@ -7,6 +7,8 @@ import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
+import { AuditChainService } from 'src/audit-chain/audit-chain.service';
+import { AUDIT_TYPE_ENUM } from 'src/audit-chain/enums/audit-type.enum';
 import type {
   DocumentEventPayload,
   DocumentCollaboratorSignedPayload,
@@ -38,6 +40,7 @@ describe('DocumentEventsConsumer', () => {
   let notificationRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let documentTransactionService: Record<string, jest.Mock>;
+  let auditChainService: Record<string, jest.Mock>;
 
   const payload: DocumentEventPayload = {
     documentId: 'doc-1',
@@ -56,6 +59,7 @@ describe('DocumentEventsConsumer', () => {
     notificationRepository = createMockRepository();
     collaboratorRepository = createMockRepository();
     documentTransactionService = { registerSignature: jest.fn() };
+    auditChainService = { recordEvent: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -72,6 +76,7 @@ describe('DocumentEventsConsumer', () => {
           provide: DocumentTransactionService,
           useValue: documentTransactionService,
         },
+        { provide: AuditChainService, useValue: auditChainService },
       ],
     }).compile();
 
@@ -82,11 +87,17 @@ describe('DocumentEventsConsumer', () => {
     expect(consumer).toBeDefined();
   });
 
-  it('handleCreated no escribe ninguna notificación (no se envía correo al crear)', async () => {
-    consumer.handleCreated(payload);
+  it('handleCreated no escribe ninguna notificación (no se envía correo al crear), pero sí encadena el evento en el ledger global', async () => {
+    await consumer.handleCreated(payload);
 
     expect(collaboratorRepository.find).not.toHaveBeenCalled();
     expect(notificationRepository.save).not.toHaveBeenCalled();
+    expect(auditChainService.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documentId: 'doc-1',
+        auditType: AUDIT_TYPE_ENUM.CREATED,
+      }),
+    );
   });
 
   it('handleSentToSign notifica solo al próximo firmante pendiente', async () => {
@@ -103,6 +114,9 @@ describe('DocumentEventsConsumer', () => {
     expect(notificationRepository.save).toHaveBeenCalledWith([
       expect.objectContaining({ collaboratorId: 'p-b', documentId: 'doc-1' }),
     ]);
+    expect(auditChainService.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ auditType: AUDIT_TYPE_ENUM.PENDING }),
+    );
   });
 
   it('handleSigned notifica a todos los colaboradores del documento', async () => {
@@ -129,6 +143,11 @@ describe('DocumentEventsConsumer', () => {
         actorType: ACTOR_TYPE_ENUM.WATCHER,
       }),
     ]);
+    expect(auditChainService.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auditType: AUDIT_TYPE_ENUM.SIGNATURES_COMPLETED,
+      }),
+    );
   });
 
   it('handleRejected notifica al creador sin collaboratorId', async () => {
@@ -136,6 +155,9 @@ describe('DocumentEventsConsumer', () => {
 
     expect(notificationRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ collaboratorId: null, documentId: 'doc-1' }),
+    );
+    expect(auditChainService.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ auditType: AUDIT_TYPE_ENUM.REJECTED }),
     );
   });
 
@@ -191,5 +213,32 @@ describe('DocumentEventsConsumer', () => {
     await expect(
       consumer.handleCollaboratorSigned(collaboratorSignedPayload),
     ).resolves.toBeUndefined();
+  });
+
+  it('handleCollaboratorSigned encadena el evento en el ledger global como SIGNATURES_PARTIAL, incluyendo el collaboratorId en los metadatos', async () => {
+    await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+    expect(auditChainService.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documentId: 'doc-1',
+        auditType: AUDIT_TYPE_ENUM.SIGNATURES_PARTIAL,
+        metadata: expect.objectContaining({ collaboratorId: 'collaborator-1' }),
+      }),
+    );
+  });
+
+  it('handleCancellationRequested/handleCancelled no encadenan nada en el ledger global (sin AUDIT_TYPE equivalente)', async () => {
+    collaboratorRepository.find.mockResolvedValue([]);
+
+    await consumer.handleCancellationRequested(payload);
+    await consumer.handleCancelled(payload);
+
+    expect(auditChainService.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('no propaga el error si falla el encadenamiento del ledger global de auditoría', async () => {
+    auditChainService.recordEvent.mockRejectedValue(new Error('DB caída'));
+
+    await expect(consumer.handleCreated(payload)).resolves.toBeUndefined();
   });
 });

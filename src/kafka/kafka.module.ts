@@ -18,6 +18,7 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { SharedModule } from 'src/shared/shared.module';
 import { EventModule } from 'src/event/event.module';
 import { DocumentTransactionModule } from 'src/document/document-transaction.module';
+import { AuditChainModule } from 'src/audit-chain/audit-chain.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { DocumentTransactionModule } from 'src/document/document-transaction.mod
     SharedModule,
     EventModule,
     DocumentTransactionModule,
+    AuditChainModule,
     ClientsModule.registerAsync([
       {
         name: KAFKA_SERVICE,

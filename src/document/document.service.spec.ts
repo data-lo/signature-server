@@ -851,6 +851,37 @@ describe('DocumentService', () => {
       );
       expect(minioService.getFileInBytesFormat).not.toHaveBeenCalled();
     });
+
+    it('bug corregido: Caso A también aplica a reject() — si el usuario autenticado no aparece como firmante todavía, se vincula por email y puede rechazar en la misma petición', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      userService.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'maria@correo.com',
+      });
+
+      const linkedSigner = buildSigner({
+        id: 'collaborator-1',
+        userId: 'user-1',
+        signingOrder: 0,
+      });
+
+      collaboratorRepository.find
+        .mockResolvedValueOnce([]) // primer find en reject(): nadie coincide por accountId todavía
+        .mockResolvedValueOnce([linkedSigner]); // segundo find, tras vincular por email
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'collaborator-1',
+        email: 'maria@correo.com',
+        accountId: null,
+      });
+
+      const result = await service.reject('doc-1', 'user-1', 'No es válido');
+
+      expect(result.success).toBe(true);
+      expect(collaboratorRepository.update).toHaveBeenCalledWith(
+        'collaborator-1',
+        { accountId: 'account-of-user-1' },
+      );
+    });
   });
 
   describe('requestCancellation', () => {
