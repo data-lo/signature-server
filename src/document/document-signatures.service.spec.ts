@@ -12,6 +12,8 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
+import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
+import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from './document-transaction.service';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
@@ -47,6 +49,7 @@ describe('DocumentSignaturesService', () => {
   let accountMemberService: Record<string, jest.Mock>;
   let verificationCodeService: Record<string, jest.Mock>;
   let notificationEventsProducer: Record<string, jest.Mock>;
+  let documentEventsProducer: Record<string, jest.Mock>;
   let emailService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
 
@@ -129,6 +132,7 @@ describe('DocumentSignaturesService', () => {
       issue: jest.fn().mockResolvedValue({ id: 'vc-1' }),
     };
     notificationEventsProducer = { emitCreated: jest.fn() };
+    documentEventsProducer = { emitCreated: jest.fn() };
     emailService = {
       sendDocumentInvitationNotification: jest
         .fn()
@@ -149,6 +153,11 @@ describe('DocumentSignaturesService', () => {
           provide: NotificationEventsProducer,
           useValue: notificationEventsProducer,
         },
+        {
+          provide: DocumentEventsProducer,
+          useValue: documentEventsProducer,
+        },
+        { provide: EmailService, useValue: emailService },
         {
           provide: DocumentTransactionService,
           useValue: documentTransactionService,
@@ -183,6 +192,10 @@ describe('DocumentSignaturesService', () => {
       expect.objectContaining({ requiresVerification: true }),
     );
     expect(notificationEventsProducer.emitCreated).toHaveBeenCalledTimes(3);
+    expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(1);
+    expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: 'creator-1' }),
+    );
     expect(documentTransactionService.createInitial).toHaveBeenCalledWith(
       expect.any(String),
       'hash-123',
@@ -209,6 +222,24 @@ describe('DocumentSignaturesService', () => {
     );
 
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+  });
+
+  it('bug corregido: asigna signingOrder consecutivo (0,1,2...) solo entre los SIGNER, en el orden del payload; VIEWER queda en null', async () => {
+    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    const mariaCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'maria.gomez@mail.com',
+    );
+    const carlosCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'auditor@mail.com',
+    );
+
+    expect(juanCall[0].signingOrder).toBe(0);
+    expect(mariaCall[0].signingOrder).toBe(1);
+    expect(carlosCall[0].signingOrder).toBeNull();
   });
 
   it('documento secuencial (default, sin isSequential en el payload): no envía invitaciones de firma simple', async () => {
@@ -306,6 +337,7 @@ describe('DocumentSignaturesService', () => {
     ).rejects.toThrow('DB caída');
 
     expect(notificationEventsProducer.emitCreated).not.toHaveBeenCalled();
+    expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
   });
 
   it('rechaza con BadRequestException si no se proporciona archivo', async () => {

@@ -14,6 +14,8 @@ import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { NOTIFICATION_CHANNEL_ENUM } from 'src/document/enum/notification-channel.enum';
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
+import { AuditChainService } from 'src/audit-chain/audit-chain.service';
+import { AUDIT_TYPE_ENUM } from 'src/audit-chain/enums/audit-type.enum';
 
 /**
  * Consumidor real de los eventos de negocio del ciclo de vida del documento (ver
@@ -27,6 +29,14 @@ import { DocumentTransactionService } from 'src/document/document-transaction.se
  * aquí (en vez de en document.service.ts) es async/eventual respecto a la transición de
  * estado, una diferencia de comportamiento intencional para no acoplar el flujo de firma a la
  * persistencia de auditoría de notificaciones.
+ *
+ * También encadena cada evento en el ledger global de auditoría (ver AuditChainService, "Módulo
+ * de Auditoría e Integridad Global de BD") — deliberadamente en este mismo consumer y no en uno
+ * nuevo: NestJS solo permite UN handler por patrón de Kafka dentro de un mismo microservicio
+ * (@nestjs/microservices registra los handlers en un Map por patrón — un segundo `@Controller`
+ * con el mismo `@EventPattern` simplemente pisaría a este, no correrían ambos), así que un
+ * consumer de auditoría separado sobre estos mismos tópicos habría roto silenciosamente la
+ * persistencia de notificaciones de arriba.
  */
 @Controller()
 export class DocumentEventsConsumer {
@@ -38,12 +48,14 @@ export class DocumentEventsConsumer {
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
     private readonly documentTransactionService: DocumentTransactionService,
+    private readonly auditChainService: AuditChainService,
   ) {}
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.CREATED)
-  handleCreated(@Payload() payload: DocumentEventPayload) {
+  async handleCreated(@Payload() payload: DocumentEventPayload) {
     // Sin correo enviado en la creación (ver document.service.ts create()) — nada que persistir.
     this.logEvent('creado', payload);
+    await this.recordAudit(payload, AUDIT_TYPE_ENUM.CREATED);
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.SENT_TO_SIGN)
@@ -61,6 +73,7 @@ export class DocumentEventsConsumer {
         await this.persistNotifications(payload.documentId, [nextSigner]);
       }
     }, payload);
+    await this.recordAudit(payload, AUDIT_TYPE_ENUM.PENDING);
   }
 
   /**
@@ -87,6 +100,9 @@ export class DocumentEventsConsumer {
         `Error encadenando Document Transaction para el documento ${payload.documentId} (colaborador ${payload.collaboratorId}): ${error}`,
       );
     }
+    await this.recordAudit(payload, AUDIT_TYPE_ENUM.SIGNATURES_PARTIAL, {
+      collaboratorId: payload.collaboratorId,
+    });
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.SIGNED)
@@ -100,6 +116,7 @@ export class DocumentEventsConsumer {
       });
       await this.persistNotifications(payload.documentId, collaborators);
     }, payload);
+    await this.recordAudit(payload, AUDIT_TYPE_ENUM.SIGNATURES_COMPLETED);
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.REJECTED)
@@ -111,6 +128,7 @@ export class DocumentEventsConsumer {
       () => this.persistCreatorNotification(payload.documentId),
       payload,
     );
+    await this.recordAudit(payload, AUDIT_TYPE_ENUM.REJECTED);
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.CANCELLATION_REQUESTED)
@@ -174,6 +192,36 @@ export class DocumentEventsConsumer {
         sentAt: new Date(),
       }),
     );
+  }
+
+  /**
+   * Encadena el evento en el ledger global de auditoría (ver AuditChainService). Best-effort,
+   * mismo criterio que `safely()`: un fallo aquí no debe tumbar el consumer ni impedir que el
+   * resto del procesamiento del evento (notificaciones, Document Transaction) continúe — solo
+   * deja un hueco en el ledger para este evento puntual, la cadena sigue siendo válida a partir
+   * del último registro exitoso.
+   */
+  private async recordAudit(
+    payload: DocumentEventPayload,
+    auditType: AUDIT_TYPE_ENUM,
+    extraMetadata?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.auditChainService.recordEvent({
+        documentId: payload.documentId,
+        auditType,
+        metadata: {
+          fileName: payload.fileName,
+          actorUserId: payload.actorUserId,
+          ...extraMetadata,
+        },
+        timestamp: new Date(payload.timestamp),
+      });
+    } catch (error) {
+      this.logger.error(
+        `Error encadenando el ledger global de auditoría para el documento ${payload.documentId} (auditType=${auditType}): ${error}`,
+      );
+    }
   }
 
   /** Los errores al persistir Notification nunca deben tumbar el consumer — mismo criterio best-effort que EmailService en document.service.ts. */

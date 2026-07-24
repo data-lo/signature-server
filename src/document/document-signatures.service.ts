@@ -29,6 +29,7 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
+import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { EmailService } from 'src/shared/email/email.service';
@@ -87,6 +88,7 @@ export class DocumentSignaturesService {
     private readonly accountMemberService: AccountMemberService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly notificationEventsProducer: NotificationEventsProducer,
+    private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
   ) {}
@@ -186,6 +188,13 @@ export class DocumentSignaturesService {
         }[] = [];
         let verificationCodesCount = 0;
         let anyRequiresVerification = false;
+        // Bug corregido: este loop nunca asignaba signingOrder a los firmantes (a diferencia de
+        // DocumentService.create(), que sí lo hace vía signerIds.map((_, index) => ...)) — con
+        // signingOrder siempre null, getNextPendingSigner() (base de "a quién le toca firmar" en
+        // sign()/reject()/las notificaciones) no tenía ningún orden real que respetar para
+        // documentos isSequential=true creados por este endpoint, que es el único que usa el
+        // frontend. Se numera solo entre los SIGNER, en el orden en que vienen en el payload.
+        let signerIndex = 0;
 
         for (const participant of dto.collaborators) {
           const isSigner =
@@ -222,10 +231,14 @@ export class DocumentSignaturesService {
                 ? SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN[participant.signatureType!]
                 : null,
               simpleSignatureId,
+              signingOrder: isSigner ? signerIndex : null,
               status: SIGNEE_STATUS_ENUM.PENDING,
               ipAddress: ip,
             }),
           );
+          if (isSigner) {
+            signerIndex += 1;
+          }
 
           const notification = await notificationRepo.save(
             notificationRepo.create({
@@ -297,6 +310,19 @@ export class DocumentSignaturesService {
 
     // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
     // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.
+    //
+    // Bug corregido: este endpoint nunca publicaba DOCUMENT_KAFKA_TOPICS.CREATED (solo el tópico
+    // de NotificationEventsProducer, uno por colaborador, para el envío de correo) — por lo que
+    // DocumentEventsConsumer.handleCreated() nunca corría para documentos creados por esta vía
+    // (la única que usa el frontend), y el ledger global de auditoría (AuditChainService, ver
+    // historia "Módulo de Auditoría e Integridad Global de BD") arrancaba su cadena directo en el
+    // primer evento de firma en vez de en la creación del documento.
+    this.documentEventsProducer.emitCreated({
+      documentId: document.id,
+      fileName: document.fileName,
+      actorUserId: createdBy,
+    });
+
     for (const { notification, collaboratorId } of notificationEvents) {
       this.notificationEventsProducer.emitCreated({
         notificationId: notification.id,
