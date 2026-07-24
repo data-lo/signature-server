@@ -83,6 +83,44 @@ export const documentSignedTemplate = (
 </html>
 `;
 
+/** Ver documentSignedTemplate: mismo evento, pero dirigido a quien creó el documento y con la lista de firmantes (que un participante ya conoce, pero el creador quiere ver de un vistazo). */
+export const documentCompletedForCreatorTemplate = (
+  creatorName: string,
+  documentName: string,
+  signerNames: string[],
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #2E7D32; margin-top: 0;">Documento firmado exitosamente</h2>
+
+    <p style="color: #555555;">Hola <strong>${creatorName}</strong>,</p>
+
+    <p style="color: #555555;">
+      El documento <strong>${documentName}</strong> que enviaste a firmar ha sido firmado por
+      todos los participantes. Adjuntamos el comprobante en formato PDF.
+    </p>
+
+    <p style="color: #555555; margin-bottom: 8px;">Firmantes:</p>
+    <ul style="color: #333333; padding-left: 20px; margin-top: 0;">
+      ${signerNames.map((name) => `<li>${name}</li>`).join('\n      ')}
+    </ul>
+
+    <p style="color: #999999; font-size: 12px;">
+      Este correo es tu comprobante de que el proceso de firma se completó correctamente.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
+
 export const documentRejectedTemplate = (
   creatorName: string,
   rejecterName: string,
@@ -177,6 +215,42 @@ export const organizationInvitationTemplate = (
 
     <p style="color: #999999; font-size: 12px;">
       Si no esperabas este mensaje, puedes ignorarlo.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
+
+export const verificationCodeTemplate = (
+  documentName: string,
+  code: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #333333; margin-top: 0;">Código de verificación</h2>
+
+    <p style="color: #555555;">
+      Tu código de verificación para firmar <strong>${documentName}</strong> es:
+    </p>
+
+    <div style="background-color: #f4f4f4; border-radius: 6px; padding: 20px; margin: 24px 0; text-align: center;">
+      <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #2E7D32;">${code}</span>
+    </div>
+
+    <p style="color: #555555; font-size: 13px;">
+      Este código vence en 15 minutos.
+    </p>
+
+    <p style="color: #999999; font-size: 12px;">
+      Si no esperabas este mensaje, por favor contáctanos.
     </p>
 
   </div>

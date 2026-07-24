@@ -24,6 +24,7 @@ import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { DocumentTransactionService } from './document-transaction.service';
+import { collaboratorDisplayName } from './utils/collaborator-display.util';
 
 function createMockRepository() {
   return {
@@ -131,6 +132,7 @@ describe('DocumentService', () => {
     emailService = {
       sendDocumentPendingNotification: jest.fn(),
       sendDocumentSignedNotification: jest.fn(),
+      sendDocumentCompletedToCreatorNotification: jest.fn(),
       sendDocumentRejectedNotification: jest.fn(),
       sendDocumentCancellationPendingNotification: jest.fn(),
       sendDocumentCancelledNotification: jest.fn(),
@@ -444,9 +446,10 @@ describe('DocumentService', () => {
         'user-1',
         'account-1',
       );
-      expect(qb.where).toHaveBeenCalledWith('document.accountId = :accountId', {
-        accountId: 'account-1',
-      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'document.accountId = :accountId',
+        { accountId: 'account-1' },
+      );
     });
 
     it('filtra el listado por organizationId cuando la cuenta activa es de una organización (Fase 5)', async () => {
@@ -459,9 +462,28 @@ describe('DocumentService', () => {
 
       await service.findWithFilters('user-1', 'account-org-member-1', query);
 
-      expect(qb.where).toHaveBeenCalledWith(
+      expect(qb.andWhere).toHaveBeenCalledWith(
         'document.organizationId = :organizationId',
         { organizationId: 'org-1' },
+      );
+    });
+
+    it('bug corregido: NO filtra por accountId/organizationId cuando se pide por participantEmail — un documento donde soy firmante casi siempre pertenece a la cuenta de quien lo creó, no a la mía', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        ...query,
+        participantEmail: 'firmante@correo.com',
+      } as any);
+
+      expect(qb.andWhere).not.toHaveBeenCalledWith(
+        'document.accountId = :accountId',
+        expect.anything(),
       );
     });
   });
@@ -547,6 +569,28 @@ describe('DocumentService', () => {
       expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
       expect(emailService.sendDocumentSignedNotification).toHaveBeenCalled();
       expect(document.completedSignersCount).toBe(1);
+    });
+
+    it('bug corregido: además de a los participantes, notifica por correo a quien creó el documento con la lista de firmantes, ya que el creador no siempre es también un participante', async () => {
+      const document = mockDocument({ createdBy: 'creator-1' });
+      documentRepository.findOne.mockResolvedValue(document);
+      const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      collaboratorRepository.find
+        .mockResolvedValueOnce([onlySigner])
+        .mockResolvedValueOnce([onlySigner]);
+
+      await service.sign('doc-1', 'user-1');
+
+      expect(userService.findOne).toHaveBeenCalledWith('creator-1');
+      expect(
+        emailService.sendDocumentCompletedToCreatorNotification,
+      ).toHaveBeenCalledWith(
+        'creador@correo.com',
+        'Creador Uno',
+        document.fileName,
+        [collaboratorDisplayName(onlySigner)],
+        expect.anything(),
+      );
     });
 
     it('guarda un snapshot inmutable de la firma al firmar (bug: firma en vivo podía cambiar después)', async () => {
@@ -1231,6 +1275,47 @@ describe('DocumentService', () => {
 
       const resultC = await service.findDetailForUser('doc-1', 'user-c');
       expect(resultC.data.canSign).toBe(true);
+    });
+
+    it('bug corregido: Caso A también aplica a findDetailForUser — si el usuario autenticado todavía no aparece como firmante, se vincula por email antes de calcular canSign/myStatus (sin esto, el botón de firmar nunca aparecía en la vista del documento)', async () => {
+      const pendingCollaborator = buildSigner({
+        id: 'p-b',
+        userId: 'user-b',
+        signingOrder: 1,
+      });
+      const unlinkedDetailDocument = {
+        ...mockDetailDocument(),
+        collaborators: [
+          signerA,
+          { ...pendingCollaborator, accountId: null, account: null },
+          signerC,
+        ],
+      };
+      const linkedDetailDocument = {
+        ...mockDetailDocument(),
+        collaborators: [signerA, pendingCollaborator, signerC],
+      };
+
+      documentRepository.findOne
+        .mockResolvedValueOnce(unlinkedDetailDocument as unknown as DocumentEntity)
+        .mockResolvedValueOnce(linkedDetailDocument as unknown as DocumentEntity);
+      userService.findOne.mockResolvedValue({
+        id: 'user-b',
+        email: 'firmante@correo.com',
+      });
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'p-b',
+        email: 'firmante@correo.com',
+        accountId: null,
+      });
+
+      const result = await service.findDetailForUser('doc-1', 'user-b');
+
+      expect(collaboratorRepository.update).toHaveBeenCalledWith('p-b', {
+        accountId: 'account-of-user-b',
+      });
+      expect(result.data.canSign).toBe(true);
+      expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
     });
   });
 

@@ -381,19 +381,8 @@ export class DocumentService {
       withUrl,
     } = query;
 
-    // Contexto de organización: todos los miembros comparten organizationId, así que ese es el
-    // filtro real (accountId es una fila por usuario desde la Fase 5, ver decisión D5 del plan
-    // de migración ER-V2). Contexto personal: accountId sigue sirviendo (1 miembro = 1 fila).
     const qb = this.documentRepository
       .createQueryBuilder('document')
-      .where(
-        activeAccount.organizationId
-          ? 'document.organizationId = :organizationId'
-          : 'document.accountId = :accountId',
-        activeAccount.organizationId
-          ? { organizationId: activeAccount.organizationId }
-          : { accountId },
-      )
       .leftJoinAndSelect('document.requestedBy', 'requester')
       .leftJoinAndSelect('document.collaborators', 'collaborator')
       .leftJoinAndSelect('collaborator.account', 'collaboratorAccount')
@@ -401,6 +390,26 @@ export class DocumentService {
       .orderBy('document.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
+
+    // Bug corregido: antes esta consulta SIEMPRE arrancaba con
+    // `document.accountId = :accountId` (o organizationId) — es decir, "documentos que le
+    // pertenecen a MI cuenta". Eso funciona para GESTIONAR (documentos que yo creé), pero rompía
+    // por completo FIRMAR: una invitación a firmar casi siempre pertenece a la cuenta de QUIEN
+    // CREÓ el documento, no a la mía, así que ese documento nunca podía aparecer aquí sin
+    // importar qué tan bien resuelto estuviera el colaborador. Ahora, cuando la consulta viene
+    // filtrada por participantEmail (el caso de "documentos donde soy participante"), se usa esa
+    // pertenencia como único filtro de alcance; solo se restringe por cuenta/organización activa
+    // cuando NO se pide por participantEmail (el caso de "documentos que pertenecen a mi cuenta").
+    if (!participantEmail) {
+      qb.andWhere(
+        activeAccount.organizationId
+          ? 'document.organizationId = :organizationId'
+          : 'document.accountId = :accountId',
+        activeAccount.organizationId
+          ? { organizationId: activeAccount.organizationId }
+          : { accountId },
+      );
+    }
 
     if (id) {
       qb.andWhere('document.id = :id', { id });
@@ -480,12 +489,17 @@ export class DocumentService {
     }
 
     if (myTurnOnly && participantEmail) {
+      // LEFT JOIN a propósito (antes INNER): un colaborador invitado solo por email todavía no
+      // tiene account_id (ver DocumentSignaturesService.create(), accountId siempre null al
+      // crear), así que el INNER JOIN lo excluía de "me toca firmar" hasta que alguien completara
+      // la vinculación perezosa de cuenta — que hoy en día solo ocurre al firmar/rechazar/pedir
+      // el código, es decir, nunca antes de ver esta misma lista.
       qb.andWhere(
         `document.id IN (
           SELECT c.document_id FROM collaborators c
-          INNER JOIN accounts a ON a.id = c.account_id
-          INNER JOIN users u ON u.id = a.user_id
-          WHERE u.email = :participantEmail
+          LEFT JOIN accounts a ON a.id = c.account_id
+          LEFT JOIN users u ON u.id = a.user_id
+          WHERE (u.email = :participantEmail OR c.email = :participantEmail)
             AND c.colaborator_type = 'signer'
             AND c.status = 'pending'
             AND c.signing_order = (
@@ -555,12 +569,14 @@ export class DocumentService {
 
   /** Obtiene el detalle de un documento para la pantalla de firma, incluyendo el rol/turno del usuario autenticado. */
   async findDetailForUser(documentId: string, currentUserId: string) {
-    const document = await this.documentRepository.findOne({
+    const documentDetailRelations: FindOptionsRelations<DocumentEntity> = {
+      requestedBy: true,
+      collaborators: { account: { user: true } },
+    };
+
+    let document = await this.documentRepository.findOne({
       where: { id: documentId },
-      relations: {
-        requestedBy: true,
-        collaborators: { account: { user: true } },
-      },
+      relations: documentDetailRelations,
     });
 
     if (!document) {
@@ -570,9 +586,35 @@ export class DocumentService {
     }
 
     const isCreator = document.createdBy === currentUserId;
-    const myParticipant = document.collaborators.find(
+    let myParticipant = document.collaborators.find(
       (c) => c.account?.userId === currentUserId,
     );
+
+    // Caso A (ver findOrLinkMySignerCollaborator/sign()/reject()): el colaborador puede seguir
+    // sin accountId si el usuario llega autenticado desde el enlace del correo sin haber pasado
+    // antes por sign()/reject()/las verificaciones de 2FA — sin este intento, canSign/myStatus
+    // salían en false/null para un firmante real y el botón de firmar nunca aparecía en esta
+    // vista, aunque el email sí coincidiera con una invitación pendiente.
+    if (!myParticipant) {
+      const linkResult = await this.linkPendingCollaboratorAccount(
+        documentId,
+        currentUserId,
+      );
+      if (linkResult.data.linked) {
+        document = await this.documentRepository.findOne({
+          where: { id: documentId },
+          relations: documentDetailRelations,
+        });
+        if (!document) {
+          throw new NotFoundException(
+            `El documento con id ${documentId} no se encuentra`,
+          );
+        }
+        myParticipant = document.collaborators.find(
+          (c) => c.account?.userId === currentUserId,
+        );
+      }
+    }
 
     if (!isCreator && !myParticipant) {
       throw new ForbiddenException('No tienes acceso a este documento');
@@ -618,6 +660,21 @@ export class DocumentService {
         .map((t) => [t.collaboratorId as string, t]),
     );
 
+    // Bug corregido: esta vista no exponía si el documento exige 2FA (requiresVerification) ni si
+    // este firmante ya lo pasó — el frontend no tenía forma de saber que debía pedir/validar un
+    // código antes de firmar, así que el único botón ("Continuar a firmar") llamaba sign()
+    // directo y siempre fallaba con 400 para documentos de Firma Simple (que lo exigen siempre).
+    const requiresVerification =
+      document.requiresVerification &&
+      myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
+    const verificationConfirmed = requiresVerification
+      ? await this.verificationCodeService.hasConsumedCode(
+          documentId,
+          myParticipant!.id,
+          VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+        )
+      : false;
+
     return {
       success: true,
       message: 'Documento obtenido correctamente',
@@ -648,6 +705,8 @@ export class DocumentService {
         canReject: canAct,
         canRequestCancellation,
         canConfirmCancellation,
+        requiresVerification: Boolean(requiresVerification),
+        verificationConfirmed,
         // Avance de firmas en tiempo real (ver Registro de Transacciones / Document
         // Transaction): completedSignersCount se compara contra totalSigners para saber si al
         // documento le falta algún firmante. completedSignedAt es la fecha en la que se
@@ -1442,21 +1501,30 @@ export class DocumentService {
     }
   }
 
-  /** Envía el PDF final firmado por correo a todos los colaboradores (firmantes, watchers y reviewers). */
+  /**
+   * Envía el PDF final firmado por correo a todos los colaboradores (firmantes, watchers y
+   * reviewers) y, por separado, a quien creó el documento — que no siempre es también un
+   * colaborador, así que sin esto se quedaba sin ningún aviso de que ya se completó la firma.
+   */
   private async sendCompletionEmails(documentId: string): Promise<void> {
     const document = await this.findOne(documentId);
     const collaborators = await this.collaboratorRepository.find({
       where: { documentId },
       relations: { account: { user: true } },
     });
+    const creator = await this.userService.findOne(document.createdBy);
 
     const signedBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
       BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
     );
 
-    await Promise.all(
-      collaborators.map((collaborator) =>
+    const signerNames = collaborators
+      .filter((c) => c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER)
+      .map(collaboratorDisplayName);
+
+    await Promise.all([
+      ...collaborators.map((collaborator) =>
         this.emailService.sendDocumentSignedNotification(
           collaboratorEmail(collaborator),
           collaboratorDisplayName(collaborator),
@@ -1464,7 +1532,14 @@ export class DocumentService {
           signedBuffer,
         ),
       ),
-    );
+      this.emailService.sendDocumentCompletedToCreatorNotification(
+        creator.email,
+        `${creator.firstName} ${creator.lastName}`,
+        document.fileName,
+        signerNames,
+        signedBuffer,
+      ),
+    ]);
   }
 
   /** Rechaza el documento a nombre del firmante autenticado (si es su turno) y notifica al creador con el motivo. */

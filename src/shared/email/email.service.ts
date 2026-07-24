@@ -13,11 +13,13 @@ import * as sgMail from '@sendgrid/mail';
 import {
   documentCancellationPendingTemplate,
   documentCancelledTemplate,
+  documentCompletedForCreatorTemplate,
   documentInvitationTemplate,
   documentPendingTemplate,
   documentRejectedTemplate,
   documentSignedTemplate,
   organizationInvitationTemplate,
+  verificationCodeTemplate,
 } from './templates/email.templates';
 import { EmailType } from './enums/email-type.enum';
 import { EmailSubject } from './enums/subject-type.enum';
@@ -115,6 +117,36 @@ export class EmailService {
     );
   }
 
+  /**
+   * Notifica a quien creó el documento (y asignó a los firmantes) que todos ya firmaron,
+   * incluyendo la lista de firmantes y el PDF final como comprobante — distinto del correo que
+   * recibe cada participante (sendDocumentSignedNotification), porque el creador no siempre es
+   * también un participante.
+   */
+  async sendDocumentCompletedToCreatorNotification(
+    to: string,
+    creatorName: string,
+    documentName: string,
+    signerNames: string[],
+    signedFileBuffer: Buffer,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_SIGNED,
+      documentCompletedForCreatorTemplate(creatorName, documentName, signerNames),
+      EmailType.NOTIFICATION,
+      undefined,
+      [
+        {
+          content: signedFileBuffer.toString('base64'),
+          filename: documentName,
+          type: 'application/pdf',
+          disposition: 'attachment',
+        },
+      ],
+    );
+  }
+
   /** Notifica al creador del documento que un firmante lo rechazó, incluyendo el motivo. */
   async sendDocumentRejectedNotification(
     to: string,
@@ -167,9 +199,7 @@ export class EmailService {
     await this.sendEmail(
       to,
       EmailSubject.VERIFICATION_CODE,
-      `<p>Tu código de verificación para firmar "<strong>${documentName}</strong>" es:</p>` +
-        `<p style="font-size:24px;font-weight:bold;letter-spacing:4px;">${code}</p>` +
-        `<p>Este código vence en 15 minutos.</p>`,
+      verificationCodeTemplate(documentName, code),
       EmailType.NOTIFICATION,
     );
   }
