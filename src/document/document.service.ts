@@ -1073,19 +1073,41 @@ export class DocumentService {
    * Encuentra la fila de Collaborator (SIGNER) del usuario autenticado en este documento, o
    * lanza ForbiddenException. Usado por el flujo de verificación (emitir/validar código) —
    * mismo criterio de acceso que sign()/reject().
+   *
+   * Bug corregido (encontrado probando el flujo completo de Firma Simple de punta a punta): el
+   * Caso A de "Notificación por Email para Firma Simple y Vinculación de Cuenta" (usuario ya
+   * autenticado, su Collaborator todavía sin accountId) solo estaba resuelto dentro de sign()/
+   * reject(), no aquí. Pero Firma Simple SIEMPRE exige 2FA, y el código se solicita ANTES de
+   * firmar — un firmante en Caso A nunca lograba pedir su código (se topaba con
+   * ForbiddenException aquí primero), así que jamás llegaba a sign() para que la vinculación
+   * perezosa de ahí lo rescatara. Se aplica el mismo criterio aquí.
    */
   private async findMySignerCollaborator(
     documentId: string,
     currentUserId: string,
   ): Promise<CollaboratorEntity> {
-    const myParticipant = await this.collaboratorRepository.findOne({
-      where: {
+    const relations = { account: { user: true } };
+    const findMine = () =>
+      this.collaboratorRepository.findOne({
+        where: {
+          documentId,
+          account: { userId: currentUserId },
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        },
+        relations,
+      });
+
+    let myParticipant = await findMine();
+
+    if (!myParticipant) {
+      const linkResult = await this.linkPendingCollaboratorAccount(
         documentId,
-        account: { userId: currentUserId },
-        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
-      },
-      relations: { account: { user: true } },
-    });
+        currentUserId,
+      );
+      if (linkResult.data.linked) {
+        myParticipant = await findMine();
+      }
+    }
 
     if (!myParticipant) {
       throw new ForbiddenException('No eres firmante de este documento');

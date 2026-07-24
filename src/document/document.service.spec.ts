@@ -134,6 +134,7 @@ describe('DocumentService', () => {
       sendDocumentRejectedNotification: jest.fn(),
       sendDocumentCancellationPendingNotification: jest.fn(),
       sendDocumentCancelledNotification: jest.fn(),
+      sendVerificationCodeNotification: jest.fn(),
     };
     auditService = { create: jest.fn() };
     documentEventsProducer = {
@@ -880,6 +881,135 @@ describe('DocumentService', () => {
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
         'collaborator-1',
         { accountId: 'account-of-user-1' },
+      );
+    });
+  });
+
+  describe('requestVerificationCode / verifyCode', () => {
+    function mockDocument(overrides: Partial<DocumentEntity> = {}) {
+      return {
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: DOCUMENT_STATUS_ENUM.PENDING,
+        ...overrides,
+      } as DocumentEntity;
+    }
+
+    it('requestVerificationCode emite y envía el código cuando el usuario ya es firmante', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildSigner({ userId: 'user-1' }),
+      );
+      verificationCodeService.issue.mockResolvedValue({ code: '123456' });
+
+      const result = await service.requestVerificationCode(
+        'doc-1',
+        'user-1',
+        '127.0.0.1',
+      );
+
+      expect(result.success).toBe(true);
+      expect(verificationCodeService.issue).toHaveBeenCalledWith(
+        'doc-1',
+        'collaborator-1',
+        'sign_document',
+        '127.0.0.1',
+      );
+      expect(emailService.sendVerificationCodeNotification).toHaveBeenCalled();
+    });
+
+    it('bug corregido: Caso A también aplica a requestVerificationCode — si el usuario autenticado no aparece como firmante todavía, se vincula por email antes de emitir el código (Firma Simple exige 2FA ANTES de firmar, así que sin esto el firmante nunca llegaba a sign() para que la vinculación perezosa de ahí lo rescatara)', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      userService.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'maria@correo.com',
+      });
+      const linkedSigner = buildSigner({
+        id: 'collaborator-1',
+        userId: 'user-1',
+      });
+      collaboratorRepository.findOne
+        .mockResolvedValueOnce(null) // primer intento: nadie coincide por accountId todavía
+        .mockResolvedValueOnce({
+          id: 'collaborator-1',
+          email: 'maria@correo.com',
+          accountId: null,
+        }) // usado por linkPendingCollaboratorAccount para encontrar la invitación pendiente
+        .mockResolvedValueOnce(linkedSigner); // segundo intento, tras vincular por email
+      verificationCodeService.issue.mockResolvedValue({ code: '123456' });
+
+      const result = await service.requestVerificationCode(
+        'doc-1',
+        'user-1',
+        '127.0.0.1',
+      );
+
+      expect(result.success).toBe(true);
+      expect(collaboratorRepository.update).toHaveBeenCalledWith(
+        'collaborator-1',
+        { accountId: 'account-of-user-1' },
+      );
+      expect(verificationCodeService.issue).toHaveBeenCalledWith(
+        'doc-1',
+        'collaborator-1',
+        'sign_document',
+        '127.0.0.1',
+      );
+    });
+
+    it('requestVerificationCode rechaza con ForbiddenException si el email no coincide con ninguna invitación pendiente', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      userService.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'nadie@correo.com',
+      });
+      collaboratorRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.requestVerificationCode('doc-1', 'user-1', '127.0.0.1'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('verifyCode consume el código cuando el usuario ya es firmante', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildSigner({ userId: 'user-1' }),
+      );
+
+      const result = await service.verifyCode('doc-1', 'user-1', '123456');
+
+      expect(result.success).toBe(true);
+      expect(verificationCodeService.verifyAndConsume).toHaveBeenCalledWith(
+        'doc-1',
+        'collaborator-1',
+        '123456',
+      );
+    });
+
+    it('verifyCode también aplica el Caso A (vinculación perezosa por email)', async () => {
+      userService.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'maria@correo.com',
+      });
+      const linkedSigner = buildSigner({
+        id: 'collaborator-1',
+        userId: 'user-1',
+      });
+      collaboratorRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'collaborator-1',
+          email: 'maria@correo.com',
+          accountId: null,
+        })
+        .mockResolvedValueOnce(linkedSigner);
+
+      const result = await service.verifyCode('doc-1', 'user-1', '123456');
+
+      expect(result.success).toBe(true);
+      expect(verificationCodeService.verifyAndConsume).toHaveBeenCalledWith(
+        'doc-1',
+        'collaborator-1',
+        '123456',
       );
     });
   });

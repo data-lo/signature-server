@@ -29,6 +29,7 @@ import { PdfSignatureService } from 'src/shared/document-signing/document-signin
 import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
+import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { EmailService } from 'src/shared/email/email.service';
@@ -87,6 +88,7 @@ export class DocumentSignaturesService {
     private readonly accountMemberService: AccountMemberService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly notificationEventsProducer: NotificationEventsProducer,
+    private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
   ) {}
@@ -308,6 +310,19 @@ export class DocumentSignaturesService {
 
     // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
     // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.
+    //
+    // Bug corregido: este endpoint nunca publicaba DOCUMENT_KAFKA_TOPICS.CREATED (solo el tópico
+    // de NotificationEventsProducer, uno por colaborador, para el envío de correo) — por lo que
+    // DocumentEventsConsumer.handleCreated() nunca corría para documentos creados por esta vía
+    // (la única que usa el frontend), y el ledger global de auditoría (AuditChainService, ver
+    // historia "Módulo de Auditoría e Integridad Global de BD") arrancaba su cadena directo en el
+    // primer evento de firma en vez de en la creación del documento.
+    this.documentEventsProducer.emitCreated({
+      documentId: document.id,
+      fileName: document.fileName,
+      actorUserId: createdBy,
+    });
+
     for (const { notification, collaboratorId } of notificationEvents) {
       this.notificationEventsProducer.emitCreated({
         notificationId: notification.id,
