@@ -9,10 +9,12 @@ import { DocumentEventsConsumer } from './document-events.controller';
 import { OrganizationInvitationEventsProducer } from './organization-invitation.producer';
 import { OrganizationInvitationEventsConsumer } from './organization-invitation-events.controller';
 import { NotificationEventsProducer } from './notification-events.producer';
+import { NotificationEventsConsumer } from './notification-events.controller';
 import { KAFKA_SERVICE } from './kafka.constants';
 import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
 import { SharedModule } from 'src/shared/shared.module';
 import { EventModule } from 'src/event/event.module';
 import { DocumentTransactionModule } from 'src/document/document-transaction.module';
@@ -23,6 +25,7 @@ import { DocumentTransactionModule } from 'src/document/document-transaction.mod
       NotificationEntity,
       CollaboratorEntity,
       DocumentEntity,
+      UserEntity,
     ]),
     SharedModule,
     EventModule,
@@ -51,6 +54,7 @@ import { DocumentTransactionModule } from 'src/document/document-transaction.mod
     KafkaTestController,
     DocumentEventsConsumer,
     OrganizationInvitationEventsConsumer,
+    NotificationEventsConsumer,
   ],
   providers: [
     KafkaProducerService,

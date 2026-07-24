@@ -47,28 +47,16 @@ import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { getNextPendingSigner, isSignerTurn } from './utils/next-signer.util';
+import {
+  collaboratorDisplayName,
+  collaboratorEmail,
+} from './utils/collaborator-display.util';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { DocumentTransactionService } from './document-transaction.service';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
-
-/** Nombre a mostrar de un colaborador: el de su cuenta si existe, o su email si fue invitado solo por correo. */
-function collaboratorDisplayName(collaborator: CollaboratorEntity): string {
-  if (collaborator.account?.user) {
-    return `${collaborator.account.user.firstName} ${collaborator.account.user.lastName}`;
-  }
-  if (collaborator.firstName || collaborator.lastName) {
-    return `${collaborator.firstName ?? ''} ${collaborator.lastName ?? ''}`.trim();
-  }
-  return collaborator.email ?? '';
-}
-
-/** Email de contacto de un colaborador: el de su cuenta si existe, o el email con el que fue invitado. */
-function collaboratorEmail(collaborator: CollaboratorEntity): string {
-  return collaborator.account?.user?.email ?? collaborator.email ?? '';
-}
 
 @Injectable()
 export class DocumentService {
