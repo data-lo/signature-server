@@ -48,7 +48,7 @@ export class NotificationEventsConsumer {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly emailService: EmailService,
-  ) {}
+  ) { }
 
   @EventPattern(NOTIFICATION_KAFKA_TOPICS.CREATED)
   async handleCreated(@Payload() payload: NotificationEventPayload) {
@@ -58,9 +58,10 @@ export class NotificationEventsConsumer {
 
     try {
       await this.sendPendingSignatureEmailIfApplies(payload);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
-        `Error enviando el correo de notificación para el colaborador ${payload.collaboratorId} del documento ${payload.documentId}: ${error}`,
+        `Error enviando el correo de notificación para el colaborador ${payload.collaboratorId} del documento ${payload.documentId}: ${error?.message || error}`,
+        error?.stack,
       );
     }
   }
@@ -121,11 +122,26 @@ export class NotificationEventsConsumer {
       );
       return;
     }
-    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3001';
+    const frontendUrl = process.env.FRONTEND_URL ?? 'http://frontend:3000';
+
+    const recipientEmail = collaboratorEmail(collaborator);
+    const recipientName = collaboratorDisplayName(collaborator);
+
+    this.logger.debug({
+      to: recipientEmail,
+      name: recipientName,
+      creatorEmail: creator.email,
+      fileName: document.fileName,
+    });
+
+    if (!recipientEmail) {
+      this.logger.warn(`No se pudo determinar el email para el colaborador ${collaborator.id}`);
+      return;
+    }
 
     await this.emailService.sendDocumentPendingNotification(
-      collaboratorEmail(collaborator),
-      collaboratorDisplayName(collaborator),
+      recipientEmail,
+      recipientName,
       creator.email,
       document.fileName,
       `${frontendUrl}/documents/${document.id}`,
