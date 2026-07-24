@@ -27,17 +27,27 @@ import { EmailSubject } from './enums/subject-type.enum';
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
+  private readonly defaultFromEmail: string;
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    const fromEmail = this.configService.get<string>('SENDGRID_FROM_EMAIL');
 
     if (!apiKey) {
       throw new InternalServerErrorException('SENDGRID_API_KEY is not defined');
     }
 
+    if (!fromEmail) {
+      throw new InternalServerErrorException(
+        'SENDGRID_FROM_EMAIL is not defined',
+      );
+    }
+
+    this.defaultFromEmail = fromEmail;
     sgMail.setApiKey(apiKey);
-    this.logger.log('SendGrid initialized');
+    this.logger.log(`SendGrid initialized with sender: ${this.defaultFromEmail}`);
   }
+
   /**
    * Envía un correo electrónico mediante SendGrid.
    * Método base utilizado internamente por los demás métodos de notificación.
@@ -47,25 +57,26 @@ export class EmailService {
     subject: string,
     html: string,
     emailType: EmailType,
-    from?: string,
+    replyTo?: string,
     attachments?: sgMail.MailDataRequired['attachments'],
   ): Promise<void> {
-    const senderEmail =
-      from ?? this.configService.get<string>('SENDGRID_FROM_EMAIL');
-
+    // Siempre usaremos la dirección oficial/verificada de la empresa como remitente (from)
     const message: sgMail.MailDataRequired = {
       to,
-      from: senderEmail,
+      from: this.defaultFromEmail,
       subject,
       html,
+      ...(replyTo && { replyTo }),
       ...(attachments && { attachments }),
     };
 
     try {
       await sgMail.send(message);
       this.logger.log(`Email sent successfully to ${to} (${emailType})`);
-    } catch (error) {
-      this.logger.error(`Failed to send email to ${to} (${emailType})`, error);
+    } catch (error: any) {
+      this.logger.error(
+        `Failed to send email to ${to} (${emailType}): ${error?.response?.body ? JSON.stringify(error.response.body) : error?.message || error}`,
+      );
       throw new InternalServerErrorException('Failed to send email');
     }
   }
@@ -90,6 +101,7 @@ export class EmailService {
         allDocumentsUrl,
       ),
       EmailType.NOTIFICATION,
+      creatorEmail, // 👈 Pasamos el correo del creador como replyTo
     );
   }
 
