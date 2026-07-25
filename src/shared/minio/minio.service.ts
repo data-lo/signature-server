@@ -14,7 +14,8 @@ import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 export class MinioService {
   private readonly logger = new Logger(MinioService.name);
 
-  minioClient: any;
+  minioPrivateClient: any;
+  minioPublicClient: any;
 
   MINIO_CREATED_DOCUMENTS_BUCKET: any;
   MINIO_SIGNED_DOCUMENTS_BUCKET: any;
@@ -31,12 +32,20 @@ export class MinioService {
     this.setMinioClient();
   }
 
-  private getMinioClient() {
-    if (!this.minioClient) {
+  private getMinioPrivateClient() {
+    if (!this.minioPrivateClient) {
       this.setMinioClient();
-      return this.minioClient;
+      return this.minioPrivateClient;
     }
-    return this.minioClient;
+    return this.minioPrivateClient;
+  }
+
+  private getMinioPublicClient() {
+    if (!this.minioPublicClient) {
+      this.setMinioClient();
+      return this.minioPublicClient;
+    }
+    return this.minioPublicClient;
   }
 
   private setMinioClient() {
@@ -46,10 +55,25 @@ export class MinioService {
       );
     }
 
-    this.minioClient = new Minio.Client({
+    if (!process.env.MINIO_PUBLIC_HOST) {
+      throw new Error(
+        '¡MINIO_PUBLIC_HOST no está configurado en las variables de entorno!',
+      );
+    }
+
+    // Cliente interno: usa la red interna de docker (rápido, sin salir a internet)
+    this.minioPrivateClient = new Minio.Client({
       endPoint: process.env.MINIO_HOST,
       port: Number(process.env.MINIO_PORT),
       useSSL: false,
+      accessKey: process.env.MINIO_ACCESS_KEY,
+      secretKey: process.env.MINIO_SECRET_KEY,
+    });
+
+    this.minioPublicClient = new Minio.Client({
+      endPoint: process.env.MINIO_PUBLIC_HOST,
+      port: Number(process.env.MINIO_PUBLIC_PORT),
+      useSSL: true,
       accessKey: process.env.MINIO_ACCESS_KEY,
       secretKey: process.env.MINIO_SECRET_KEY,
     });
@@ -151,10 +175,10 @@ export class MinioService {
     fileType: string;
   }> {
     try {
-      const minioClient = await this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = await this.getBucketByType(type);
 
-      await minioClient.bucketExists(bucketName, (err) => {
+      await minioPrivateClient.bucketExists(bucketName, (err) => {
         if (err) {
           throw new Error(
             `Error al verificar la existencia del bucket: ${err}`,
@@ -176,7 +200,7 @@ export class MinioService {
         throw new Error('El archivo no contiene datos válidos');
       }
 
-      await minioClient.putObject(
+      await minioPrivateClient.putObject(
         bucketName,
         objectKey,
         fileBuffer,
@@ -214,10 +238,10 @@ export class MinioService {
     fileType: string;
   }> {
     try {
-      const minioClient = await this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = await this.getBucketByType(type);
 
-      await minioClient.bucketExists(bucketName, (err) => {
+      await minioPrivateClient.bucketExists(bucketName, (err) => {
         if (err) {
           throw new Error(
             `Error al verificar la existencia del bucket: ${err}`,
@@ -239,7 +263,7 @@ export class MinioService {
         throw new Error('El archivo no contiene datos válidos');
       }
 
-      await minioClient.putObject(bucketName, objectKey, fileBuffer, {
+      await minioPrivateClient.putObject(bucketName, objectKey, fileBuffer, {
         'Content-Type': mimetype,
       });
 
@@ -261,9 +285,10 @@ export class MinioService {
   ): Promise<GetFileResponse> {
     try {
       let fileName = fileId;
-      const minioClient = await this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
+      const minioPublicClient = this.getMinioPublicClient();
       const bucketName = await this.getBucketByType(bucketType);
-      const exists = await minioClient.bucketExists(bucketName);
+      const exists = await minioPrivateClient.bucketExists(bucketName);
 
       if (!exists) {
         throw new Error(`El bucket ${bucketName} no existe en MinIO`);
@@ -275,7 +300,7 @@ export class MinioService {
 
       try {
         this.logger.log(
-          `Consulta del file en Minio ${await minioClient.statObject(bucketName, fileName)}`,
+          `Consulta del file en Minio ${await minioPrivateClient.statObject(bucketName, fileName)}`,
         );
       } catch (error) {
         throw new Error(
@@ -283,22 +308,11 @@ export class MinioService {
         );
       }
 
-      const secureUrl = await minioClient.presignedGetObject(
+      const secureUrl = await minioPublicClient.presignedGetObject(
         bucketName,
         fileName,
         expiresIn,
       );
-
-      const publicUrl = secureUrl.replace(
-        `http://${process.env.MINIO_HOST}:${process.env.MINIO_PORT}`,
-        process.env.MINIO_PUBLIC_URL,
-      );
-
-      return {
-        fileId,
-        secureUrl: publicUrl,
-        expiresIn,
-      };
 
       return {
         fileId,
@@ -321,13 +335,16 @@ export class MinioService {
     fileType: string;
   }> {
     try {
-      const minioClient = this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
       this.logger.debug(fileName);
 
       const bucketName = this.getBucketByType(type);
       this.logger.debug(bucketName);
       try {
-        const fileData = await minioClient.statObject(bucketName, fileName);
+        const fileData = await minioPrivateClient.statObject(
+          bucketName,
+          fileName,
+        );
         this.logger.log(fileData);
       } catch (error) {
         throw new Error(
@@ -335,7 +352,7 @@ export class MinioService {
         );
       }
 
-      await minioClient.removeObject(bucketName, fileName);
+      await minioPrivateClient.removeObject(bucketName, fileName);
       this.logger.debug(
         `Archivo ${fileName} eliminado del bucket ${bucketName}`,
       );
@@ -345,7 +362,7 @@ export class MinioService {
       }
 
       try {
-        await minioClient.putObject(bucketName, fileName, fileBuffer, {
+        await minioPrivateClient.putObject(bucketName, fileName, fileBuffer, {
           'Content-Type': mimetype,
         });
       } catch (error) {
@@ -370,7 +387,7 @@ export class MinioService {
 
   async deleteFile(fileName, bucketType: BUCKET_TYPES_ENUM) {
     try {
-      const minioClient = this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
       this.logger.debug(fileName);
 
       this.logger.warn(
@@ -379,7 +396,10 @@ export class MinioService {
       const bucketName = this.getBucketByType(bucketType);
       this.logger.debug(bucketName);
       try {
-        const fileData = await minioClient.statObject(bucketName, fileName);
+        const fileData = await minioPrivateClient.statObject(
+          bucketName,
+          fileName,
+        );
         this.logger.log(fileData);
       } catch (error) {
         throw new Error(
@@ -387,7 +407,7 @@ export class MinioService {
         );
       }
 
-      await minioClient.removeObject(bucketName, fileName);
+      await minioPrivateClient.removeObject(bucketName, fileName);
       this.logger.warn(
         `Archivo ${fileName} eliminado del bucket ${bucketName}`,
       );
@@ -407,9 +427,10 @@ export class MinioService {
     bucketType: BUCKET_TYPES_ENUM,
   ): Promise<Buffer<ArrayBufferLike>> {
     try {
+      const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = this.getBucketByType(bucketType);
       try {
-        const fileData = await this.minioClient.statObject(
+        const fileData = await minioPrivateClient.statObject(
           bucketName,
           fileName,
         );
@@ -420,7 +441,10 @@ export class MinioService {
         );
       }
 
-      const dataStream = await this.minioClient.getObject(bucketName, fileName);
+      const dataStream = await minioPrivateClient.getObject(
+        bucketName,
+        fileName,
+      );
 
       return new Promise((resolve, reject) => {
         const chunks: any[] = [];
