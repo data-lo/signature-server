@@ -242,6 +242,36 @@ describe('DocumentSignaturesService', () => {
     expect(carlosCall[0].signingOrder).toBeNull();
   });
 
+  it('historia "Habilitar ordenamiento Drag and Drop": cuando todos los colaboradores traen orderIndex, signingOrder respeta ese orden en vez del orden de aparición en el payload', async () => {
+    const dtoConOrderIndexInvertido: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: baseDto.collaborators.map((c, index) => ({
+        ...c,
+        // Invierte el orden visual: María (payload index 1) debe firmar primero,
+        // Juan (payload index 0) segundo — Carlos (VIEWER) no firma, su orderIndex es irrelevante.
+        orderIndex: baseDto.collaborators.length - 1 - index,
+      })),
+    };
+
+    await service.create(
+      'creator-1',
+      'account-1',
+      dtoConOrderIndexInvertido,
+      file,
+      '127.0.0.1',
+    );
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    const mariaCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'maria.gomez@mail.com',
+    );
+
+    expect(mariaCall[0].signingOrder).toBe(0);
+    expect(juanCall[0].signingOrder).toBe(1);
+  });
+
   it('documento secuencial (default, sin isSequential en el payload): no envía invitaciones de firma simple', async () => {
     await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
