@@ -33,6 +33,6 @@ jobs:
       - name: Disparar despliegue en Dokploy
         run: |
           echo "Enviando solicitud de despliegue a Dokploy..."
-          RESPONSE=$(curl -s -X POST "https://dokploy.data-lo.online/api/deploy/compose/LfalPhwe9vfvstQuQ8y5n")
+          RESPONSE=$(curl -s -X POST "https://dokploy.data-lo.online/api/deploy/compose/nhI-aPDgdpE_h_OzCnzV-")
           echo "Respuesta del servidor: $RESPONSE"
           echo "¡Despliegue solicitado con éxito!"

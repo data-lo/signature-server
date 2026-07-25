@@ -1,41 +1,31 @@
+// Framework & third-party libraries
 import { Controller, Logger } from '@nestjs/common';
+import { EventPattern, Payload } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { EventPattern, Payload } from '@nestjs/microservices';
-import {
-  NOTIFICATION_KAFKA_TOPICS,
-  NotificationEventPayload,
-} from './notification-events.topics';
+
+// Entities & Enums
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
-import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
+
+// Services & Topics
+import { EmailService } from 'src/shared/email/email.service';
+import {
+  NOTIFICATION_KAFKA_TOPICS,
+  NotificationEventPayload,
+} from './notification-events.topics';
+
+// Utilities
 import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from 'src/document/utils/collaborator-display.util';
-import { EmailService } from 'src/shared/email/email.service';
+import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 
-/**
- * Consumidor real de `notification.created` (ver NotificationEventsProducer — hasta ahora el
- * tópico se publicaba y se persistía en Postgres para trazabilidad, pero ningún worker lo
- * consumía para disparar el envío real del correo: por eso los colaboradores nunca recibían
- * notificación al crear un documento vía POST /api/v1/documents/signatures, aunque el documento
- * sí quedaba creado correctamente — ver bug "La notificación por correo electrónico no se envía
- * al crear un documento").
- *
- * Solo notifica a firmantes (WATCHER no tiene plantilla de correo todavía, mismo criterio que
- * `notifyNextSigner` en document.service.ts) que sigan PENDING, y respeta el mismo criterio de
- * turno que el resto del dominio:
- *  - Documento secuencial (isSequential=true, default): solo el siguiente firmante pendiente
- *    (los demás se notifican más adelante, cuando les toque — ver sign()/notifyNextSigner()).
- *  - Documento sin orden (isSequential=false): todos los firmantes pendientes, ya — salvo los
- *    que ya recibieron el correo dedicado de invitación de Firma Simple sin orden (ver
- *    DocumentSignaturesService.create()), para no duplicar el correo.
- */
 @Controller()
 export class NotificationEventsConsumer {
   private readonly logger = new Logger(NotificationEventsConsumer.name);
@@ -48,7 +38,7 @@ export class NotificationEventsConsumer {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly emailService: EmailService,
-  ) {}
+  ) { }
 
   @EventPattern(NOTIFICATION_KAFKA_TOPICS.CREATED)
   async handleCreated(@Payload() payload: NotificationEventPayload) {
@@ -58,10 +48,12 @@ export class NotificationEventsConsumer {
 
     try {
       await this.sendPendingSignatureEmailIfApplies(payload);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
-        `Error enviando el correo de notificación para el colaborador ${payload.collaboratorId} del documento ${payload.documentId}: ${error}`,
+        `Error enviando el correo de notificación para el colaborador ${payload.collaboratorId} del documento ${payload.documentId}: ${error?.message || error}`,
+        error?.stack,
       );
+  
     }
   }
 
@@ -90,8 +82,6 @@ export class NotificationEventsConsumer {
       return;
     }
 
-    // Ya recibió el correo dedicado de invitación (ver DocumentSignaturesService.create()) —
-    // enviar también este lo duplicaría para la misma acción.
     if (
       !document.isSequential &&
       collaborator.signatureType === SIGNATURE_TYPE_ENUM.SIMPLE
@@ -121,11 +111,21 @@ export class NotificationEventsConsumer {
       );
       return;
     }
-    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3001';
+
+    const recipientEmail = collaboratorEmail(collaborator);
+    if (!recipientEmail) {
+      this.logger.warn(
+        `No se pudo determinar el email para el colaborador ${collaborator.id}`,
+      );
+      return;
+    }
+
+    const recipientName = collaboratorDisplayName(collaborator);
+    const frontendUrl = process.env.FRONTEND_URL ?? 'http://frontend:3000';
 
     await this.emailService.sendDocumentPendingNotification(
-      collaboratorEmail(collaborator),
-      collaboratorDisplayName(collaborator),
+      recipientEmail,
+      recipientName,
       creator.email,
       document.fileName,
       `${frontendUrl}/documents/${document.id}`,
@@ -133,7 +133,7 @@ export class NotificationEventsConsumer {
     );
 
     this.logger.log(
-      `Correo de notificación pendiente enviado a ${collaboratorEmail(collaborator)} (documento ${document.id}, colaborador ${collaborator.id})`,
+      `Correo de notificación pendiente enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
     );
   }
 }
