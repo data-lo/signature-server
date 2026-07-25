@@ -701,6 +701,7 @@ export class DocumentService {
         myRole:
           myParticipant?.colaboratorType ?? (isCreator ? 'creator' : null),
         myStatus: myParticipant?.status ?? null,
+        mySignatureType: myParticipant?.signatureType ?? null,
         canSign: canAct,
         canReject: canAct,
         canRequestCancellation,
