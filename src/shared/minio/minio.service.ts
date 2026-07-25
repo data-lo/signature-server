@@ -289,6 +289,17 @@ export class MinioService {
         expiresIn,
       );
 
+      const publicUrl = secureUrl.replace(
+        `http://${process.env.MINIO_HOST}:${process.env.MINIO_PORT}`,
+        process.env.MINIO_PUBLIC_URL,
+      );
+
+      return {
+        fileId,
+        secureUrl: publicUrl,
+        expiresIn,
+      };
+
       return {
         fileId,
         secureUrl,
