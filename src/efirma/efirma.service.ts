@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import {
   X509Certificate,
   KeyObject,
@@ -10,15 +10,36 @@ import {
 
 import { CertificateInfo } from './interfaces/certificate.interface';
 import { CadenaConfianzaInvalidaException, CertificadoExpiradoException, CertificadoInvalidoException, LLaveNoCorrespondeCertificadoException, LLavePrivadaInvalidException } from './efirma.exceptions';
-import { CreateEfirmaDto } from './dto/create-efirma.dto';
-import { Create } from 'sharp';
-import { create } from 'node:domain';
+import { join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
 
 
 @Injectable()
-export class EfirmaService {
+export class EfirmaService implements OnModuleInit{
   private readonly logger = new Logger(EfirmaService.name)
+  private cadenaConfianza:X509Certificate[] = []
+
+  onModuleInit() {
+    this.cadenaConfianza = this.cargarCertificadosDeConfianza();
+    this.logger.log(`Cargados ${this.cadenaConfianza.length} certificados de confianza`);
+  }
   
+
+  private cargarCertificadosDeConfianza(): X509Certificate[] {
+    const dir = join(process.cwd(), 'src', 'certificates');
+    const files = readdirSync(dir).filter((f) => /\.(cer|crt)$/i.test(f));
+
+    return files.map((fileName) => {
+      const buffer = readFileSync(join(dir,fileName))
+      try{
+        return new X509Certificate(buffer);
+      }catch(error){
+        this.logger.error(`Unable to load ${fileName}: ${(error as Error).message}`)
+        throw error;
+      }
+    });
+  }
+
   parsearCertificado(cerBuffer:Buffer):CertificateInfo{
     let cert:X509Certificate;
     try {
@@ -26,19 +47,20 @@ export class EfirmaService {
     }catch(err){
       throw new CertificadoInvalidoException((err as Error).message)
     }
+
     const rfc = this.extaerRfcDeSubject(cert.subject);
     return {
       rfc,
       nombre: this.extraerCampoSubject(cert.subject, 'CN') ?? '',
       emisor: cert.issuer,
       numeroCertificado: this.serialAFormatoSat(cert.serialNumber),
+      numeroSerial: cert.serialNumber,
       vigenciaDesde: new Date(cert.validFrom),
       vigenciaHasta: new Date(cert.validTo),
       certificadoPem: cert.toString(),
       certificadoDer: cert.raw,
     };
   }
-
 
   private serialAFormatoSat(serialHex: string){
     return BigInt(`0x${serialHex}`).toString();
@@ -62,25 +84,48 @@ export class EfirmaService {
     return linea?.substring(campo.length + 1);  
   }
 
-
   validarVigencia(info:CertificateInfo, fechaReferencia: Date = new Date()): void {
     if (fechaReferencia < info.vigenciaDesde || fechaReferencia > info.vigenciaHasta){
       throw new CertificadoExpiradoException(info.vigenciaHasta);
     }
   }
 
-  validarCadenaConfianza(cerBuffer: Buffer, cadenaConfianza: Buffer[]): void {
-    const cert = new X509Certificate(cerBuffer);
-    const emisorEncontrado = cadenaConfianza.some((caCertBuffer) => {
-      const caCert = new X509Certificate(caCertBuffer);
-      return caCert.checkIssued(cert);
-    });
+  validarCadenaConfianza(cerBuffer: Buffer): void {
+    const certOriginal = new X509Certificate(cerBuffer);
+    let actual = certOriginal;
+    const vistos = new Set<string>();
 
-    if(!emisorEncontrado){
-      throw new CadenaConfianzaInvalidaException(
-        `Emisor "${cert.issuer} no esta en la cadena de confianza cargada"`
-      )
-    };
+    while (true) {
+      // ¿es autofirmado? (subject === issuer) -> es una raíz
+      if (actual.issuer === actual.subject) {
+        const esRaizConfiable = this.cadenaConfianza.some(
+          (raiz) => raiz.fingerprint256 === actual.fingerprint256,
+        );
+        if (!esRaizConfiable) {
+          throw new CadenaConfianzaInvalidaException(
+            `El certificado raíz "${actual.subject}" no está en tu directorio de confianza`,
+          );
+        }
+        return;
+      }
+
+      const emisor = this.cadenaConfianza.find(
+        (candidato) =>
+          actual.checkIssued(candidato) && actual.verify(candidato.publicKey),
+      );
+
+      if (!emisor) {
+        throw new CadenaConfianzaInvalidaException(
+          `No se encontró (o no valida criptográficamente) el emisor "${actual.issuer}" en tu directorio`,
+        );
+      }
+
+      if (vistos.has(emisor.fingerprint256)) {
+        throw new CadenaConfianzaInvalidaException('Ciclo detectado al validar la cadena de confianza');
+      }
+      vistos.add(emisor.fingerprint256);
+      actual = emisor;
+    }  
   };
 
   descifrarLlavePrivada(keyBuffer: Buffer, password:string): KeyObject {
@@ -101,7 +146,6 @@ export class EfirmaService {
   validarParCertificadoLlave(cerBuffer: Buffer, privateKey: KeyObject): void {
     const cert = new X509Certificate(cerBuffer);
     const reto = createHash('sha256').update(`reto-${Date.now()}-${Math.random()}`).digest();
-    
     const firmaReto = createSign('RSA-SHA256').update(reto).sign(privateKey);
     const esValida = createVerify('RSA-SHA256').update(reto).verify(cert.publicKey, firmaReto);
     if(!esValida){
@@ -117,12 +161,11 @@ export class EfirmaService {
     return createSign('RSA-SHA256').update(documento).sign(privateKey).toString('base64');
   }
 
-  firmar(createEfirmaDto:CreateEfirmaDto){
-
-    const {documento, cerBuffer, keyBuffer, password, cadenaConfianzaSat} = createEfirmaDto;
+  firmar(documento, cerBuffer, keyBuffer, password){
+    
     const infoCertificado = this.parsearCertificado(cerBuffer);
     this.validarVigencia(infoCertificado);
-    this.validarCadenaConfianza(cerBuffer, cadenaConfianzaSat);
+    this.validarCadenaConfianza(cerBuffer);
 
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
     this.validarParCertificadoLlave(cerBuffer,privateKey);
@@ -141,6 +184,8 @@ export class EfirmaService {
       certificado: {
         rfc: infoCertificado.rfc,
         nombre: infoCertificado.nombre,
+        certificado: infoCertificado,
+        numeroSerial: infoCertificado.numeroSerial,
         numeroCertificado: infoCertificado.numeroCertificado,
         certificadoPem:infoCertificado.certificadoPem
       },
