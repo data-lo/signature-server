@@ -574,7 +574,7 @@ export class DocumentService {
       collaborators: { account: { user: true } },
     };
 
-    let document = await this.documentRepository.findOne({
+    const document = await this.documentRepository.findOne({
       where: { id: documentId },
       relations: documentDetailRelations,
     });
@@ -586,36 +586,16 @@ export class DocumentService {
     }
 
     const isCreator = document.createdBy === currentUserId;
-    let myParticipant = document.collaborators.find(
+    const myParticipant = document.collaborators.find(
       (c) => c.account?.userId === currentUserId,
     );
 
-    // Caso A (ver findOrLinkMySignerCollaborator/sign()/reject()): el colaborador puede seguir
-    // sin accountId si el usuario llega autenticado desde el enlace del correo sin haber pasado
-    // antes por sign()/reject()/las verificaciones de 2FA — sin este intento, canSign/myStatus
-    // salían en false/null para un firmante real y el botón de firmar nunca aparecía en esta
-    // vista, aunque el email sí coincidiera con una invitación pendiente.
-    if (!myParticipant) {
-      const linkResult = await this.linkPendingCollaboratorAccount(
-        documentId,
-        currentUserId,
-      );
-      if (linkResult.data.linked) {
-        document = await this.documentRepository.findOne({
-          where: { id: documentId },
-          relations: documentDetailRelations,
-        });
-        if (!document) {
-          throw new NotFoundException(
-            `El documento con id ${documentId} no se encuentra`,
-          );
-        }
-        myParticipant = document.collaborators.find(
-          (c) => c.account?.userId === currentUserId,
-        );
-      }
-    }
-
+    // Bug corregido (ver historia "Vinculacion del documento debe postergarse hasta el inicio
+    // de sesion y validacion de RFC"): este metodo vinculaba la cuenta al colaborador pendiente
+    // como efecto secundario de una simple lectura (GET), asociando/listando el documento antes
+    // de que el usuario pasara formalmente por login/registro desde /access-document. Ahora la
+    // vinculacion solo ocurre por una accion explicita: AccessDocumentView (sesion ya activa) o
+    // useLogin (tras iniciar sesion) llaman a linkPendingCollaboratorAccount directamente.
     if (!isCreator && !myParticipant) {
       throw new ForbiddenException('No tienes acceso a este documento');
     }
@@ -701,6 +681,7 @@ export class DocumentService {
         myRole:
           myParticipant?.colaboratorType ?? (isCreator ? 'creator' : null),
         myStatus: myParticipant?.status ?? null,
+        mySignatureType: myParticipant?.signatureType ?? null,
         canSign: canAct,
         canReject: canAct,
         canRequestCancellation,

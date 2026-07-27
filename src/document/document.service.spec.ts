@@ -1277,7 +1277,7 @@ describe('DocumentService', () => {
       expect(resultC.data.canSign).toBe(true);
     });
 
-    it('bug corregido: Caso A también aplica a findDetailForUser — si el usuario autenticado todavía no aparece como firmante, se vincula por email antes de calcular canSign/myStatus (sin esto, el botón de firmar nunca aparecía en la vista del documento)', async () => {
+    it('bug corregido (ver historia "Vinculación del documento debe postergarse hasta el inicio de sesión y validación de RFC"): findDetailForUser YA NO vincula por email como efecto secundario de una lectura — si el colaborador pendiente todavía no tiene accountId, lanza ForbiddenException en vez de auto-vincular y dejarlo pasar', async () => {
       const pendingCollaborator = buildSigner({
         id: 'p-b',
         userId: 'user-b',
@@ -1291,29 +1291,34 @@ describe('DocumentService', () => {
           signerC,
         ],
       };
+
+      documentRepository.findOne.mockResolvedValue(
+        unlinkedDetailDocument as unknown as DocumentEntity,
+      );
+
+      await expect(
+        service.findDetailForUser('doc-1', 'user-b'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('tras una vinculación explícita previa (linkPendingCollaboratorAccount), findDetailForUser sí encuentra al colaborador por accountId y calcula canSign/myStatus normalmente', async () => {
+      const pendingCollaborator = buildSigner({
+        id: 'p-b',
+        userId: 'user-b',
+        signingOrder: 1,
+      });
       const linkedDetailDocument = {
         ...mockDetailDocument(),
         collaborators: [signerA, pendingCollaborator, signerC],
       };
 
-      documentRepository.findOne
-        .mockResolvedValueOnce(unlinkedDetailDocument as unknown as DocumentEntity)
-        .mockResolvedValueOnce(linkedDetailDocument as unknown as DocumentEntity);
-      userService.findOne.mockResolvedValue({
-        id: 'user-b',
-        email: 'firmante@correo.com',
-      });
-      collaboratorRepository.findOne.mockResolvedValue({
-        id: 'p-b',
-        email: 'firmante@correo.com',
-        accountId: null,
-      });
+      documentRepository.findOne.mockResolvedValue(
+        linkedDetailDocument as unknown as DocumentEntity,
+      );
 
       const result = await service.findDetailForUser('doc-1', 'user-b');
 
-      expect(collaboratorRepository.update).toHaveBeenCalledWith('p-b', {
-        accountId: 'account-of-user-b',
-      });
       expect(result.data.canSign).toBe(true);
       expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
     });
