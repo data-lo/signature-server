@@ -196,7 +196,20 @@ export class DocumentSignaturesService {
         // frontend. Se numera solo entre los SIGNER, en el orden en que vienen en el payload.
         let signerIndex = 0;
 
-        for (const participant of dto.collaborators) {
+        // Historia "Habilitar ordenamiento Drag and Drop para firmantes requeridos": el frontend
+        // manda orderIndex reflejando el orden tras el arrastre manual — si viene en todos los
+        // colaboradores, se ordena explícitamente sobre esa base en vez de confiar en que el
+        // arreglo ya llegó en el orden correcto (si algún colaborador no lo trae, se conserva el
+        // orden de aparición en el payload, comportamiento previo a esta historia).
+        const orderedCollaborators = dto.collaborators.every(
+          (c) => typeof c.orderIndex === 'number',
+        )
+          ? [...dto.collaborators].sort(
+              (a, b) => a.orderIndex! - b.orderIndex!,
+            )
+          : dto.collaborators;
+
+        for (const participant of orderedCollaborators) {
           const isSigner =
             participant.collaboratorType ===
             PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;

@@ -161,6 +161,18 @@ export class CollaboratorPayloadDto {
   @IsOptional()
   @IsBoolean()
   requiresTwoFactorAuth?: boolean;
+
+  /**
+   * Posición final del colaborador en el flujo de firma (ver historia "Habilitar ordenamiento
+   * Drag and Drop para firmantes requeridos"). El frontend la manda siempre, reflejando el orden
+   * tras el reordenamiento manual; si no viene, DocumentSignaturesService cae de vuelta al orden
+   * de aparición en el arreglo (comportamiento previo a esta historia).
+   */
+  @ApiPropertyOptional({ example: 0 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  orderIndex?: number;
 }
 
 export class CreateDocumentSignaturesDto {
