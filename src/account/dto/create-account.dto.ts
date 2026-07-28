@@ -1,5 +1,12 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsString, ValidateIf } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsBoolean,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  ValidateIf,
+} from 'class-validator';
 import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
 
 export class CreateAccountDto {
@@ -31,4 +38,29 @@ export class CreateAccountDto {
   @IsString()
   @IsNotEmpty()
   organizationName?: string;
+
+  @ApiPropertyOptional({ example: 'Av. Reforma 123, CDMX' })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional({ example: 'ACM010101AAA' })
+  @IsOptional()
+  @IsString()
+  rfc?: string;
+
+  @ApiPropertyOptional({ example: 'acme.com' })
+  @IsOptional()
+  @IsString()
+  domainAllowed?: string;
+
+  @ApiPropertyOptional({ example: '5512345678' })
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @IsBoolean()
+  indexDocuments?: boolean;
 }

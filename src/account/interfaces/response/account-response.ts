@@ -13,16 +13,11 @@ export class OrganizationDetailData {
 export class AccountData {
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    description: 'UUID de la cuenta',
+    description:
+      'UUID de esta membresía/contexto (una fila por usuario × cuenta desde la fusión Account/AccountMember — ver plan de migración ER-V2, Fase 5)',
     format: 'uuid',
   })
   id: string;
-
-  @ApiProperty({
-    example: 'Acme Corp',
-    description: 'Nombre de visualización del espacio de trabajo',
-  })
-  name: string;
 
   @ApiProperty({
     example: ACCOUNT_TYPE_ENUM.ORGANIZATION,
@@ -38,6 +33,15 @@ export class AccountData {
   createdAt: Date;
 
   @ApiProperty({
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    description:
+      'UUID de la organización (tabla organizations); NULL para cuentas PERSONAL. Varias filas de Account (una por miembro) comparten el mismo organizationId.',
+    format: 'uuid',
+    nullable: true,
+  })
+  organizationId: string | null;
+
+  @ApiProperty({
     type: OrganizationDetailData,
     description:
       'Datos corporativos, presentes solo si el type de la cuenta es ORGANIZATION',
@@ -45,6 +49,22 @@ export class AccountData {
     required: false,
   })
   organizationDetail?: OrganizationDetailData | null;
+
+  @ApiProperty({
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    description:
+      'UUID del rol (ver GET /api/v1/roles) del usuario autenticado en esta cuenta; NULL si todavía no se le ha asignado uno explícitamente (la columna admite NULL, aunque hoy el creador de una cuenta personal u organización siempre queda con el rol ADMIN de inmediato)',
+    format: 'uuid',
+    nullable: true,
+  })
+  roleId: string | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Vigencia de la membresía del usuario autenticado en esta cuenta',
+  })
+  isActive: boolean;
 }
 
 export class AccountResponse extends BaseResponse<AccountData> {

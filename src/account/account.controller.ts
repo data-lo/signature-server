@@ -3,15 +3,16 @@ import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 
 // Swagger
 import {
+  ApiBearerAuth,
   ApiOperation,
   ApiParam,
   ApiResponse,
-  ApiSecurity,
   ApiTags,
 } from '@nestjs/swagger';
 
 // Auth
-import { Public } from 'src/auth/decorators/public.decorator';
+import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
+import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 // Service
 import { AccountService } from './account.service';
@@ -28,9 +29,8 @@ import {
   NotFoundResponse,
 } from 'src/interfaces/api-response.dto';
 
-@Public()
 @ApiTags('Account')
-@ApiSecurity('x-api-key')
+@ApiBearerAuth('access-token')
 @Controller('account')
 export class AccountController {
   constructor(private readonly accountService: AccountService) {}
@@ -52,10 +52,13 @@ export class AccountController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
-  create(@Body() createAccountDto: CreateAccountDto) {
-    return this.accountService.create(createAccountDto);
+  create(
+    @CurrentUser() user: JwtPayload,
+    @Body() createAccountDto: CreateAccountDto,
+  ) {
+    return this.accountService.create(user.sub, createAccountDto);
   }
 
   @Get()
@@ -67,7 +70,7 @@ export class AccountController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
   })
   findAll() {
     return this.accountService.findAll();
@@ -88,15 +91,19 @@ export class AccountController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 404,
     description: 'Cuenta no encontrada',
     type: NotFoundResponse,
   })
-  findOne(@Param('id') id: string) {
-    return this.accountService.findOne(id);
+  findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.accountService.findOne(user.sub, id);
   }
 
   @Patch(':id')
@@ -114,14 +121,22 @@ export class AccountController {
   })
   @ApiResponse({
     status: 401,
-    description: 'API Key inválida o no proporcionada',
+    description: 'Token de autenticación inválido, expirado o no proporcionado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es ADMIN de esta cuenta',
   })
   @ApiResponse({
     status: 404,
     description: 'Cuenta no encontrada',
     type: NotFoundResponse,
   })
-  update(@Param('id') id: string, @Body() updateAccountDto: UpdateAccountDto) {
-    return this.accountService.update(id, updateAccountDto);
+  update(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() updateAccountDto: UpdateAccountDto,
+  ) {
+    return this.accountService.update(user.sub, id, updateAccountDto);
   }
 }

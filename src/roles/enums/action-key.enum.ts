@@ -1,0 +1,6 @@
+export enum ACTION_KEY_ENUM {
+  CREATE = 'CREATE',
+  READ = 'READ',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE',
+}

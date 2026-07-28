@@ -1,4 +1,8 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import * as Minio from 'minio';
 import { MinioFileI } from './interfaces/minio.file.interface';
 import { FILE_STATUS_ENUM } from './enums/file-status-enum';
@@ -8,10 +12,10 @@ import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 
 @Injectable()
 export class MinioService {
-
   private readonly logger = new Logger(MinioService.name);
 
-  minioClient: any;
+  minioPrivateClient: any;
+  minioPublicClient: any;
 
   MINIO_CREATED_DOCUMENTS_BUCKET: any;
   MINIO_SIGNED_DOCUMENTS_BUCKET: any;
@@ -28,12 +32,20 @@ export class MinioService {
     this.setMinioClient();
   }
 
-  private getMinioClient() {
-    if (!this.minioClient) {
+  private getMinioPrivateClient() {
+    if (!this.minioPrivateClient) {
       this.setMinioClient();
-      return this.minioClient;
+      return this.minioPrivateClient;
     }
-    return this.minioClient;
+    return this.minioPrivateClient;
+  }
+
+  private getMinioPublicClient() {
+    if (!this.minioPublicClient) {
+      this.setMinioClient();
+      return this.minioPublicClient;
+    }
+    return this.minioPublicClient;
   }
 
   private setMinioClient() {
@@ -43,10 +55,47 @@ export class MinioService {
       );
     }
 
-    this.minioClient = new Minio.Client({
+    if (!process.env.MINIO_PUBLIC_HOST) {
+      throw new Error(
+        '¡MINIO_PUBLIC_HOST no está configurado en las variables de entorno!',
+      );
+    }
+
+    // Bug corregido: sin `region`, el SDK de minio resuelve la región del bucket con una
+    // llamada de red real en la primera operación que la necesita (p. ej. presignedGetObject),
+    // usando el protocolo del cliente que la dispara. Para el cliente público (useSSL:true) eso
+    // significa un handshake TLS contra el propio MinIO — que en local (y en cualquier despliegue
+    // donde MinIO no hable TLS directamente) responde en HTTP plano, y el intento de parsear esa
+    // respuesta como TLS revienta con "EPROTO ... packet length too long", tumbando cualquier
+    // vista que necesite un secureUrl (findDetailForUser, getDocumentMinioURL, etc.) con un 500.
+    // Fijar la región (MinIO standalone usa 'us-east-1' por defecto si no se configuró otra)
+    // hace que esa resolución sea local y evita el round-trip por completo, en ambos clientes.
+    const region = process.env.MINIO_REGION || 'us-east-1';
+
+    // Bug corregido (parte 2): useSSL estaba fijo en true para el cliente público, así que las
+    // URLs presignadas siempre salían con esquema https:// — funciona si MINIO_PUBLIC_HOST está
+    // detrás de un proxy que termina TLS (el caso de producción), pero en local MinIO expone
+    // HTTP plano en ese mismo host/puerto: el navegador intenta el handshake TLS contra un
+    // servidor que responde en claro y falla con ERR_SSL_PROTOCOL_ERROR al cargar el PDF, aunque
+    // el backend ya haya generado la URL sin error. MINIO_PUBLIC_USE_SSL permite apagarlo en
+    // local; por defecto sigue en true para no cambiar el comportamiento de producción.
+    const publicUseSSL = process.env.MINIO_PUBLIC_USE_SSL !== 'false';
+
+    // Cliente interno: usa la red interna de docker (rápido, sin salir a internet)
+    this.minioPrivateClient = new Minio.Client({
       endPoint: process.env.MINIO_HOST,
       port: Number(process.env.MINIO_PORT),
       useSSL: false,
+      region,
+      accessKey: process.env.MINIO_ACCESS_KEY,
+      secretKey: process.env.MINIO_SECRET_KEY,
+    });
+
+    this.minioPublicClient = new Minio.Client({
+      endPoint: process.env.MINIO_PUBLIC_HOST,
+      port: Number(process.env.MINIO_PUBLIC_PORT),
+      useSSL: publicUseSSL,
+      region,
       accessKey: process.env.MINIO_ACCESS_KEY,
       secretKey: process.env.MINIO_SECRET_KEY,
     });
@@ -136,74 +185,11 @@ export class MinioService {
     }
   }
 
-
   async uploadPdfAObject(
-    file:MinioFileI,
-    type:BUCKET_TYPES_ENUM,
-    signerFullName:string,
-    objectKey?:string,
-  ):Promise<{
-    status:FILE_STATUS_ENUM,
-    fileId:string,
-    bucket:string,
-    fileType:string
-  }>{
-    try{
-      const minioClient = await this.getMinioClient();
-      const bucketName = await this.getBucketByType(type);
-
-      await minioClient.bucketExists(bucketName, (err, exists) => {
-        if (err) {
-          throw new Error(
-            `Error al verificar la existencia del bucket: ${err}`,
-          );
-        }
-      });
-
-      this.logger.log(file.name);
-      const extension = file.name.split('.').pop()?.toLowerCase();
-      this.logger.log(`Extension Document ${extension}`);
-          
-      if(!objectKey){
-        objectKey = `${uuid4()}.${extension}`;  
-      }
-
-      this.logger.log(`Nombre Documento ${objectKey}`)
-      const {buffer:fileBuffer,mimetype} = this.resolveFileData(file);
-      if (!fileBuffer) {
-        throw new Error('El archivo no contiene datos válidos');
-      }
-
-      await minioClient.putObject(
-        bucketName, 
-        objectKey, 
-        fileBuffer,
-        fileBuffer.length, 
-        mimetype,
-        {
-        'Content-Type': mimetype,
-        'x-amz-meta-pdfa-conformance':'PDF/A-2B',
-        'x-amz-meta-signed-at':new Date().toString(),
-        'x-amz-meta-signer':signerFullName
-        }
-    );
-
-      return {
-        fileType: mimetype,
-        bucket: bucketName,
-        status: FILE_STATUS_ENUM.FILE_CREATED,
-        fileId: objectKey,
-      };
-
-    }catch(error){
-      throw new InternalServerErrorException(`Error cargano PDF/A en minio ${error}`)
-    }
-  }
-
-  async uploadObject(
     file: MinioFileI,
     type: BUCKET_TYPES_ENUM,
-    objectKey?:string
+    signerFullName: string,
+    objectKey?: string,
   ): Promise<{
     status: FILE_STATUS_ENUM;
     fileId: string;
@@ -211,10 +197,10 @@ export class MinioService {
     fileType: string;
   }> {
     try {
-      const minioClient = await this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = await this.getBucketByType(type);
 
-      await minioClient.bucketExists(bucketName, (err, exists) => {
+      await minioPrivateClient.bucketExists(bucketName, (err) => {
         if (err) {
           throw new Error(
             `Error al verificar la existencia del bucket: ${err}`,
@@ -225,18 +211,81 @@ export class MinioService {
       this.logger.log(file.name);
       const extension = file.name.split('.').pop()?.toLowerCase();
       this.logger.log(`Extension Document ${extension}`);
-          
-      if(!objectKey){
-        objectKey = `${uuid4()}.${extension}`;  
+
+      if (!objectKey) {
+        objectKey = `${uuid4()}.${extension}`;
       }
 
-      this.logger.log(`Nombre Documento ${objectKey}`)
-      const {buffer:fileBuffer,mimetype} = this.resolveFileData(file);
+      this.logger.log(`Nombre Documento ${objectKey}`);
+      const { buffer: fileBuffer, mimetype } = this.resolveFileData(file);
       if (!fileBuffer) {
         throw new Error('El archivo no contiene datos válidos');
       }
 
-      await minioClient.putObject(bucketName, objectKey, fileBuffer, {
+      await minioPrivateClient.putObject(
+        bucketName,
+        objectKey,
+        fileBuffer,
+        fileBuffer.length,
+        mimetype,
+        {
+          'Content-Type': mimetype,
+          'x-amz-meta-pdfa-conformance': 'PDF/A-2B',
+          'x-amz-meta-signed-at': new Date().toString(),
+          'x-amz-meta-signer': signerFullName,
+        },
+      );
+
+      return {
+        fileType: mimetype,
+        bucket: bucketName,
+        status: FILE_STATUS_ENUM.FILE_CREATED,
+        fileId: objectKey,
+      };
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Error cargano PDF/A en minio ${error}`,
+      );
+    }
+  }
+
+  async uploadObject(
+    file: MinioFileI,
+    type: BUCKET_TYPES_ENUM,
+    objectKey?: string,
+  ): Promise<{
+    status: FILE_STATUS_ENUM;
+    fileId: string;
+    bucket: string;
+    fileType: string;
+  }> {
+    try {
+      const minioPrivateClient = this.getMinioPrivateClient();
+      const bucketName = await this.getBucketByType(type);
+
+      await minioPrivateClient.bucketExists(bucketName, (err) => {
+        if (err) {
+          throw new Error(
+            `Error al verificar la existencia del bucket: ${err}`,
+          );
+        }
+      });
+
+      this.logger.log(file.name);
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      this.logger.log(`Extension Document ${extension}`);
+
+      if (!objectKey) {
+        objectKey = `${uuid4()}.${extension}`;
+      }
+
+      this.logger.log(`Nombre Documento ${objectKey}`);
+      const { buffer: fileBuffer, mimetype } = this.resolveFileData(file);
+      if (!fileBuffer) {
+        throw new Error('El archivo no contiene datos válidos');
+      }
+
+      await minioPrivateClient.putObject(bucketName, objectKey, fileBuffer, {
         'Content-Type': mimetype,
       });
 
@@ -258,27 +307,30 @@ export class MinioService {
   ): Promise<GetFileResponse> {
     try {
       let fileName = fileId;
-      const minioClient = await this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
+      const minioPublicClient = this.getMinioPublicClient();
       const bucketName = await this.getBucketByType(bucketType);
-      const exists = await minioClient.bucketExists(bucketName);
+      const exists = await minioPrivateClient.bucketExists(bucketName);
 
       if (!exists) {
         throw new Error(`El bucket ${bucketName} no existe en MinIO`);
       }
 
-      if(!fileName.includes('.')){
+      if (!fileName.includes('.')) {
         fileName = this.addFileExtension(fileId, bucketType);
       }
 
       try {
-        this.logger.log(`Consulta del file en Minio ${await minioClient.statObject(bucketName, fileName)}`);
+        this.logger.log(
+          `Consulta del file en Minio ${await minioPrivateClient.statObject(bucketName, fileName)}`,
+        );
       } catch (error) {
         throw new Error(
           `El archivo con ID ${fileId} no existe en el bucket ${bucketName}`,
         );
       }
 
-      const secureUrl = await minioClient.presignedGetObject(
+      const secureUrl = await minioPublicClient.presignedGetObject(
         bucketName,
         fileName,
         expiresIn,
@@ -305,13 +357,16 @@ export class MinioService {
     fileType: string;
   }> {
     try {
-      const minioClient = this.getMinioClient();
+      const minioPrivateClient = this.getMinioPrivateClient();
       this.logger.debug(fileName);
 
       const bucketName = this.getBucketByType(type);
       this.logger.debug(bucketName);
       try {
-        const fileData = await minioClient.statObject(bucketName, fileName);
+        const fileData = await minioPrivateClient.statObject(
+          bucketName,
+          fileName,
+        );
         this.logger.log(fileData);
       } catch (error) {
         throw new Error(
@@ -319,17 +374,17 @@ export class MinioService {
         );
       }
 
-      await minioClient.removeObject(bucketName, fileName);
+      await minioPrivateClient.removeObject(bucketName, fileName);
       this.logger.debug(
         `Archivo ${fileName} eliminado del bucket ${bucketName}`,
       );
-      const {buffer: fileBuffer, mimetype} = this.resolveFileData(file);
+      const { buffer: fileBuffer, mimetype } = this.resolveFileData(file);
       if (!fileBuffer) {
         throw new Error('El archivo no contiene datos válidos');
       }
 
       try {
-        await minioClient.putObject(bucketName, fileName, fileBuffer, {
+        await minioPrivateClient.putObject(bucketName, fileName, fileBuffer, {
           'Content-Type': mimetype,
         });
       } catch (error) {
@@ -352,16 +407,21 @@ export class MinioService {
     }
   }
 
-  async deleteFile(fileName,bucketType:BUCKET_TYPES_ENUM){
-    try{
-      const minioClient = this.getMinioClient();
+  async deleteFile(fileName, bucketType: BUCKET_TYPES_ENUM) {
+    try {
+      const minioPrivateClient = this.getMinioPrivateClient();
       this.logger.debug(fileName);
 
-      this.logger.warn('SOLO SE DEBERÍA PODER BORRAR ARCHIVOS EN STATUS CREATED');
+      this.logger.warn(
+        'SOLO SE DEBERÍA PODER BORRAR ARCHIVOS EN STATUS CREATED',
+      );
       const bucketName = this.getBucketByType(bucketType);
       this.logger.debug(bucketName);
       try {
-        const fileData = await minioClient.statObject(bucketName, fileName);
+        const fileData = await minioPrivateClient.statObject(
+          bucketName,
+          fileName,
+        );
         this.logger.log(fileData);
       } catch (error) {
         throw new Error(
@@ -369,30 +429,33 @@ export class MinioService {
         );
       }
 
-      await minioClient.removeObject(bucketName, fileName);
+      await minioPrivateClient.removeObject(bucketName, fileName);
       this.logger.warn(
         `Archivo ${fileName} eliminado del bucket ${bucketName}`,
       );
       return {
-        message:{
-          status:FILE_STATUS_ENUM.FILE_DELETED,
-          fileId:fileName
-        }
-      }
-
-    }catch(error){
-      throw new Error(`Error eliminando un documento del bucket ${error}`)
+        message: {
+          status: FILE_STATUS_ENUM.FILE_DELETED,
+          fileId: fileName,
+        },
+      };
+    } catch (error) {
+      throw new Error(`Error eliminando un documento del bucket ${error}`);
     }
-
   }
 
-
-  async getFileInBytesFormat(fileName: string, bucketType: BUCKET_TYPES_ENUM): Promise<Buffer<ArrayBufferLike>> {
-    try{
-      
+  async getFileInBytesFormat(
+    fileName: string,
+    bucketType: BUCKET_TYPES_ENUM,
+  ): Promise<Buffer<ArrayBufferLike>> {
+    try {
+      const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = this.getBucketByType(bucketType);
       try {
-        const fileData = await this.minioClient.statObject(bucketName, fileName);
+        const fileData = await minioPrivateClient.statObject(
+          bucketName,
+          fileName,
+        );
         this.logger.log(fileData);
       } catch (error) {
         throw new Error(
@@ -400,23 +463,26 @@ export class MinioService {
         );
       }
 
-      const dataStream = await this.minioClient.getObject(bucketName, fileName);
+      const dataStream = await minioPrivateClient.getObject(
+        bucketName,
+        fileName,
+      );
 
-      return new Promise((resolve,reject) => {
+      return new Promise((resolve, reject) => {
         const chunks: any[] = [];
-        dataStream.on('data',(chunk) => chunks.push(chunk));
-        dataStream.on('end',() => resolve(Buffer.concat(chunks)));
-        dataStream.on('error',(error) => reject(error));
-      })
-
-    }catch(error){
-      throw new Error(`Error obteniendo Bytes de Archivo desde Minio ${error}`)
+        dataStream.on('data', (chunk) => chunks.push(chunk));
+        dataStream.on('end', () => resolve(Buffer.concat(chunks)));
+        dataStream.on('error', (error) => reject(error));
+      });
+    } catch (error) {
+      throw new Error(`Error obteniendo Bytes de Archivo desde Minio ${error}`);
     }
   }
 
-  
-
-  private addFileExtension(fileId: string, bucketType: BUCKET_TYPES_ENUM): string {
+  private addFileExtension(
+    fileId: string,
+    bucketType: BUCKET_TYPES_ENUM,
+  ): string {
     switch (bucketType) {
       case BUCKET_TYPES_ENUM.CREATED_DOCUMENTS:
       case BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS:
@@ -431,15 +497,16 @@ export class MinioService {
     }
   }
 
-  private resolveFileData(file:MinioFileI):{buffer:Buffer;mimetype:string}{
-    if(Buffer.isBuffer(
-      file.file
-    )){
-      if(!file.mimetype){
+  private resolveFileData(file: MinioFileI): {
+    buffer: Buffer;
+    mimetype: string;
+  } {
+    if (Buffer.isBuffer(file.file)) {
+      if (!file.mimetype) {
         throw new Error('mimetype necesarry cuando se pasa un Buffer');
       }
-      return {buffer: file.file, mimetype:file.mimetype}
+      return { buffer: file.file, mimetype: file.mimetype };
     }
-    return { buffer:file.file.buffer, mimetype: file.file.mimetype}
+    return { buffer: file.file.buffer, mimetype: file.file.mimetype };
   }
 }

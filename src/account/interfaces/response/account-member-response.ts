@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
-import { ACCOUNT_MEMBER_ROLE_ENUM } from '../../enums/account-member-role.enum';
 
 export class AccountMemberData {
   @ApiProperty({
@@ -12,10 +11,11 @@ export class AccountMemberData {
 
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    description: 'UUID de la cuenta a la que se le da acceso',
+    description: 'UUID de la organización a la que se le da acceso',
     format: 'uuid',
+    nullable: true,
   })
-  accountId: string;
+  organizationId: string | null;
 
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
@@ -25,12 +25,13 @@ export class AccountMemberData {
   userId: string;
 
   @ApiProperty({
-    example: [ACCOUNT_MEMBER_ROLE_ENUM.OWNER],
-    description: 'Lista de roles asignados en esa cuenta',
-    enum: ACCOUNT_MEMBER_ROLE_ENUM,
-    isArray: true,
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    description:
+      'UUID del rol asignado en esa cuenta (ver GET /api/v1/roles); NULL si aún no se le ha asignado uno',
+    format: 'uuid',
+    nullable: true,
   })
-  role: ACCOUNT_MEMBER_ROLE_ENUM[];
+  roleId: string | null;
 
   @ApiProperty({
     example: 'Gerente de TI',
@@ -62,4 +63,45 @@ export class AccountMemberListResponse extends BaseResponse<
     description: 'Lista de membresías',
   })
   data: AccountMemberData[];
+}
+
+class OrganizationMemberRole {
+  @ApiProperty({ format: 'uuid' })
+  id: string;
+
+  @ApiProperty({ example: 'MEMBER' })
+  name: string;
+}
+
+/**
+ * Shape delgado para la sección de gestión de miembros (ver historia [STORY] Gestión de
+ * Miembros): solo lo que la tabla del frontend necesita, en vez de la AccountEntity completa
+ * que devuelve AccountMemberData. `rfc` sale de `users.personal_information` (join adicional,
+ * ver `AccountMemberService.findMembersForOrganizationDetailed`).
+ */
+export class OrganizationMemberData {
+  @ApiProperty({ format: 'uuid' })
+  accountId: string;
+
+  @ApiProperty({ format: 'uuid' })
+  userId: string;
+
+  @ApiProperty({ example: 'usuario@mail.com' })
+  email: string;
+
+  @ApiProperty({ example: 'XAXX010101000', nullable: true })
+  rfc: string | null;
+
+  @ApiProperty({ type: OrganizationMemberRole, nullable: true })
+  role: OrganizationMemberRole | null;
+
+  @ApiProperty({ example: '2023-10-25T10:00:00Z', nullable: true })
+  joinedAt: Date | null;
+}
+
+export class OrganizationMemberListResponse extends BaseResponse<
+  OrganizationMemberData[]
+> {
+  @ApiProperty({ type: [OrganizationMemberData] })
+  data: OrganizationMemberData[];
 }
