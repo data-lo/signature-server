@@ -3,21 +3,23 @@ import * as crypto from 'crypto';
 
 @Injectable()
 export class HashService {
+  CIPHER_KEY: any;
 
-  CIPHER_KEY:any;
-
-  constructor(){
+  constructor() {
     this.setCipherKey();
   }
 
-  private setCipherKey(){
-    if(!process.env.CIPHER_SECRET){
-      throw new Error('Variable de Entorno de CHIPHER_SECRET para el Hash Service no están configuradas');
+  private setCipherKey() {
+    if (!process.env.CIPHER_SECRET) {
+      throw new Error(
+        'Variable de Entorno de CHIPHER_SECRET para el Hash Service no están configuradas',
+      );
     }
-    if(!this.CIPHER_KEY){
-      this.CIPHER_KEY = crypto.createHash('sha256')
-      .update(process.env.CIPHER_SECRET)
-      .digest()
+    if (!this.CIPHER_KEY) {
+      this.CIPHER_KEY = crypto
+        .createHash('sha256')
+        .update(process.env.CIPHER_SECRET)
+        .digest();
     }
     return;
   }
@@ -35,55 +37,69 @@ export class HashService {
   }
 
   async generateFileHash(file: Express.Multer.File | Buffer): Promise<string> {
-    const buffer = Buffer.isBuffer(file) ? file: file.buffer;
+    const buffer = Buffer.isBuffer(file) ? file : file.buffer;
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     return hash;
   }
 
-  async generateRegistryHash(registryContent: Object): Promise<string> {
+  async generateRegistryHash(registryContent: object): Promise<string> {
     const normalizedContent = JSON.stringify(
       registryContent,
       Object.keys(registryContent).sort(),
     );
 
-    const hash = crypto.createHash('sha256')
-    .update(normalizedContent)
-    .digest('hex');
+    const hash = crypto
+      .createHash('sha256')
+      .update(normalizedContent)
+      .digest('hex');
 
-    return hash
+    return hash;
   }
 
-  async generateCiperHash(cipherContent: Object): Promise<string> {
+  /**
+   * SHA-256 sobre la concatenación directa (en el orden dado) de las partes recibidas — a
+   * diferencia de generateRegistryHash (que serializa un objeto con JSON.stringify y llaves
+   * ordenadas), esto es para fórmulas de hash explícitas y literales como la del Módulo de
+   * Auditoría Global (SHA256(documentId + cipher + chainHash + auditType + timestamp)).
+   */
+  async generateChainedHash(...parts: string[]): Promise<string> {
+    return crypto.createHash('sha256').update(parts.join('')).digest('hex');
+  }
+
+  async generateCiperHash(cipherContent: object): Promise<string> {
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm',this.CIPHER_KEY,iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', this.CIPHER_KEY, iv);
     const serialized = JSON.stringify(cipherContent);
     const encrypted = Buffer.concat([
-        cipher.update(serialized,'utf-8'),
-        cipher.final()
-    ])
+      cipher.update(serialized, 'utf-8'),
+      cipher.final(),
+    ]);
     const authTag = cipher.getAuthTag();
     return [
-        iv.toString('base64'),
-        authTag.toString('base64'),
-        encrypted.toString('base64')
+      iv.toString('base64'),
+      authTag.toString('base64'),
+      encrypted.toString('base64'),
     ].join(':');
   }
 
   async reverseCiperHash(cipherHash: string): Promise<object> {
-    const [ivB64,authTagB64,encryptedB64] = cipherHash.split(':');
-    
-    const iv = Buffer.from(ivB64,'base64');
-    const authTag = Buffer.from(authTagB64,'base64');
-    const encrypted = Buffer.from(encryptedB64,'base64');
+    const [ivB64, authTagB64, encryptedB64] = cipherHash.split(':');
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm',this.CIPHER_KEY,iv);
+    const iv = Buffer.from(ivB64, 'base64');
+    const authTag = Buffer.from(authTagB64, 'base64');
+    const encrypted = Buffer.from(encryptedB64, 'base64');
+
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      this.CIPHER_KEY,
+      iv,
+    );
     decipher.setAuthTag(authTag);
 
     const decrypted = Buffer.concat([
-        decipher.update(encrypted),
-        decipher.final(),
+      decipher.update(encrypted),
+      decipher.final(),
     ]);
     return JSON.parse(decrypted.toString('utf8'));
   }
-
 }

@@ -1,10 +1,12 @@
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { SignatureEntity } from 'src/signature/entities/signature.entity';
-import { AccountMemberEntity } from 'src/account/entities/account-member.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { PersonalInformationEntity } from './personal-information.entity';
 import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
   OneToMany,
   OneToOne,
   PrimaryGeneratedColumn,
@@ -25,9 +27,6 @@ export class UserEntity {
   @Column({ unique: true, name: 'email' })
   email: string;
 
-  @Column({ nullable: false, name: 'position' })
-  position: string;
-
   @Column({ name: 'roles', type: 'simple-array' })
   roles: string[];
 
@@ -37,14 +36,20 @@ export class UserEntity {
   @Column({ default: false, name: 'is_deleted' })
   isDeleted: boolean;
 
-  @Column({ length: 18, name: 'national_id' })
+  @Column({ default: false, name: 'is_configured' })
+  isConfigured: boolean;
+
+  @Column({ length: 18, name: 'national_id', unique: true })
   nationalId: string;
 
   @Column({ name: 'password' })
   password: string;
 
   @Column({ nullable: true, name: 'signature_id' })
-  signatureId: string;
+  signatureId: string | null;
+
+  @Column({ nullable: false, name: 'personal_information_id' })
+  personalInformationId: string;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
@@ -52,15 +57,17 @@ export class UserEntity {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  @OneToOne(() => SignatureEntity, (signature) => signature.user)
-  signature: SignatureEntity;
+  @OneToOne(() => SignatureEntity)
+  @JoinColumn({ name: 'signature_id' })
+  signature: SignatureEntity | null;
+
+  @OneToOne(() => PersonalInformationEntity)
+  @JoinColumn({ name: 'personal_information_id' })
+  personalInformation: PersonalInformationEntity;
 
   @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
   createdDocuments: DocumentEntity[];
 
-  @OneToMany(() => DocumentEntity, (document) => document.signer)
-  documentsToSign: DocumentEntity[];
-
-  @OneToMany(() => AccountMemberEntity, (member) => member.user)
-  accountMemberships: AccountMemberEntity[];
+  @OneToMany(() => AccountEntity, (account) => account.user)
+  accountMemberships: AccountEntity[];
 }
