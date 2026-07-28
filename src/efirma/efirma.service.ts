@@ -12,6 +12,7 @@ import { CertificateInfo } from './interfaces/certificate.interface';
 import { CadenaConfianzaInvalidaException, CertificadoExpiradoException, CertificadoInvalidoException, LLaveNoCorrespondeCertificadoException, LLavePrivadaInvalidException } from './efirma.exceptions';
 import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
+import { ResultadoVerificacion } from './interfaces/verification.interface';
 
 
 @Injectable()
@@ -184,11 +185,78 @@ export class EfirmaService implements OnModuleInit{
       certificado: {
         rfc: infoCertificado.rfc,
         nombre: infoCertificado.nombre,
-        certificado: infoCertificado,
         numeroSerial: infoCertificado.numeroSerial,
         numeroCertificado: infoCertificado.numeroCertificado,
         certificadoPem:infoCertificado.certificadoPem
       },
     };
   }
+
+  verificar(
+  documento: Buffer,
+  hashDocumentoOriginal: string,
+  firmaBase64: string,
+  certificadoPem: string,
+  firmadoEn: Date,
+): ResultadoVerificacion {
+  const errores: string[] = [];
+  const cerBuffer = Buffer.from(certificadoPem);
+
+  // 1. INTEGRIDAD (capa rápida): ¿el documento sigue siendo byte-por-byte el mismo?
+  const hashActual = this.calcularHashDocumento(documento);
+  const hashCoincide = hashActual === hashDocumentoOriginal;
+  if (!hashCoincide) {
+    errores.push('El hash del documento no coincide: el archivo fue modificado o no es el original');
+  }
+
+  // 2. IDENTIDAD: ¿el certificado usado realmente lo emitió el SAT?
+  let cadenaConfianzaValida = true;
+  try {
+    this.validarCadenaConfianza(cerBuffer);
+  } catch (err) {
+    cadenaConfianzaValida = false;
+    errores.push(`Cadena de confianza inválida: ${(err as Error).message}`);
+  }
+
+  // 3. VIGENCIA AL MOMENTO DE FIRMAR (no al momento de verificar)
+  const infoCertificado = this.parsearCertificado(cerBuffer);
+  let vigenteAlFirmar = true;
+  try {
+    this.validarVigencia(infoCertificado, firmadoEn);
+  } catch (err) {
+    vigenteAlFirmar = false;
+    errores.push(`El certificado no estaba vigente al momento de firmar: ${(err as Error).message}`);
+  }
+
+  // 4. AUTORÍA / INTEGRIDAD REAL: la operación criptográfica inversa
+  const cert = new X509Certificate(cerBuffer);
+  let firmaValida = false;
+  try {
+    firmaValida = createVerify('RSA-SHA256')
+      .update(documento)
+      .verify(cert.publicKey, Buffer.from(firmaBase64, 'base64'));
+  } catch (err) {
+    errores.push(`No se pudo verificar la firma: ${(err as Error).message}`);
+  }
+  if (!firmaValida) {
+    errores.push('La firma no corresponde a este documento y certificado');
+  }
+
+  const esValida = hashCoincide && firmaValida && cadenaConfianzaValida && vigenteAlFirmar;
+
+  return {
+    esValida,
+    hashCoincide,
+    firmaValida,
+    cadenaConfianzaValida,
+    vigenteAlFirmar,
+    detalle: {
+      rfc: infoCertificado.rfc,
+      nombre: infoCertificado.nombre,
+      numeroCertificado: infoCertificado.numeroCertificado,
+      firmadoEn,
+    },
+    errores,
+  };
+}
 }
