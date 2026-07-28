@@ -38,7 +38,6 @@ import { EfirmaModule } from './efirma/efirma.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => (
-        console.log(config.get('POSTGRES_DB_URL')),
         {
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',

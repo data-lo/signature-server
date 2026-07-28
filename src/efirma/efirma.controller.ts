@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFiles } from '@nestjs/common';
+import { Controller, Post, Body, UseInterceptors, UploadedFiles } from '@nestjs/common';
 import { EfirmaService } from './efirma.service';
 import { CreateEfirmaDto } from './dto/create-efirma.dto';
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
