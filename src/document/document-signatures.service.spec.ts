@@ -17,6 +17,7 @@ import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from './document-transaction.service';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
 import {
   CreateDocumentSignaturesDto,
@@ -126,9 +127,11 @@ describe('DocumentSignaturesService', () => {
     hashService = { generateFileHash: jest.fn().mockResolvedValue('hash-123') };
     documentSigningService = { getPdfPages: jest.fn().mockResolvedValue(3) };
     accountMemberService = {
-      assertIsActiveMember: jest
-        .fn()
-        .mockResolvedValue({ id: 'account-1', organizationId: null }),
+      assertIsActiveMember: jest.fn().mockResolvedValue({
+        id: 'account-1',
+        accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+        organizationId: null,
+      }),
     };
     verificationCodeService = {
       issue: jest.fn().mockResolvedValue({ id: 'vc-1' }),
@@ -437,7 +440,12 @@ describe('DocumentSignaturesService', () => {
     expect(accountMemberService.assertIsActiveMember).not.toHaveBeenCalled();
   });
 
-  it('documentData.requiresApproval se guarda en el documento', async () => {
+  it('documentData.requiresApproval se guarda en el documento cuando la cuenta activa es ORGANIZATION', async () => {
+    accountMemberService.assertIsActiveMember.mockResolvedValue({
+      id: 'account-1',
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      organizationId: 'org-1',
+    });
     const dtoConAprobacion: CreateDocumentSignaturesDto = {
       ...baseDto,
       documentData: { ...baseDto.documentData, requiresApproval: true },
@@ -453,6 +461,27 @@ describe('DocumentSignaturesService', () => {
 
     expect(documentRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ requiresApproval: true }),
+    );
+  });
+
+  it('bug corregido: rechaza requiresApproval=true cuando la cuenta activa es PERSONAL', async () => {
+    // El mock por defecto de assertIsActiveMember ya es PERSONAL (ver beforeEach).
+    const dtoConAprobacion: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      documentData: { ...baseDto.documentData, requiresApproval: true },
+    };
+
+    await expect(
+      service.create('creator-1', 'account-1', dtoConAprobacion, file, '127.0.0.1'),
+    ).rejects.toThrow(BadRequestException);
+    expect(documentRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('no rechaza una cuenta PERSONAL cuando requiresApproval no se solicita', async () => {
+    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresApproval: false }),
     );
   });
 });

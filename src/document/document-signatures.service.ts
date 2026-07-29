@@ -30,6 +30,7 @@ import { MinioService } from 'src/shared/minio/minio.service';
 import { HashService } from 'src/shared/hash/hash.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { AccountMemberService } from 'src/account/account-member.service';
+import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { VerificationCodeService } from './verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
@@ -119,6 +120,20 @@ export class DocumentSignaturesService {
       createdBy,
       accountId,
     );
+
+    // Bug corregido: "requiere aprobación" depende de que exista alguien con permisos dentro de
+    // una organización para aprobarlo — una cuenta PERSONAL no tiene miembros ni permisos que
+    // ejercer esa aprobación. El frontend ya oculta la opción para cuentas PERSONAL; esto la
+    // rechaza también aquí para que un cliente distinto (u otro bug en el frontend) no pueda
+    // colar un documento personal con requiresApproval=true que nunca podría aprobarse.
+    if (
+      dto.documentData.requiresApproval === true &&
+      activeAccount.accountType !== ACCOUNT_TYPE_ENUM.ORGANIZATION
+    ) {
+      throw new BadRequestException(
+        'Solo las cuentas de tipo ORGANIZATION pueden requerir aprobación en un documento',
+      );
+    }
 
     const totalPages = await this.documentSigningService.getPdfPages(file);
     const originalHash = await this.hashService.generateFileHash(file);

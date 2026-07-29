@@ -22,6 +22,8 @@ import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { HealthModule } from './health/health.module';
 import { AccountModule } from './account/account.module';
+import { EfirmaModule } from './efirma/efirma.module';
+
 import { KafkaModule } from './kafka/kafka.module';
 import { StripeModule } from './stripe/stripe.module';
 import { RolesModule } from './roles/roles.module';
@@ -33,7 +35,8 @@ import { EventModule } from './event/event.module';
       name: 'default',
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
+      useFactory: (config: ConfigService) => (
+        {
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',
         autoLoadEntities: true,
@@ -69,6 +72,7 @@ import { EventModule } from './event/event.module';
     SignatureModule,
     SharedModule,
     HealthModule,
+    EfirmaModule,
     KafkaModule,
     StripeModule,
     RolesModule,
