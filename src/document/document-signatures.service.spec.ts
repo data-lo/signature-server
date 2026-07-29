@@ -70,7 +70,9 @@ describe('DocumentSignaturesService', () => {
         email: 'juan.perez@mail.com',
         rfc: 'PEAJ800101XXX',
         signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
-        signaturePosition: { page: 1, x: 150, y: 600 },
+        signatures: [
+          { signatureId: 'sig-1', page: 1, xRatio: 0.65, yRatio: 0.8, widthRatio: 0.2, heightRatio: 0.08 },
+        ],
         requiresTwoFactorAuth: true,
       },
       {
@@ -80,7 +82,7 @@ describe('DocumentSignaturesService', () => {
         email: 'maria.gomez@mail.com',
         rfc: null,
         signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE,
-        signaturePosition: { page: 1, x: 100, y: 100 },
+        signatures: [],
         requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
       },
       {
@@ -344,19 +346,58 @@ describe('DocumentSignaturesService', () => {
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
   });
 
-  it('crea una SimpleSignatureEntity por firmante con las coordenadas del payload', async () => {
+  it('crea una SimpleSignatureEntity por firmante, incluso con un arreglo vacío de posiciones', async () => {
     await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
+    // Juan (signatures con 1 elemento) y María (signatures: []) — ambos SIGNER, ambos deben
+    // recibir una fila propia (ver historia "Ubicación de firmas por usuario": simpleSignatureId
+    // asignado, con o sin posiciones, distingue a estos colaboradores del flujo /document viejo).
     expect(simpleSignatureRepo.save).toHaveBeenCalledTimes(2);
     expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        signatureCoordinates: expect.objectContaining({
-          x: 150,
-          y: 600,
-          page: 1,
-        }),
+        signatureCoordinates: [
+          expect.objectContaining({
+            signatureId: 'sig-1',
+            page: 1,
+            xRatio: 0.65,
+            yRatio: 0.8,
+            widthRatio: 0.2,
+            heightRatio: 0.08,
+          }),
+        ],
       }),
     );
+    expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ signatureCoordinates: [] }),
+    );
+  });
+
+  it('bug corregido: rechaza con BadRequestException si dos firmantes colocan una posición que se solapa en la misma página', async () => {
+    const dtoConColision: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: baseDto.collaborators.map((collaborator) =>
+        collaborator.email === 'maria.gomez@mail.com'
+          ? {
+              ...collaborator,
+              signatures: [
+                {
+                  signatureId: 'sig-2',
+                  page: 1,
+                  xRatio: 0.7,
+                  yRatio: 0.82,
+                  widthRatio: 0.2,
+                  heightRatio: 0.08,
+                },
+              ],
+            }
+          : collaborator,
+      ),
+    };
+
+    await expect(
+      service.create('creator-1', 'account-1', dtoConColision, file, '127.0.0.1'),
+    ).rejects.toThrow(BadRequestException);
+    expect(simpleSignatureRepo.save).not.toHaveBeenCalled();
   });
 
   it('Escenario 2: si falla la inserción dentro de la transacción, no se publica ningún evento a Kafka', async () => {

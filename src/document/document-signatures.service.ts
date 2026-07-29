@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { v4 as uuid4 } from 'uuid';
 
 import { DocumentEntity } from './entities/document.entity';
 import { CollaboratorEntity } from './entities/collaborator.entity';
@@ -11,7 +12,9 @@ import {
   CreateDocumentSignaturesDto,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
   PAYLOAD_SIGNATURE_TYPE_ENUM,
+  SignaturePositionDto,
 } from './dto/create-document-signatures.dto';
+import { assertNoOverlappingSignaturePositions } from './utils/signature-collision.util';
 
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
@@ -51,9 +54,6 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
   [PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED]: SIGNATURE_TYPE_ENUM.FIEL,
 };
 
-/** Ancho/alto por defecto para el stamp de firma — el payload solo trae page/x/y (ver historia). */
-const DEFAULT_SIGNATURE_SIZE = { width: 100, height: 80 };
-
 export interface CreateDocumentSignaturesResult {
   id: string;
   status: DOCUMENT_STATUS_ENUM;
@@ -72,9 +72,10 @@ export interface CreateDocumentSignaturesResult {
  * Trata a todos los colaboradores como invitación por email (accountId siempre null) — no
  * intenta resolver si ese correo ya tiene cuenta en la plataforma.
  *
- * Crea Document -> Collaborator (+ SimpleSignature por firmante, con su signaturePosition) ->
- * Notification -> verification_code dentro de UNA transacción; los eventos de Kafka (uno por
- * notificación) solo se publican si la transacción hizo commit.
+ * Crea Document -> Collaborator (+ SimpleSignature por firmante, con su arreglo `signatures` —
+ * ver historia "Ubicación de firmas por usuario") -> Notification -> verification_code dentro de
+ * UNA transacción; los eventos de Kafka (uno por notificación) solo se publican si la
+ * transacción hizo commit.
  */
 @Injectable()
 export class DocumentSignaturesService {
@@ -134,6 +135,18 @@ export class DocumentSignaturesService {
       (c) => c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
     ).length;
     const isSequential = dto.documentData.isSequential ?? true;
+
+    // Defensa en profundidad (ver signature-collision.util.ts): valida ANTES de tocar la base de
+    // datos, agrupando por página todas las posiciones de todos los firmantes del payload.
+    const positionsByPage = new Map<number, SignaturePositionDto[]>();
+    for (const participant of dto.collaborators) {
+      for (const position of participant.signatures ?? []) {
+        const positionsOnPage = positionsByPage.get(position.page) ?? [];
+        positionsOnPage.push(position);
+        positionsByPage.set(position.page, positionsOnPage);
+      }
+    }
+    assertNoOverlappingSignaturePositions(positionsByPage);
 
     const {
       document,
@@ -214,16 +227,25 @@ export class DocumentSignaturesService {
             participant.collaboratorType ===
             PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;
 
+          // Se crea SIEMPRE (incluso con un arreglo vacío) para todo SIGNER de este flujo —
+          // `simpleSignatureId` asignado (con o sin posiciones) distingue a estos colaboradores
+          // de los creados por el endpoint POST /document más antiguo (que nunca lo asigna y
+          // sigue cayendo al apilado automático en finalizeSignedDocument, sin cambios). Un
+          // arreglo vacío significa "sin posición: se firma sin estampado visual" (ver historia).
           let simpleSignatureId: string | null = null;
-          if (isSigner && participant.signaturePosition) {
+          if (isSigner) {
             const simpleSignature = await simpleSignatureRepo.save(
               simpleSignatureRepo.create({
-                signatureCoordinates: {
-                  x: participant.signaturePosition.x,
-                  y: participant.signaturePosition.y,
-                  page: participant.signaturePosition.page,
-                  ...DEFAULT_SIGNATURE_SIZE,
-                },
+                signatureCoordinates: (participant.signatures ?? []).map(
+                  (position) => ({
+                    signatureId: position.signatureId ?? uuid4(),
+                    page: position.page,
+                    xRatio: position.xRatio,
+                    yRatio: position.yRatio,
+                    widthRatio: position.widthRatio,
+                    heightRatio: position.heightRatio,
+                  }),
+                ),
               }),
             );
             simpleSignatureId = simpleSignature.id;
