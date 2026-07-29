@@ -31,6 +31,10 @@ import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
 import { SignatureCoordinates } from 'src/shared/document-signing/interfaces/signature-coordinates.interface';
+import type {
+  LegacySignatureCoordinates,
+  SignaturePositionRecord,
+} from 'src/signature/entities/simple-signature.entity';
 
 // Services
 import { MinioService } from '../shared/minio/minio.service';
@@ -57,6 +61,17 @@ import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.consta
 import { DocumentTransactionService } from './document-transaction.service';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
+
+/**
+ * Distingue una posición en el shape nuevo (ratios 0-1, ver historia "Ubicación de firmas por
+ * usuario") de una en el shape legacy (píxeles absolutos, pre-migración
+ * `ArraySignatureCoordinates`) dentro del mismo arreglo `signatureCoordinates`.
+ */
+function isRatioSignaturePosition(
+  position: SignaturePositionRecord | LegacySignatureCoordinates,
+): position is SignaturePositionRecord {
+  return 'xRatio' in position;
+}
 
 @Injectable()
 export class DocumentService {
@@ -1423,29 +1438,80 @@ export class DocumentService {
           BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
         );
 
-        let coordinates: SignatureCoordinates;
+        const signerName = `${signerUser.firstName} ${signerUser.lastName}`;
+
         if (collaborator.simpleSignature) {
-          coordinates = collaborator.simpleSignature.signatureCoordinates;
+          // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
+          // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
+          // sin estampar nada visualmente, y el loop de abajo simplemente no itera. Con
+          // elementos, se estampa UNA vez por cada posición (páginas/zonas distintas).
+          for (const position of collaborator.simpleSignature
+            .signatureCoordinates) {
+            if (isRatioSignaturePosition(position)) {
+              const { coordinates, pageIndex } =
+                await this.documentSigningSerivice.resolveRatioPosition(
+                  documentBuffer,
+                  position,
+                );
+              documentBuffer =
+                await this.documentSigningSerivice.mergeSignatureIntoPdf(
+                  documentBuffer,
+                  signatureBuffer,
+                  coordinates,
+                  pageIndex,
+                );
+              documentBuffer = await this.documentSigningSerivice.addSignerName(
+                documentBuffer,
+                signerName,
+                coordinates,
+                pageIndex,
+              );
+            } else {
+              // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
+              // sin ratios) — se respeta el comportamiento de siempre: página por defecto
+              // (última), sin intentar una conversión a ratios con pérdida de precisión.
+              const legacyCoordinates: SignatureCoordinates = {
+                x: position.x,
+                y: position.y,
+                width: position.width,
+                height: position.height,
+                opacity: position.opacity,
+              };
+              documentBuffer =
+                await this.documentSigningSerivice.mergeSignatureIntoPdf(
+                  documentBuffer,
+                  signatureBuffer,
+                  legacyCoordinates,
+                );
+              documentBuffer = await this.documentSigningSerivice.addSignerName(
+                documentBuffer,
+                signerName,
+                legacyCoordinates,
+              );
+            }
+          }
         } else {
-          coordinates = {
+          // Colaborador creado por el endpoint POST /document más antiguo (nunca asigna
+          // simpleSignatureId) — apilado automático sin cambios respecto al comportamiento
+          // previo a esta historia.
+          const coordinates: SignatureCoordinates = {
             ...baseCoordinates,
             y: baseCoordinates.y + autoStackIndex * verticalStep,
           };
           autoStackIndex += 1;
-        }
 
-        documentBuffer =
-          await this.documentSigningSerivice.mergeSignatureIntoPdf(
+          documentBuffer =
+            await this.documentSigningSerivice.mergeSignatureIntoPdf(
+              documentBuffer,
+              signatureBuffer,
+              coordinates,
+            );
+          documentBuffer = await this.documentSigningSerivice.addSignerName(
             documentBuffer,
-            signatureBuffer,
+            signerName,
             coordinates,
           );
-
-        documentBuffer = await this.documentSigningSerivice.addSignerName(
-          documentBuffer,
-          `${signerUser.firstName} ${signerUser.lastName}`,
-          coordinates,
-        );
+        }
       }
 
       const signerNames = signerCollaborators

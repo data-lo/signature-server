@@ -105,12 +105,17 @@ export class PdfSignatureService {
    * @param documentBuffer  PDF original como Buffer de bytes.
    * @param signatureBuffer Imagen de la firma (PNG) como Buffer de bytes.
    * @param coordinates     Posición y tamaño donde incrustar la firma en la página.
+   * @param pageIndex       Página destino, 0-based (ver historia "Ubicación de firmas por
+   *                        usuario"). Por defecto la última página, mismo comportamiento que
+   *                        antes de que existiera soporte multipágina — ningún caller que no lo
+   *                        pase explícitamente cambia de comportamiento.
    * @returns               PDF firmado en formato PDF/A-2B como Buffer.
    */
   async mergeSignatureIntoPdf(
     documentBuffer: Buffer,
     signatureBuffer: Buffer,
     coordinates: SignatureCoordinates,
+    pageIndex?: number,
   ): Promise<Buffer> {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
@@ -135,15 +140,15 @@ export class PdfSignatureService {
       );
     }
 
-    // Paso 4: seleccionar la última página del documento como destino de la firma
+    // Paso 4: seleccionar la página destino (por defecto la última, ver doc del parámetro)
     const pages = pdfDoc.getPages();
-    const lastPage = pages[pages.length - 1];
+    const targetPage = pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
 
     // Paso 5: resolver el tamaño final de la firma aplicando el resize automático si corresponde
     const drawSize = this.resolveSignatureSize(coordinates);
 
     // Paso 6: dibujar la firma en la página con las coordenadas, dimensiones y opacidad resueltas
-    lastPage.drawImage(signatureImage, {
+    targetPage.drawImage(signatureImage, {
       x: coordinates.x,
       y: coordinates.y,
       width: drawSize.width,
@@ -218,6 +223,46 @@ export class PdfSignatureService {
     );
   }
 
+  /**
+   * Convierte una posición en ratios 0-1 (ver historia "Ubicación de firmas por usuario") a
+   * coordenadas absolutas en puntos PDF (origen inferior-izquierdo) contra el tamaño REAL de la
+   * página destino — los ratios no sirven de nada sin saber el tamaño en puntos de ESA página
+   * específica, que puede variar entre páginas de un mismo documento.
+   *
+   * `yRatio` se mide desde el borde SUPERIOR de la página (coincide con cómo el frontend mide la
+   * posición del drop en el DOM), de ahí la resta contra `pageHeight`.
+   *
+   * `page` es 1-based; si viniera fuera de rango (no debería, ya validado al crear el
+   * documento) se usa la última página como fallback en vez de lanzar.
+   */
+  async resolveRatioPosition(
+    documentBuffer: Buffer,
+    position: {
+      page: number;
+      xRatio: number;
+      yRatio: number;
+      widthRatio: number;
+      heightRatio: number;
+      opacity?: number;
+    },
+  ): Promise<{ coordinates: SignatureCoordinates; pageIndex: number }> {
+    const pdfDoc = await PDFDocument.load(documentBuffer);
+    const pages = pdfDoc.getPages();
+    const pageIndex = Math.min(Math.max(position.page - 1, 0), pages.length - 1);
+    const { width: pageWidth, height: pageHeight } = pages[pageIndex].getSize();
+
+    return {
+      pageIndex,
+      coordinates: {
+        x: position.xRatio * pageWidth,
+        y: pageHeight - (position.yRatio + position.heightRatio) * pageHeight,
+        width: position.widthRatio * pageWidth,
+        height: position.heightRatio * pageHeight,
+        opacity: position.opacity,
+      },
+    };
+  }
+
   /** Estampa "CANCELADO" en diagonal rojo semitransparente en todas las páginas del PDF. */
   async stampCancelledWatermark(documentBuffer: Buffer): Promise<Buffer> {
     return this.stampDiagonalWatermark(
@@ -231,13 +276,15 @@ export class PdfSignatureService {
     documentBuffer: Buffer,
     signerName: string,
     coord: SignatureCoordinates,
+    pageIndex?: number,
   ): Promise<Buffer> {
     try {
       const pdfDoc = await PDFDocument.load(documentBuffer);
       const pages = pdfDoc.getPages();
-      const lastPage = pages[pages.length - 1];
+      const targetPage =
+        pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
 
-      lastPage.drawText(signerName, {
+      targetPage.drawText(signerName, {
         x: coord.x,
         y: coord.y - 20,
         size: 10,

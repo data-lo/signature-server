@@ -11,6 +11,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   Min,
   ValidateIf,
   ValidateNested,
@@ -60,19 +61,48 @@ function parseJson<T>(cls: new () => T) {
   };
 }
 
+/**
+ * Ubicación de una firma sobre una página, en ratios 0-1 relativos al tamaño de esa página (no
+ * píxeles absolutos) — ver historia "Ubicación de firmas por usuario". Un mismo firmante puede
+ * traer varias instancias de este DTO (una por cada página/zona donde colocó su firma); el
+ * frontend siempre manda el arreglo completo, vacío si no colocó ninguna (ver
+ * `CollaboratorPayloadDto.signatures`).
+ */
 export class SignaturePositionDto {
+  /** Generado por el cliente (para poder mover/borrar una firma específica en la UI); si no llega, el backend genera uno. */
+  @ApiPropertyOptional({ example: 'sig_loc_01' })
+  @IsOptional()
+  @IsString()
+  signatureId?: string;
+
   @ApiProperty({ example: 1 })
   @IsInt()
   @Min(1)
   page: number;
 
-  @ApiProperty({ example: 150 })
+  @ApiProperty({ example: 0.65 })
   @IsNumber()
-  x: number;
+  @Min(0)
+  @Max(1)
+  xRatio: number;
 
-  @ApiProperty({ example: 600 })
+  @ApiProperty({ example: 0.8 })
   @IsNumber()
-  y: number;
+  @Min(0)
+  @Max(1)
+  yRatio: number;
+
+  @ApiProperty({ example: 0.2 })
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  widthRatio: number;
+
+  @ApiProperty({ example: 0.08 })
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  heightRatio: number;
 }
 
 export class DocumentDataDto {
@@ -144,18 +174,18 @@ export class CollaboratorPayloadDto {
   signatureType?: PAYLOAD_SIGNATURE_TYPE_ENUM;
 
   /**
-   * Sin UI para esto todavía (ver historia) — el frontend inyecta un default. Solo aplica a
-   * SIGNER; el backend además refuerza requiresTwoFactorAuth=true para SIMPLE sin importar lo
-   * que llegue en el payload (ver DocumentSignaturesService).
+   * Ubicaciones de firma de este colaborador (ver historia "Ubicación de firmas por usuario").
+   * Solo aplica a SIGNER; el backend además refuerza requiresTwoFactorAuth=true para SIMPLE sin
+   * importar lo que llegue en el payload (ver DocumentSignaturesService). Un arreglo vacío u
+   * omitido es válido: significa que este firmante no tiene ninguna posición asignada, y al
+   * firmar se valida su firma sin estampar nada en el PDF (ver finalizeSignedDocument).
    */
-  @ApiPropertyOptional({ type: SignaturePositionDto })
-  @ValidateIf(
-    (c: CollaboratorPayloadDto) =>
-      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-  )
-  @ValidateNested()
+  @ApiPropertyOptional({ type: [SignaturePositionDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
   @Type(() => SignaturePositionDto)
-  signaturePosition?: SignaturePositionDto;
+  signatures?: SignaturePositionDto[];
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()
