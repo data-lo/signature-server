@@ -31,3 +31,36 @@ export class LoginResponse extends BaseResponse<LoginResponseData> {
   })
   data: LoginResponseData;
 }
+
+export class ForgotPasswordResponse extends BaseResponse<null> {
+  @ApiProperty({
+    example: null,
+    description:
+      'Sin datos — la respuesta es siempre el mismo mensaje genérico',
+  })
+  data: null;
+}
+
+export class VerifyResetCodeResponseData {
+  @ApiProperty({
+    description:
+      'Token de corta duración (10 min) para usar en /auth/reset-password',
+  })
+  resetToken: string;
+}
+
+export class VerifyResetCodeResponse extends BaseResponse<VerifyResetCodeResponseData> {
+  @ApiProperty({
+    type: VerifyResetCodeResponseData,
+    description: 'Datos de la verificación del código',
+  })
+  data: VerifyResetCodeResponseData;
+}
+
+export class ResetPasswordResponse extends BaseResponse<null> {
+  @ApiProperty({
+    example: null,
+    description: 'Sin datos adicionales',
+  })
+  data: null;
+}

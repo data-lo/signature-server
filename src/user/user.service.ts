@@ -301,6 +301,11 @@ export class UserService {
     return this.userRepository.findOne({ where: { email, isDeleted: false } });
   }
 
+  /** Actualiza el hash de contraseña de UserEntity (ver historia "Recuperación de Contraseña mediante Código de Verificación OTP" — AuthService.resetPassword). No sincroniza AccountEntity: ver AccountService.updatePasswordForUser. */
+  async updatePassword(userId: string, hashedPassword: string): Promise<void> {
+    await this.userRepository.update(userId, { password: hashedPassword });
+  }
+
   async remove(id: string): Promise<BaseResponse> {
     const result = await this.userRepository.update(
       { id, isActive: true },

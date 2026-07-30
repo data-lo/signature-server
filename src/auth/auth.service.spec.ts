@@ -1,10 +1,12 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { UserService } from '../user/user.service';
 import { AccountService } from '../account/account.service';
 import { OrganizationInvitationService } from '../account/organization-invitation.service';
+import { PasswordResetCodeService } from './password-reset-code.service';
+import { EmailService } from '../shared/email/email.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
 
@@ -13,13 +15,23 @@ describe('AuthService', () => {
   let userService: {
     createFromSignup: jest.Mock;
     findOne: jest.Mock;
+    findOneByEmail: jest.Mock;
+    updatePassword: jest.Mock;
     sanitize: jest.Mock;
   };
-  let accountService: { findActiveAccountByEmail: jest.Mock };
+  let accountService: {
+    findActiveAccountByEmail: jest.Mock;
+    updatePasswordForUser: jest.Mock;
+  };
   let organizationInvitationService: { acceptForUser: jest.Mock };
+  let passwordResetCodeService: {
+    issue: jest.Mock;
+    verifyAndConsume: jest.Mock;
+  };
+  let emailService: { sendPasswordResetOtpNotification: jest.Mock };
   let passwordService: { hash: jest.Mock; compare: jest.Mock };
-  let jwtService: { sign: jest.Mock };
-  let redisService: { set: jest.Mock };
+  let jwtService: { sign: jest.Mock; verifyAsync: jest.Mock };
+  let redisService: { set: jest.Mock; get: jest.Mock };
 
   const account = {
     id: 'account-1',
@@ -40,20 +52,37 @@ describe('AuthService', () => {
     userService = {
       createFromSignup: jest.fn(),
       findOne: jest.fn().mockResolvedValue(user),
+      findOneByEmail: jest.fn().mockResolvedValue(user),
+      updatePassword: jest.fn().mockResolvedValue(undefined),
       sanitize: jest.fn((u) => u),
     };
     accountService = {
       findActiveAccountByEmail: jest.fn().mockResolvedValue(account),
+      updatePasswordForUser: jest.fn().mockResolvedValue(undefined),
     };
     organizationInvitationService = {
       acceptForUser: jest.fn().mockResolvedValue(undefined),
+    };
+    passwordResetCodeService = {
+      issue: jest.fn().mockResolvedValue({ code: '123456' }),
+      verifyAndConsume: jest.fn().mockResolvedValue(undefined),
+    };
+    emailService = {
+      sendPasswordResetOtpNotification: jest.fn().mockResolvedValue(undefined),
     };
     passwordService = {
       hash: jest.fn().mockResolvedValue('hashed-pw'),
       compare: jest.fn().mockResolvedValue(true),
     };
-    jwtService = { sign: jest.fn().mockReturnValue('signed-jwt') };
-    redisService = { set: jest.fn() };
+    jwtService = {
+      sign: jest.fn().mockReturnValue('signed-jwt'),
+      verifyAsync: jest.fn().mockResolvedValue({
+        sub: 'user-1',
+        purpose: 'password_reset',
+        iat: 1000,
+      }),
+    };
+    redisService = { set: jest.fn(), get: jest.fn().mockResolvedValue(null) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -64,6 +93,11 @@ describe('AuthService', () => {
           provide: OrganizationInvitationService,
           useValue: organizationInvitationService,
         },
+        {
+          provide: PasswordResetCodeService,
+          useValue: passwordResetCodeService,
+        },
+        { provide: EmailService, useValue: emailService },
         { provide: JwtService, useValue: jwtService },
         { provide: PasswordService, useValue: passwordService },
         { provide: RedisService, useValue: redisService },
@@ -185,6 +219,169 @@ describe('AuthService', () => {
       } as any);
 
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('forgotPassword', () => {
+    const dto = { email: 'ANA@empresa.com' };
+
+    it('con correo existente y activo, emite y envía el OTP', async () => {
+      const result = await service.forgotPassword(dto);
+
+      expect(userService.findOneByEmail).toHaveBeenCalledWith(
+        'ana@empresa.com',
+      );
+      expect(passwordResetCodeService.issue).toHaveBeenCalledWith('user-1');
+      expect(
+        emailService.sendPasswordResetOtpNotification,
+      ).toHaveBeenCalledWith('ana@empresa.com', '123456');
+      expect(result).toEqual({
+        success: true,
+        message:
+          'Si el correo está registrado, recibirás un código de verificación',
+        data: null,
+      });
+    });
+
+    it('anti-enumeración: con correo inexistente, regresa el mismo mensaje genérico sin emitir OTP', async () => {
+      userService.findOneByEmail.mockResolvedValue(null);
+
+      const result = await service.forgotPassword(dto);
+
+      expect(passwordResetCodeService.issue).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        message:
+          'Si el correo está registrado, recibirás un código de verificación',
+        data: null,
+      });
+    });
+
+    it('anti-enumeración: con correo de una cuenta desactivada, mismo mensaje genérico sin emitir OTP', async () => {
+      userService.findOneByEmail.mockResolvedValue({
+        ...user,
+        isActive: false,
+      });
+
+      const result = await service.forgotPassword(dto);
+
+      expect(passwordResetCodeService.issue).not.toHaveBeenCalled();
+      expect(result.message).toBe(
+        'Si el correo está registrado, recibirás un código de verificación',
+      );
+    });
+
+    it('bug corregido: si SendGrid falla, no propaga el error — el mensaje sigue siendo el genérico (best-effort)', async () => {
+      emailService.sendPasswordResetOtpNotification.mockRejectedValue(
+        new Error('Failed to send email'),
+      );
+
+      const result = await service.forgotPassword(dto);
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('verifyResetCode', () => {
+    const dto = { email: 'ANA@empresa.com', code: '123456' };
+
+    it('consume el OTP y regresa un resetToken', async () => {
+      const result = await service.verifyResetCode(dto);
+
+      expect(passwordResetCodeService.verifyAndConsume).toHaveBeenCalledWith(
+        'user-1',
+        '123456',
+      );
+      expect(jwtService.sign).toHaveBeenCalledWith(
+        { sub: 'user-1', purpose: 'password_reset' },
+        { expiresIn: '10m' },
+      );
+      expect(result.data.resetToken).toBe('signed-jwt');
+    });
+
+    it('rechaza con BadRequestException si no existe ningún usuario con ese correo', async () => {
+      userService.findOneByEmail.mockResolvedValue(null);
+
+      await expect(service.verifyResetCode(dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(passwordResetCodeService.verifyAndConsume).not.toHaveBeenCalled();
+    });
+
+    it('propaga el error si el código es inválido/expirado', async () => {
+      passwordResetCodeService.verifyAndConsume.mockRejectedValue(
+        new BadRequestException('El código de verificación expiró'),
+      );
+
+      await expect(service.verifyResetCode(dto)).rejects.toThrow(
+        'El código de verificación expiró',
+      );
+      expect(jwtService.sign).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resetPassword', () => {
+    const dto = {
+      resetToken: 'reset-jwt',
+      newPassword: 'NuevaPassword123!',
+      confirmPassword: 'NuevaPassword123!',
+    };
+
+    it('actualiza la contraseña en User y Account, y fija token_valid_after', async () => {
+      const result = await service.resetPassword(dto);
+
+      expect(jwtService.verifyAsync).toHaveBeenCalledWith('reset-jwt');
+      expect(passwordService.hash).toHaveBeenCalledWith('NuevaPassword123!');
+      expect(userService.updatePassword).toHaveBeenCalledWith(
+        'user-1',
+        'hashed-pw',
+      );
+      expect(accountService.updatePasswordForUser).toHaveBeenCalledWith(
+        'user-1',
+        'hashed-pw',
+      );
+      expect(redisService.set).toHaveBeenCalledWith(
+        'token_valid_after:user-1',
+        expect.any(String),
+        expect.any(Number),
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('rechaza con UnauthorizedException si el token es inválido o expiró', async () => {
+      jwtService.verifyAsync.mockRejectedValue(new Error('jwt expired'));
+
+      await expect(service.resetPassword(dto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(userService.updatePassword).not.toHaveBeenCalled();
+    });
+
+    it('rechaza con UnauthorizedException si el token no tiene purpose:password_reset', async () => {
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        purpose: 'other',
+        iat: 1000,
+      });
+
+      await expect(service.resetPassword(dto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(userService.updatePassword).not.toHaveBeenCalled();
+    });
+
+    it('bug corregido: rechaza el reuso del mismo resetToken tras un reset previo (replay)', async () => {
+      redisService.get.mockResolvedValue('2000');
+      jwtService.verifyAsync.mockResolvedValue({
+        sub: 'user-1',
+        purpose: 'password_reset',
+        iat: 1000,
+      });
+
+      await expect(service.resetPassword(dto)).rejects.toThrow(
+        'Este enlace ya fue utilizado',
+      );
+      expect(userService.updatePassword).not.toHaveBeenCalled();
     });
   });
 });

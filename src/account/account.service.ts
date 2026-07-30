@@ -546,6 +546,24 @@ export class AccountService {
     });
   }
 
+  /**
+   * Resincroniza la contraseña en TODAS las filas AccountEntity del usuario (personal +
+   * memberships de organización) tras un cambio en UserEntity.password. Necesario porque
+   * `login()` autentica contra Account.email/.password (decisión D6), no contra User.password
+   * directamente — sin esto, un reset de contraseña dejaría al usuario sin poder loguearse con
+   * la contraseña nueva (ver historia "Recuperación de Contraseña mediante Código de
+   * Verificación OTP").
+   */
+  async updatePasswordForUser(
+    userId: string,
+    hashedPassword: string,
+  ): Promise<void> {
+    await this.accountRepository.update(
+      { userId },
+      { password: hashedPassword },
+    );
+  }
+
   private toCatalogEntry(account: AccountEntity): AccountData {
     return {
       id: account.id,

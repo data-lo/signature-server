@@ -10,6 +10,7 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { IS_SKIP_JWT_KEY } from '../decorators/skip-jwt-auth.decorator';
 import { RedisService } from '../../shared/redis/redis.service';
 import { JwtPayload } from '../interfaces/jwt-payload.interface';
+import { tokenValidAfterKey } from '../utils/token-valid-after.util';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -53,6 +54,18 @@ export class JwtAuthGuard implements CanActivate {
       `blacklist:${payload.jti}`,
     );
     if (isBlacklisted) {
+      throw new UnauthorizedException('La sesión ha sido cerrada');
+    }
+
+    // Invalidación en bloque (ver historia "Recuperación de Contraseña mediante Código de
+    // Verificación OTP"): a diferencia del blacklist de arriba (un solo jti, escrito por
+    // logout()), esta marca invalida CUALQUIER JWT emitido antes de cierto momento — no hay un
+    // registro de jtis emitidos por usuario para poder blacklistearlos uno por uno, así que
+    // resetPassword() simplemente fija "ahora" y cualquier token con iat anterior deja de servir.
+    const validAfterRaw = await this.redisService.get(
+      tokenValidAfterKey(payload.sub),
+    );
+    if (validAfterRaw && payload.iat && payload.iat < Number(validAfterRaw)) {
       throw new UnauthorizedException('La sesión ha sido cerrada');
     }
 
