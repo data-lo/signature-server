@@ -1,13 +1,25 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
 import { UserService } from '../user/user.service';
 import { AccountService } from '../account/account.service';
 import { OrganizationInvitationService } from '../account/organization-invitation.service';
+import { EmailVerificationCodeService } from '../user/email-verification-code.service';
+import { EmailService } from '../shared/email/email.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
+import { maskEmail } from '../shared/utils/mask-email.util';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResendOtpDto } from './dto/resend-otp.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { BaseResponse } from '../interfaces/api-response.dto';
 import { UserEntity } from '../user/entities/user.entity';
@@ -20,6 +32,8 @@ export class AuthService {
     private readonly userService: UserService,
     private readonly accountService: AccountService,
     private readonly organizationInvitationService: OrganizationInvitationService,
+    private readonly emailVerificationCodeService: EmailVerificationCodeService,
+    private readonly emailService: EmailService,
     private readonly jwtService: JwtService,
     private readonly passwordService: PasswordService,
     private readonly redisService: RedisService,
@@ -37,7 +51,7 @@ export class AuthService {
    * tumbar un registro que por lo demás fue exitoso — el usuario simplemente no queda unido a
    * la organización y puede reintentar el enlace de /join manualmente.
    */
-  async register(dto: RegisterDto): Promise<BaseResponse<UserEntity>> {
+  async register(dto: RegisterDto) {
     const hashedPassword = await this.passwordService.hash(dto.password);
     const result = await this.userService.createFromSignup(dto, hashedPassword);
 
@@ -45,11 +59,11 @@ export class AuthService {
       try {
         await this.organizationInvitationService.acceptForUser(
           dto.invitationToken,
-          result.data.id,
+          result.data.userId,
         );
       } catch (error) {
         this.logger.warn(
-          `No se pudo unir al usuario recién registrado ${result.data.id} a la organización de la invitación: ${
+          `No se pudo unir al usuario recién registrado ${result.data.userId} a la organización de la invitación: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -92,6 +106,27 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
+    // Una pre-cuenta (isEmailVerified=false) tiene contraseña real desde que se registró, pero
+    // no debe poder iniciar sesión saltándose la verificación de correo (ver historia "Auth:
+    // Flujo de Pre-registro, Verificación OTP y Control por CURP") — 403 en vez de 401 para que
+    // el frontend pueda distinguir "credenciales inválidas" de "falta verificar tu correo" y
+    // mandar al usuario a la pantalla de OTP en vez de un error genérico.
+    if (!user.isEmailVerified) {
+      throw new ForbiddenException(
+        'Debes verificar tu correo antes de iniciar sesión',
+      );
+    }
+
+    const token = this.signJwtForUser(user);
+
+    return {
+      success: true,
+      message: 'Inicio de sesión exitoso',
+      data: { user: this.userService.sanitize(user), token },
+    };
+  }
+
+  private signJwtForUser(user: UserEntity): string {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
@@ -99,12 +134,81 @@ export class AuthService {
       nationalId: user.nationalId,
       jti: randomUUID(),
     };
-    const token = this.jwtService.sign(payload);
+    return this.jwtService.sign(payload);
+  }
+
+  /**
+   * Valida el OTP de verificación de correo (ver EmailVerificationCodeService) y, si es
+   * correcto, activa la cuenta (isEmailVerified=true) y autentica al usuario de inmediato —
+   * ya completó todo el formulario de registro, no tiene sentido pedirle que inicie sesión
+   * de nuevo manualmente.
+   */
+  async verifyOtp(
+    dto: VerifyOtpDto,
+  ): Promise<BaseResponse<{ user: UserEntity; token: string }>> {
+    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
+    if (!user) {
+      throw new NotFoundException(
+        'No hay una solicitud de registro pendiente para este correo',
+      );
+    }
+    if (user.isEmailVerified) {
+      throw new ConflictException(
+        'Este correo ya fue verificado. Inicia sesión.',
+      );
+    }
+
+    await this.emailVerificationCodeService.verifyAndConsume(user.id, dto.code);
+
+    const verifiedUser = await this.userService.markEmailVerified(user.id);
+    const token = this.signJwtForUser(verifiedUser);
 
     return {
       success: true,
-      message: 'Inicio de sesión exitoso',
-      data: { user: this.userService.sanitize(user), token },
+      message: 'Correo verificado correctamente',
+      data: { user: this.userService.sanitize(verifiedUser), token },
+    };
+  }
+
+  /** Reenvía un OTP nuevo para un pre-registro pendiente (ver botón "Reenviar código" en /signup/verify). */
+  async resendOtp(
+    dto: ResendOtpDto,
+  ): Promise<BaseResponse<{ email: string; maskedEmail: string }>> {
+    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
+    if (!user) {
+      throw new NotFoundException(
+        'No hay una solicitud de registro pendiente para este correo',
+      );
+    }
+    if (user.isEmailVerified) {
+      throw new ConflictException(
+        'Este correo ya fue verificado. Inicia sesión.',
+      );
+    }
+
+    const verificationCode = await this.emailVerificationCodeService.issue(
+      user.id,
+    );
+    try {
+      await this.emailService.sendRegistrationOtpNotification(
+        user.email,
+        verificationCode.code,
+      );
+    } catch (error) {
+      // Best-effort, igual que en UserService.createFromSignup: un fallo de SendGrid no debe
+      // tumbar el endpoint — el código ya quedó persistido y el usuario puede reintentar el
+      // reenvío si de verdad nunca le llegó.
+      this.logger.warn(
+        `No se pudo enviar el correo de reenvío de verificación a ${user.email}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    return {
+      success: true,
+      message: 'Reenviamos un nuevo código de verificación a tu correo',
+      data: { email: user.email, maskedEmail: maskEmail(user.email) },
     };
   }
 
