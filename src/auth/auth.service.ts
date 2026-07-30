@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -11,18 +12,36 @@ import { randomUUID } from 'crypto';
 import { UserService } from '../user/user.service';
 import { AccountService } from '../account/account.service';
 import { OrganizationInvitationService } from '../account/organization-invitation.service';
+import { PasswordResetCodeService } from './password-reset-code.service';
 import { EmailVerificationCodeService } from '../user/email-verification-code.service';
 import { EmailService } from '../shared/email/email.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
+import { tokenValidAfterKey } from './utils/token-valid-after.util';
 import { maskEmail } from '../shared/utils/mask-email.util';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { BaseResponse } from '../interfaces/api-response.dto';
 import { UserEntity } from '../user/entities/user.entity';
+
+const PASSWORD_RESET_GENERIC_MESSAGE =
+  'Si el correo está registrado, recibirás un código de verificación';
+
+/** TTL de la marca de invalidación de sesiones — solo necesita sobrevivir cualquier JWT vivo, no depende de parsear JWT_EXPIRES_IN. */
+const TOKEN_VALID_AFTER_TTL_SECONDS = 60 * 60 * 24 * 30;
+
+interface PasswordResetTokenPayload {
+  sub: string;
+  purpose: 'password_reset';
+  iat?: number;
+  exp?: number;
+}
 
 @Injectable()
 export class AuthService {
@@ -32,6 +51,7 @@ export class AuthService {
     private readonly userService: UserService,
     private readonly accountService: AccountService,
     private readonly organizationInvitationService: OrganizationInvitationService,
+    private readonly passwordResetCodeService: PasswordResetCodeService,
     private readonly emailVerificationCodeService: EmailVerificationCodeService,
     private readonly emailService: EmailService,
     private readonly jwtService: JwtService,
@@ -226,5 +246,116 @@ export class AuthService {
 
   async me(payload: JwtPayload) {
     return this.userService.findOneActiveUser(payload.sub, true);
+  }
+
+  /**
+   * "Verificado" se traduce como isActive:true (el único flag de legitimidad que existe hoy en
+   * UserEntity) — ver historia "Recuperación de Contraseña mediante Código de Verificación
+   * OTP". Siempre regresa el mismo mensaje genérico, exista o no el correo (o esté inactivo),
+   * para no permitir enumerar usuarios registrados.
+   */
+  async forgotPassword(dto: ForgotPasswordDto): Promise<BaseResponse<null>> {
+    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
+
+    if (user && user.isActive) {
+      try {
+        const resetCode = await this.passwordResetCodeService.issue(user.id);
+        await this.emailService.sendPasswordResetOtpNotification(
+          user.email,
+          resetCode.code,
+        );
+      } catch (error) {
+        // Best-effort, igual que el resto del código (ver UserService.createFromSignup): un
+        // fallo de SendGrid no debe delatar nada distinto al mensaje genérico ni tumbar la
+        // respuesta — el usuario puede volver a pedir el código.
+        this.logger.warn(
+          `No se pudo enviar el correo de recuperación de contraseña a ${user.email}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    return {
+      success: true,
+      message: PASSWORD_RESET_GENERIC_MESSAGE,
+      data: null,
+    };
+  }
+
+  /**
+   * No distingue "no existe el usuario" de "código inválido/expirado" — mismo error en ambos
+   * casos, para no filtrar existencia de cuentas en este paso tampoco.
+   */
+  async verifyResetCode(
+    dto: VerifyResetCodeDto,
+  ): Promise<BaseResponse<{ resetToken: string }>> {
+    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
+    if (!user) {
+      throw new BadRequestException(
+        'Código de verificación inválido o expirado',
+      );
+    }
+
+    await this.passwordResetCodeService.verifyAndConsume(user.id, dto.code);
+
+    const resetToken = this.jwtService.sign(
+      { sub: user.id, purpose: 'password_reset' } as PasswordResetTokenPayload,
+      { expiresIn: '10m' },
+    );
+
+    return {
+      success: true,
+      message: 'Código verificado correctamente',
+      data: { resetToken },
+    };
+  }
+
+  /**
+   * `resetToken` se verifica manualmente (este endpoint es @SkipJwtAuth, no pasa por
+   * JwtAuthGuard) en vez de pedir de nuevo email+código. El chequeo de tokenValidAfter aquí
+   * hace que el propio resetToken sea de un solo uso: tras un reset exitoso se fija la marca a
+   * "ahora", así que reintentar con el mismo resetToken (su `iat` quedó antes de esa marca)
+   * queda rechazado igual que cualquier sesión de login anterior.
+   */
+  async resetPassword(dto: ResetPasswordDto): Promise<BaseResponse<null>> {
+    let payload: PasswordResetTokenPayload;
+    try {
+      payload = await this.jwtService.verifyAsync<PasswordResetTokenPayload>(
+        dto.resetToken,
+      );
+    } catch {
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
+
+    if (payload.purpose !== 'password_reset') {
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
+
+    const validAfterRaw = await this.redisService.get(
+      tokenValidAfterKey(payload.sub),
+    );
+    if (validAfterRaw && payload.iat && payload.iat < Number(validAfterRaw)) {
+      throw new UnauthorizedException('Este enlace ya fue utilizado');
+    }
+
+    const hashedPassword = await this.passwordService.hash(dto.newPassword);
+    await this.userService.updatePassword(payload.sub, hashedPassword);
+    await this.accountService.updatePasswordForUser(
+      payload.sub,
+      hashedPassword,
+    );
+
+    await this.redisService.set(
+      tokenValidAfterKey(payload.sub),
+      String(Math.floor(Date.now() / 1000)),
+      TOKEN_VALID_AFTER_TTL_SECONDS,
+    );
+
+    return {
+      success: true,
+      message: 'Contraseña actualizada correctamente',
+      data: null,
+    };
   }
 }

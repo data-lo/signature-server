@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ApiKeyGuard } from './guards/api-key.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { PasswordResetCodeService } from './password-reset-code.service';
+import { PasswordResetCodeEntity } from './entities/password-reset-code.entity';
 import { UserModule } from '../user/user.module';
 import { AccountModule } from '../account/account.module';
 import { SharedModule } from '../shared/shared.module';
@@ -21,6 +24,7 @@ import { SharedModule } from '../shared/shared.module';
     UserModule,
     AccountModule,
     SharedModule,
+    TypeOrmModule.forFeature([PasswordResetCodeEntity]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -33,6 +37,7 @@ import { SharedModule } from '../shared/shared.module';
   controllers: [AuthController],
   providers: [
     AuthService,
+    PasswordResetCodeService,
     {
       provide: APP_GUARD,
       useClass: ApiKeyGuard,

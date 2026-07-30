@@ -19,18 +19,25 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import {
   RegisterResponse,
   LoginResponse,
+  ForgotPasswordResponse,
+  VerifyResetCodeResponse,
+  ResetPasswordResponse,
   ResendOtpResponse,
 } from './interfaces/response/auth-response';
 import { UserGetResponse } from '../user/interfaces/response/get-user-response';
 import {
   UnauthorizedResponse,
   ConflictResponse,
+  BadRequestResponse,
   ForbiddenResponse,
   NotFoundResponse,
 } from '../interfaces/api-response.dto';
@@ -99,6 +106,47 @@ export class AuthController {
   @ApiResponse({ status: 409, type: ConflictResponse })
   resendOtp(@Body() dto: ResendOtpDto) {
     return this.authService.resendOtp(dto);
+  }
+
+  @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('forgot-password')
+  @ApiOperation({
+    summary:
+      'Solicita un código OTP de recuperación de contraseña (mensaje genérico siempre, anti-enumeración)',
+  })
+  @ApiResponse({ status: 200, type: ForgotPasswordResponse })
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
+  }
+
+  @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('verify-reset-code')
+  @ApiOperation({ summary: 'Valida el OTP de recuperación de contraseña' })
+  @ApiResponse({ status: 200, type: VerifyResetCodeResponse })
+  @ApiResponse({ status: 400, type: BadRequestResponse })
+  verifyResetCode(@Body() dto: VerifyResetCodeDto) {
+    return this.authService.verifyResetCode(dto);
+  }
+
+  @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('reset-password')
+  @ApiOperation({
+    summary:
+      'Establece una nueva contraseña usando el resetToken de /auth/verify-reset-code',
+  })
+  @ApiResponse({ status: 200, type: ResetPasswordResponse })
+  @ApiResponse({ status: 401, type: UnauthorizedResponse })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 
   @HttpCode(HttpStatus.OK)

@@ -19,6 +19,7 @@ import {
   documentRejectedTemplate,
   documentSignedTemplate,
   organizationInvitationTemplate,
+  passwordResetOtpTemplate,
   registrationOtpTemplate,
   verificationCodeTemplate,
 } from './templates/email.templates';
@@ -219,6 +220,19 @@ export class EmailService {
       to,
       EmailSubject.VERIFICATION_CODE,
       verificationCodeTemplate(documentName, code),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /** Envía el código de verificación del flujo de recuperación de contraseña (ver historia "Recuperación de Contraseña mediante Código de Verificación OTP"). */
+  async sendPasswordResetOtpNotification(
+    to: string,
+    code: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.PASSWORD_RESET_OTP,
+      passwordResetOtpTemplate(code),
       EmailType.NOTIFICATION,
     );
   }
