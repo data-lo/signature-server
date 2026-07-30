@@ -41,6 +41,7 @@ import { ClientIp } from 'src/ip/ip.decorator';
 // Decorators
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
+import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 
 // Interfaces
 import {
@@ -52,6 +53,7 @@ import { DocumentGetListResponse } from './interfaces/responses/document-get-res
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { DocumentUpdateResponse } from './interfaces/responses/document-update-response';
+import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
 import { SubmitForAuthorizationResponse } from './interfaces/responses/submit-for-authorization-response';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
@@ -70,6 +72,28 @@ export class DocumentController {
   ) {
     await this.documentService.assertUserHasAccess(id, user.sub);
     return this.documentService.getDocumentMinioURL(id);
+  }
+
+  @Get('public/:id')
+  @SkipJwtAuth()
+  @ApiOperation({
+    summary: 'Vista pública de un documento (sin autenticación)',
+    description:
+      'Público (sin JWT ni x-api-key, ver SkipJwtAuth) — usado por /public/documents/:id en el frontend. Solo devuelve secureUrl cuando el documento está SIGNED; para cualquier otro estatus, secureUrl/expiresIn son null y el frontend muestra el aviso correspondiente según el estatus recibido.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Documento obtenido correctamente',
+    type: DocumentPublicViewResponse,
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Documento no encontrado',
+    type: NotFoundResponse,
+  })
+  async getPublicDocument(@Param('id') id: string) {
+    return this.documentService.getPublicDocumentView(id);
   }
 
   @Post()

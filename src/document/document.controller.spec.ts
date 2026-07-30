@@ -10,6 +10,7 @@ describe('DocumentController', () => {
     findWithFilters: jest.Mock;
     findDetailForUser: jest.Mock;
     getDocumentMinioURL: jest.Mock;
+    getPublicDocumentView: jest.Mock;
     assertUserHasAccess: jest.Mock;
     submitForAuthorization: jest.Mock;
     sign: jest.Mock;
@@ -35,6 +36,7 @@ describe('DocumentController', () => {
       findWithFilters: jest.fn(),
       findDetailForUser: jest.fn(),
       getDocumentMinioURL: jest.fn(),
+      getPublicDocumentView: jest.fn(),
       assertUserHasAccess: jest.fn(),
       submitForAuthorization: jest.fn(),
       sign: jest.fn(),
@@ -71,6 +73,31 @@ describe('DocumentController', () => {
       file,
       '127.0.0.1',
     );
+  });
+
+  // Historia "Visualización pública de documentos firmados mediante MinIO": esta ruta va
+  // marcada @SkipJwtAuth() (sin JWT ni x-api-key) — a diferencia del resto del controller, no
+  // recibe @CurrentUser() ni llama a assertUserHasAccess, así que el único contrato que le toca
+  // verificar a este test es la delegación directa por id.
+  it('getPublicDocument delega en documentService.getPublicDocumentView con el id, sin ningún chequeo de acceso', async () => {
+    const response = {
+      success: true,
+      message: 'Documento obtenido correctamente',
+      data: {
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: 'signed',
+        secureUrl: 'https://minio/signed-documents/doc-1',
+        expiresIn: 86400,
+      },
+    };
+    documentService.getPublicDocumentView.mockResolvedValue(response);
+
+    const result = await controller.getPublicDocument('doc-1');
+
+    expect(documentService.getPublicDocumentView).toHaveBeenCalledWith('doc-1');
+    expect(documentService.assertUserHasAccess).not.toHaveBeenCalled();
+    expect(result).toBe(response);
   });
 
   it('findAll delega en documentService.findWithFilters con el userId y el X-Account-Id', () => {
