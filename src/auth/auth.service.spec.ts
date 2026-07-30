@@ -1,4 +1,10 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
@@ -6,6 +12,7 @@ import { UserService } from '../user/user.service';
 import { AccountService } from '../account/account.service';
 import { OrganizationInvitationService } from '../account/organization-invitation.service';
 import { PasswordResetCodeService } from './password-reset-code.service';
+import { EmailVerificationCodeService } from '../user/email-verification-code.service';
 import { EmailService } from '../shared/email/email.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
@@ -17,6 +24,7 @@ describe('AuthService', () => {
     findOne: jest.Mock;
     findOneByEmail: jest.Mock;
     updatePassword: jest.Mock;
+    markEmailVerified: jest.Mock;
     sanitize: jest.Mock;
   };
   let accountService: {
@@ -28,7 +36,14 @@ describe('AuthService', () => {
     issue: jest.Mock;
     verifyAndConsume: jest.Mock;
   };
-  let emailService: { sendPasswordResetOtpNotification: jest.Mock };
+  let emailVerificationCodeService: {
+    issue: jest.Mock;
+    verifyAndConsume: jest.Mock;
+  };
+  let emailService: {
+    sendPasswordResetOtpNotification: jest.Mock;
+    sendRegistrationOtpNotification: jest.Mock;
+  };
   let passwordService: { hash: jest.Mock; compare: jest.Mock };
   let jwtService: { sign: jest.Mock; verifyAsync: jest.Mock };
   let redisService: { set: jest.Mock; get: jest.Mock };
@@ -46,6 +61,7 @@ describe('AuthService', () => {
     roles: ['signer'],
     nationalId: 'GOMA900101MDFRNN01',
     isActive: true,
+    isEmailVerified: true,
   };
 
   beforeEach(async () => {
@@ -54,6 +70,9 @@ describe('AuthService', () => {
       findOne: jest.fn().mockResolvedValue(user),
       findOneByEmail: jest.fn().mockResolvedValue(user),
       updatePassword: jest.fn().mockResolvedValue(undefined),
+      markEmailVerified: jest
+        .fn()
+        .mockResolvedValue({ ...user, isEmailVerified: true }),
       sanitize: jest.fn((u) => u),
     };
     accountService = {
@@ -67,8 +86,13 @@ describe('AuthService', () => {
       issue: jest.fn().mockResolvedValue({ code: '123456' }),
       verifyAndConsume: jest.fn().mockResolvedValue(undefined),
     };
+    emailVerificationCodeService = {
+      issue: jest.fn().mockResolvedValue({ code: '123456' }),
+      verifyAndConsume: jest.fn().mockResolvedValue(undefined),
+    };
     emailService = {
       sendPasswordResetOtpNotification: jest.fn().mockResolvedValue(undefined),
+      sendRegistrationOtpNotification: jest.fn().mockResolvedValue(undefined),
     };
     passwordService = {
       hash: jest.fn().mockResolvedValue('hashed-pw'),
@@ -96,6 +120,10 @@ describe('AuthService', () => {
         {
           provide: PasswordResetCodeService,
           useValue: passwordResetCodeService,
+        },
+        {
+          provide: EmailVerificationCodeService,
+          useValue: emailVerificationCodeService,
         },
         { provide: EmailService, useValue: emailService },
         { provide: JwtService, useValue: jwtService },
@@ -156,6 +184,16 @@ describe('AuthService', () => {
 
       await expect(service.login(dto)).rejects.toThrow(UnauthorizedException);
     });
+
+    it('bug corregido: rechaza con ForbiddenException si la cuenta todavía no verifica su correo (pre-registro)', async () => {
+      userService.findOne.mockResolvedValue({
+        ...user,
+        isEmailVerified: false,
+      });
+
+      await expect(service.login(dto)).rejects.toThrow(ForbiddenException);
+      expect(jwtService.sign).not.toHaveBeenCalled();
+    });
   });
 
   describe('register', () => {
@@ -168,11 +206,17 @@ describe('AuthService', () => {
       password: 'Password123!',
       confirmPassword: 'Password123!',
     };
+    const pendingVerificationData = {
+      userId: 'user-1',
+      email: 'ana@empresa.com',
+      maskedEmail: 'a***a@empresa.com',
+      isNewPreRegistration: true,
+    };
 
     it('hashea el password y delega en userService.createFromSignup', async () => {
       userService.createFromSignup.mockResolvedValue({
         success: true,
-        data: { id: 'user-1' },
+        data: pendingVerificationData,
       });
 
       await service.register(dto as any);
@@ -187,10 +231,10 @@ describe('AuthService', () => {
       ).not.toHaveBeenCalled();
     });
 
-    it('si el dto trae invitationToken, une al usuario recién creado a esa organización', async () => {
+    it('si el dto trae invitationToken, une al usuario recién creado (o al pre-registro existente) a esa organización', async () => {
       userService.createFromSignup.mockResolvedValue({
         success: true,
-        data: { id: 'user-1' },
+        data: pendingVerificationData,
       });
 
       await service.register({
@@ -207,7 +251,7 @@ describe('AuthService', () => {
     it('no falla el registro si acceptForUser rechaza (best-effort)', async () => {
       userService.createFromSignup.mockResolvedValue({
         success: true,
-        data: { id: 'user-1' },
+        data: pendingVerificationData,
       });
       organizationInvitationService.acceptForUser.mockRejectedValue(
         new Error('Invitación no encontrada'),
@@ -219,6 +263,118 @@ describe('AuthService', () => {
       } as any);
 
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('verifyOtp', () => {
+    const dto = { email: 'ANA@empresa.com', code: '123456' };
+
+    beforeEach(() => {
+      userService.findOneByEmail.mockResolvedValue({
+        ...user,
+        isEmailVerified: false,
+      });
+    });
+
+    it('valida el OTP, marca isEmailVerified=true y autentica al usuario (auto-login)', async () => {
+      const result = await service.verifyOtp(dto);
+
+      expect(userService.findOneByEmail).toHaveBeenCalledWith(
+        'ana@empresa.com',
+      );
+      expect(
+        emailVerificationCodeService.verifyAndConsume,
+      ).toHaveBeenCalledWith('user-1', '123456');
+      expect(userService.markEmailVerified).toHaveBeenCalledWith('user-1');
+      expect(jwtService.sign).toHaveBeenCalled();
+      expect(result.data.token).toBe('signed-jwt');
+    });
+
+    it('lanza NotFoundException si no hay ningún pre-registro con ese correo', async () => {
+      userService.findOneByEmail.mockResolvedValue(null);
+
+      await expect(service.verifyOtp(dto)).rejects.toThrow(NotFoundException);
+    });
+
+    it('lanza ConflictException si el correo ya estaba verificado', async () => {
+      userService.findOneByEmail.mockResolvedValue({
+        ...user,
+        isEmailVerified: true,
+      });
+
+      await expect(service.verifyOtp(dto)).rejects.toThrow(ConflictException);
+      expect(
+        emailVerificationCodeService.verifyAndConsume,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('propaga el error del OTP inválido/expirado sin marcar la cuenta como verificada', async () => {
+      emailVerificationCodeService.verifyAndConsume.mockRejectedValue(
+        new Error('Código de verificación inválido'),
+      );
+
+      await expect(service.verifyOtp(dto)).rejects.toThrow(
+        'Código de verificación inválido',
+      );
+      expect(userService.markEmailVerified).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resendOtp', () => {
+    const dto = { email: 'ANA@empresa.com' };
+
+    beforeEach(() => {
+      userService.findOneByEmail.mockResolvedValue({
+        ...user,
+        isEmailVerified: false,
+      });
+    });
+
+    it('emite un nuevo OTP y lo envía al correo del pre-registro', async () => {
+      const result = await service.resendOtp(dto);
+
+      expect(userService.findOneByEmail).toHaveBeenCalledWith(
+        'ana@empresa.com',
+      );
+      expect(emailVerificationCodeService.issue).toHaveBeenCalledWith('user-1');
+      expect(emailService.sendRegistrationOtpNotification).toHaveBeenCalledWith(
+        'ana@empresa.com',
+        '123456',
+      );
+      expect(result.data).toEqual({
+        email: 'ana@empresa.com',
+        maskedEmail: 'a***a@empresa.com',
+      });
+    });
+
+    it('lanza NotFoundException si no hay ningún pre-registro con ese correo', async () => {
+      userService.findOneByEmail.mockResolvedValue(null);
+
+      await expect(service.resendOtp(dto)).rejects.toThrow(NotFoundException);
+    });
+
+    it('lanza ConflictException si el correo ya estaba verificado', async () => {
+      userService.findOneByEmail.mockResolvedValue({
+        ...user,
+        isEmailVerified: true,
+      });
+
+      await expect(service.resendOtp(dto)).rejects.toThrow(ConflictException);
+      expect(emailVerificationCodeService.issue).not.toHaveBeenCalled();
+    });
+
+    it('bug corregido: si SendGrid falla al reenviar, no propaga un 500 — el código ya quedó persistido (best-effort)', async () => {
+      emailService.sendRegistrationOtpNotification.mockRejectedValue(
+        new Error('Failed to send email'),
+      );
+
+      const result = await service.resendOtp(dto);
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({
+        email: 'ana@empresa.com',
+        maskedEmail: 'a***a@empresa.com',
+      });
     });
   });
 

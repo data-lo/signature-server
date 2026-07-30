@@ -20,6 +20,7 @@ import {
   documentSignedTemplate,
   organizationInvitationTemplate,
   passwordResetOtpTemplate,
+  registrationOtpTemplate,
   verificationCodeTemplate,
 } from './templates/email.templates';
 import { EmailType } from './enums/email-type.enum';
@@ -232,6 +233,19 @@ export class EmailService {
       to,
       EmailSubject.PASSWORD_RESET_OTP,
       passwordResetOtpTemplate(code),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /** Envía el código de verificación de correo del flujo de pre-registro/OTP (ver historia "Auth: Flujo de Pre-registro, Verificación OTP y Control por CURP"). */
+  async sendRegistrationOtpNotification(
+    to: string,
+    code: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.REGISTRATION_OTP,
+      registrationOtpTemplate(code),
       EmailType.NOTIFICATION,
     );
   }

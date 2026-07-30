@@ -7,10 +7,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * de documentos). Se usa el mismo `OTPService` genérico (src/shared/otp/otp.service.ts)
  * para generar/comparar el código.
  */
-export class CreatePasswordResetCodes1784300000020
-  implements MigrationInterface
-{
-  name = 'CreatePasswordResetCodes1784300000020';
+export class CreatePasswordResetCodes1784300000022 implements MigrationInterface {
+  name = 'CreatePasswordResetCodes1784300000022';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`

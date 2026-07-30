@@ -1,13 +1,36 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
 import { UserCreateData } from '../../../user/interfaces/response/user-create-response';
+import { SignupPendingVerificationData } from '../../../user/interfaces/response/signup-pending-verification-response';
 
-export class RegisterResponse extends BaseResponse<UserCreateData> {
+export class RegisterResponse extends BaseResponse<SignupPendingVerificationData> {
   @ApiProperty({
-    type: UserCreateData,
-    description: 'Datos del usuario registrado',
+    type: SignupPendingVerificationData,
+    description: 'Datos del pre-registro pendiente de verificación',
   })
-  data: UserCreateData;
+  data: SignupPendingVerificationData;
+}
+
+export class ResendOtpResponseData {
+  @ApiProperty({
+    example: 'juan.perez@empresa.com',
+    description: 'Correo real asociado al pre-registro',
+  })
+  email: string;
+
+  @ApiProperty({
+    example: 'j***z@empresa.com',
+    description: 'Correo enmascarado, para mostrarse en pantalla',
+  })
+  maskedEmail: string;
+}
+
+export class ResendOtpResponse extends BaseResponse<ResendOtpResponseData> {
+  @ApiProperty({
+    type: ResendOtpResponseData,
+    description: 'Datos del reenvío de OTP',
+  })
+  data: ResendOtpResponseData;
 }
 
 export class LoginResponseData {
