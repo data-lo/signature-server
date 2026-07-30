@@ -19,15 +19,20 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResendOtpDto } from './dto/resend-otp.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import {
   RegisterResponse,
   LoginResponse,
+  ResendOtpResponse,
 } from './interfaces/response/auth-response';
 import { UserGetResponse } from '../user/interfaces/response/get-user-response';
 import {
   UnauthorizedResponse,
   ConflictResponse,
+  ForbiddenResponse,
+  NotFoundResponse,
 } from '../interfaces/api-response.dto';
 
 @ApiTags('Auth')
@@ -59,8 +64,41 @@ export class AuthController {
   @ApiOperation({ summary: 'Inicio de sesión' })
   @ApiResponse({ status: 200, type: LoginResponse })
   @ApiResponse({ status: 401, type: UnauthorizedResponse })
+  @ApiResponse({
+    status: 403,
+    type: ForbiddenResponse,
+    description: 'La cuenta todavía no verifica su correo (pre-registro)',
+  })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('verify-otp')
+  @ApiOperation({
+    summary: 'Verifica el OTP de registro y activa la cuenta (auto-login)',
+  })
+  @ApiResponse({ status: 200, type: LoginResponse })
+  @ApiResponse({ status: 404, type: NotFoundResponse })
+  @ApiResponse({ status: 409, type: ConflictResponse })
+  verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto);
+  }
+
+  @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('resend-otp')
+  @ApiOperation({ summary: 'Reenvía el OTP de registro pendiente' })
+  @ApiResponse({ status: 200, type: ResendOtpResponse })
+  @ApiResponse({ status: 404, type: NotFoundResponse })
+  @ApiResponse({ status: 409, type: ConflictResponse })
+  resendOtp(@Body() dto: ResendOtpDto) {
+    return this.authService.resendOtp(dto);
   }
 
   @HttpCode(HttpStatus.OK)

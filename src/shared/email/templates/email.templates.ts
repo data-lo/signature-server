@@ -258,6 +258,39 @@ export const verificationCodeTemplate = (
 </html>
 `;
 
+export const registrationOtpTemplate = (code: string): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #333333; margin-top: 0;">Verifica tu correo</h2>
+
+    <p style="color: #555555;">
+      Gracias por registrarte. Usa el siguiente código para verificar tu correo y activar tu cuenta:
+    </p>
+
+    <div style="background-color: #f4f4f4; border-radius: 6px; padding: 20px; margin: 24px 0; text-align: center;">
+      <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #2E7D32;">${code}</span>
+    </div>
+
+    <p style="color: #555555; font-size: 13px;">
+      Este código vence en 15 minutos.
+    </p>
+
+    <p style="color: #999999; font-size: 12px;">
+      Si no esperabas este mensaje, por favor contáctanos.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
+
 export const documentInvitationTemplate = (
   signerName: string,
   documentName: string,

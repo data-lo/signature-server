@@ -11,6 +11,8 @@ import { PersonalInformationEntity } from './entities/personal-information.entit
 import { SignatureService } from 'src/signature/signature.service';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { AccountService } from 'src/account/account.service';
+import { EmailService } from 'src/shared/email/email.service';
+import { EmailVerificationCodeService } from './email-verification-code.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRoles } from './enums/user-roles';
 
@@ -50,6 +52,8 @@ describe('UserService', () => {
     createDefaultPersonalAccount: jest.Mock;
     appendAccountToCatalog: jest.Mock;
   };
+  let emailService: { sendRegistrationOtpNotification: jest.Mock };
+  let emailVerificationCodeService: { issue: jest.Mock };
 
   beforeEach(async () => {
     userRepository = createMockRepository();
@@ -64,6 +68,12 @@ describe('UserService', () => {
         account: { id: 'personal-account-1' },
       }),
       appendAccountToCatalog: jest.fn(),
+    };
+    emailService = {
+      sendRegistrationOtpNotification: jest.fn().mockResolvedValue(undefined),
+    };
+    emailVerificationCodeService = {
+      issue: jest.fn().mockResolvedValue({ code: '123456' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -81,6 +91,11 @@ describe('UserService', () => {
         },
         { provide: RedisService, useValue: redisService },
         { provide: AccountService, useValue: accountService },
+        { provide: EmailService, useValue: emailService },
+        {
+          provide: EmailVerificationCodeService,
+          useValue: emailVerificationCodeService,
+        },
       ],
     }).compile();
 
@@ -170,9 +185,11 @@ describe('UserService', () => {
       rfc: 'GOMA900101XYZ',
     };
 
-    it('registra el usuario correctamente, cachea el perfil en Redis por CURP y crea la cuenta personal por defecto', async () => {
-      userRepository.findOne.mockResolvedValue(null);
-      personalInformationRepository.findOne.mockResolvedValue(null);
+    it('CURP libre: registra la pre-cuenta (isEmailVerified:false), cachea el perfil en Redis, crea la cuenta personal y envía el primer OTP', async () => {
+      userRepository.findOne
+        .mockResolvedValueOnce(null) // búsqueda por CURP
+        .mockResolvedValueOnce(null); // búsqueda por email
+      personalInformationRepository.findOne.mockResolvedValue(null); // RFC libre
 
       const result = await service.createFromSignup(dto, 'hashed-password');
 
@@ -192,30 +209,69 @@ describe('UserService', () => {
         expect.any(String),
         { id: 'personal-account-1' },
       );
+      expect(emailVerificationCodeService.issue).toHaveBeenCalledWith(
+        expect.any(String),
+      );
+      expect(
+        emailService.sendRegistrationOtpNotification,
+      ).toHaveBeenCalledWith(dto.email, '123456');
+      expect(result.data.isNewPreRegistration).toBe(true);
+      expect(result.data.maskedEmail).toBe('a***a@empresa.com');
     });
 
-    it('rechaza con ConflictException si el email ya existe', async () => {
-      userRepository.findOne.mockResolvedValue({ id: 'existing' });
+    it('Caso A: CURP con pre-registro pendiente (isEmailVerified:false) reenvía el OTP al correo ya asociado, sin abrir transacción ni tocar los datos reenviados', async () => {
+      const existingUser = {
+        id: 'existing-user',
+        email: 'original@empresa.com',
+        isEmailVerified: false,
+      };
+      userRepository.findOne.mockResolvedValueOnce(existingUser);
+
+      const result = await service.createFromSignup(dto, 'hashed-password');
+
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(emailVerificationCodeService.issue).toHaveBeenCalledWith(
+        'existing-user',
+      );
+      expect(
+        emailService.sendRegistrationOtpNotification,
+      ).toHaveBeenCalledWith('original@empresa.com', '123456');
+      expect(result.data).toEqual({
+        userId: 'existing-user',
+        email: 'original@empresa.com',
+        maskedEmail: 'o***l@empresa.com',
+        isNewPreRegistration: false,
+      });
+    });
+
+    it('Caso B: CURP con cuenta ya verificada rechaza con ConflictException sugiriendo iniciar sesión', async () => {
+      userRepository.findOne.mockResolvedValueOnce({
+        id: 'existing-user',
+        email: 'ana@empresa.com',
+        isEmailVerified: true,
+      });
+
+      await expect(
+        service.createFromSignup(dto, 'hashed-password'),
+      ).rejects.toThrow(ConflictException);
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(emailVerificationCodeService.issue).not.toHaveBeenCalled();
+    });
+
+    it('rechaza con ConflictException si el email ya existe (CURP libre)', async () => {
+      userRepository.findOne
+        .mockResolvedValueOnce(null) // curp
+        .mockResolvedValueOnce({ id: 'existing' }); // email
 
       await expect(
         service.createFromSignup(dto, 'hashed-password'),
       ).rejects.toThrow(ConflictException);
     });
 
-    it('rechaza con ConflictException si el CURP ya existe', async () => {
+    it('rechaza con ConflictException si el RFC ya existe (CURP y email libres)', async () => {
       userRepository.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'other-user' });
-
-      await expect(
-        service.createFromSignup(dto, 'hashed-password'),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('rechaza con ConflictException si el RFC ya existe', async () => {
-      userRepository.findOne
-        .mockResolvedValueOnce(null) // email
-        .mockResolvedValueOnce(null); // curp
+        .mockResolvedValueOnce(null) // curp
+        .mockResolvedValueOnce(null); // email
       personalInformationRepository.findOne.mockResolvedValue({
         id: 'other-info',
       });
@@ -223,6 +279,40 @@ describe('UserService', () => {
       await expect(
         service.createFromSignup(dto, 'hashed-password'),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('markEmailVerified', () => {
+    it('marca isEmailVerified=true y refresca el cache de Redis por CURP', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        nationalId: 'CURP1',
+        isEmailVerified: true,
+        personalInformation: {
+          rfc: 'RFC1',
+          phoneNumber: null,
+          secondaryEmail: null,
+        },
+      });
+
+      const result = await service.markEmailVerified('user-1');
+
+      expect(userRepository.update).toHaveBeenCalledWith('user-1', {
+        isEmailVerified: true,
+      });
+      expect(redisService.set).toHaveBeenCalledWith(
+        'CURP1',
+        expect.any(String),
+      );
+      expect(result.isEmailVerified).toBe(true);
+    });
+
+    it('lanza NotFoundException si el usuario no existe', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.markEmailVerified('missing-user')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
