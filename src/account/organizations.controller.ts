@@ -29,16 +29,19 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { AccountService } from './account.service';
 import { AccountMemberService } from './account-member.service';
 import { OrganizationInvitationService } from './organization-invitation.service';
+import { OrganizationPermissionsService } from 'src/organization-permissions/organization-permissions.service';
 
 // DTOs
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
+import { AssignMemberPermissionsDto } from 'src/organization-permissions/dto/assign-member-permissions.dto';
 import { AccountResponse } from './interfaces/response/account-response';
 import {
   AccountMemberResponse,
   OrganizationMemberListResponse,
 } from './interfaces/response/account-member-response';
+import { MemberPermissionsResponse } from 'src/organization-permissions/interfaces/response/organization-permission-response';
 import {
   BadRequestResponse,
   BaseResponse,
@@ -52,6 +55,7 @@ export class OrganizationsController {
     private readonly accountService: AccountService,
     private readonly accountMemberService: AccountMemberService,
     private readonly organizationInvitationService: OrganizationInvitationService,
+    private readonly organizationPermissionsService: OrganizationPermissionsService,
   ) {}
 
   @Post()
@@ -241,5 +245,72 @@ export class OrganizationsController {
     @Param('accountId') accountId: string,
   ) {
     return this.accountMemberService.remove(user.sub, accountId);
+  }
+
+  @Get('members/:accountId/permissions')
+  @ApiOperation({
+    summary: 'Obtener los permisos actualmente asignados a un miembro',
+    description: 'Solo un ADMIN activo de esa organización puede consultarlo.',
+  })
+  @ApiParam({
+    name: 'accountId',
+    description: 'UUID de la membresía (accountId) a consultar',
+    format: 'uuid',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Permisos del miembro obtenidos correctamente',
+    type: MemberPermissionsResponse,
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es ADMIN de esta organización',
+  })
+  findMemberPermissions(
+    @CurrentUser() user: JwtPayload,
+    @Param('accountId') accountId: string,
+  ) {
+    return this.organizationPermissionsService.findMemberPermissions(
+      user.sub,
+      accountId,
+    );
+  }
+
+  @Patch('members/:accountId/permissions')
+  @ApiOperation({
+    summary: 'Actualizar la lista de permisos asignados a un miembro',
+    description:
+      'Reemplaza por completo la lista de permisos asignados. Solo un ADMIN activo de esa organización puede hacerlo.',
+  })
+  @ApiParam({
+    name: 'accountId',
+    description: 'UUID de la membresía (accountId) a actualizar',
+    format: 'uuid',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Permisos del miembro actualizados correctamente',
+    type: MemberPermissionsResponse,
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Uno o más permisos no pertenecen al catálogo de esta organización',
+    type: BadRequestResponse,
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario autenticado no es ADMIN de esta organización',
+  })
+  assignMemberPermissions(
+    @CurrentUser() user: JwtPayload,
+    @Param('accountId') accountId: string,
+    @Body() dto: AssignMemberPermissionsDto,
+  ) {
+    return this.organizationPermissionsService.assignToMember(
+      user.sub,
+      accountId,
+      dto.permissionIds,
+    );
   }
 }

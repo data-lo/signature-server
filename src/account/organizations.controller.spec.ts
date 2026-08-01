@@ -3,6 +3,7 @@ import { OrganizationsController } from './organizations.controller';
 import { AccountService } from './account.service';
 import { AccountMemberService } from './account-member.service';
 import { OrganizationInvitationService } from './organization-invitation.service';
+import { OrganizationPermissionsService } from 'src/organization-permissions/organization-permissions.service';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 describe('OrganizationsController', () => {
@@ -17,6 +18,10 @@ describe('OrganizationsController', () => {
     remove: jest.Mock;
   };
   let organizationInvitationService: { create: jest.Mock };
+  let organizationPermissionsService: {
+    findMemberPermissions: jest.Mock;
+    assignToMember: jest.Mock;
+  };
 
   const user: JwtPayload = {
     sub: 'user-1',
@@ -41,6 +46,10 @@ describe('OrganizationsController', () => {
       remove: jest.fn(),
     };
     organizationInvitationService = { create: jest.fn() };
+    organizationPermissionsService = {
+      findMemberPermissions: jest.fn(),
+      assignToMember: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrganizationsController],
@@ -50,6 +59,10 @@ describe('OrganizationsController', () => {
         {
           provide: OrganizationInvitationService,
           useValue: organizationInvitationService,
+        },
+        {
+          provide: OrganizationPermissionsService,
+          useValue: organizationPermissionsService,
         },
       ],
     }).compile();
@@ -117,6 +130,25 @@ describe('OrganizationsController', () => {
     expect(accountMemberService.remove).toHaveBeenCalledWith(
       'user-1',
       'account-1',
+    );
+  });
+
+  it('findMemberPermissions delega en organizationPermissionsService.findMemberPermissions con el userId del JWT y el accountId de la ruta', () => {
+    controller.findMemberPermissions(user, 'account-1');
+
+    expect(
+      organizationPermissionsService.findMemberPermissions,
+    ).toHaveBeenCalledWith('user-1', 'account-1');
+  });
+
+  it('assignMemberPermissions delega en organizationPermissionsService.assignToMember con el userId del JWT, el accountId de la ruta y los permissionIds del body', () => {
+    const dto = { permissionIds: ['perm-1', 'perm-2'] };
+    controller.assignMemberPermissions(user, 'account-1', dto);
+
+    expect(organizationPermissionsService.assignToMember).toHaveBeenCalledWith(
+      'user-1',
+      'account-1',
+      ['perm-1', 'perm-2'],
     );
   });
 });
