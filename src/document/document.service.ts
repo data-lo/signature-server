@@ -49,6 +49,7 @@ import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
+import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { getNextPendingSigner, isSignerTurn } from './utils/next-signer.util';
 import {
@@ -842,6 +843,54 @@ export class DocumentService {
       if (error instanceof NotFoundException) throw error;
       throw new Error(`Error obteniendo URL del Documento: ${error}`);
     }
+  }
+
+  /**
+   * Vista pública (sin autenticación) de un documento — ver historia "Visualización pública de
+   * documentos firmados mediante MinIO". A diferencia de `getDocumentMinioURL`/
+   * `findDetailForUser` (que resuelven una URL de Minio para CUALQUIER estatus vía
+   * STATUS_BUCKET_MAP, apoyados en que ya hubo un chequeo de acceso previo), esta ruta no tiene
+   * ningún control de acceso — cualquiera con el UUID puede llamarla — así que el gate por
+   * `status === SIGNED` ocurre ANTES de siquiera considerar Minio: si el documento no está
+   * firmado, ni se resuelve el bucket ni se llama a `minioService.getFile` (que es lo único que
+   * genera la URL prefirmada), evitando exponer el archivo de un documento pendiente, rechazado,
+   * cancelado o expirado.
+   */
+  async getPublicDocumentView(
+    documentId: string,
+  ): Promise<DocumentPublicViewResponse> {
+    const document = await this.findOne(documentId);
+
+    if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
+      return {
+        success: true,
+        message: 'Documento obtenido correctamente',
+        data: {
+          id: document.id,
+          fileName: document.fileName,
+          status: document.status,
+          secureUrl: null,
+          expiresIn: null,
+        },
+      };
+    }
+
+    const { secureUrl, expiresIn } = await this.minioService.getFile(
+      document.objectKey,
+      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    );
+
+    return {
+      success: true,
+      message: 'Documento obtenido correctamente',
+      data: {
+        id: document.id,
+        fileName: document.fileName,
+        status: document.status,
+        secureUrl,
+        expiresIn,
+      },
+    };
   }
 
   /** Busca un documento por su UUID y lanza NotFoundException si no existe. */

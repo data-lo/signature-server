@@ -12,6 +12,7 @@ import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { HashService } from 'src/shared/hash/hash.service';
 import { UserService } from 'src/user/user.service';
@@ -1268,6 +1269,86 @@ describe('DocumentService', () => {
       await expect(service.findOne('missing-doc')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  // Historia "Visualización pública de documentos firmados mediante MinIO": esta ruta no tiene
+  // ningún control de acceso (cualquiera con el UUID la puede llamar), así que el gate por
+  // status === SIGNED es la única defensa contra exponer el archivo de un documento que no
+  // debería ser público todavía.
+  describe('getPublicDocumentView', () => {
+    it('lanza NotFoundException si el documento no existe, sin llamar a Minio', async () => {
+      documentRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getPublicDocumentView('missing-doc'),
+      ).rejects.toThrow(NotFoundException);
+      expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      DOCUMENT_STATUS_ENUM.CREATED,
+      DOCUMENT_STATUS_ENUM.PENDING,
+      DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
+      DOCUMENT_STATUS_ENUM.REJECTED,
+      DOCUMENT_STATUS_ENUM.EXPIRED,
+      DOCUMENT_STATUS_ENUM.CANCELLED,
+    ])(
+      'con status=%s: nunca genera ni devuelve una URL de Minio',
+      async (status) => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          status,
+          objectKey: 'object-key-1',
+        });
+
+        const result = await service.getPublicDocumentView('doc-1');
+
+        expect(minioService.getFile).not.toHaveBeenCalled();
+        expect(result).toEqual({
+          success: true,
+          message: 'Documento obtenido correctamente',
+          data: {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            status,
+            secureUrl: null,
+            expiresIn: null,
+          },
+        });
+      },
+    );
+
+    it('con status=SIGNED: genera y devuelve la URL prefirmada de Minio desde el bucket de firmados', async () => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: DOCUMENT_STATUS_ENUM.SIGNED,
+        objectKey: 'object-key-1',
+      });
+      minioService.getFile.mockResolvedValue({
+        secureUrl: 'https://minio/signed-documents/object-key-1',
+        expiresIn: 86400,
+      });
+
+      const result = await service.getPublicDocumentView('doc-1');
+
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-1',
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Documento obtenido correctamente',
+        data: {
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          status: DOCUMENT_STATUS_ENUM.SIGNED,
+          secureUrl: 'https://minio/signed-documents/object-key-1',
+          expiresIn: 86400,
+        },
+      });
     });
   });
 
