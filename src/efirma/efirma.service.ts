@@ -27,7 +27,7 @@ export class EfirmaService implements OnModuleInit{
   
 
   private cargarCertificadosDeConfianza(): X509Certificate[] {
-    const dir = join(process.cwd(), 'src', 'certificates');
+    const dir = join(process.cwd(), 'dist','certificates');
     const files = readdirSync(dir).filter((f) => /\.(cer|crt)$/i.test(f));
 
     return files.map((fileName) => {
