@@ -9,7 +9,11 @@ import {
 } from 'node:crypto'
 
 import { CertificateInfo } from './interfaces/certificate.interface';
-import { CadenaConfianzaInvalidaException, CertificadoExpiradoException, CertificadoInvalidoException, LLaveNoCorrespondeCertificadoException, LLavePrivadaInvalidException } from './efirma.exceptions';
+import { CadenaConfianzaInvalidaException, 
+  CertificadoExpiradoException, 
+  CertificadoInvalidoException,
+   LLaveNoCorrespondeCertificadoException, 
+   LLavePrivadaInvalidException } from './efirma.exceptions';
 import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
 import { ResultadoVerificacion } from './interfaces/verification.interface';
@@ -27,7 +31,7 @@ export class EfirmaService implements OnModuleInit{
   
 
   private cargarCertificadosDeConfianza(): X509Certificate[] {
-    const dir = join(process.cwd(), 'src', 'certificates');
+    const dir = join(process.cwd(), 'dist','certificates');
     const files = readdirSync(dir).filter((f) => /\.(cer|crt)$/i.test(f));
 
     return files.map((fileName) => {
