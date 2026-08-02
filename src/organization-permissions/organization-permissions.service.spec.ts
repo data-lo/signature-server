@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -160,6 +161,20 @@ describe('OrganizationPermissionsService', () => {
       ).rejects.toThrow(ForbiddenException);
       expect(organizationPermissionRepository.save).not.toHaveBeenCalled();
     });
+
+    it('lanza ConflictException si ya existe un permiso con ese nombre en la organización', async () => {
+      accountRepository.findOne.mockResolvedValue(adminMembership());
+      organizationPermissionRepository.findOne.mockResolvedValue({
+        id: 'perm-existing',
+        organizationId: 'org-1',
+        name: 'Aprobar documentos',
+      });
+
+      await expect(
+        service.create('owner-1', 'org-1', { name: 'Aprobar documentos' }),
+      ).rejects.toThrow(ConflictException);
+      expect(organizationPermissionRepository.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('update', () => {
@@ -188,6 +203,50 @@ describe('OrganizationPermissionsService', () => {
         'perm-1',
         { isActive: false },
       );
+    });
+
+    it('permite guardar sin cambiar el nombre, sin disparar el chequeo de duplicados', async () => {
+      accountRepository.findOne.mockResolvedValue(adminMembership());
+      organizationPermissionRepository.findOne.mockResolvedValue({
+        id: 'perm-1',
+        organizationId: 'org-1',
+        name: 'Aprobar',
+        isActive: true,
+      });
+
+      await service.update('owner-1', 'org-1', 'perm-1', {
+        name: 'Aprobar',
+        isActive: false,
+      });
+
+      // Solo se llama findOne para findPermissionOrFail (x2, antes y después del update) —
+      // el chequeo de duplicados no debe ejecutar una consulta extra si el nombre no cambió.
+      expect(organizationPermissionRepository.findOne).toHaveBeenCalledTimes(2);
+      expect(organizationPermissionRepository.update).toHaveBeenCalledWith(
+        'perm-1',
+        { name: 'Aprobar', isActive: false },
+      );
+    });
+
+    it('lanza ConflictException al renombrar a un nombre ya usado por otro permiso de la organización', async () => {
+      accountRepository.findOne.mockResolvedValue(adminMembership());
+      organizationPermissionRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'perm-1',
+          organizationId: 'org-1',
+          name: 'Aprobar',
+          isActive: true,
+        }) // findPermissionOrFail
+        .mockResolvedValueOnce({
+          id: 'perm-2',
+          organizationId: 'org-1',
+          name: 'Ver reportes',
+        }); // assertNameNotTaken: ya existe otro permiso con ese nombre
+
+      await expect(
+        service.update('owner-1', 'org-1', 'perm-1', { name: 'Ver reportes' }),
+      ).rejects.toThrow(ConflictException);
+      expect(organizationPermissionRepository.update).not.toHaveBeenCalled();
     });
   });
 

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -88,6 +89,8 @@ export class OrganizationPermissionsService {
       ACTION_KEY_ENUM.CREATE,
     );
 
+    await this.assertNameNotTaken(organizationId, dto.name);
+
     const permission = await this.organizationPermissionRepository.save(
       this.organizationPermissionRepository.create({
         organizationId,
@@ -118,6 +121,10 @@ export class OrganizationPermissionsService {
       organizationId,
       permissionId,
     );
+
+    if (dto.name !== undefined && dto.name !== permission.name) {
+      await this.assertNameNotTaken(organizationId, dto.name);
+    }
 
     await this.organizationPermissionRepository.update(permission.id, {
       ...(dto.name !== undefined && { name: dto.name }),
@@ -225,6 +232,26 @@ export class OrganizationPermissionsService {
       message: 'Permisos del miembro actualizados correctamente',
       data: { accountId, permissionIds: uniquePermissionIds },
     };
+  }
+
+  /**
+   * `organization_permissions` tiene un `@Unique(['organizationId', 'name'])` — sin este check
+   * previo, un nombre repetido llega a violar la constraint en la base de datos y termina como
+   * un 500 genérico (QueryFailedError sin capturar) en vez de un error claro para el usuario.
+   */
+  private async assertNameNotTaken(
+    organizationId: string,
+    name: string,
+  ): Promise<void> {
+    const existing = await this.organizationPermissionRepository.findOne({
+      where: { organizationId, name },
+    });
+
+    if (existing) {
+      throw new ConflictException(
+        `Ya existe un permiso con el nombre "${name}" en esta organización`,
+      );
+    }
   }
 
   private async findPermissionOrFail(
