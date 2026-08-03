@@ -5,7 +5,12 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "assets": [
-      { "include": "**/*.icc", "watchAssets": true }
+      { "include": "**/*.icc", 
+        "watchAssets": true },
+      {
+        "include": "certificates/*",
+        "outDir": "dist"
+      }
     ]
   }
 }
