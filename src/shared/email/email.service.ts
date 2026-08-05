@@ -19,6 +19,8 @@ import {
   documentRejectedTemplate,
   documentSignedTemplate,
   organizationInvitationTemplate,
+  passwordResetOtpTemplate,
+  registrationOtpTemplate,
   verificationCodeTemplate,
 } from './templates/email.templates';
 import { EmailType } from './enums/email-type.enum';
@@ -45,7 +47,9 @@ export class EmailService {
 
     this.defaultFromEmail = fromEmail;
     sgMail.setApiKey(apiKey);
-    this.logger.log(`SendGrid initialized with sender: ${this.defaultFromEmail}`);
+    this.logger.log(
+      `SendGrid initialized with sender: ${this.defaultFromEmail}`,
+    );
   }
 
   /**
@@ -145,7 +149,11 @@ export class EmailService {
     await this.sendEmail(
       to,
       EmailSubject.DOCUMENT_SIGNED,
-      documentCompletedForCreatorTemplate(creatorName, documentName, signerNames),
+      documentCompletedForCreatorTemplate(
+        creatorName,
+        documentName,
+        signerNames,
+      ),
       EmailType.NOTIFICATION,
       undefined,
       [
@@ -212,6 +220,32 @@ export class EmailService {
       to,
       EmailSubject.VERIFICATION_CODE,
       verificationCodeTemplate(documentName, code),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /** Envía el código de verificación del flujo de recuperación de contraseña (ver historia "Recuperación de Contraseña mediante Código de Verificación OTP"). */
+  async sendPasswordResetOtpNotification(
+    to: string,
+    code: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.PASSWORD_RESET_OTP,
+      passwordResetOtpTemplate(code),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /** Envía el código de verificación de correo del flujo de pre-registro/OTP (ver historia "Auth: Flujo de Pre-registro, Verificación OTP y Control por CURP"). */
+  async sendRegistrationOtpNotification(
+    to: string,
+    code: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.REGISTRATION_OTP,
+      registrationOtpTemplate(code),
       EmailType.NOTIFICATION,
     );
   }

@@ -15,6 +15,7 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { SharedModule } from 'src/shared/shared.module';
 import { RolesModule } from 'src/roles/roles.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
+import { OrganizationPermissionsModule } from 'src/organization-permissions/organization-permissions.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { KafkaModule } from 'src/kafka/kafka.module';
     SharedModule,
     RolesModule,
     KafkaModule,
+    OrganizationPermissionsModule,
   ],
   controllers: [
     AccountController,

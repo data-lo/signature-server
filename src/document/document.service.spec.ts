@@ -12,6 +12,7 @@ import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
+import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { HashService } from 'src/shared/hash/hash.service';
 import { UserService } from 'src/user/user.service';
@@ -120,6 +121,18 @@ describe('DocumentService', () => {
       addSignerName: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampRejectedWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampCancelledWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
+      // Página de prueba fija de 600x800pt — suficiente para verificar que la conversión
+      // ratio→puntos y el pageIndex correcto llegan a mergeSignatureIntoPdf/addSignerName sin
+      // necesitar un PDF real (eso ya lo cubre document-signing.service.spec.ts).
+      resolveRatioPosition: jest.fn(async (_buffer: Buffer, position: any) => ({
+        pageIndex: position.page - 1,
+        coordinates: {
+          x: position.xRatio * 600,
+          y: 800 - (position.yRatio + position.heightRatio) * 800,
+          width: position.widthRatio * 600,
+          height: position.heightRatio * 800,
+        },
+      })),
     };
     signatureService = {
       findOne: jest.fn().mockResolvedValue({
@@ -672,7 +685,10 @@ describe('DocumentService', () => {
         userId: 'user-a',
         signingOrder: 0,
         status: SIGNEE_STATUS_ENUM.SIGNED,
-        simpleSignature: { id: 'ss-1', signatureCoordinates: explicitCoords },
+        // Shape legacy (pre-migración ArraySignatureCoordinates, ver historia "Ubicación de
+        // firmas por usuario") — sin xRatio, así que finalizeSignedDocument lo trata tal cual,
+        // en píxeles absolutos, sin conversión de ratios.
+        simpleSignature: { id: 'ss-1', signatureCoordinates: [explicitCoords] },
       } as any);
       const signerB = buildSigner({ userId: 'user-b', signingOrder: 1 });
       collaboratorRepository.find
@@ -684,6 +700,58 @@ describe('DocumentService', () => {
       const calls = documentSigningService.mergeSignatureIntoPdf.mock.calls;
       expect(calls[0][2]).toEqual(explicitCoords);
       expect(calls[1][2]).toEqual({ x: 50, y: 200, width: 100, height: 80 });
+    });
+
+    it('historia "Ubicación de firmas por usuario": estampa cada posición del arreglo en su página correspondiente', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const onlySigner = buildSigner({
+        userId: 'user-1',
+        signingOrder: 0,
+        simpleSignature: {
+          id: 'ss-1',
+          signatureCoordinates: [
+            { signatureId: 'sig-1', page: 1, xRatio: 0.1, yRatio: 0.2, widthRatio: 0.2, heightRatio: 0.08 },
+            { signatureId: 'sig-2', page: 3, xRatio: 0.5, yRatio: 0.5, widthRatio: 0.2, heightRatio: 0.08 },
+          ],
+        },
+      } as any);
+      collaboratorRepository.find
+        .mockResolvedValueOnce([onlySigner])
+        .mockResolvedValueOnce([onlySigner]);
+
+      await service.sign('doc-1', 'user-1');
+
+      expect(documentSigningService.resolveRatioPosition).toHaveBeenCalledTimes(2);
+      const mergeCalls = documentSigningService.mergeSignatureIntoPdf.mock.calls;
+      expect(mergeCalls).toHaveLength(2);
+      expect(mergeCalls[0][3]).toBe(0); // page 1 → pageIndex 0
+      expect(mergeCalls[1][3]).toBe(2); // page 3 → pageIndex 2
+      const addNameCalls = documentSigningService.addSignerName.mock.calls;
+      expect(addNameCalls[0][3]).toBe(0);
+      expect(addNameCalls[1][3]).toBe(2);
+    });
+
+    it('historia "Ubicación de firmas por usuario": con signatures vacío, firma sin estampar nada visualmente', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const onlySigner = buildSigner({
+        userId: 'user-1',
+        signingOrder: 0,
+        simpleSignature: { id: 'ss-1', signatureCoordinates: [] },
+      } as any);
+      collaboratorRepository.find
+        .mockResolvedValueOnce([onlySigner])
+        .mockResolvedValueOnce([onlySigner]);
+
+      const result = await service.sign('doc-1', 'user-1');
+
+      expect(result.success).toBe(true);
+      expect(documentSigningService.mergeSignatureIntoPdf).not.toHaveBeenCalled();
+      expect(documentSigningService.addSignerName).not.toHaveBeenCalled();
+      // Sigue subiendo el PDF (sin cambios visuales) y marcando el documento como firmado.
+      expect(minioService.uploadPdfAObject).toHaveBeenCalled();
+      expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
     });
 
     it('rechaza si el documento no está en estatus PENDING', async () => {
@@ -1201,6 +1269,86 @@ describe('DocumentService', () => {
       await expect(service.findOne('missing-doc')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  // Historia "Visualización pública de documentos firmados mediante MinIO": esta ruta no tiene
+  // ningún control de acceso (cualquiera con el UUID la puede llamar), así que el gate por
+  // status === SIGNED es la única defensa contra exponer el archivo de un documento que no
+  // debería ser público todavía.
+  describe('getPublicDocumentView', () => {
+    it('lanza NotFoundException si el documento no existe, sin llamar a Minio', async () => {
+      documentRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getPublicDocumentView('missing-doc'),
+      ).rejects.toThrow(NotFoundException);
+      expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      DOCUMENT_STATUS_ENUM.CREATED,
+      DOCUMENT_STATUS_ENUM.PENDING,
+      DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
+      DOCUMENT_STATUS_ENUM.REJECTED,
+      DOCUMENT_STATUS_ENUM.EXPIRED,
+      DOCUMENT_STATUS_ENUM.CANCELLED,
+    ])(
+      'con status=%s: nunca genera ni devuelve una URL de Minio',
+      async (status) => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          status,
+          objectKey: 'object-key-1',
+        });
+
+        const result = await service.getPublicDocumentView('doc-1');
+
+        expect(minioService.getFile).not.toHaveBeenCalled();
+        expect(result).toEqual({
+          success: true,
+          message: 'Documento obtenido correctamente',
+          data: {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            status,
+            secureUrl: null,
+            expiresIn: null,
+          },
+        });
+      },
+    );
+
+    it('con status=SIGNED: genera y devuelve la URL prefirmada de Minio desde el bucket de firmados', async () => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: DOCUMENT_STATUS_ENUM.SIGNED,
+        objectKey: 'object-key-1',
+      });
+      minioService.getFile.mockResolvedValue({
+        secureUrl: 'https://minio/signed-documents/object-key-1',
+        expiresIn: 86400,
+      });
+
+      const result = await service.getPublicDocumentView('doc-1');
+
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-1',
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      );
+      expect(result).toEqual({
+        success: true,
+        message: 'Documento obtenido correctamente',
+        data: {
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          status: DOCUMENT_STATUS_ENUM.SIGNED,
+          secureUrl: 'https://minio/signed-documents/object-key-1',
+          expiresIn: 86400,
+        },
+      });
     });
   });
 

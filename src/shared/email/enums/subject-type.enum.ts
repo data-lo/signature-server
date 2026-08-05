@@ -5,6 +5,8 @@ export enum EmailSubject {
   CANCELLATION_PENDING = 'Solicitud de cancelación de documento',
   DOCUMENT_CANCELLED = 'Documento cancelado',
   VERIFICATION_CODE = 'Código de verificación',
+  PASSWORD_RESET_OTP = 'Recupera tu contraseña',
+  REGISTRATION_OTP = 'Verifica tu correo',
   ORGANIZATION_INVITATION = 'Te invitaron a una organización',
   DOCUMENT_INVITATION = 'Te invitaron a firmar un documento',
 }

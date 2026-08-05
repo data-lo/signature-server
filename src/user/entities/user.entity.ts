@@ -6,6 +6,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   OneToMany,
   OneToOne,
@@ -39,6 +40,10 @@ export class UserEntity {
   @Column({ default: false, name: 'is_configured' })
   isConfigured: boolean;
 
+  @Column({ default: false, name: 'is_email_verified' })
+  isEmailVerified: boolean;
+
+  @Index()
   @Column({ length: 18, name: 'national_id', unique: true })
   nationalId: string;
 

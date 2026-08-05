@@ -28,6 +28,10 @@ import { SignatureService } from 'src/signature/signature.service';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { AccountService } from 'src/account/account.service';
+import { EmailService } from 'src/shared/email/email.service';
+import { maskEmail } from 'src/shared/utils/mask-email.util';
+import { EmailVerificationCodeService } from './email-verification-code.service';
+import { SignupPendingVerificationData } from './interfaces/response/signup-pending-verification-response';
 
 @Injectable()
 export class UserService {
@@ -44,6 +48,8 @@ export class UserService {
     private signatureService: SignatureService,
     private redisService: RedisService,
     private accountService: AccountService,
+    private emailService: EmailService,
+    private emailVerificationCodeService: EmailVerificationCodeService,
   ) {}
 
   async create(
@@ -297,8 +303,13 @@ export class UserService {
     return user;
   }
 
-  async findOneByEmail(email: string): Promise<UserEntity> {
+  async findOneByEmail(email: string): Promise<UserEntity | null> {
     return this.userRepository.findOne({ where: { email, isDeleted: false } });
+  }
+
+  /** Actualiza el hash de contraseña de UserEntity (ver historia "Recuperación de Contraseña mediante Código de Verificación OTP" — AuthService.resetPassword). No sincroniza AccountEntity: ver AccountService.updatePasswordForUser. */
+  async updatePassword(userId: string, hashedPassword: string): Promise<void> {
+    await this.userRepository.update(userId, { password: hashedPassword });
   }
 
   async remove(id: string): Promise<BaseResponse> {
@@ -339,6 +350,31 @@ export class UserService {
     return this.removeSensitiveData(user);
   }
 
+  /**
+   * Envía (best-effort) el OTP de verificación de correo. Un fallo de SendGrid nunca debe
+   * tumbar el registro/reenvío que lo dispara — el usuario siempre puede pedir otro código
+   * desde /auth/resend-otp si este envío en particular falla.
+   */
+  private async sendRegistrationOtpBestEffort(
+    userId: string,
+    email: string,
+  ): Promise<void> {
+    try {
+      const verificationCode =
+        await this.emailVerificationCodeService.issue(userId);
+      await this.emailService.sendRegistrationOtpNotification(
+        email,
+        verificationCode.code,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo enviar el correo de verificación de registro a ${email}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   async createFromSignup(
     dto: {
       firstName: string;
@@ -348,29 +384,69 @@ export class UserService {
       rfc: string;
     },
     hashedPassword: string,
-  ): Promise<BaseResponse<UserEntity>> {
-    const existingUser = await this.userRepository.findOne({
+  ): Promise<BaseResponse<SignupPendingVerificationData>> {
+    const curp = dto.nationalId.toUpperCase();
+
+    // A diferencia del antiguo assertCurpNotTaken (que solo miraba isActive), aquí importa el
+    // estado de verificación: un CURP con una pre-cuenta sin verificar no es un duplicado real,
+    // es un registro abandonado a medias (ver historia "Auth: Flujo de Pre-registro,
+    // Verificación OTP y Control por CURP").
+    const existingByCurp = await this.userRepository.findOne({
+      where: { nationalId: curp },
+    });
+
+    if (existingByCurp) {
+      if (existingByCurp.isEmailVerified) {
+        throw new ConflictException(
+          'Ya existe un usuario verificado con este CURP. Inicia sesión.',
+        );
+      }
+
+      // Caso A: reenvía el OTP al correo YA ASOCIADO al pre-registro original — se ignora
+      // deliberadamente cualquier email/nombre/RFC reenviado en este intento, para que conocer
+      // el CURP de alguien más (no es secreto) no permita secuestrar su pre-registro con un
+      // correo propio.
+      await this.sendRegistrationOtpBestEffort(
+        existingByCurp.id,
+        existingByCurp.email,
+      );
+
+      return {
+        success: true,
+        message:
+          'Ya existía una solicitud de registro pendiente para este CURP; te reenviamos el código de verificación',
+        data: {
+          userId: existingByCurp.id,
+          email: existingByCurp.email,
+          maskedEmail: maskEmail(existingByCurp.email),
+          isNewPreRegistration: false,
+        },
+      };
+    }
+
+    const existingByEmail = await this.userRepository.findOne({
       where: { email: dto.email.toLowerCase() },
     });
-    if (existingUser) {
+    if (existingByEmail) {
       throw new ConflictException(
         'Ya existe un usuario registrado con ese correo electrónico',
       );
     }
 
-    await this.assertCurpNotTaken(dto.nationalId.toUpperCase());
     await this.assertRfcNotTaken(dto.rfc.toUpperCase());
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
+    let newUser: UserEntity;
+
     try {
       const personalInformation = await queryRunner.manager.save(
         queryRunner.manager.create(PersonalInformationEntity, {
           name: dto.firstName.toUpperCase(),
           lastName: dto.lastName.toUpperCase(),
-          curp: dto.nationalId.toUpperCase(),
+          curp,
           rfc: dto.rfc.toUpperCase(),
         }),
       );
@@ -380,12 +456,13 @@ export class UserService {
         lastName: dto.lastName.toUpperCase(),
         email: dto.email.toLowerCase(),
         roles: [UserRoles.SIGNER],
-        nationalId: dto.nationalId.toUpperCase(),
+        nationalId: curp,
         password: hashedPassword,
         personalInformationId: personalInformation.id,
+        isEmailVerified: false,
       });
 
-      const newUser = await queryRunner.manager.save(user);
+      newUser = await queryRunner.manager.save(user);
 
       const { account: personalAccount } =
         await this.accountService.createDefaultPersonalAccount(
@@ -402,18 +479,48 @@ export class UserService {
         newUser.id,
         personalAccount,
       );
-
-      return {
-        success: true,
-        message: 'Usuario registrado correctamente',
-        data: this.removeSensitiveData(newUser),
-      };
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
     } finally {
       await queryRunner.release();
     }
+
+    await this.sendRegistrationOtpBestEffort(newUser.id, newUser.email);
+
+    return {
+      success: true,
+      message: 'Registro iniciado, revisa tu correo para verificar tu cuenta',
+      data: {
+        userId: newUser.id,
+        email: newUser.email,
+        maskedEmail: maskEmail(newUser.email),
+        isNewPreRegistration: true,
+      },
+    };
+  }
+
+  /**
+   * Marca isEmailVerified=true tras un OTP válido (ver AuthService.verifyOtp) y refresca el
+   * snapshot cacheado en Redis, igual criterio que updateStatus.
+   */
+  async markEmailVerified(userId: string): Promise<UserEntity> {
+    await this.userRepository.update(userId, { isEmailVerified: true });
+
+    const updatedUser = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: { personalInformation: true },
+    });
+    if (!updatedUser) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    await this.refreshUserCurpCache(
+      updatedUser,
+      updatedUser.personalInformation,
+    );
+
+    return updatedUser;
   }
 
   /**
