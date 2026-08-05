@@ -82,15 +82,15 @@ export class DocumentService {
     DOCUMENT_STATUS_ENUM,
     BUCKET_TYPES_ENUM
   > = {
-    [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-  };
+      [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+      [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+      [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    };
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -108,7 +108,7 @@ export class DocumentService {
     private readonly accountMemberService: AccountMemberService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentTransactionService: DocumentTransactionService,
-  ) {}
+  ) { }
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
   async create(
@@ -407,15 +407,7 @@ export class DocumentService {
       .skip((page - 1) * limit)
       .take(limit);
 
-    // Bug corregido: antes esta consulta SIEMPRE arrancaba con
-    // `document.accountId = :accountId` (o organizationId) — es decir, "documentos que le
-    // pertenecen a MI cuenta". Eso funciona para GESTIONAR (documentos que yo creé), pero rompía
-    // por completo FIRMAR: una invitación a firmar casi siempre pertenece a la cuenta de QUIEN
-    // CREÓ el documento, no a la mía, así que ese documento nunca podía aparecer aquí sin
-    // importar qué tan bien resuelto estuviera el colaborador. Ahora, cuando la consulta viene
-    // filtrada por participantEmail (el caso de "documentos donde soy participante"), se usa esa
-    // pertenencia como único filtro de alcance; solo se restringe por cuenta/organización activa
-    // cuando NO se pide por participantEmail (el caso de "documentos que pertenecen a mi cuenta").
+
     if (!participantEmail) {
       qb.andWhere(
         activeAccount.organizationId
@@ -665,10 +657,10 @@ export class DocumentService {
       myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
     const verificationConfirmed = requiresVerification
       ? await this.verificationCodeService.hasConsumedCode(
-          documentId,
-          myParticipant!.id,
-          VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
-        )
+        documentId,
+        myParticipant!.id,
+        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      )
       : false;
 
     return {
