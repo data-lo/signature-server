@@ -61,27 +61,10 @@ export class MinioService {
       );
     }
 
-    // Bug corregido: sin `region`, el SDK de minio resuelve la región del bucket con una
-    // llamada de red real en la primera operación que la necesita (p. ej. presignedGetObject),
-    // usando el protocolo del cliente que la dispara. Para el cliente público (useSSL:true) eso
-    // significa un handshake TLS contra el propio MinIO — que en local (y en cualquier despliegue
-    // donde MinIO no hable TLS directamente) responde en HTTP plano, y el intento de parsear esa
-    // respuesta como TLS revienta con "EPROTO ... packet length too long", tumbando cualquier
-    // vista que necesite un secureUrl (findDetailForUser, getDocumentMinioURL, etc.) con un 500.
-    // Fijar la región (MinIO standalone usa 'us-east-1' por defecto si no se configuró otra)
-    // hace que esa resolución sea local y evita el round-trip por completo, en ambos clientes.
     const region = process.env.MINIO_REGION || 'us-east-1';
 
-    // Bug corregido (parte 2): useSSL estaba fijo en true para el cliente público, así que las
-    // URLs presignadas siempre salían con esquema https:// — funciona si MINIO_PUBLIC_HOST está
-    // detrás de un proxy que termina TLS (el caso de producción), pero en local MinIO expone
-    // HTTP plano en ese mismo host/puerto: el navegador intenta el handshake TLS contra un
-    // servidor que responde en claro y falla con ERR_SSL_PROTOCOL_ERROR al cargar el PDF, aunque
-    // el backend ya haya generado la URL sin error. MINIO_PUBLIC_USE_SSL permite apagarlo en
-    // local; por defecto sigue en true para no cambiar el comportamiento de producción.
     const publicUseSSL = process.env.MINIO_PUBLIC_USE_SSL !== 'false';
 
-    // Cliente interno: usa la red interna de docker (rápido, sin salir a internet)
     this.minioPrivateClient = new Minio.Client({
       endPoint: process.env.MINIO_HOST,
       port: Number(process.env.MINIO_PORT),
@@ -95,7 +78,6 @@ export class MinioService {
       endPoint: process.env.MINIO_PUBLIC_HOST,
       port: Number(process.env.MINIO_PUBLIC_PORT),
       useSSL: publicUseSSL,
-      region,
       accessKey: process.env.MINIO_ACCESS_KEY,
       secretKey: process.env.MINIO_SECRET_KEY,
     });
@@ -307,10 +289,10 @@ export class MinioService {
   ): Promise<GetFileResponse> {
     try {
       let fileName = fileId;
-      const minioPrivateClient = this.getMinioPrivateClient();
+
       const minioPublicClient = this.getMinioPublicClient();
       const bucketName = await this.getBucketByType(bucketType);
-      const exists = await minioPrivateClient.bucketExists(bucketName);
+      const exists = await minioPublicClient.bucketExists(bucketName);
 
       if (!exists) {
         throw new Error(`El bucket ${bucketName} no existe en MinIO`);
@@ -322,7 +304,7 @@ export class MinioService {
 
       try {
         this.logger.log(
-          `Consulta del file en Minio ${await minioPrivateClient.statObject(bucketName, fileName)}`,
+          `Consulta del file en Minio ${await minioPublicClient.statObject(bucketName, fileName)}`,
         );
       } catch (error) {
         throw new Error(
@@ -335,6 +317,8 @@ export class MinioService {
         fileName,
         expiresIn,
       );
+
+      this.logger.log(`Presigned URL: ${secureUrl}`);
 
       return {
         fileId,
