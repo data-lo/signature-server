@@ -5,7 +5,9 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "assets": [
-      { "include": "**/*.icc", 
+      { "include": "**/*.icc",
+        "watchAssets": true },
+      { "include": "**/*.ttf",
         "watchAssets": true },
       {
         "include": "certificates/*",
