@@ -79,17 +79,25 @@ export class StripeService {
 
     const frontendUrl = this.configService.get<string>('FRONTEND_URL');
 
-    const session = await this.client.checkout.sessions.create({
-      mode: 'subscription',
-      customer: customerId,
-      line_items: [{ price: plan.priceId, quantity: 1 }],
-      metadata: { accountId, planId },
-      subscription_data: {
+    const session = await this.client.checkout.sessions.create(
+      {
+        mode: 'subscription',
+        customer: customerId,
+        line_items: [{ price: plan.priceId, quantity: 1 }],
         metadata: { accountId, planId },
+        subscription_data: {
+          metadata: { accountId, planId },
+        },
+        success_url: `${frontendUrl}/dashboard/plans/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${frontendUrl}/dashboard/plans/cancel`,
       },
-      success_url: `${frontendUrl}/plans/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${frontendUrl}/plans/cancel`,
-    });
+      {
+        // Colapsa clics repetidos del mismo intento de suscripción en la misma sesión de
+        // Checkout en vez de crear una nueva en Stripe por cada click; expira sola al día
+        // siguiente, permitiendo un intento nuevo si el usuario vuelve a suscribirse.
+        idempotencyKey: `checkout-session-${accountId}-${planId}-${new Date().toISOString().slice(0, 10)}`,
+      },
+    );
 
     return { sessionId: session.id, url: session.url };
   }
