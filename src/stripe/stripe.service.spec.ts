@@ -5,7 +5,6 @@ import { NotFoundException } from '@nestjs/common';
 import { StripeService } from './stripe.service';
 import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
-import { SUBSCRIPTION_STATUS_ENUM } from './enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from './enums/plan-id.enum';
 
 const mockSessionsCreate = jest.fn();
