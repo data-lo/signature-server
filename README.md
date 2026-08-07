@@ -4,12 +4,14 @@ Backend en NestJS para una plataforma de firma electrónica de documentos: gesti
 
 ## 1. Proceso de firmado de documentos
 
+> Esta sección describe el flujo del endpoint original `POST /document`. Sigue existiendo y expuesto, pero `signature-app` hoy crea documentos vía `POST /api/v1/documents/signatures` (multipart, colaboradores de datos libres) — ver sección 3, módulo `document-signatures`, para el contrato realmente en uso. La entidad de participante también cambió de nombre (`DocumentParticipantEntity` → `CollaboratorEntity`, ver sección 2.1) desde que se escribió originalmente esta sección; el flujo paso a paso de abajo sigue siendo conceptualmente válido para ambos endpoints.
+
 ### 1.1 Dos conceptos que no hay que confundir
 
 | Concepto | Entidad | Qué representa |
 |---|---|---|
 | **Firma del usuario (credencial)** | `SignatureEntity` (módulo `signature`) | La imagen PNG de la rúbrica + la foto de la identificación oficial (INE) del usuario. Se registra **una sola vez** por usuario (relación 1–1 opcional `Users.signatureId`). |
-| **Firma de un documento (acto de firmar)** | `DocumentParticipantEntity` (módulo `document`) | El acto de que un participante concreto firme o rechace un documento concreto. Requiere que el usuario ya tenga su credencial (`SignatureEntity`) completa y activa. |
+| **Firma de un documento (acto de firmar)** | `CollaboratorEntity` (módulo `document`, antes `DocumentParticipantEntity`) | El acto de que un colaborador concreto firme o rechace un documento concreto. Requiere que el usuario ya tenga su credencial (`SignatureEntity`) completa y activa. |
 
 ### 1.2 Flujo paso a paso
 
@@ -17,7 +19,7 @@ Backend en NestJS para una plataforma de firma electrónica de documentos: gesti
    - Valida que todos los participantes existan.
    - Sube el PDF a MinIO (bucket `created_documents`).
    - Cuenta páginas (`PdfSignatureService.getPdfPages`) y calcula el hash SHA-256 del original (`originalHash`).
-   - Crea el `DocumentEntity` (`status = CREATED`) y un `DocumentParticipantEntity` por firmante (`role = SIGNER`, `signOrder` = posición en el arreglo) y por espectador (`role = SPECTATOR`, sin orden, solo visualiza).
+   - Crea el `DocumentEntity` (`status = CREATED`) y un `CollaboratorEntity` por firmante (`colaboratorType = SIGNER`, `signingOrder` = posición en el arreglo) y por espectador (`colaboratorType = WATCHER`, sin orden, solo visualiza).
 
 2. **Enviar a firma** — `PATCH /document/:id/submit-for-authorization` (solo el creador, solo si `status = CREATED`).
    - `status → PENDING` y se notifica por correo al **primer firmante** según `signOrder`.
@@ -67,41 +69,69 @@ Cuando firma el último firmante pendiente:
 
 ### 2.1 Entidades
 
+> ⚠️ Esta sección describía el modelo previo a la migración de arquitectura `ENTIDAD_RELACIÓN_V2` (documentada en la sección 7, entrada "migración de modelo completa"). Esa migración ya se ejecutó y quedó narrada en el changelog, pero nunca se retroalimentó aquí — la tabla de abajo es la reescritura, auditada línea por línea contra `src/**/*.entity.ts` (25 archivos) en esta ronda.
+
 | Entidad | Tabla / colección | Campos principales |
 |---|---|---|
-| `UserEntity` | `users` (Postgres) | id, firstName, lastName, email (único), position, roles, isActive, isDeleted, `isConfigured` (default `false` — onboarding: se pone en `true` solo vía `PATCH /api/v1/users/me/status`), nationalId (CURP, 18 chars, **único**), password, `signatureId` (FK opcional), `personalInformationId` (FK obligatoria), createdAt, updatedAt |
+| `UserEntity` | `users` (Postgres) | id, firstName, lastName, email (único), roles (simple-array, ver nota abajo), isActive, isDeleted, `isConfigured` (onboarding, se pone en `true` solo vía `PATCH /api/v1/users/me/status`), `isEmailVerified` (default `false` — pre-cuenta hasta verificar el OTP de registro), nationalId (CURP, **único**), password, `signatureId` (FK opcional), `personalInformationId` (FK obligatoria), createdAt, updatedAt. `position` **ya no existe** (migración `RemovePositionFromUsers`). |
 | `PersonalInformationEntity` | `personal_information` (Postgres) | id, name, lastName, curp, rfc (nullable a nivel de columna — obligatorio en `POST /auth/register`, opcional en `POST /user`), phoneNumber (nullable), secondaryEmail (nullable) |
+| `EmailVerificationCodeEntity` | `email_verification_codes` (Postgres) | id, code, isUsed, usedAt, expiredAt, userId (FK, `ON DELETE CASCADE`), createdAt — OTP de verificación de correo en el registro |
+| `PasswordResetCodeEntity` | `password_reset_codes` (Postgres) | id, code, isUsed, usedAt, expiredAt, userId (FK, `ON DELETE CASCADE`), createdAt |
 | `SignatureEntity` | `signatures` (Postgres) | id, signatureObjectKey (nullable), officialCardObjectKey (nullable), isActive, createdAt, updatedAt |
-| `DocumentEntity` | `documents` (Postgres) | id, objectKey, fileName, fileType, totalPages, documentUrl, ipAddress, originalHash, signedHash, signedAt, cancelledAt, rejectedAt, status, signatureCoordinates (jsonb), createdBy (FK), `accountId` (FK, **NOT NULL** — cuenta activa al crearlo, ver sección 3 y migración `AddAccountIdToDocuments`) |
-| `DocumentParticipantEntity` | `document_participants` (Postgres) | id, documentId (FK), userId (FK), role (`signer`\|`spectator`), status (`pending`\|`signed`\|`rejected`), signOrder, signedAt, rejectedAt, rejectionReason |
-| `AccountEntity` | `accounts` (Postgres) | id, name, type (`PERSONAL`\|`ORGANIZATION`) |
-| `OrganizationDetailEntity` | `organization_details` (Postgres) | accountId (PK = FK), name |
-| `AccountMemberEntity` | `account_members` (Postgres) | id, accountId (FK), userId (FK), `roleId` (FK a `roles`, **nullable** — hoy siempre el rol de sistema ADMIN para el creador, tanto de la cuenta personal del registro como de una organización nueva; el `NULL` queda disponible para un futuro flujo de invitar miembros sin rol asignado todavía), isActive — único por (accountId, userId) |
-| `AccountSubscriptionEntity` | `account_subscriptions` (Postgres) | id, accountId (FK, único), planId, stripeCustomerId, stripeSubscriptionId, status, currentPeriodEnd, signingEnabled |
+| `SimpleSignatureEntity` | `simple_signatures` (Postgres, módulo `signature`) | id, verificationCode (FK nullable), signatureCoordinates (jsonb, arreglo — soporta el shape legacy de un solo objeto y el shape nuevo con ratios 0–1 por página) — coordenadas de firma explícitas por colaborador |
+| `FielSignatureEntity` | `fiel_signatures` (Postgres, módulo `signature`) | id, rfc, verificationCodeId (FK nullable), verificationCodeRequired — solo modelo de datos, **sin lógica de firma FIEL/PKI real conectada** (decisión de producto/legal pendiente) |
+| `DocumentEntity` | `documents` (Postgres) | id, objectKey, fileName, fileType, totalPages, documentUrl, ipAddress, originalHash, signedHash, signedAt, cancelledAt, rejectedAt, isNotified, status, signatureCoordinates (jsonb, legacy — convive con las coordenadas por colaborador), createdBy (FK), `accountId` (FK, NOT NULL), `organizationId` (FK, **nullable** — clave real de aislamiento multi-tenant en contexto organización, distinta de `accountId`; ver nota en 2.2), isSequential (default `true`), expirationDate, visibilityLevel, sealKey, totalSigners, completedSignersCount, reviewedBy (reservado, sin gateo real todavía), requiresVerification, requiresApproval (flag guardado, **sin enrutamiento real a un aprobador**, ver Pendientes), indexDocument |
+| `CollaboratorEntity` (reemplaza `DocumentParticipantEntity`) | `collaborators` (Postgres) | id, documentId (FK, `ON DELETE CASCADE`), `accountId` (FK **nullable**, ancla a la cuenta PERSONAL del colaborador — ya no `userId` directo, ver migración `RenameCollaboratorUserIdToAccountId`), email/firstName/lastName/rfc (invitación por datos libres, sin cuenta de plataforma todavía si `accountId` es null), signingOrder, signedAt, status (`SIGNEE_STATUS`), comments, ipAddress, geoLoc (jsonb), visibilityLevel, cancellationReason, reminderPeriodicity, simpleSignatureId/fielSignatureId (FK), `signatureSnapshotObjectKey` (copia inmutable de la firma tomada en el momento de firmar — fix del bug crítico de "firma corrupta silenciosa", ver Pendientes/Resuelto), signatureType (`SIMPLE`\|`ADVANCED`), `colaboratorType` (`SIGNER`\|`WATCHER`\|`REVIEWER` — nótese el typo "colaborator" consistente en todo el código, no es un error de este README), createdAt, updatedAt |
+| `AccountEntity` (fusión de las antiguas `AccountEntity`+`AccountMemberEntity`) | `accounts` (Postgres) | **Una fila por usuario × contexto** (personal o membresía de una organización). id, userId (FK), accountType (`PERSONAL`\|`ORGANIZATION`), organizationId (FK **nullable**, NULL en cuentas PERSONAL), roleId (FK **nullable**), email/password (**copia sincronizada** de la credencial única del usuario — decisión de producto: una sola contraseña por usuario, sin selector de cuenta antes del login), isActive, status (`pending_invite`\|`active`\|`suspended`\|`removed` — distinto de `isActive`), leftAt, joinedAt, indexDocuments, position, membershipId (sin FK real, evita un ciclo con `account_subscriptions`), createdAt |
+| `OrganizationEntity` (reemplaza `OrganizationDetailEntity`) | `organizations` (Postgres) | id **propio** (ya no PK compartida con `accounts`), name, isActive, address, rfc, domainAllowed, phoneNumber, indexDocuments — varias filas `Account` (una por miembro) comparten el mismo `organizationId` |
+| `OrganizationInvitationEntity` | `organization_invitations` (Postgres) | id, organizationId (FK), roleId (FK), invitedBy (FK a users), email, token (**único**), status (`PENDING`\|`ACCEPTED`\|`EXPIRED`), expiresAt (7 días desde la creación), createdAt |
+| `NotificationEntity` | `notifications` (Postgres) | id, collaboratorId (FK nullable, CASCADE), isNotified, actorType, documentId (FK, CASCADE), notificationChannelSource (default `EMAIL`), delivered, sentAt, createdAt — registro/auditoría de envíos reales, alimentado por `DocumentEventsConsumer` |
+| `VerificationCodeEntity` | `verification_codes` (Postgres) | id, code, event, isUsed, usedAt, ipAddress, expiredAt, signerId (FK a collaborator, nullable), documentId (FK), createdAt — OTP de firma, gateado por `document.requiresVerification` |
+| `DocumentTransactionEntity` | `document_transactions` (Postgres) | id, documentId (FK, CASCADE), collaboratorId (FK nullable, CASCADE), actualHash, chainHash (encadenado **por documento**), timeStamp, chipher — cadena de integridad alimentada desde `DocumentEventsConsumer.handleCollaboratorSigned` |
+| `AuditChainEntity` | `audit` (Postgres, no confundir con `audits` de Mongo) | id (**integer autoincremental**, no uuid), documentId (FK nullable, `ON DELETE SET NULL` — borrar un documento `CREATED` no rompe la cadena), chipher, actualHash, chainHash (encadenamiento **global**, sobre toda la tabla, no por documento), auditType, timestamp — índice ligero en Postgres sobre la misma información, la fuente de verdad de integridad sigue siendo Mongo |
 | `AuditDocument` | `audits` (Mongo) | documentId, users[], operation, chainIndex, integrityHash, cipher, chainHash — sin FK real hacia Postgres (bases distintas) |
-| `RoleEntity` | `roles` (Postgres) | id, name, isSystemRole (default `false`; `true` para los 2 roles seed `ADMIN`/`MEMBER`), organizationId (FK opcional a `accounts` — `NULL` para roles del sistema, reservado para un futuro rol custom de una organización) |
+| `RoleEntity` | `roles` (Postgres) | id, name, isSystemRole (`true` para los 2 roles seed `ADMIN`/`MEMBER`), organizationId (FK opcional — reservado para un futuro rol custom de organización), visibility (int, default 0, significado de negocio sin definir todavía) |
 | `ResourceEntity` | `resources` (Postgres) | id, key (**único**, p. ej. `DOCUMENT`), description |
 | `ActionEntity` | `actions` (Postgres) | id, key (**único**, p. ej. `CREATE`), description |
-| `PermissionEntity` | `permissions` (Postgres) | id, resourceId (FK), actionId (FK), scope (string libre, hoy solo `ANY`) — único por (resourceId, actionId, scope) |
-| `RolePermissionEntity` | `role_permissions` (Postgres) | id, roleId (FK), permissionId (FK) — tabla pivote, único por (roleId, permissionId) |
+| `PermissionEntity` | `permissions` (Postgres) | id, resourceId (FK), actionId (FK), scope (hoy solo `ANY`) — único por (resourceId, actionId, scope) |
+| `RolePermissionEntity` | `role_permissions` (Postgres) | id, roleId (FK), permissionId (FK) — tabla pivote del RBAC real, único por (roleId, permissionId) |
+| `OrganizationPermissionEntity` | `organization_permissions` (Postgres) | id, organizationId (FK, CASCADE), name, isActive, createdAt — catálogo administrativo **por organización**, sin relación con el RBAC (ver sección 3, módulo `organization-permissions`) — único por (organizationId, name) |
+| `AccountPermissionEntity` | `account_permissions` (Postgres) | id, accountId (FK a `accounts`, CASCADE), organizationPermissionId (FK, CASCADE) — junction table de la asignación por miembro, único por (accountId, organizationPermissionId) |
+| `AccountSubscriptionEntity` | `account_subscriptions` (Postgres) | id, accountId (FK a `accounts`, único), planId, stripeCustomerId, stripeSubscriptionId, status, currentPeriodEnd, signingEnabled, createdAt, updatedAt |
+| `EventEntity` | `events` (Postgres) | id, eventType, metadata (jsonb), from, createdAt — sin FKs a propósito, correlación vía `metadata` |
+| `Efirma` | — | **no es una `@Entity()` real** — clase vacía (`export class Efirma {}`). El módulo `efirma` firma PDFs directo contra buffers subidos (e.firma/CSD), sin persistencia; parece una prueba de concepto aislada del resto del dominio (ver sección 3) |
+
+**`UserEntity.roles` vs. `AccountEntity.roleId` — dos sistemas de "rol" sin relación entre sí**: el primero (`simple-array` de `UserRoles`) es un rol de plataforma legado sin conexión al RBAC; el segundo es la FK real al catálogo `roles`/`role_permissions` que gobierna la autorización real (ver sección 3). No confundirlos al leer el código.
+
+**`AccountMemberEntity` ya no existe como archivo** — no quedó ni siquiera como código muerto, se borró por completo en la migración de fusión. El nombre sobrevive solo como nombre de servicio/controlador (`AccountMemberService`/`AccountMemberController`, ruta `/account-member`), que hoy opera sobre `AccountEntity` filtrando por `organizationId`. Las tablas legacy `document_participants`/`account_members_deprecated` mencionadas en migraciones anteriores son residuos renombrados (`_deprecated`/`_legacy`), no entidades TypeORM activas — el `DROP` real se difirió a una limpieza posterior.
 
 ### 2.2 Relaciones
 
-- **User 1—1 Signature**: FK `signature_id` en `users`, **opcional**. `User` es el dueño de la relación.
-- **User 1—1 PersonalInformation**: FK `personal_information_id` en `users`, **obligatoria**. `User` es el dueño de la relación.
-- **User 1—N Document** (como creador): FK `created_by` en `documents`.
-- **User 1—N DocumentParticipant**: FK `user_id` en `document_participants`.
-- **User 1—N AccountMember**: FK `user_id` en `account_members`.
-- **Document 1—N DocumentParticipant**: FK `document_id`, `onDelete: CASCADE`.
-- **Account 1—1 OrganizationDetail**: FK `account_id` (PK compartida), `onDelete: CASCADE`.
-- **Account 1—N AccountMember**: FK `account_id`, `onDelete: CASCADE`.
-- **Account 1—1 AccountSubscription**: FK `account_id` (único), `onDelete: CASCADE`.
-- **Role 1—N AccountMember**: FK `role_id` en `account_members`, **nullable**, sin `onDelete` (borrar un rol en uso no borra en cascada las membresías que lo tienen asignado).
-- **Account 1—N Role** (roles custom de una organización, hoy sin uso real): FK `organization_id`, `onDelete: CASCADE`.
-- **Resource 1—N Permission** / **Action 1—N Permission**: FK `resource_id`/`action_id`, `onDelete: CASCADE`.
-- **Role 1—N RolePermission** / **Permission 1—N RolePermission**: FK `role_id`/`permission_id`, `onDelete: CASCADE`.
+- **User 1—1 Signature**: FK `signature_id` en `users`, **opcional**.
+- **User 1—1 PersonalInformation**: FK `personal_information_id` en `users`, **obligatoria**.
+- **User 1—N Account**: FK `user_id` en `accounts` — cada fila es una membresía de ese usuario en un contexto (antes esta relación pasaba por `AccountMemberEntity`).
+- **User 1—N Document** (creador): FK `created_by`.
+- **User 1—N EmailVerificationCode / PasswordResetCode**: FK `user_id`, `ON DELETE CASCADE`.
+- **Account N—1 Organization**: FK `organization_id` en `accounts`, **nullable** (NULL en cuentas PERSONAL), `ON DELETE CASCADE`.
+- **Account N—1 Role**: FK `role_id`, nullable, sin `onDelete` (borrar un rol en uso no borra en cascada las membresías que lo tienen asignado).
+- **Account 1—1 AccountSubscription**: FK `account_id`, único, `ON DELETE CASCADE`.
+- **Document N—1 Account**: FK `account_id`, NOT NULL — cuenta activa al crear el documento.
+- **Document N—1 Organization**: FK `organization_id`, **nullable** — ver nota de aislamiento multi-tenant abajo.
+- **Document 1—N Collaborator**: FK `document_id`, `ON DELETE CASCADE`.
+- **Collaborator N—1 Account** (nullable): FK `account_id`, ancla a la cuenta PERSONAL del colaborador (resuelta vía `AccountMemberService.findPersonalAccountId`), no a una membresía de organización específica.
+- **Collaborator N—1 SimpleSignature / N—1 FielSignature**: ambas nullable.
+- **DocumentTransaction / Notification / VerificationCode N—1 Document** (CASCADE) **/ N—1 Collaborator** (nullable, CASCADE).
+- **AuditChain N—1 Document**: FK `document_id`, nullable, **`ON DELETE SET NULL`** a propósito.
+- **OrganizationInvitation N—1 Organization** (CASCADE) **/ N—1 Role / N—1 User** (`invited_by`).
+- **Role N—1 Organization** (roles custom, hoy sin uso real): FK `organization_id`, CASCADE.
+- **Resource 1—N Permission** / **Action 1—N Permission**: CASCADE.
+- **Role 1—N RolePermission** / **Permission 1—N RolePermission**: CASCADE.
+- **OrganizationPermission N—1 Organization**: CASCADE.
+- **AccountPermission N—1 Account / N—1 OrganizationPermission**: CASCADE — junction table deliberadamente separada de `role_permissions` (el módulo de permisos administrativos duplica su propio chequeo RBAC en vez de acoplarse a `AccountService`/`AccountMemberService`, ver sección 3).
 
-> El esquema ya **no** se sincroniza automáticamente (`synchronize: false`). Hay un sistema de migraciones formal de TypeORM en `src/migrations/` — ver sección 6 para los comandos y el flujo para aplicar cambios de entidad.
+**Cambio conceptual que no existía antes de ER-V2: ya no hay "una cuenta = un tenant único"**. Hoy hay dos claves de aislamiento distintas según el contexto: `AccountEntity.id` (única por usuario, sirve para contexto personal) y `OrganizationEntity.id`/`Document.organizationId` (agrupa a **todos** los miembros de una organización, porque una organización tiene N filas `Account`, una por miembro). Al leer o escribir lógica de aislamiento multi-tenant, hay que decidir cuál de las dos claves aplica según si el contexto es personal o de organización.
+
+> El esquema ya **no** se sincroniza automáticamente (`synchronize: false`). Hay un sistema de migraciones formal de TypeORM en `src/migrations/` (30 archivos) — ver sección 6 para los comandos y el flujo para aplicar cambios de entidad.
 
 ---
 
@@ -115,15 +145,23 @@ Cuando firma el último firmante pendiente:
 | `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros |
 | `GET /document/:id` | `findDetailForUser()` | Detalle + permisos del usuario (`canSign`/`canReject`). **Todavía no scopeado por cuenta** (ver Pendientes) |
 | `GET /document/file/:id` | `getDocumentMinioURL()` | URL prefirmada según estado |
+| `GET /document/public/:id` | `getPublicDocument()` | **Nuevo, `@SkipJwtAuth()`** — expone `secureUrl` sin autenticación, solo si `status = SIGNED`. Consumido por `signature-app` en `/public/documents/:id` |
 | `PATCH /document/:id/submit-for-authorization` | `submitForAuthorization()` | `CREATED → PENDING`, notifica al primer firmante |
 | `PATCH /document/:id/sign` | `sign()` | Firma en turno; finaliza el documento si es el último firmante |
+| `PATCH /document/:id/link-collaborator` | `linkCollaborator()` | **Nuevo** — vincula al usuario autenticado como colaborador si fue invitado solo por email (sin cuenta todavía); consumido por `/access-document` en el frontend |
+| `POST /document/:id/verification-codes` | `requestVerificationCode()` | **Nuevo** — emite un OTP de firma cuando el documento tiene `requiresVerification = true` |
+| `POST /document/:id/verification-codes/verify` | `verifyCode()` | **Nuevo** — valida el OTP anterior antes de habilitar `sign()` |
 | `PATCH /document/:id/reject` | `reject()` | Rechaza con motivo, marca de agua, notifica al creador |
 | `PATCH /document/:id/submit-for-cancellation` | `requestCancellation()` | `SIGNED → CANCELLATION_PENDING` (solo el creador) |
 | `PATCH /document/:id/confirm-cancellation` | `confirmCancellation()` | `CANCELLATION_PENDING → CANCELLED` (cualquier firmante), marca de agua + notificación |
 | `PATCH /document/:id` | `update()` | Reemplaza archivo/coordenadas (solo `CREATED`) |
 | `DELETE /document/:id` | `remove()` | Borra archivo + registro (solo `CREATED`) |
 
-**Multi-tenancy (`X-Account-Id`)**: `create()`/`findWithFilters()` reciben el header y llaman `AccountMemberService.assertIsActiveMember(userId, accountId)` (`ForbiddenException` si el usuario no es miembro activo de esa cuenta) **antes** de usarlo para nada — el header lo manda el cliente, así que confiar en él sin validar contra `account_members` habría sido un hueco de aislamiento por tenant, no una solución. Si falta el header, `BadRequestException`. `DocumentEntity.accountId` (migración `AddAccountIdToDocuments`, con backfill a la cuenta PERSONAL del creador para los documentos ya existentes) es la columna que hace posible el filtro. El resto de los endpoints del módulo (`GET /document/:id`, `sign`/`reject`/cancelación/`update`/`remove`) siguen sin este scoping — ver Pendientes.
+**Multi-tenancy (`X-Account-Id`)**: `create()`/`findWithFilters()` reciben el header y llaman `AccountMemberService.assertIsActiveMember(userId, accountId)` (`ForbiddenException` si el usuario no es miembro activo de esa cuenta) **antes** de usarlo para nada — el header lo manda el cliente, así que confiar en él sin validar contra la membresía real habría sido un hueco de aislamiento por tenant, no una solución. Si falta el header, `BadRequestException`. `DocumentEntity.accountId` (migración `AddAccountIdToDocuments`, con backfill a la cuenta PERSONAL del creador para los documentos ya existentes) es la columna que hace posible el filtro. El resto de los endpoints del módulo (`GET /document/:id`, `sign`/`reject`/cancelación/`update`/`remove`) siguen sin este scoping — ver Pendientes.
+
+### `document-signatures` (`POST /api/v1/documents/signatures`) — endpoint de creación alternativo, coexiste con `POST /document`
+
+`DocumentSignaturesController`/`DocumentSignaturesService` (`src/document/`): recibe multipart (archivo + `documentData` + `collaborators`, cada uno `SIGNER`/`VIEWER` con datos libres, sin `userId`), sube el PDF él mismo, y orquesta en una sola transacción (`DataSource.transaction`) Document → Collaborator (uno por colaborador) → Notification (`isNotified: false`) → `verification_code` (si el colaborador es SIGNER y aplica verificación). Los eventos Kafka (`notification.created`, uno por notificación, vía `NotificationEventsProducer`) se publican **fuera** de la transacción, después de que resuelve — si algo falla adentro, el rollback ya ocurrió antes de llegar al publish. Es el endpoint que consume hoy `signature-app` desde `/dashboard/documents/create` (ver su README) — `POST /document` sigue existiendo y expuesto, pero con un contrato distinto (JSON con `objectKey` ya subido, no multipart).
 
 ### `signature` (`/signature`) — credencial de firma del usuario
 
@@ -165,40 +203,71 @@ El JWT ahora incluye `nationalId` (CURP) como claim estable (ver sección 4) par
 
 ### `account` (`/account`) — CRUD genérico de cuentas (JWT)
 
-`AccountService`: `create()`, `findAll()`, `findOne()`, `update()` (maneja `OrganizationDetailEntity` cuando `type = ORGANIZATION`). `findOne()`/`update()` exigen que el llamador tenga una membresía **activa** con rol de sistema ADMIN sobre esa cuenta (`ForbiddenException` si no — el check consulta `account_members.role_id` vía `relations: {role: true}` y compara `role.name`, ya no un enum-array). `create()`/`findAll()` solo exigen JWT válido — no hay un `accountId` concreto contra el cual validar ownership (`findAll()` en particular sigue devolviendo el listado completo de cuentas de **todos** los usuarios a cualquier autenticado; ver Pendientes). Ninguno de los 4 se usa desde `signature-app` hoy — la creación real de cuentas pasa por `POST /auth/register` (personal) y `POST /api/v1/organizations` (organización).
+`AccountService`: `create()`, `findAll()`, `findOne()`, `update()` (maneja `OrganizationEntity` cuando `accountType = ORGANIZATION`). `findOne()` exige `ORGANIZATION:READ` y `update()` exige `ORGANIZATION:UPDATE` vía RBAC granular real (`assertHasOrganizationPermission` → `RolesService.assertHasPermission`, consulta `role_permissions` — ya no una comparación de `role.name === 'ADMIN'` a mano, ver la entrada "RBAC granular" en la sección 7). `create()`/`findAll()` solo exigen JWT válido — no hay un `accountId` concreto contra el cual validar ownership (`findAll()` en particular sigue devolviendo el listado completo de cuentas de **todos** los usuarios a cualquier autenticado; ver Pendientes). Ninguno de los 4 se usa desde `signature-app` hoy — la creación real de cuentas pasa por `POST /auth/register` (personal) y `POST /api/v1/organizations` (organización).
 
-### `organizations` (`/api/v1/organizations`, JWT) — creación de organización e invitación de miembros (multi-tenant)
+### `organizations` (`/api/v1/organizations`, JWT) — mucho más grande que solo "crear e invitar"
 
-`AccountService.createOrganization(userId, dto)`: transacción ACID que crea `Account(type=ORGANIZATION)` + `OrganizationDetail` + `AccountMemberEntity` con `roleId` apuntando al rol de sistema ADMIN (`RolesService.findSystemRoleByName`) para el creador (queda como administrador de inmediato, igual que en la cuenta personal). Al confirmar, refresca el catálogo cacheado en Redis (`appendAccountToCatalog`) para el usuario creador.
+`AccountService.createOrganization(userId, dto)`: transacción ACID que crea `Organization` + `Account(accountType=ORGANIZATION)` con `roleId` apuntando al rol de sistema ADMIN para el creador (queda como administrador de inmediato, igual que en la cuenta personal). Al confirmar, refresca el catálogo cacheado en Redis (`appendAccountToCatalog`) para el usuario creador.
 
-**`POST /api/v1/organizations/invite`** (`AccountService.inviteMember(callerId, accountId, dto)`) — **alcance delimitado a propósito** (ver historia `[STORY] Módulo de Invitación de Miembros`): recibe `{email, roleId}`, exige el header `X-Account-Id` (la organización activa, vía `@ActiveAccountId()`), valida que el llamador tenga una membresía activa con rol ADMIN sobre esa cuenta (reutiliza `assertIsAccountAdmin`, `ForbiddenException` si no), que la cuenta activa sea de tipo `ORGANIZATION` (`BadRequestException` si no — no tiene sentido invitar a la cuenta PERSONAL de alguien) y que el `roleId` recibido exista (`RolesService.findByIdOrFail()`, `NotFoundException` si no). Si todo pasa, responde éxito de inmediato. **No envía correo, no genera token de invitación, ni inserta ninguna fila** (`AccountMemberEntity`, catálogo de Redis) — es intencional, el endpoint solo valida y confirma recepción, dejando el flujo listo para conectar esa lógica en una siguiente iteración (ver Pendientes).
+**`POST /api/v1/organizations/invite`** (`AccountService.inviteMember` + `OrganizationInvitationService.create`, orquestados desde el controller a propósito para no crear una dependencia circular) — **ya no es solo validación**: recibe `{email, roleId}`, exige el header `X-Account-Id`, valida ADMIN (`ORGANIZATION:CREATE`) sobre la cuenta activa, que sea de tipo `ORGANIZATION`, y que el `roleId` exista. Si todo pasa, **persiste** una fila `OrganizationInvitationEntity` (`PENDING`, token único, expira en 7 días) y publica `organization.member.invited` en Kafka — `OrganizationInvitationEventsConsumer` (ver Kafka más abajo) despacha el correo real de forma asíncrona. Ver módulo `organization-invitations` para el flujo de aceptación.
+
+**`GET /:organizationId/members`** (`AccountMemberService.findMembersForOrganizationDetailed`): shape delgado (`accountId`, `userId`, `email`, `rfc`, `role: {id,name} | null`, `joinedAt`), solo miembros activos, exige `ORGANIZATION:READ`.
+
+**`PATCH /members/:accountId/role`** / **`DELETE /members/:accountId`**: alias sobre `AccountMemberService.update()`/`remove()` (mismos checks RBAC `ORGANIZATION:UPDATE`/`DELETE`) — protegidos por `assertNotLastAdmin`: si el objetivo es el único ADMIN activo de la organización, ambas operaciones responden `409 Conflict` (no hay rol `OWNER` separado de `ADMIN`, así que "no dejar la organización sin dueño" se implementa como "no dejar la organización sin ADMIN").
+
+**`GET/PATCH /members/:accountId/permissions`**: montadas aquí pero pertenecen al módulo de permisos administrativos — ver `organization-permissions` más abajo.
+
+### `organization-invitations` (`/api/v1/organizations/invitations`, público) — aceptar una invitación
+
+Rutas `@SkipJwtAuth()` (el invitado puede no tener sesión): **`GET /:token`** (preview — nombre de la organización, para el mensaje de `/join` en el frontend; expiración perezosa, se marca `EXPIRED` en el primer acceso posterior a `expiresAt`, sin job programado) y **`POST /:token/accept`** (`{rfc}`, resuelve al usuario por RFC — el correo es solo el canal de entrega, no el criterio de aceptación). El registro (`POST /auth/register`) acepta un `invitationToken` opcional para el camino de "RFC nuevo": crea la cuenta y se une a la organización automáticamente (best-effort, un fallo no tumba un registro que por lo demás fue exitoso).
 
 ### `accounts` (`GET /api/v1/accounts/me`, JWT) — catálogo de cuentas del usuario autenticado
 
 `AccountService.getAccountsCatalog(userId)`: lee **exclusivamente** el catálogo cacheado en Redis DB 0 (key `accounts:{userId}`), sin fallback a Postgres. Si la key no existe, retorna un catálogo vacío (no hay self-heal como en `users/me`, porque el catálogo se puebla siempre al registrarse/crear una organización).
 
-### `account-member` (`/account-member`) — membresías (JWT, solo ADMIN)
+### `account-member` (`/account-member`) — membresías (JWT, RBAC)
 
-`AccountMemberService`: `create()` (otorgar acceso con un `roleId` del catálogo RBAC), `findByAccount()`, `findOne()`, `update()` (cambia rol/puesto/vigencia), `remove()` (revocación = soft delete `isActive=false`). Los 5 exigen que el llamador tenga una membresía **activa** con rol de sistema ADMIN sobre la cuenta involucrada (`ForbiddenException` si no) — para `findOne()`/`update()`/`remove()`, que reciben el id de la membresía (no de la cuenta), primero se resuelve la membresía para obtener su `accountId` y luego se valida contra ese id. `create()`/`update()` además validan que el `roleId` recibido exista de verdad (`RolesService.findByIdOrFail()`, `NotFoundException` si no) antes de asignarlo.
+`AccountMemberService`: `create()` (otorgar acceso con un `roleId` del catálogo RBAC, exige `ORGANIZATION:CREATE`), `findByAccount()`/`findOne()` (`ORGANIZATION:READ`), `update()` (cambia rol/puesto/vigencia, `ORGANIZATION:UPDATE`), `remove()` (revocación = soft delete `isActive=false`, `ORGANIZATION:DELETE`) — todos vía `assertHasOrganizationPermission`, no una comparación de nombre de rol. Para `findOne()`/`update()`/`remove()`, que reciben el id de la membresía, primero se resuelve para obtener su `organizationId` y luego se valida contra ese id. `create()`/`update()` además validan que el `roleId` recibido exista de verdad antes de asignarlo. Internamente opera sobre `AccountEntity` filtrado por `organizationId` — no existe `AccountMemberEntity` como archivo (ver sección 2.1).
 
-También expone `assertIsActiveMember(userId, accountId)` (público, sin controlador propio): check de tenant más laxo — cualquier miembro **activo** basta, sin importar su rol — usado por otros módulos que necesitan validar el header `X-Account-Id` contra una membresía real (hoy solo `document`, ver su sección arriba).
+También expone `assertIsActiveMember(userId, accountId)` (público, sin controlador propio): check de tenant más laxo — cualquier miembro **activo** basta, sin importar su rol — usado por `document` para validar `X-Account-Id`.
+
+### `organization-permissions` (`/api/v1/organizations/:organizationId/permissions`) — catálogo administrativo, **no RBAC**
+
+Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (crea, nombre único por organización), `PATCH /:permissionId` (nombre y/o `isActive`), `DELETE /:permissionId` — más las dos rutas montadas en `organizations` de arriba para leer/reemplazar la asignación por miembro (`PATCH` hace `DELETE`+`INSERT` transaccional completo, nunca deja una lista parcial a medio camino).
+
+**Es deliberadamente un sistema paralelo al RBAC**, no una extensión — `OrganizationPermissionEntity`/`AccountPermissionEntity` son solo un catálogo de **nombres libres** que el ADMIN de cada organización define (p. ej. "puede aprobar gastos", "puede firmar en nombre de la empresa"). No le dan a nadie ningún permiso técnico real sobre ningún otro endpoint del sistema — es metadata de negocio, no control de acceso. El único punto de contacto con el RBAC real es que **gestionar el catálogo** exige ser ADMIN (`assertHasOrganizationPermission`, la misma consulta a `role_permissions` que usan `AccountService`/`AccountMemberService`, duplicada a propósito en vez de compartida — cada servicio resuelve la membresía del llamador de forma distinta, y compartir el helper habría creado un acoplamiento cruzado innecesario).
 
 ### `roles` (`GET /api/v1/roles`, JWT) — catálogo RBAC (Role/Resource/Action/Permission/RolePermission)
 
-`AccountMemberEntity.roleId` es una FK real a este catálogo (migración `ReplaceAccountMemberRoleWithRoleId` — ver Pendientes/Resuelto) — ya no son dos sistemas paralelos. Centraliza las 5 entidades de control de acceso: `RoleEntity`, `ResourceEntity`, `ActionEntity`, `PermissionEntity`, `RolePermissionEntity` (tabla pivote).
+`AccountEntity.roleId` (antes `AccountMemberEntity.roleId`, previo a la fusión — migración `ReplaceAccountMemberRoleWithRoleId` — ver Pendientes/Resuelto) es una FK real a este catálogo — ya no son dos sistemas paralelos. Centraliza las 5 entidades de control de acceso: `RoleEntity`, `ResourceEntity`, `ActionEntity`, `PermissionEntity`, `RolePermissionEntity` (tabla pivote).
 
 `RolesService.findAllSystemRoles()`: `roleRepository.find({ where: { isSystemRole: true } })`, ordenado por `name`. `RolesController` expone `GET /api/v1/roles` (JWT, sin check de ownership — es un catálogo de solo lectura, no datos de una cuenta concreta) devolviendo `{id, name, isSystemRole}` por rol; pensado para poblar el modal de invitar miembros en el frontend. También expone (sin controlador propio) `findSystemRoleByName(name)` — usado por `AccountService` al asignar el rol ADMIN por defecto a una membresía nueva — y `findByIdOrFail(id)` — usado por `AccountMemberService` para validar el `roleId` recibido en `create()`/`update()`.
 
 **Seed** (`npm run seed:roles`, `src/scripts/seed-roles.ts`, mismo patrón standalone que `seed:documents`): puebla `ADMIN`/`MEMBER` (`isSystemRole: true`, `organizationId: null`), los 3 `resources` (`DOCUMENT`/`ORGANIZATION`/`USER`), las 4 `actions` (`CREATE`/`READ`/`UPDATE`/`DELETE`), y `role_permissions`: `ADMIN` con las 12 combinaciones resource×action (`scope: ANY`), `MEMBER` solo con `READ`+`CREATE` sobre `DOCUMENT`. Idempotente: cada tabla se busca por su clave natural antes de insertar (`key`/`name`, o el par de FKs en las pivote), así que correrlo varias veces no duplica filas — verificado corriéndolo dos veces seguidas contra Postgres local (mismos conteos: 2/3/4/12/14).
 
-### `auth` (`/auth`)
+### `auth` (`/auth`) — mucho más grande que solo login/registro
 
 | Endpoint | Servicio |
 |---|---|
-| `POST /auth/register` | `register()` → `UserService.createFromSignup()` |
-| `POST /auth/login` | `login()` — valida password (bcrypt), firma JWT con `jti` único |
+| `POST /auth/register` | `register()` → `UserService.createFromSignup()` — crea una **pre-cuenta** (`isEmailVerified: false`), envía OTP, no autentica todavía |
+| `POST /auth/verify-otp` | Confirma el OTP de registro (`EmailVerificationCodeEntity`), marca `isEmailVerified = true` y autentica de inmediato (auto-login) |
+| `POST /auth/resend-otp` | Reenvía el OTP de verificación de registro |
+| `POST /auth/forgot-password` | Inicia recuperación de contraseña, envía OTP (`PasswordResetCodeEntity`) |
+| `POST /auth/verify-reset-code` | Valida el OTP de recuperación |
+| `POST /auth/reset-password` | Fija la contraseña nueva tras un OTP válido |
+| `POST /auth/login` | `login()` — valida password (bcrypt) contra `Account.email`/`.password`, rechaza con `403` si `!user.isEmailVerified`, firma JWT con `jti` único |
 | `POST /auth/logout` | `logout()` — agrega el `jti` a la blacklist de Redis |
-| `GET /auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
+| `GET /auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/dashboard/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
+
+Todos los endpoints públicos de este módulo tienen `ThrottlerGuard` explícito (5 intentos/60s) — no solo `register`/`login` como documentaba antes este README.
+
+### `users` (`/api/v1/users`) — un endpoint público adicional
+
+Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** (`@SkipJwtAuth()`) — `UserService.checkRfcAvailability()`, usado por `/join` y `/signup` en el frontend para bifurcar el flujo según si ese RFC ya tiene cuenta.
+
+### `efirma` (`POST /efirma/sign`) — prueba de concepto aislada, sin persistencia
+
+`@SkipJwtAuth()` en todo el controlador (**sin autenticación de ningún tipo**). Recibe multipart (`cerBuffer`, `keyBuffer`, `documento`) y firma directo contra los buffers con e.firma/CSD mexicana, sin guardar nada — `Efirma` no es siquiera una `@Entity()` TypeORM real (ver sección 2.1). No usa `CollaboratorEntity`/`FielSignatureEntity` para nada; no está conectado al flujo de firma de documentos del resto del sistema.
 
 ### `audit` (`/audit`)
 
@@ -211,13 +280,17 @@ También expone `assertIsActiveMember(userId, accountId)` (público, sin control
 
 ### `health`, `ip`, `kafka`
 
-- `GET /health` — combina pings de Postgres, Mongo y Redis. `@SkipJwtAuth()` (sin JWT ni x-api-key): lo consumen probes de infraestructura (healthcheck de Docker, liveness/readiness de k8s, monitoreo externo) que no traen ninguna credencial — antes de esta ronda no tenía el decorador y devolvía 401 a cualquier probe real, rompiendo el propósito mismo del endpoint (encontrado en el chequeo end-to-end de todos los servicios).
+- `GET /health` — combina pings de Postgres, Mongo y Redis. `@SkipJwtAuth()` (sin JWT ni x-api-key): lo consumen probes de infraestructura.
 - `IpInterceptor` (global) — extrae la IP real del cliente e inyecta `request.clientIp`.
-- `KafkaModule` — cliente configurado y conectando al boot (`signature.test` como chequeo de conectividad). Además, `DocumentEventsProducer`/`DocumentEventsConsumer` publican y consumen los eventos reales del ciclo de vida del documento: `document.created`, `document.sent_to_sign`, `document.signed`, `document.rejected`, `document.cancelled` (ver Pendientes sobre próximos pasos para el consumidor).
+- **`KafkaModule`** — 3 productores, no 1:
+  - **`DocumentEventsProducer`** → `DOCUMENT_KAFKA_TOPICS`, **7 tópicos, no 5**: `document.created`, `document.sent_to_sign`, `document.collaborator_signed` (se dispara por cada colaborador que firma, distinto de `.signed` que solo dispara al terminar el último), `document.signed`, `document.rejected`, `document.cancellation_requested`, `document.cancelled`.
+  - **`NotificationEventsProducer`** → `notification.created` (uno por `Notification` creada desde `document-signatures`).
+  - **`OrganizationInvitationEventsProducer`** → `organization.member.invited`.
+  - **3 consumidores** (`src/kafka/*.controller.ts`), no 1: **`DocumentEventsConsumer`** ya no solo loggea — persiste `NotificationEntity`, encadena `DocumentTransactionEntity` en `document.collaborator_signed`, y alimenta el ledger global (`AuditChainEntity`) en cada evento. **`NotificationEventsConsumer`** consume `notification.created`, resuelve a quién le toca notificar (orden secuencial, tipo de firma) y despacha el correo real. **`OrganizationInvitationEventsConsumer`** consume `organization.member.invited`, arma el link `/join` y despacha el correo de invitación.
 
 ### `shared/*`
 
-`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService` (generación/verificación de OTP — no integrado a ningún flujo aún), `RedisService` (blacklist de JWT), `PasswordService` (bcrypt).
+`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService`, `RedisService` (blacklist de JWT), `PasswordService` (bcrypt). El flujo de OTP de registro/recuperación de contraseña (`auth`, arriba) ya está integrado end-to-end vía `EmailVerificationCodeService`/`PasswordResetCodeService` — confirmar si reutilizan `OTPService` internamente o son una implementación paralela antes de asumir cuál es la fuente de verdad del código de generación/expiración.
 
 ---
 
@@ -226,7 +299,7 @@ También expone `assertIsActiveMember(userId, accountId)` (público, sin control
 Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 
 - **`ApiKeyGuard`** — solo exige `x-api-key` en endpoints marcados `@Public()`.
-- **`JwtAuthGuard`** — exige `Authorization: Bearer <jwt>` válido y no presente en la blacklist de Redis, salvo `@Public()` o `@SkipJwtAuth()` (usado solo en `/auth/register` y `/auth/login`).
+- **`JwtAuthGuard`** — exige `Authorization: Bearer <jwt>` válido y no presente en la blacklist de Redis, salvo `@Public()` o `@SkipJwtAuth()` — hoy usado en bastante más que `register`/`login`: todo el flujo de OTP (`verify-otp`/`resend-otp`/`forgot-password`/`verify-reset-code`/`reset-password`), `check-rfc`, las rutas de `organization-invitations`, `GET /document/public/:id` y todo el controlador `efirma`.
 
 `@CurrentUser()` expone el payload del JWT (`sub`, `email`, `roles`, `nationalId`, `jti`) inyectado por el guard en `request.user`. `nationalId` (CURP) se agregó como claim estable — no es un dato volátil de onboarding (eso vive en Redis, no en el JWT), es la misma clase de identificador que `email`/`roles`, y permite que `GET /api/v1/users/me` resuelva directo por Redis sin una consulta previa a Postgres.
 
@@ -236,10 +309,10 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 
 | Componente | Uso |
 |---|---|
-| PostgreSQL (TypeORM) | Todo el dominio transaccional: usuarios, información personal, credenciales de firma, documentos, participantes, cuentas, membresías, suscripciones |
-| MongoDB (Mongoose) | Solo el módulo `audit` — cadena de hashes de integridad, append-only |
-| Redis (ioredis) | Blacklist de JWT invalidados por logout |
-| Kafka (KRaft) | Cliente configurado y funcional; publica/consume los eventos del ciclo de vida del documento (creado, enviado a firma, firmado, rechazado, cancelado) |
+| PostgreSQL (TypeORM) | Todo el dominio transaccional: usuarios, información personal, credenciales de firma, documentos, colaboradores, cuentas/organizaciones (fusionadas, ver 2.1), suscripciones, RBAC, permisos administrativos de organización, OTP de registro/recuperación de contraseña, y un índice ligero de auditoría (`AuditChainEntity`, `audit`) |
+| MongoDB (Mongoose) | El módulo `audit` (colección `audits`) — cadena de hashes de integridad, append-only; sigue siendo la fuente de verdad, `AuditChainEntity` en Postgres es solo un índice joinable |
+| Redis (ioredis) | Blacklist de JWT invalidados por logout; también el cache de onboarding por CURP y el catálogo de cuentas (ver sección 3) |
+| Kafka (KRaft) | 3 productores (`DocumentEventsProducer` con 7 tópicos del ciclo de vida del documento, `NotificationEventsProducer`, `OrganizationInvitationEventsProducer`) y 3 consumidores reales — ver sección 3, `kafka` |
 | MinIO | Almacenamiento de archivos (documentos, firmas, INEs), siempre vía URL prefirmada |
 | Stripe | Suscripciones por cuenta, 3 planes (`basic`/`pro`/`enterprise`), Checkout Sessions + webhook verificado |
 | SendGrid | Notificaciones transaccionales por correo |
@@ -272,6 +345,8 @@ npm run migration:revert                                         # revierte la �
 
 `migrationsRun: true` en `app.module.ts` significa que `npm run start:dev`/`start:prod` aplican automáticamente cualquier migración pendiente al arrancar — no hace falta correr `migration:run` a mano en el flujo normal, solo al generar una migración nueva para probarla antes de commitear.
 
+**30 migraciones en `src/migrations/` (esta auditoría)**. Las 8 más recientes no tenían ninguna mención en este README hasta esta ronda: `CreateAuditChain` (ledger global en Postgres), `RemovePositionFromUsers` (columna eliminada de `users`), `DecoupleLegacyAccountsTypeEnum`, `ArraySignatureCoordinates` (shape nuevo de coordenadas con ratios 0–1), `AddIsEmailVerifiedToUsers` + `CreateEmailVerificationCodes` (OTP de verificación de registro), `CreatePasswordResetCodes` (recuperación de contraseña), `CreateOrganizationPermissions` (catálogo administrativo de permisos, sección 3).
+
 ### Seed en Docker (post-build)
 
 `npm run seed:roles`/`seed:documents` (ver sección 3) usan `ts-node` sobre `src/*.ts` — no sirven dentro de la imagen de producción, que solo tiene `dist/` compilado y `node_modules --omit=dev` (sin `ts-node`, ver `Dockerfile`). Para esos casos existen `seed:roles:prod`/`seed:documents:prod`, que corren el `.js` ya compilado directo con `node`:
@@ -287,6 +362,11 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 ---
 
 ## 7. Pendientes / trabajo futuro
+
+### Auditoría de documentación (README vs. código real) — 2026-08-06
+Las secciones 1-6 de este README (referencia técnica) describían el modelo previo a la migración de arquitectura `ENTIDAD_RELACIÓN_V2` — esa migración sí quedó narrada más abajo en este mismo changelog ("migración de modelo completa `ENTIDAD_RELACIÓN_V2`"), pero nunca se retroalimentó a las secciones de arriba, y varias rondas posteriores a esa migración (OTP de registro/recuperación de contraseña, catálogo de permisos administrativos de organización, cadena de auditoría global en Postgres, `efirma`, visor público de documentos) tampoco se documentaron nunca, en ninguna sección. Se hizo una auditoría de solo lectura (dos agentes en paralelo, uno por proyecto del monorepo, más lectura directa de migraciones/entidades/controladores) y se reescribieron las secciones 1-6 completas contra el código real (25 entidades, 22 controladores, 30 migraciones, 3 productores/3 consumidores Kafka). La sección 7 (este changelog) se dejó intacta salvo esta entrada nueva — es un registro histórico, no se reescribe retroactivamente.
+
+**No se corrigió ningún código en esta ronda** (auditoría de documentación únicamente) — los hallazgos que implican una decisión de producto o un posible bug quedan documentados como pendientes reales más abajo, no arreglados de paso. En particular: el módulo `organization-permissions` completo, el flujo OTP de `auth`, y `GET /document/public/:id` no tenían precedente documental de ningún tipo antes de esta ronda.
 
 ### Resuelto en esta ronda (contrato de `POST /api/v1/documents/signatures` revisado por la historia de frontend)
 La historia "[STORY] Frontend: Carga de Documentos y Configuración de Firmantes" trajo el JSON exacto que el formulario nuevo manda, y no coincidía con el contrato que se acababa de construir la ronda anterior — se ajustó el backend para matchearlo (confirmado antes de tocar código, no fue una suposición):
@@ -373,9 +453,10 @@ Se levantaron Docker (Postgres/Mongo/Redis/Kafka/MinIO) + backend + frontend lim
 - **Migraciones `MakeAccountMemberRoleNullable`, `AddAccountIdToDocuments`, `CreateRolesModule` y `ReplaceAccountMemberRoleWithRoleId` sin confirmar contra una base con datos reales**: las 4 se generaron y se verificaron contra el esquema de desarrollo (incluyendo la última, verificada con una fila real: `role: [OWNER]` → `roleId` del rol de sistema ADMIN), pero no contra un ambiente con datos de producción reales. `AddAccountIdToDocuments` hace un backfill (asigna la cuenta PERSONAL del creador a cada documento existente) y falla a propósito si algún documento no encuentra esa cuenta. `ReplaceAccountMemberRoleWithRoleId` colapsa `ADMIN`/`SIGNEE` (enum viejo) en un solo rol `MEMBER` — una decisión de producto **irreversible sin pérdida** (el `down()` no puede distinguir cuál de los dos era originalmente); si en producción existiera alguna membresía con `ADMIN` (enum) que dependiera de tener más permisos que `SIGNEE`, este backfill la degradaría a `MEMBER`. Hay que correr las 4 primero en staging y confirmar que no truenen ni degraden permisos inesperadamente antes de un despliegue real. `migrationsRun: true` las aplica solas al desplegar, no requiere acción manual salvo esa verificación previa.
 - **Multi-tenancy de documentos solo cubre crear + listar**: `GET /document/:id`, `sign`/`reject`/cancelación/`update`/`remove`, y el selector de participantes (`GET /user`, sigue devolviendo todos los usuarios de la plataforma) todavía no validan ni filtran por la cuenta activa. Se decidió acotar esta ronda a `create()`/`findWithFilters()` — el resto queda para una siguiente iteración si se necesita.
 - **`X-Organization-Id` no lo lee nadie en el backend todavía**: el frontend lo manda en cada request cuando la cuenta activa es una organización (`lib/axios.ts`, ver README de `signature-app`), pero ningún controller/servicio de este repo lo consume — ni siquiera `document`, que sí valida `X-Account-Id`. Hoy es inofensivo (el scoping real ya lo hace `accountId`, y una organización no necesita un identificador adicional para resolver su cuenta), pero si en algún punto se necesita distinguir un rol "de organización" separado del "de cuenta", hay que decidir primero para qué serviría este header antes de empezar a leerlo.
-- **Kafka sin caso de uso de negocio para el consumidor**: `DocumentEventsConsumer` hoy solo loggea los eventos de forma estructurada. Falta decidir una acción real (p. ej. desacoplar el envío de emails del request síncrono, alimentar un dashboard, disparar webhooks a terceros).
-- **`OTPService`**: implementado pero deliberadamente sin integrar a ningún flujo (decisión del equipo, no es un olvido).
-- **Cobertura de tests parcial**: 124 tests en 23 suites. `user.service.spec.ts`, `document.service.spec.ts`, `account.service.spec.ts` (incluye `inviteMember`), `account-member.service.spec.ts` y `roles.service.spec.ts` ya cubren comportamiento real (éxito + errores, incluyendo `NotFoundException` cuando `create()`/`update()` de `account-member` reciben un `roleId` inexistente), igual que `account.controller.spec.ts`/`account-member.controller.spec.ts`/`organizations.controller.spec.ts`/`document.controller.spec.ts`/`roles.controller.spec.ts` (delegación con el userId/accountId del JWT/header). El resto de specs (`audit`, etc.) siguen siendo smoke tests (`should be defined`). Tampoco hay un e2e que ejercite el flujo completo registro→login→onboarding→crear organización→crear documento (`test/app.e2e-spec.ts` sigue siendo el scaffold por defecto de Nest).
+- ~~Kafka sin caso de uso de negocio para el consumidor~~ **desactualizado, corregido en esta auditoría**: `DocumentEventsConsumer` ya no solo loggea (persiste `NotificationEntity`, encadena `DocumentTransactionEntity` y el ledger `AuditChainEntity`), y hay 2 consumidores reales más (`NotificationEventsConsumer` despacha correos, `OrganizationInvitationEventsConsumer` despacha el correo de invitación) — ver sección 3, `kafka`.
+- ~~`OTPService`: implementado pero deliberadamente sin integrar a ningún flujo~~ **desactualizado, corregido en esta auditoría**: hoy hay un flujo OTP completo end-to-end (`auth`: `verify-otp`/`resend-otp`/`forgot-password`/`verify-reset-code`/`reset-password`, ver sección 3) — falta confirmar si internamente reutiliza `OTPService` o es una implementación paralela, ver nota en `shared/*`.
+- **Cobertura de tests desactualizada en este README**: esta auditoría (de solo lectura, sin correr la suite) contó **47 archivos `*.spec.ts`** bajo `src/`, cubriendo módulos que ninguna entrada de este changelog documenta (`organization-permissions`, `efirma`, `audit-chain`, `document-transaction`, `verification-code`, `password-reset-code`, `email-verification-code`, `document-signing`). La última cifra de *tests* (no archivos) que aparece en el changelog es "244 tests" (entrada más reciente, arriba) — correr `npm test` es la única forma de confirmar el número vigente de tests individuales; no se hizo en esta ronda por ser auditoría de solo lectura. Tampoco hay un e2e que ejercite el flujo completo registro→login→onboarding→crear organización→crear documento (`test/app.e2e-spec.ts` sigue siendo el scaffold por defecto de Nest).
+- **Bug crítico recurrente en `signature-app` (3ra vez), no en este repo**: `lib/axios.ts` volvió a tener `baseURL: '/api'` hardcodeado y `next.config.ts` volvió a traer el `rewrites()` roto — el mismo bug ya documentado como "resuelto" dos veces más abajo en este changelog (ver "bug crítico: el frontend no llegaba al backend"), incluyendo una ronda donde se agregó un test dedicado (`lib/axios.spec.ts`) explícitamente para evitar una tercera recurrencia. Ese test está fallando ahora mismo. El backend en sí no tiene el problema — ver README de `signature-app`, sección 9, para el detalle completo.
 - **Migración baseline generada contra una base vacía de desarrollo**: `src/migrations/*-InitialSchema.ts` se generó reseteando el schema `public` de la base de dev (confirmado como desechable). Si este proyecto ya tiene un ambiente de staging/producción con datos reales, esa migración **no** debe correrse ahí tal cual — habría que generar una migración de diff real contra ese ambiente, o revisar la baseline a mano antes de aplicarla.
 
 ### Resuelto en esta ronda (auditoría general: revisión de las 6 historias del README + búsqueda abierta de bugs)
