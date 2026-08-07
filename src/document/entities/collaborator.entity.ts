@@ -15,6 +15,7 @@ import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
 import { REMINDER_PERIODICITY_ENUM } from '../enum/reminder-periodicity.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 
 /**
  * Reemplaza a DocumentParticipantEntity (ver plan de migración ER-V2, Fase 3). Generaliza
@@ -119,7 +120,8 @@ export class CollaboratorEntity {
   @JoinColumn({ name: 'simple_signature_id' })
   simpleSignature: SimpleSignatureEntity | null;
 
-  /** Modelo de datos únicamente (ver Fase 8 del plan) — sin lógica de firma FIEL conectada todavía. */
+  /** Modelo de datos histórico (ver Fase 8 del plan) — la validación/firma FIEL real se resuelve
+   * en el momento de firmar vía `EfirmaService` (ver `advancedSignature`), no a través de esta FK. */
   @Column({ name: 'fiel_signature_id', nullable: true })
   fielSignatureId: string | null;
 
@@ -128,10 +130,20 @@ export class CollaboratorEntity {
    * (ver migración `AddSignatureSnapshotToCollaborators`). `finalizeSignedDocument` usa esto en
    * vez de volver a resolver `user.signatureId` en vivo — si el usuario desactiva o reemplaza
    * su firma después de firmar este documento, el PDF final no debe verse afectado. NULL hasta
-   * que el colaborador firma.
+   * que el colaborador firma. Solo aplica a `signatureType === SIMPLE`.
    */
   @Column({ name: 'signature_snapshot_object_key', nullable: true })
   signatureSnapshotObjectKey: string | null;
+
+  /**
+   * Resultado NO sensible de `EfirmaService.firmar` (hash del documento, firma en base64,
+   * algoritmo, fecha, y datos públicos del certificado) tomado en el momento real de la firma —
+   * nunca contiene la llave privada ni la contraseña, esas nunca se persisten. Solo aplica a
+   * `signatureType === FIEL` (ver historia "Integrar carga y validación de e.firma en el flujo
+   * de firma avanzada"). NULL hasta que el colaborador firma o si firmó con firma simple.
+   */
+  @Column({ name: 'advanced_signature', type: 'jsonb', nullable: true })
+  advancedSignature: SignatureResult | null;
 
   @ManyToOne(() => FielSignatureEntity, { nullable: true })
   @JoinColumn({ name: 'fiel_signature_id' })

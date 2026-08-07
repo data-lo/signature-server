@@ -15,6 +15,7 @@ import { AuditModule } from 'src/audit/audit.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
 import { AccountModule } from 'src/account/account.module';
 import { DocumentTransactionModule } from './document-transaction.module';
+import { EfirmaModule } from 'src/efirma/efirma.module';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -36,6 +37,7 @@ import { DocumentTransactionModule } from './document-transaction.module';
     KafkaModule,
     AccountModule,
     DocumentTransactionModule,
+    EfirmaModule,
   ],
   exports: [DocumentService],
 })

@@ -9,9 +9,13 @@ import {
   Delete,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   Query,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  FileInterceptor,
+  FileFieldsInterceptor,
+} from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -29,6 +33,7 @@ import {
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
 import { VerifyCodeDto } from './dto/verify-code.dto';
+import { SignDocumentDto } from './dto/sign-document.dto';
 
 // Services
 import { DocumentService } from './document.service';
@@ -328,14 +333,19 @@ export class DocumentController {
 
   @Patch(':id/sign')
   @ApiOperation({
-    summary: 'Firmar el documento (solo si es tu turno como firmante)',
+    summary:
+      'Firmar el documento (solo si es tu turno como firmante). Para firma electrónica ' +
+      'avanzada (FIEL) requiere además .key/.cer y contraseña como multipart/form-data.',
   })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: SignDocumentDto, required: false })
   @ApiResponse({ status: 200, description: 'Documento firmado correctamente' })
   @ApiResponse({
     status: 400,
     description:
-      'El documento no se encuentra en estatus PENDING o ya respondiste',
+      'El documento no se encuentra en estatus PENDING, ya respondiste, o faltan/son inválidos ' +
+      'los archivos .key/.cer requeridos para firma FIEL',
     type: BadRequestResponse,
   })
   @ApiResponse({
@@ -351,8 +361,33 @@ export class DocumentController {
     description: 'Documento no encontrado',
     type: NotFoundResponse,
   })
-  sign(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.sign(id, user.sub);
+  @ApiResponse({
+    status: 422,
+    description:
+      'La e.firma no pudo validarse: contraseña incorrecta, certificado inválido/expirado, o la ' +
+      'llave privada no corresponde al certificado',
+  })
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'key', maxCount: 1 },
+        { name: 'cer', maxCount: 1 },
+      ],
+      { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES } },
+    ),
+  )
+  sign(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: SignDocumentDto,
+    @UploadedFiles()
+    files: { key?: Express.Multer.File[]; cer?: Express.Multer.File[] },
+  ) {
+    return this.documentService.sign(id, user.sub, {
+      password: dto?.password,
+      keyFile: files?.key?.[0],
+      cerFile: files?.cer?.[0],
+    });
   }
 
   @Patch(':id/link-collaborator')

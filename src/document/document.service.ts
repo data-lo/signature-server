@@ -24,6 +24,7 @@ import { CreateDocumentDto } from './dto/create-document.dto';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
+import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 
@@ -58,10 +59,22 @@ import {
 } from './utils/collaborator-display.util';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
-import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
+import {
+  MAX_PDF_FILE_SIZE_BYTES,
+  MAX_EFIRMA_FILE_SIZE_BYTES,
+} from 'src/shared/constants/file-upload.constants';
 import { DocumentTransactionService } from './document-transaction.service';
+import { EfirmaService } from 'src/efirma/efirma.service';
+import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
+
+/** .key/.cer suben por separado como multipart (no forman parte de SignDocumentDto). */
+interface AdvancedSignatureInput {
+  password?: string;
+  keyFile?: Express.Multer.File;
+  cerFile?: Express.Multer.File;
+}
 
 /**
  * Distingue una posición en el shape nuevo (ratios 0-1, ver historia "Ubicación de firmas por
@@ -82,15 +95,15 @@ export class DocumentService {
     DOCUMENT_STATUS_ENUM,
     BUCKET_TYPES_ENUM
   > = {
-      [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-    };
+    [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
+      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+  };
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -108,7 +121,8 @@ export class DocumentService {
     private readonly accountMemberService: AccountMemberService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentTransactionService: DocumentTransactionService,
-  ) { }
+    private readonly efirmaService: EfirmaService,
+  ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
   async create(
@@ -407,7 +421,6 @@ export class DocumentService {
       .skip((page - 1) * limit)
       .take(limit);
 
-
     if (!participantEmail) {
       qb.andWhere(
         activeAccount.organizationId
@@ -657,10 +670,10 @@ export class DocumentService {
       myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
     const verificationConfirmed = requiresVerification
       ? await this.verificationCodeService.hasConsumedCode(
-        documentId,
-        myParticipant!.id,
-        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
-      )
+          documentId,
+          myParticipant!.id,
+          VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+        )
       : false;
 
     return {
@@ -1140,6 +1153,65 @@ export class DocumentService {
   }
 
   /**
+   * Valida el `.key`/`.cer`/contraseña de e.firma del firmante FIEL y ejecuta la firma
+   * criptográfica sobre el documento actual. Delega toda la validación real (contraseña,
+   * vigencia del certificado, cadena de confianza SAT, correspondencia llave/certificado) a
+   * `EfirmaService.firmar` — este servicio nunca se expone como endpoint independiente, solo se
+   * invoca aquí. Los errores de `EfirmaService` (422, mensajes claros en español) se propagan
+   * tal cual, sin envolverlos.
+   */
+  private async validateAndSignWithEfirma(
+    document: DocumentEntity,
+    input: AdvancedSignatureInput | undefined,
+  ): Promise<SignatureResult> {
+    const { password, keyFile, cerFile } = input ?? {};
+
+    if (!keyFile) {
+      throw new BadRequestException(
+        'Falta el archivo de la llave privada (.key)',
+      );
+    }
+    if (!cerFile) {
+      throw new BadRequestException('Falta el archivo del certificado (.cer)');
+    }
+    if (!password) {
+      throw new BadRequestException('Falta la contraseña de la llave privada');
+    }
+    if (!keyFile.originalname.toLowerCase().endsWith('.key')) {
+      throw new BadRequestException(
+        'El archivo de la llave privada debe tener extensión .key',
+      );
+    }
+    if (!cerFile.originalname.toLowerCase().endsWith('.cer')) {
+      throw new BadRequestException(
+        'El archivo del certificado debe tener extensión .cer',
+      );
+    }
+    if (keyFile.size > MAX_EFIRMA_FILE_SIZE_BYTES) {
+      throw new BadRequestException(
+        `El archivo .key excede el tamaño máximo permitido (${Math.floor(MAX_EFIRMA_FILE_SIZE_BYTES / 1024)}KB)`,
+      );
+    }
+    if (cerFile.size > MAX_EFIRMA_FILE_SIZE_BYTES) {
+      throw new BadRequestException(
+        `El archivo .cer excede el tamaño máximo permitido (${Math.floor(MAX_EFIRMA_FILE_SIZE_BYTES / 1024)}KB)`,
+      );
+    }
+
+    const documentBuffer = await this.minioService.getFileInBytesFormat(
+      document.objectKey,
+      BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    );
+
+    return this.efirmaService.firmar(
+      documentBuffer,
+      cerFile.buffer,
+      keyFile.buffer,
+      password,
+    ) as SignatureResult;
+  }
+
+  /**
    * Copia la imagen de firma activa del usuario (ya validada por `assertUserHasSignatureOnFile`)
    * a un object key nuevo e inmutable en MinIO, y retorna esa clave. Ver docblock de
    * `CollaboratorEntity.signatureSnapshotObjectKey` para el porqué: sin este snapshot, el PDF
@@ -1275,6 +1347,7 @@ export class DocumentService {
   async sign(
     documentId: string,
     currentUserId: string,
+    advancedSignatureInput?: AdvancedSignatureInput,
   ): Promise<BaseResponse<{ id: string }>> {
     const document = await this.findOne(documentId);
 
@@ -1306,7 +1379,20 @@ export class DocumentService {
       );
     }
 
-    await this.assertUserHasSignatureOnFile(myParticipant.account!.user);
+    // La validación de e.firma (contraseña, vigencia del certificado, cadena de confianza,
+    // correspondencia llave/certificado — todo vía EfirmaService) corre ANTES del claim atómico
+    // a propósito: si falla (contraseña incorrecta es el caso más común, se espera que el
+    // firmante reintente), no debe dejar al colaborador marcado como SIGNED sin una firma válida
+    // detrás. Para firma simple, el equivalente es `assertUserHasSignatureOnFile`.
+    let advancedSignatureResult: SignatureResult | null = null;
+    if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+      advancedSignatureResult = await this.validateAndSignWithEfirma(
+        document,
+        advancedSignatureInput,
+      );
+    } else {
+      await this.assertUserHasSignatureOnFile(myParticipant.account!.user);
+    }
 
     // Gateo por código de verificación (ver plan de migración ER-V2, Fase 7): opt-in por
     // documento vía requiresVerification (default false) — si está apagado, el flujo de firma
@@ -1341,17 +1427,23 @@ export class DocumentService {
     myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
 
-    // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
-    // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()
-    // (que corre después, cuando firma el ÚLTIMO firmante) volvería a leer la firma EN VIVO de
-    // cada colaborador, y un firmante que desactivó su firma entre que firmó y que el último
-    // terminó quedaría con un PNG en blanco estampado en el PDF legal final, sin ningún error.
-    // Se toma después del claim a propósito: si el claim se pierde, no se desperdicia esta
-    // llamada a MinIO.
-    myParticipant.signatureSnapshotObjectKey =
-      await this.snapshotSignatureImage(
-        myParticipant.account!.user as UserEntity,
-      );
+    if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+      // Resultado ya validado arriba (antes del claim) — solo se persiste. No contiene la llave
+      // privada ni la contraseña, ver docblock de `CollaboratorEntity.advancedSignature`.
+      myParticipant.advancedSignature = advancedSignatureResult;
+    } else {
+      // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
+      // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()
+      // (que corre después, cuando firma el ÚLTIMO firmante) volvería a leer la firma EN VIVO de
+      // cada colaborador, y un firmante que desactivó su firma entre que firmó y que el último
+      // terminó quedaría con un PNG en blanco estampado en el PDF legal final, sin ningún error.
+      // Se toma después del claim a propósito: si el claim se pierde, no se desperdicia esta
+      // llamada a MinIO.
+      myParticipant.signatureSnapshotObjectKey =
+        await this.snapshotSignatureImage(
+          myParticipant.account!.user as UserEntity,
+        );
+    }
 
     const remainingSigners = signerCollaborators.filter(
       (c) =>
@@ -1450,6 +1542,13 @@ export class DocumentService {
       // los colaboradores SIN coordenadas explícitas, para que no colisionen entre sí.
       let autoStackIndex = 0;
       for (const collaborator of signerCollaborators) {
+        // Firma electrónica avanzada (FIEL): la evidencia es criptográfica (ver
+        // `CollaboratorEntity.advancedSignature`, poblado en `sign()`), no una imagen — no hay
+        // nada que estampar visualmente en el PDF para este colaborador.
+        if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+          continue;
+        }
+
         // Los firmantes siempre tienen cuenta de plataforma (accountId no-nulo): solo watchers
         // y reviewers pueden invitarse por email únicamente (ver create()). Fallback defensivo
         // por si la relación account.user no vino cargada (no debería pasar: signerCollaborators
