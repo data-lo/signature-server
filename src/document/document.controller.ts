@@ -29,6 +29,7 @@ import {
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
 import { VerifyCodeDto } from './dto/verify-code.dto';
+import { SignDocumentDto } from './dto/sign-document.dto';
 
 // Services
 import { DocumentService } from './document.service';
@@ -331,6 +332,7 @@ export class DocumentController {
     summary: 'Firmar el documento (solo si es tu turno como firmante)',
   })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiBody({ type: SignDocumentDto, required: false })
   @ApiResponse({ status: 200, description: 'Documento firmado correctamente' })
   @ApiResponse({
     status: 400,
@@ -351,8 +353,12 @@ export class DocumentController {
     description: 'Documento no encontrado',
     type: NotFoundResponse,
   })
-  sign(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.sign(id, user.sub);
+  sign(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: SignDocumentDto,
+  ) {
+    return this.documentService.sign(id, user.sub, dto?.geolocation);
   }
 
   @Patch(':id/link-collaborator')
