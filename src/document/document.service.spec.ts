@@ -1112,6 +1112,55 @@ describe('DocumentService', () => {
         expect(collaboratorRepository.save).not.toHaveBeenCalled();
       });
     });
+
+    it('captura y persiste la geolocalización declarada por el dispositivo del firmante', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      const signerB = buildSigner({
+        id: 'collaborator-2',
+        userId: 'user-2',
+        signingOrder: 1,
+      });
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+      const geolocation = {
+        latitude: 19.4326,
+        longitude: -99.1332,
+        accuracy: 15,
+      };
+
+      await service.sign('doc-1', 'user-1', undefined, geolocation);
+
+      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ geoLoc: geolocation }),
+      );
+      expect(auditService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ geolocation }),
+      );
+    });
+
+    it('permite firmar sin geolocalización (permiso rechazado o no disponible) sin bloquear la firma', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      const signerB = buildSigner({
+        id: 'collaborator-2',
+        userId: 'user-2',
+        signingOrder: 1,
+      });
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+      const result = await service.sign('doc-1', 'user-1');
+
+      expect(result.success).toBe(true);
+      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ geoLoc: null }),
+      );
+      expect(auditService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ geolocation: undefined }),
+      );
+    });
   });
 
   describe('reject', () => {

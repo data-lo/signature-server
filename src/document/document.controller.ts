@@ -383,11 +383,16 @@ export class DocumentController {
     @UploadedFiles()
     files: { key?: Express.Multer.File[]; cer?: Express.Multer.File[] },
   ) {
-    return this.documentService.sign(id, user.sub, {
-      password: dto?.password,
-      keyFile: files?.key?.[0],
-      cerFile: files?.cer?.[0],
-    });
+    return this.documentService.sign(
+      id,
+      user.sub,
+      {
+        password: dto?.password,
+        keyFile: files?.key?.[0],
+        cerFile: files?.cer?.[0],
+      },
+      dto?.geolocation,
+    );
   }
 
   @Patch(':id/link-collaborator')

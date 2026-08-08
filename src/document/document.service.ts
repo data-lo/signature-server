@@ -49,6 +49,7 @@ import { AuditAction } from 'src/audit/schema/audit-document';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
+import { GeolocationDto } from './dto/sign-document.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
 import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
 import { AccountMemberService } from 'src/account/account-member.service';
@@ -1348,6 +1349,7 @@ export class DocumentService {
     documentId: string,
     currentUserId: string,
     advancedSignatureInput?: AdvancedSignatureInput,
+    geolocation?: GeolocationDto,
   ): Promise<BaseResponse<{ id: string }>> {
     const document = await this.findOne(documentId);
 
@@ -1426,6 +1428,10 @@ export class DocumentService {
     }
     myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
+    // Evidencia declarada por el dispositivo del firmante (navigator.geolocation), no verificada
+    // independientemente por el servidor — null cuando el permiso fue rechazado/no disponible,
+    // lo cual no bloquea la firma (ver historia "Capturar y almacenar la geolocalización").
+    myParticipant.geoLoc = geolocation ?? null;
 
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       // Resultado ya validado arriba (antes del claim) — solo se persiste. No contiene la llave
@@ -1495,6 +1501,7 @@ export class DocumentService {
       ipAddress: document.ipAddress ?? '0.0.0.0',
       users: [{ userId: currentUserId, action: AuditAction.DOCUMENT_SIGNED }],
       signedAt: myParticipant.signedAt,
+      geolocation,
     });
 
     if (remainingSigners.length > 0) {

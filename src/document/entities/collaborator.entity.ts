@@ -94,8 +94,9 @@ export class CollaboratorEntity {
   @Column({ name: 'ip_address' })
   ipAddress: string;
 
+  /** Evidencia de ubicación declarada por el dispositivo del firmante al momento de firmar (ver `GeolocationDto`). */
   @Column({ name: 'geo_loc', type: 'jsonb', nullable: true })
-  geoLoc: Record<string, unknown> | null;
+  geoLoc: { latitude: number; longitude: number; accuracy?: number } | null;
 
   @Column({ name: 'visibility_level', nullable: true })
   visibilityLevel: number | null;
