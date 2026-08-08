@@ -30,6 +30,13 @@ export class AuditDocument extends Document {
   @Prop()
   signedAt?: Date;
 
+  /** Evidencia de ubicación declarada por el dispositivo del firmante al momento de firmar. */
+  @Prop({
+    type: { latitude: Number, longitude: Number, accuracy: Number },
+    _id: false,
+  })
+  geolocation?: { latitude: number; longitude: number; accuracy?: number };
+
   @Prop({ required: true })
   chainIndex: number;
 

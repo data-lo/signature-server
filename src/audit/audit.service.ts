@@ -20,6 +20,7 @@ export interface AuditPayload {
   users?: { userId: string; action: AuditAction }[];
   verificationCodeId?: string;
   signedAt?: Date;
+  geolocation?: { latitude: number; longitude: number; accuracy?: number };
 }
 
 @Injectable()

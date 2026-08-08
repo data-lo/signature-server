@@ -711,8 +711,22 @@ describe('DocumentService', () => {
         simpleSignature: {
           id: 'ss-1',
           signatureCoordinates: [
-            { signatureId: 'sig-1', page: 1, xRatio: 0.1, yRatio: 0.2, widthRatio: 0.2, heightRatio: 0.08 },
-            { signatureId: 'sig-2', page: 3, xRatio: 0.5, yRatio: 0.5, widthRatio: 0.2, heightRatio: 0.08 },
+            {
+              signatureId: 'sig-1',
+              page: 1,
+              xRatio: 0.1,
+              yRatio: 0.2,
+              widthRatio: 0.2,
+              heightRatio: 0.08,
+            },
+            {
+              signatureId: 'sig-2',
+              page: 3,
+              xRatio: 0.5,
+              yRatio: 0.5,
+              widthRatio: 0.2,
+              heightRatio: 0.08,
+            },
           ],
         },
       } as any);
@@ -722,8 +736,11 @@ describe('DocumentService', () => {
 
       await service.sign('doc-1', 'user-1');
 
-      expect(documentSigningService.resolveRatioPosition).toHaveBeenCalledTimes(2);
-      const mergeCalls = documentSigningService.mergeSignatureIntoPdf.mock.calls;
+      expect(documentSigningService.resolveRatioPosition).toHaveBeenCalledTimes(
+        2,
+      );
+      const mergeCalls =
+        documentSigningService.mergeSignatureIntoPdf.mock.calls;
       expect(mergeCalls).toHaveLength(2);
       expect(mergeCalls[0][3]).toBe(0); // page 1 → pageIndex 0
       expect(mergeCalls[1][3]).toBe(2); // page 3 → pageIndex 2
@@ -747,7 +764,9 @@ describe('DocumentService', () => {
       const result = await service.sign('doc-1', 'user-1');
 
       expect(result.success).toBe(true);
-      expect(documentSigningService.mergeSignatureIntoPdf).not.toHaveBeenCalled();
+      expect(
+        documentSigningService.mergeSignatureIntoPdf,
+      ).not.toHaveBeenCalled();
       expect(documentSigningService.addSignerName).not.toHaveBeenCalled();
       // Sigue subiendo el PDF (sin cambios visuales) y marcando el documento como firmado.
       expect(minioService.uploadPdfAObject).toHaveBeenCalled();
@@ -901,6 +920,55 @@ describe('DocumentService', () => {
       const result = await service.sign('doc-1', 'user-b');
 
       expect(result.success).toBe(true);
+    });
+
+    it('captura y persiste la geolocalización declarada por el dispositivo del firmante', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      const signerB = buildSigner({
+        id: 'collaborator-2',
+        userId: 'user-2',
+        signingOrder: 1,
+      });
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+      const geolocation = {
+        latitude: 19.4326,
+        longitude: -99.1332,
+        accuracy: 15,
+      };
+
+      await service.sign('doc-1', 'user-1', geolocation);
+
+      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ geoLoc: geolocation }),
+      );
+      expect(auditService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ geolocation }),
+      );
+    });
+
+    it('permite firmar sin geolocalización (permiso rechazado o no disponible) sin bloquear la firma', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      const signerB = buildSigner({
+        id: 'collaborator-2',
+        userId: 'user-2',
+        signingOrder: 1,
+      });
+      collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+      const result = await service.sign('doc-1', 'user-1');
+
+      expect(result.success).toBe(true);
+      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ geoLoc: null }),
+      );
+      expect(auditService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ geolocation: undefined }),
+      );
     });
   });
 

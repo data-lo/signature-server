@@ -48,6 +48,7 @@ import { AuditAction } from 'src/audit/schema/audit-document';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
+import { GeolocationDto } from './dto/sign-document.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
 import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
 import { AccountMemberService } from 'src/account/account-member.service';
@@ -82,15 +83,15 @@ export class DocumentService {
     DOCUMENT_STATUS_ENUM,
     BUCKET_TYPES_ENUM
   > = {
-      [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-      [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
-    };
+    [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
+      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+  };
 
   constructor(
     @InjectRepository(DocumentEntity)
@@ -108,7 +109,7 @@ export class DocumentService {
     private readonly accountMemberService: AccountMemberService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentTransactionService: DocumentTransactionService,
-  ) { }
+  ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
   async create(
@@ -407,7 +408,6 @@ export class DocumentService {
       .skip((page - 1) * limit)
       .take(limit);
 
-
     if (!participantEmail) {
       qb.andWhere(
         activeAccount.organizationId
@@ -657,10 +657,10 @@ export class DocumentService {
       myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
     const verificationConfirmed = requiresVerification
       ? await this.verificationCodeService.hasConsumedCode(
-        documentId,
-        myParticipant!.id,
-        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
-      )
+          documentId,
+          myParticipant!.id,
+          VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+        )
       : false;
 
     return {
@@ -1275,6 +1275,7 @@ export class DocumentService {
   async sign(
     documentId: string,
     currentUserId: string,
+    geolocation?: GeolocationDto,
   ): Promise<BaseResponse<{ id: string }>> {
     const document = await this.findOne(documentId);
 
@@ -1340,6 +1341,10 @@ export class DocumentService {
     }
     myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
+    // Evidencia declarada por el dispositivo del firmante (navigator.geolocation), no verificada
+    // independientemente por el servidor — null cuando el permiso fue rechazado/no disponible,
+    // lo cual no bloquea la firma (ver historia "Capturar y almacenar la geolocalización").
+    myParticipant.geoLoc = geolocation ?? null;
 
     // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
     // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()
@@ -1403,6 +1408,7 @@ export class DocumentService {
       ipAddress: document.ipAddress ?? '0.0.0.0',
       users: [{ userId: currentUserId, action: AuditAction.DOCUMENT_SIGNED }],
       signedAt: myParticipant.signedAt,
+      geolocation,
     });
 
     if (remainingSigners.length > 0) {
