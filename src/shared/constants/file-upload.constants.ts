@@ -16,3 +16,5 @@
 export const MAX_IMAGE_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 export const MAX_PDF_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
 export const MAX_UPLOAD_SAFETY_NET_BYTES = 25 * 1024 * 1024; // 25MB
+/** .key/.cer de e.firma pesan típicamente unos pocos KB; 256KB es generoso sin abrir la puerta a abuso. */
+export const MAX_EFIRMA_FILE_SIZE_BYTES = 256 * 1024; // 256KB

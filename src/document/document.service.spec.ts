@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -26,6 +27,8 @@ import { VerificationCodeService } from './verification-code.service';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { DocumentTransactionService } from './document-transaction.service';
 import { collaboratorDisplayName } from './utils/collaborator-display.util';
+import { EfirmaService } from 'src/efirma/efirma.service';
+import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
 function createMockRepository() {
   return {
@@ -86,6 +89,7 @@ describe('DocumentService', () => {
   let accountMemberService: Record<string, jest.Mock>;
   let verificationCodeService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
+  let efirmaService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
@@ -181,6 +185,20 @@ describe('DocumentService', () => {
       registerSignature: jest.fn(),
       findAllForDocument: jest.fn().mockResolvedValue([]),
     };
+    efirmaService = {
+      firmar: jest.fn().mockReturnValue({
+        hashDocumentoOriginal: 'hash-doc-1',
+        firmaBase64: 'firma-base64',
+        algoritmo: 'sha256',
+        firmadoEn: new Date('2026-01-01T00:00:00.000Z'),
+        certificado: {
+          rfc: 'XAXX010101000',
+          nombre: 'Firmante Uno',
+          numeroCertificado: '30001000000400002434',
+          certificadoPem: '-----BEGIN CERTIFICATE-----...',
+        },
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -210,6 +228,7 @@ describe('DocumentService', () => {
           provide: DocumentTransactionService,
           useValue: documentTransactionService,
         },
+        { provide: EfirmaService, useValue: efirmaService },
       ],
     }).compile();
 
@@ -922,6 +941,178 @@ describe('DocumentService', () => {
       expect(result.success).toBe(true);
     });
 
+    describe('firma electrónica avanzada (FIEL)', () => {
+      function buildFielSigner(
+        overrides: Partial<CollaboratorEntity> & { userId?: string } = {},
+      ) {
+        return buildSigner({
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          ...overrides,
+        } as any);
+      }
+
+      function buildFile(
+        overrides: Partial<Express.Multer.File> = {},
+      ): Express.Multer.File {
+        return {
+          originalname: 'archivo.key',
+          size: 1024,
+          buffer: Buffer.from('contenido'),
+          ...overrides,
+        } as Express.Multer.File;
+      }
+
+      it('valida con EfirmaService y guarda el resultado no sensible en advancedSignature (sin estampar imagen)', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildFielSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find.mockResolvedValue([signerA]);
+
+        const keyFile = buildFile({ originalname: 'llave.KEY' });
+        const cerFile = buildFile({
+          originalname: 'certificado.cer',
+          buffer: Buffer.from('cert'),
+        });
+
+        const result = await service.sign('doc-1', 'user-1', {
+          password: 'clave-correcta',
+          keyFile,
+          cerFile,
+        });
+
+        expect(result.success).toBe(true);
+        expect(efirmaService.firmar).toHaveBeenCalledWith(
+          Buffer.from('pdf'), // documentBuffer mockeado por minioService.getFileInBytesFormat
+          cerFile.buffer,
+          keyFile.buffer,
+          'clave-correcta',
+        );
+        expect(collaboratorRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({
+            advancedSignature: expect.objectContaining({
+              firmaBase64: 'firma-base64',
+            }),
+          }),
+        );
+        // No debe intentar estampar ninguna imagen (firma FIEL no tiene snapshot de imagen).
+        expect(
+          documentSigningService.mergeSignatureIntoPdf,
+        ).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['keyFile', undefined, 'Falta el archivo de la llave privada (.key)'],
+        ['cerFile', undefined, 'Falta el archivo del certificado (.cer)'],
+      ])(
+        'rechaza sin llamar a EfirmaService cuando falta %s',
+        async (field, _value, expectedMessage) => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signerA = buildFielSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+          });
+          collaboratorRepository.find.mockResolvedValue([signerA]);
+
+          const input: any = {
+            password: 'clave',
+            keyFile: buildFile(),
+            cerFile: buildFile({ originalname: 'cert.cer' }),
+          };
+          delete input[field];
+
+          await expect(service.sign('doc-1', 'user-1', input)).rejects.toThrow(
+            expectedMessage,
+          );
+          expect(efirmaService.firmar).not.toHaveBeenCalled();
+          // El claim atómico (que marca SIGNED) tampoco debe haber corrido.
+          expect(collaboratorRepository.update).not.toHaveBeenCalled();
+        },
+      );
+
+      it('rechaza sin llamar a EfirmaService cuando falta la contraseña', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildFielSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find.mockResolvedValue([signerA]);
+
+        await expect(
+          service.sign('doc-1', 'user-1', {
+            keyFile: buildFile(),
+            cerFile: buildFile({ originalname: 'cert.cer' }),
+          }),
+        ).rejects.toThrow('Falta la contraseña de la llave privada');
+        expect(efirmaService.firmar).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['keyFile', { originalname: 'llave.txt' }, '.key'],
+        ['cerFile', { originalname: 'certificado.pdf' }, '.cer'],
+      ])(
+        'rechaza cuando %s tiene una extensión inválida',
+        async (field, override, expectedExtension) => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signerA = buildFielSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+          });
+          collaboratorRepository.find.mockResolvedValue([signerA]);
+
+          const input: any = {
+            password: 'clave',
+            keyFile: buildFile(),
+            cerFile: buildFile({ originalname: 'cert.cer' }),
+          };
+          input[field] = buildFile(override);
+
+          await expect(service.sign('doc-1', 'user-1', input)).rejects.toThrow(
+            expectedExtension,
+          );
+          expect(efirmaService.firmar).not.toHaveBeenCalled();
+        },
+      );
+
+      it('rechaza cuando el archivo .key excede el tamaño máximo permitido', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildFielSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find.mockResolvedValue([signerA]);
+
+        await expect(
+          service.sign('doc-1', 'user-1', {
+            password: 'clave',
+            keyFile: buildFile({ size: 10 * 1024 * 1024 }),
+            cerFile: buildFile({ originalname: 'cert.cer' }),
+          }),
+        ).rejects.toThrow('excede el tamaño máximo permitido');
+        expect(efirmaService.firmar).not.toHaveBeenCalled();
+      });
+
+      it('propaga el error de EfirmaService (ej. contraseña incorrecta) sin marcar al colaborador como firmado', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildFielSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find.mockResolvedValue([signerA]);
+        efirmaService.firmar.mockImplementation(() => {
+          throw new UnprocessableEntityException(
+            'No fue posible descifrar la llave privada (.key). verifica la constraseña.',
+          );
+        });
+
+        await expect(
+          service.sign('doc-1', 'user-1', {
+            password: 'clave-incorrecta',
+            keyFile: buildFile(),
+            cerFile: buildFile({ originalname: 'cert.cer' }),
+          }),
+        ).rejects.toThrow('verifica la constraseña');
+        // La validación corre ANTES del claim atómico: nunca debe quedar marcado SIGNED.
+        expect(collaboratorRepository.update).not.toHaveBeenCalled();
+        expect(collaboratorRepository.save).not.toHaveBeenCalled();
+      });
+    });
+
     it('captura y persiste la geolocalización declarada por el dispositivo del firmante', async () => {
       const document = mockDocument();
       documentRepository.findOne.mockResolvedValue(document);
@@ -939,7 +1130,7 @@ describe('DocumentService', () => {
         accuracy: 15,
       };
 
-      await service.sign('doc-1', 'user-1', geolocation);
+      await service.sign('doc-1', 'user-1', undefined, geolocation);
 
       expect(collaboratorRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ geoLoc: geolocation }),
