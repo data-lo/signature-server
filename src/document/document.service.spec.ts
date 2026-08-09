@@ -1684,29 +1684,74 @@ describe('DocumentService', () => {
       expect(resultC.data.canSign).toBe(true);
     });
 
-    it('bug corregido (ver historia "Vinculación del documento debe postergarse hasta el inicio de sesión y validación de RFC"): findDetailForUser YA NO vincula por email como efecto secundario de una lectura — si el colaborador pendiente todavía no tiene accountId, lanza ForbiddenException en vez de auto-vincular y dejarlo pasar', async () => {
-      const pendingCollaborator = buildSigner({
+    it('bug corregido: un colaborador invitado solo por email (accountId todavía null) SÍ puede leer el documento — el listado ya se lo mostraba y el detalle lo rechazaba con 403', async () => {
+      const invitedByEmail = buildSigner({
         id: 'p-b',
         userId: 'user-b',
         signingOrder: 1,
+        accountId: null,
+        account: null,
+        email: 'Firmante.B@Correo.com',
       });
-      const unlinkedDetailDocument = {
+      documentRepository.findOne.mockResolvedValue({
         ...mockDetailDocument(),
-        collaborators: [
-          signerA,
-          { ...pendingCollaborator, accountId: null, account: null },
-          signerC,
-        ],
-      };
+        collaborators: [signerA, invitedByEmail, signerC],
+      } as unknown as DocumentEntity);
+      userService.findOne.mockResolvedValue({
+        id: 'user-b',
+        email: 'firmante.b@correo.com',
+      });
 
-      documentRepository.findOne.mockResolvedValue(
-        unlinkedDetailDocument as unknown as DocumentEntity,
-      );
+      const result = await service.findDetailForUser('doc-1', 'user-b');
+
+      expect(result.data.canSign).toBe(true);
+      expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
+    });
+
+    it('leer NO vincula la cuenta (ver historia "Vinculación del documento debe postergarse hasta el inicio de sesión y validación de RFC"): la vinculación sigue siendo una acción explícita', async () => {
+      const invitedByEmail = buildSigner({
+        id: 'p-b',
+        userId: 'user-b',
+        signingOrder: 1,
+        accountId: null,
+        account: null,
+        email: 'firmante.b@correo.com',
+      });
+      documentRepository.findOne.mockResolvedValue({
+        ...mockDetailDocument(),
+        collaborators: [signerA, invitedByEmail, signerC],
+      } as unknown as DocumentEntity);
+      userService.findOne.mockResolvedValue({
+        id: 'user-b',
+        email: 'firmante.b@correo.com',
+      });
+
+      await service.findDetailForUser('doc-1', 'user-b');
+
+      expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('un usuario ajeno al documento sigue recibiendo ForbiddenException', async () => {
+      const invitedByEmail = buildSigner({
+        id: 'p-b',
+        userId: 'user-b',
+        signingOrder: 1,
+        accountId: null,
+        account: null,
+        email: 'firmante.b@correo.com',
+      });
+      documentRepository.findOne.mockResolvedValue({
+        ...mockDetailDocument(),
+        collaborators: [signerA, invitedByEmail, signerC],
+      } as unknown as DocumentEntity);
+      userService.findOne.mockResolvedValue({
+        id: 'user-x',
+        email: 'intruso@correo.com',
+      });
 
       await expect(
-        service.findDetailForUser('doc-1', 'user-b'),
+        service.findDetailForUser('doc-1', 'user-x'),
       ).rejects.toThrow(ForbiddenException);
-      expect(collaboratorRepository.update).not.toHaveBeenCalled();
     });
 
     it('tras una vinculación explícita previa (linkPendingCollaboratorAccount), findDetailForUser sí encuentra al colaborador por accountId y calcula canSign/myStatus normalmente', async () => {
@@ -1728,6 +1773,56 @@ describe('DocumentService', () => {
 
       expect(result.data.canSign).toBe(true);
       expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
+    });
+  });
+
+  describe('assertUserHasAccess (descarga del archivo)', () => {
+    const document = { id: 'doc-1', createdBy: 'creator-1' } as DocumentEntity;
+
+    it('el creador siempre tiene acceso, sin consultar colaboradores', async () => {
+      documentRepository.findOne.mockResolvedValue(document);
+
+      await expect(
+        service.assertUserHasAccess('doc-1', 'creator-1'),
+      ).resolves.toBe(document);
+      expect(collaboratorRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('un colaborador con cuenta vinculada tiene acceso', async () => {
+      documentRepository.findOne.mockResolvedValue(document);
+      collaboratorRepository.findOne.mockResolvedValue({ id: 'collaborator-1' });
+
+      await expect(
+        service.assertUserHasAccess('doc-1', 'user-2'),
+      ).resolves.toBe(document);
+    });
+
+    it('bug corregido: un colaborador invitado solo por email también puede descargar el archivo (antes 403, con el detalle cargando y el visor vacío)', async () => {
+      documentRepository.findOne.mockResolvedValue(document);
+      collaboratorRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'collaborator-1', accountId: null });
+      userService.findOne.mockResolvedValue({
+        id: 'user-2',
+        email: 'invitado@correo.com',
+      });
+
+      await expect(
+        service.assertUserHasAccess('doc-1', 'user-2'),
+      ).resolves.toBe(document);
+    });
+
+    it('un usuario sin relación con el documento sigue recibiendo ForbiddenException', async () => {
+      documentRepository.findOne.mockResolvedValue(document);
+      collaboratorRepository.findOne.mockResolvedValue(null);
+      userService.findOne.mockResolvedValue({
+        id: 'user-3',
+        email: 'intruso@correo.com',
+      });
+
+      await expect(
+        service.assertUserHasAccess('doc-1', 'user-3'),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
