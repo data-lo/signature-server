@@ -1289,6 +1289,45 @@ describe('DocumentService', () => {
       expect(emailService.sendVerificationCodeNotification).toHaveBeenCalled();
     });
 
+    it('bug corregido: si el envío del correo falla, el código sigue emitido y la petición NO revienta con 500 — se reporta emailDelivered:false para que la UI ofrezca el reenvío', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildSigner({ userId: 'user-1' }),
+      );
+      verificationCodeService.issue.mockResolvedValue({ code: '123456' });
+      emailService.sendVerificationCodeNotification.mockRejectedValue(
+        new Error('Failed to send email'),
+      );
+
+      const result = await service.requestVerificationCode(
+        'doc-1',
+        'user-1',
+        '127.0.0.1',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.data.emailDelivered).toBe(false);
+      expect(result.message).toMatch(/no se pudo enviar el correo/i);
+      // El código sí quedó emitido: el firmante puede validarlo por el reenvío o por soporte.
+      expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+    });
+
+    it('cuando el correo sí sale, lo reporta con emailDelivered:true', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildSigner({ userId: 'user-1' }),
+      );
+      verificationCodeService.issue.mockResolvedValue({ code: '123456' });
+
+      const result = await service.requestVerificationCode(
+        'doc-1',
+        'user-1',
+        '127.0.0.1',
+      );
+
+      expect(result.data.emailDelivered).toBe(true);
+    });
+
     it('bug corregido: Caso A también aplica a requestVerificationCode — si el usuario autenticado no aparece como firmante todavía, se vincula por email antes de emitir el código (Firma Simple exige 2FA ANTES de firmar, así que sin esto el firmante nunca llegaba a sign() para que la vinculación perezosa de ahí lo rescatara)', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
       userService.findOne.mockResolvedValue({
