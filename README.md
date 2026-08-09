@@ -363,6 +363,16 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 
 ## 7. Pendientes / trabajo futuro
 
+### Resuelto en esta ronda (un fallo de correo ya no bloquea la firma) — 2026-08-09
+
+`POST /document/:id/verification-codes` persistía el código y **después** enviaba el correo sin protección: si el proveedor (SendGrid) fallaba, la excepción tumbaba toda la petición con un 500 aunque el código ya estuviera emitido en la base. La pantalla de firma nunca llegaba a mostrar el campo para capturarlo, así que el firmante no podía firmar **ni rechazar** (el bloque de acciones depende de la verificación) — quedaba sin ninguna salida por un problema de infraestructura ajeno a él.
+
+- El envío pasa a ser no fatal, con el mismo criterio que ya usaba `UserService` para el OTP de registro (advierte en el log y continúa).
+- El contrato ahora reporta el resultado: `data: { emailDelivered: boolean }`, con un `message` distinto en cada caso, para que la UI pueda avisar y ofrecer el reenvío en vez de fingir que el correo salió. Documentado en Swagger.
+- Tests: 2 casos nuevos en `document.service.spec.ts` (correo caído → `emailDelivered:false`, código igualmente emitido, sin excepción; y el camino feliz reportando `true`).
+
+Del lado del frontend, `requestVerificationCodeRequest` expone `emailDelivered`, el hook cambia el toast por una advertencia cuando no salió, y `SignDocumentView` muestra un aviso persistente junto al botón "Reenviar código". Efecto secundario en las pruebas: la suite E2E ahora valida el código **por la interfaz** (antes tenía que hacerlo por API porque la pantalla nunca avanzaba).
+
 ### Resuelto en esta ronda (bug de acceso: el firmante no podía abrir su propio documento) — 2026-08-08
 
 Encontrado por la suite E2E del frontend (`signature-app/e2e`, Playwright contra la aplicación real). `GET /document/:id` y `GET /document/file/:id` identificaban al colaborador **solo por `accountId`**, y ese campo permanece en `null` hasta que el firmante entra por el enlace del correo (`/access-document` → `PATCH /document/:id/link-collaborator`). El listado (`GET /document?participantEmail=`), en cambio, siempre filtró por email: **el usuario veía en "Por firmar" documentos que el detalle le rechazaba con 403** ("No tienes acceso a este documento"), y quedaba atascado si llegaba por la navegación en vez del correo. El visor de PDF fallaba igual, así que ni el detalle ni el archivo cargaban.
