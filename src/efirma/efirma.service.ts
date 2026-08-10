@@ -13,10 +13,11 @@ import { CadenaConfianzaInvalidaException, CertificadoExpiradoException, Certifi
 import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
 import { ResultadoVerificacion } from './interfaces/verification.interface';
+import { SignatureResult } from './interfaces/signature-result.interface';
 
 
 @Injectable()
-export class EfirmaService implements OnModuleInit{
+export class EfirmaService implements OnModuleInit {
   private readonly logger = new Logger(EfirmaService.name)
   private cadenaConfianza:X509Certificate[] = []
 
@@ -162,7 +163,12 @@ export class EfirmaService implements OnModuleInit{
     return createSign('RSA-SHA256').update(documento).sign(privateKey).toString('base64');
   }
 
-  firmar(documento, cerBuffer, keyBuffer, password){
+  firmar(
+
+    document:Buffer, 
+    cerBuffer:Buffer, 
+    keyBuffer:Buffer, 
+    password):SignatureResult{
     
     const infoCertificado = this.parsearCertificado(cerBuffer);
     this.validarVigencia(infoCertificado);
@@ -171,23 +177,23 @@ export class EfirmaService implements OnModuleInit{
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
     this.validarParCertificadoLlave(cerBuffer,privateKey);
 
-    const hashDocumentoOriginal = this.calcularHashDocumento(documento);
-    const firmaBase64 = this.firmarDocumento(documento, privateKey);
+    const originalHash = this.calcularHashDocumento(document);
+    const signatureBase64 = this.firmarDocumento(document, privateKey);
     this.logger.log(
       `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`
     );
 
     return {
-      hashDocumentoOriginal,
-      firmaBase64,
-      algoritmo: 'sha256',
-      firmadoEn: new Date(),
-      certificado: {
+      originalHash,
+      signatureBase64,
+      algorithm: 'sha256',
+      signedAt: new Date(),
+      certificate: {
         rfc: infoCertificado.rfc,
-        nombre: infoCertificado.nombre,
-        numeroSerial: infoCertificado.numeroSerial,
-        numeroCertificado: infoCertificado.numeroCertificado,
-        certificadoPem:infoCertificado.certificadoPem
+        name: infoCertificado.nombre,
+        serialNumber: infoCertificado.numeroSerial,
+        certificateNumber: infoCertificado.numeroCertificado,
+        certificatePem:infoCertificado.certificadoPem
       },
     };
   }
