@@ -422,7 +422,8 @@ export class DocumentController {
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
   @ApiResponse({
     status: 201,
-    description: 'Código de verificación enviado por correo',
+    description:
+      'Código de verificación emitido. `data.emailDelivered` indica si además se pudo enviar por correo: un fallo del proveedor de correo no invalida el código ni bloquea la firma (el firmante puede pedir un reenvío).',
   })
   @ApiResponse({
     status: 401,

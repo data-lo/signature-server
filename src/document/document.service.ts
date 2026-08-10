@@ -589,6 +589,51 @@ export class DocumentService {
     };
   }
 
+  /**
+   * Colaborador que corresponde al usuario autenticado dentro de un documento, para operaciones
+   * de LECTURA.
+   *
+   * Se resuelve primero por cuenta vinculada y, si no hay, por email (case-insensitive) contra
+   * las invitaciones que todavía no tienen `accountId`.
+   *
+   * Bug corregido: solo se emparejaba por `accountId`, pero ese campo permanece en null hasta que
+   * el firmante entra por el enlace del correo (`/access-document` → linkPendingCollaboratorAccount).
+   * Como el listado (`GET /document?participantEmail=`) sí filtra por email, el usuario veía en
+   * "Por firmar" documentos que el detalle le rechazaba con 403 — quedaba atascado si llegaba por
+   * la navegación en vez del correo. Emparejar por email aquí no amplía el modelo de seguridad:
+   * `sign()`/`reject()` ya identifican al firmante exactamente así (ver
+   * findOrLinkMySignerCollaborator), y el email de la cuenta está verificado por OTP en el
+   * registro.
+   *
+   * Sigue sin vincular nada (ver historia "Vinculación del documento debe postergarse hasta el
+   * inicio de sesión y validación de RFC"): una lectura no puede tener el efecto secundario de
+   * asociar la cuenta: eso sigue siendo una acción explícita de AccessDocumentView/useLogin, o
+   * perezosa dentro de sign()/reject().
+   */
+  private async resolveMyCollaborator(
+    collaborators: CollaboratorEntity[],
+    currentUserId: string,
+  ): Promise<CollaboratorEntity | undefined> {
+    const linked = collaborators.find(
+      (c) => c.account?.userId === currentUserId,
+    );
+    if (linked) {
+      return linked;
+    }
+
+    const pendingInvitations = collaborators.filter((c) => !c.accountId);
+    if (pendingInvitations.length === 0) {
+      return undefined;
+    }
+
+    const user = await this.userService.findOne(currentUserId);
+    const userEmail = user.email?.toLowerCase();
+
+    return pendingInvitations.find(
+      (c) => Boolean(c.email) && c.email!.toLowerCase() === userEmail,
+    );
+  }
+
   /** Obtiene el detalle de un documento para la pantalla de firma, incluyendo el rol/turno del usuario autenticado. */
   async findDetailForUser(documentId: string, currentUserId: string) {
     const documentDetailRelations: FindOptionsRelations<DocumentEntity> = {
@@ -608,16 +653,11 @@ export class DocumentService {
     }
 
     const isCreator = document.createdBy === currentUserId;
-    const myParticipant = document.collaborators.find(
-      (c) => c.account?.userId === currentUserId,
+    const myParticipant = await this.resolveMyCollaborator(
+      document.collaborators,
+      currentUserId,
     );
 
-    // Bug corregido (ver historia "Vinculacion del documento debe postergarse hasta el inicio
-    // de sesion y validacion de RFC"): este metodo vinculaba la cuenta al colaborador pendiente
-    // como efecto secundario de una simple lectura (GET), asociando/listando el documento antes
-    // de que el usuario pasara formalmente por login/registro desde /access-document. Ahora la
-    // vinculacion solo ocurre por una accion explicita: AccessDocumentView (sesion ya activa) o
-    // useLogin (tras iniciar sesion) llaman a linkPendingCollaboratorAccount directamente.
     if (!isCreator && !myParticipant) {
       throw new ForbiddenException('No tienes acceso a este documento');
     }
@@ -912,7 +952,14 @@ export class DocumentService {
     return document;
   }
 
-  /** Verifica si el usuario tiene acceso al documento (creador o colaborador). Usado para proteger la descarga del archivo. */
+  /**
+   * Verifica si el usuario tiene acceso al documento (creador o colaborador). Usado para proteger
+   * la descarga del archivo.
+   *
+   * Mismo criterio que `resolveMyCollaborator`: por cuenta vinculada o, si la invitación sigue
+   * pendiente de vincular, por email. Sin esto la pantalla de detalle cargaba pero el archivo
+   * no (el visor pedía `/document/file/:id` y recibía 403), dejando la firma a medias.
+   */
   async assertUserHasAccess(
     documentId: string,
     userId: string,
@@ -921,12 +968,28 @@ export class DocumentService {
     if (document.createdBy === userId) {
       return document;
     }
-    const collaborator = await this.collaboratorRepository.findOne({
+
+    const linkedCollaborator = await this.collaboratorRepository.findOne({
       where: { documentId, account: { userId } },
     });
-    if (!collaborator) {
+    if (linkedCollaborator) {
+      return document;
+    }
+
+    const user = await this.userService.findOne(userId);
+    const invitedCollaborator = user.email
+      ? await this.collaboratorRepository.findOne({
+          where: {
+            documentId,
+            accountId: IsNull(),
+            email: ILike(user.email),
+          },
+        })
+      : null;
+    if (!invitedCollaborator) {
       throw new ForbiddenException('No tienes acceso a este documento');
     }
+
     return document;
   }
 
@@ -1285,12 +1348,23 @@ export class DocumentService {
     return myParticipant;
   }
 
-  /** Emite y envía por correo un código de verificación para que el firmante autenticado pueda firmar un documento con requiresVerification=true. */
+  /**
+   * Emite y envía por correo un código de verificación para que el firmante autenticado pueda
+   * firmar un documento con requiresVerification=true.
+   *
+   * Bug corregido: el envío del correo se hacía sin protección después de persistir el código, así
+   * que una caída del proveedor (SendGrid) tumbaba toda la petición con un 500 — el código ya
+   * estaba emitido en la base, pero la pantalla de firma nunca llegaba a mostrar el campo para
+   * capturarlo y el firmante quedaba sin poder firmar *ni rechazar*. El registro de usuarios ya
+   * trataba este mismo fallo como no fatal (ver `UserService`: advierte y continúa); aquí se
+   * unifica ese criterio: el resultado del envío se reporta en `emailDelivered` para que la UI
+   * pueda avisar y ofrecer el reenvío, en vez de dejar al usuario sin salida.
+   */
   async requestVerificationCode(
     documentId: string,
     currentUserId: string,
     ipAddress: string,
-  ): Promise<BaseResponse<null>> {
+  ): Promise<BaseResponse<{ emailDelivered: boolean }>> {
     const document = await this.findOne(documentId);
     const myParticipant = await this.findMySignerCollaborator(
       documentId,
@@ -1304,16 +1378,30 @@ export class DocumentService {
       ipAddress,
     );
 
-    await this.emailService.sendVerificationCodeNotification(
-      collaboratorEmail(myParticipant),
-      document.fileName,
-      verificationCode.code,
-    );
+    const recipient = collaboratorEmail(myParticipant);
+    let emailDelivered = true;
+
+    try {
+      await this.emailService.sendVerificationCodeNotification(
+        recipient,
+        document.fileName,
+        verificationCode.code,
+      );
+    } catch (error) {
+      emailDelivered = false;
+      this.logger.warn(
+        `No se pudo enviar el código de verificación de firma a ${recipient} (documento ${documentId}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
 
     return {
       success: true,
-      message: 'Código de verificación enviado correctamente',
-      data: null,
+      message: emailDelivered
+        ? 'Código de verificación enviado correctamente'
+        : 'El código de verificación quedó emitido, pero no se pudo enviar el correo. Solicita un reenvío si no lo recibes.',
+      data: { emailDelivered },
     };
   }
 

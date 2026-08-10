@@ -363,6 +363,25 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 
 ## 7. Pendientes / trabajo futuro
 
+### Resuelto en esta ronda (un fallo de correo ya no bloquea la firma) — 2026-08-09
+
+`POST /document/:id/verification-codes` persistía el código y **después** enviaba el correo sin protección: si el proveedor (SendGrid) fallaba, la excepción tumbaba toda la petición con un 500 aunque el código ya estuviera emitido en la base. La pantalla de firma nunca llegaba a mostrar el campo para capturarlo, así que el firmante no podía firmar **ni rechazar** (el bloque de acciones depende de la verificación) — quedaba sin ninguna salida por un problema de infraestructura ajeno a él.
+
+- El envío pasa a ser no fatal, con el mismo criterio que ya usaba `UserService` para el OTP de registro (advierte en el log y continúa).
+- El contrato ahora reporta el resultado: `data: { emailDelivered: boolean }`, con un `message` distinto en cada caso, para que la UI pueda avisar y ofrecer el reenvío en vez de fingir que el correo salió. Documentado en Swagger.
+- Tests: 2 casos nuevos en `document.service.spec.ts` (correo caído → `emailDelivered:false`, código igualmente emitido, sin excepción; y el camino feliz reportando `true`).
+
+Del lado del frontend, `requestVerificationCodeRequest` expone `emailDelivered`, el hook cambia el toast por una advertencia cuando no salió, y `SignDocumentView` muestra un aviso persistente junto al botón "Reenviar código". Efecto secundario en las pruebas: la suite E2E ahora valida el código **por la interfaz** (antes tenía que hacerlo por API porque la pantalla nunca avanzaba).
+
+### Resuelto en esta ronda (bug de acceso: el firmante no podía abrir su propio documento) — 2026-08-08
+
+Encontrado por la suite E2E del frontend (`signature-app/e2e`, Playwright contra la aplicación real). `GET /document/:id` y `GET /document/file/:id` identificaban al colaborador **solo por `accountId`**, y ese campo permanece en `null` hasta que el firmante entra por el enlace del correo (`/access-document` → `PATCH /document/:id/link-collaborator`). El listado (`GET /document?participantEmail=`), en cambio, siempre filtró por email: **el usuario veía en "Por firmar" documentos que el detalle le rechazaba con 403** ("No tienes acceso a este documento"), y quedaba atascado si llegaba por la navegación en vez del correo. El visor de PDF fallaba igual, así que ni el detalle ni el archivo cargaban.
+
+- `DocumentService.resolveMyCollaborator` (nuevo, privado) resuelve al colaborador del usuario autenticado primero por cuenta vinculada y, si no hay, por email (case-insensitive) contra las invitaciones con `accountId` en null. Lo usan `findDetailForUser` y —con la consulta equivalente— `assertUserHasAccess`.
+- **No amplía el modelo de seguridad**: `sign()`/`reject()` ya identificaban al firmante exactamente así (`findOrLinkMySignerCollaborator` → `linkPendingCollaboratorAccount`, emparejando por email), y el email de la cuenta está verificado por OTP en el registro. Lo que había era una asimetría: se confiaba en el email para *firmar* pero no para *leer*.
+- **Sigue sin vincular en lecturas**: se respeta la decisión de la historia "Vinculación del documento debe postergarse hasta el inicio de sesión y validación de RFC" — un GET no asocia la cuenta; eso sigue siendo una acción explícita (`/access-document`, `useLogin`) o perezosa dentro de `sign()`/`reject()`. Hay un test que lo fija (`collaboratorRepository.update` no se llama al leer).
+- Tests: 4 casos nuevos en `document.service.spec.ts` (lectura por email, no-vinculación, extraño sigue con 403, y los cuatro caminos de `assertUserHasAccess`). En el frontend, la prueba E2E que documentaba el bug pasó a verificar el comportamiento corregido.
+
 ### Auditoría de documentación (README vs. código real) — 2026-08-06
 Las secciones 1-6 de este README (referencia técnica) describían el modelo previo a la migración de arquitectura `ENTIDAD_RELACIÓN_V2` — esa migración sí quedó narrada más abajo en este mismo changelog ("migración de modelo completa `ENTIDAD_RELACIÓN_V2`"), pero nunca se retroalimentó a las secciones de arriba, y varias rondas posteriores a esa migración (OTP de registro/recuperación de contraseña, catálogo de permisos administrativos de organización, cadena de auditoría global en Postgres, `efirma`, visor público de documentos) tampoco se documentaron nunca, en ninguna sección. Se hizo una auditoría de solo lectura (dos agentes en paralelo, uno por proyecto del monorepo, más lectura directa de migraciones/entidades/controladores) y se reescribieron las secciones 1-6 completas contra el código real (25 entidades, 22 controladores, 30 migraciones, 3 productores/3 consumidores Kafka). La sección 7 (este changelog) se dejó intacta salvo esta entrada nueva — es un registro histórico, no se reescribe retroactivamente.
 
