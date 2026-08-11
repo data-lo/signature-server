@@ -118,7 +118,6 @@ describe('DocumentTransactionService', () => {
       expect(transactionalRepository.find).toHaveBeenCalledWith({
         where: { documentId: 'doc-1' },
         order: { timeStamp: 'DESC' },
-        take: 1,
       });
       expect(transactionalRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -137,6 +136,79 @@ describe('DocumentTransactionService', () => {
 
       expect(transactionalRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ chainHash: '' }),
+      );
+    });
+  });
+
+  describe('registerCompletion', () => {
+    const initialRecord = {
+      id: 'transaction-0',
+      documentId: 'doc-1',
+      collaboratorId: null,
+      actualHash: 'hash-inicial',
+      chainHash: '',
+    };
+
+    it('encadena el registro final sin collaboratorId, con el actualHash del último registro', async () => {
+      transactionalRepository.find.mockResolvedValue([initialRecord]);
+
+      await service.registerCompletion('doc-1', 'hash-del-pdf-final');
+
+      expect(transactionalRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-1',
+          collaboratorId: null,
+          chainHash: 'hash-inicial',
+          actualHash: 'actual-hash-nuevo',
+        }),
+      );
+    });
+
+    it('incluye el hash del PDF firmado en el contenido hasheado del registro', async () => {
+      transactionalRepository.find.mockResolvedValue([initialRecord]);
+
+      await service.registerCompletion('doc-1', 'hash-del-pdf-final');
+
+      expect(hashService.generateRegistryHash).toHaveBeenCalledWith(
+        expect.objectContaining({ signedHash: 'hash-del-pdf-final' }),
+      );
+    });
+
+    it('es idempotente: si el documento ya tiene registro final, no encadena otro', async () => {
+      const completionRecord = {
+        id: 'transaction-final',
+        documentId: 'doc-1',
+        collaboratorId: null,
+        actualHash: 'hash-final',
+        chainHash: 'hash-anterior',
+      };
+      transactionalRepository.find.mockResolvedValue([
+        completionRecord,
+        initialRecord,
+      ]);
+
+      const result = await service.registerCompletion('doc-1', 'hash-nuevo');
+
+      expect(transactionalRepository.save).not.toHaveBeenCalled();
+      expect(result).toBe(completionRecord);
+    });
+
+    it('el registro inicial no se confunde con uno final (se distinguen por chainHash vacío)', async () => {
+      transactionalRepository.find.mockResolvedValue([initialRecord]);
+
+      await service.registerCompletion('doc-1', 'hash-del-pdf-final');
+
+      expect(transactionalRepository.save).toHaveBeenCalled();
+    });
+
+    it('toma el mismo advisory lock por documento que registerSignature', async () => {
+      transactionalRepository.find.mockResolvedValue([initialRecord]);
+
+      await service.registerCompletion('doc-1', 'hash-del-pdf-final');
+
+      expect(manager.query).toHaveBeenCalledWith(
+        'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+        [expect.any(Number), 'doc-1'],
       );
     });
   });

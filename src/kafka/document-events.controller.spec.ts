@@ -3,7 +3,9 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentEventsConsumer } from './document-events.controller';
 import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
+import { DocumentEntity } from 'src/document/entities/document.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
+import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
@@ -17,6 +19,7 @@ import type {
 function createMockRepository() {
   return {
     find: jest.fn(),
+    findOne: jest.fn(),
     create: jest.fn((data) => data),
     save: jest.fn(),
   };
@@ -29,6 +32,7 @@ function buildCollaborator(overrides: Partial<CollaboratorEntity> = {}) {
     accountId: 'account-1',
     email: null,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+    signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
     status: SIGNEE_STATUS_ENUM.PENDING,
     signingOrder: 0,
     ...overrides,
@@ -39,6 +43,7 @@ describe('DocumentEventsConsumer', () => {
   let consumer: DocumentEventsConsumer;
   let notificationRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
+  let documentRepository: ReturnType<typeof createMockRepository>;
   let documentTransactionService: Record<string, jest.Mock>;
   let auditChainService: Record<string, jest.Mock>;
 
@@ -58,7 +63,15 @@ describe('DocumentEventsConsumer', () => {
   beforeEach(async () => {
     notificationRepository = createMockRepository();
     collaboratorRepository = createMockRepository();
-    documentTransactionService = { registerSignature: jest.fn() };
+    documentRepository = createMockRepository();
+    documentRepository.findOne.mockResolvedValue({
+      id: 'doc-1',
+      signedHash: 'hash-del-pdf-final',
+    });
+    documentTransactionService = {
+      registerSignature: jest.fn(),
+      registerCompletion: jest.fn(),
+    };
     auditChainService = { recordEvent: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -71,6 +84,10 @@ describe('DocumentEventsConsumer', () => {
         {
           provide: getRepositoryToken(CollaboratorEntity),
           useValue: collaboratorRepository,
+        },
+        {
+          provide: getRepositoryToken(DocumentEntity),
+          useValue: documentRepository,
         },
         {
           provide: DocumentTransactionService,
@@ -195,24 +212,121 @@ describe('DocumentEventsConsumer', () => {
     await expect(consumer.handleSigned(payload)).resolves.toBeUndefined();
   });
 
-  it('handleCollaboratorSigned encadena un registro de Document Transaction para el colaborador que firmó', async () => {
-    await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+  describe('encadenamiento de Document Transaction según el tipo de firma', () => {
+    const signed = SIGNEE_STATUS_ENUM.SIGNED;
+    const pending = SIGNEE_STATUS_ENUM.PENDING;
 
-    expect(documentTransactionService.registerSignature).toHaveBeenCalledWith(
-      'doc-1',
-      'collaborator-1',
-      '2026-01-01T00:05:00.000Z',
-    );
-  });
+    it('firma simple: cada firma encadena su propio registro', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildCollaborator({ id: 'collaborator-1', status: signed }),
+        buildCollaborator({ id: 'collaborator-2', status: pending }),
+      ]);
 
-  it('handleCollaboratorSigned no propaga el error si falla el encadenamiento de la transacción', async () => {
-    documentTransactionService.registerSignature.mockRejectedValue(
-      new Error('DB caída'),
-    );
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
 
-    await expect(
-      consumer.handleCollaboratorSigned(collaboratorSignedPayload),
-    ).resolves.toBeUndefined();
+      expect(documentTransactionService.registerSignature).toHaveBeenCalledWith(
+        'doc-1',
+        'collaborator-1',
+        '2026-01-01T00:05:00.000Z',
+      );
+    });
+
+    it('firma avanzada: una firma intermedia no genera ningún registro', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildCollaborator({
+          id: 'collaborator-1',
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          status: signed,
+        }),
+        buildCollaborator({
+          id: 'collaborator-2',
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          status: pending,
+        }),
+      ]);
+
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+      expect(
+        documentTransactionService.registerSignature,
+      ).not.toHaveBeenCalled();
+      expect(
+        documentTransactionService.registerCompletion,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('firma avanzada: la última firma cierra la cadena con el registro final, ligado al hash del PDF firmado', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildCollaborator({
+          id: 'collaborator-1',
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          status: signed,
+        }),
+        buildCollaborator({
+          id: 'collaborator-2',
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          status: signed,
+        }),
+      ]);
+
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+      expect(
+        documentTransactionService.registerSignature,
+      ).not.toHaveBeenCalled();
+      expect(
+        documentTransactionService.registerCompletion,
+      ).toHaveBeenCalledWith('doc-1', 'hash-del-pdf-final');
+    });
+
+    it('documento de pura firma simple: al completarse NO agrega registro final (la última firma ya dejó el suyo)', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildCollaborator({ id: 'collaborator-1', status: signed }),
+        buildCollaborator({ id: 'collaborator-2', status: signed }),
+      ]);
+
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+      expect(documentTransactionService.registerSignature).toHaveBeenCalled();
+      expect(
+        documentTransactionService.registerCompletion,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('documento mixto: la firma simple encadena su registro y el documento se cierra con el final por la firma avanzada', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildCollaborator({ id: 'collaborator-1', status: signed }),
+        buildCollaborator({
+          id: 'collaborator-2',
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          status: signed,
+        }),
+      ]);
+
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+      expect(documentTransactionService.registerSignature).toHaveBeenCalledWith(
+        'doc-1',
+        'collaborator-1',
+        '2026-01-01T00:05:00.000Z',
+      );
+      expect(
+        documentTransactionService.registerCompletion,
+      ).toHaveBeenCalledWith('doc-1', 'hash-del-pdf-final');
+    });
+
+    it('no propaga el error si falla el encadenamiento de la transacción', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildCollaborator({ id: 'collaborator-1', status: signed }),
+      ]);
+      documentTransactionService.registerSignature.mockRejectedValue(
+        new Error('DB caída'),
+      );
+
+      await expect(
+        consumer.handleCollaboratorSigned(collaboratorSignedPayload),
+      ).resolves.toBeUndefined();
+    });
   });
 
   it('handleCollaboratorSigned encadena el evento en el ledger global como SIGNATURES_PARTIAL, incluyendo el collaboratorId en los metadatos', async () => {
