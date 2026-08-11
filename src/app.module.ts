@@ -28,6 +28,7 @@ import { KafkaModule } from './kafka/kafka.module';
 import { StripeModule } from './stripe/stripe.module';
 import { RolesModule } from './roles/roles.module';
 import { EventModule } from './event/event.module';
+import { SealModule } from './seal/seal.module';
 
 @Module({
   imports: [
@@ -55,7 +56,8 @@ import { EventModule } from './event/event.module';
     ThrottlerModule.forRoot({
       throttlers: [
         {
-          ttl: 60000,
+
+          ttl: 60000, // Unidad: ms
           limit: 10,
         },
       ],
@@ -77,6 +79,7 @@ import { EventModule } from './event/event.module';
     StripeModule,
     RolesModule,
     EventModule,
+    SealModule,
   ],
   controllers: [AppController],
   providers: [
