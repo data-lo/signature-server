@@ -692,8 +692,11 @@ export class DocumentService {
       document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING &&
       myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
 
-    // Registro de Transacciones (Document Transaction): un registro por colaborador que firmó,
-    // más el registro inicial de creación (collaboratorId null) — ver DocumentTransactionService.
+    // Registro de Transacciones (Document Transaction): además del registro inicial de creación
+    // (collaboratorId null), hay un registro por cada firma SIMPLE; las firmas avanzadas no
+    // encadenan uno propio y el documento se cierra con un registro final, también sin
+    // collaboratorId — ver DocumentTransactionService. Por eso un firmante FIEL expone
+    // actualHash/chainHash en null: su evidencia vive en CollaboratorEntity.advancedSignature.
     const transactions =
       await this.documentTransactionService.findAllForDocument(documentId);
     const transactionByCollaboratorId = new Map(

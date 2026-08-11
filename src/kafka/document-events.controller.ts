@@ -9,7 +9,10 @@ import {
 } from './document-events.topics';
 import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
+import { DocumentEntity } from 'src/document/entities/document.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
+import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
+import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { NOTIFICATION_CHANNEL_ENUM } from 'src/document/enum/notification-channel.enum';
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
@@ -47,6 +50,8 @@ export class DocumentEventsConsumer {
     private readonly notificationRepository: Repository<NotificationEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    @InjectRepository(DocumentEntity)
+    private readonly documentRepository: Repository<DocumentEntity>,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly auditChainService: AuditChainService,
   ) {}
@@ -78,8 +83,19 @@ export class DocumentEventsConsumer {
 
   /**
    * Se dispara por CADA colaborador que firma (a diferencia de handleSigned, que solo procesa
-   * cuando el documento queda completamente firmado) — encadena un nuevo registro en
-   * DocumentTransaction (ver Registro de Transacciones / Document Transaction).
+   * cuando el documento queda completamente firmado) y es el único punto donde se decide qué
+   * entra a la cadena de DocumentTransaction, según el tipo de firma:
+   *
+   * - **Firma simple** → un registro encadenado por cada firma.
+   * - **Firma avanzada (FIEL)** → ningún registro por firmante; su evidencia criptográfica ya
+   *   vive en `CollaboratorEntity.advancedSignature` (ver EfirmaService).
+   * - Cuando esta firma es la que completa el documento y hay al menos una firma avanzada, se
+   *   agrega el registro final del documento.
+   *
+   * El registro final se resuelve aquí y no en handleSigned a propósito: son tópicos distintos
+   * (`document.signed` se emite además ANTES que este evento en sign()), así que Kafka no
+   * garantiza en qué orden se consumen y la cadena podía cerrarse antes de encadenar la última
+   * firma simple. Aquí ambas cosas ocurren en secuencia dentro del mismo handler.
    */
   @EventPattern(DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED)
   async handleCollaboratorSigned(
@@ -89,20 +105,62 @@ export class DocumentEventsConsumer {
       `firmado por el colaborador ${payload.collaboratorId}`,
       payload,
     );
+
     try {
-      await this.documentTransactionService.registerSignature(
-        payload.documentId,
-        payload.collaboratorId,
-        payload.signedAt,
-      );
+      const signers = await this.collaboratorRepository.find({
+        where: {
+          documentId: payload.documentId,
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        },
+      });
+      const signer = signers.find((s) => s.id === payload.collaboratorId);
+
+      if (signer?.signatureType === SIGNATURE_TYPE_ENUM.SIMPLE) {
+        await this.documentTransactionService.registerSignature(
+          payload.documentId,
+          payload.collaboratorId,
+          payload.signedAt,
+        );
+      }
+
+      await this.registerCompletionIfDone(payload.documentId, signers);
     } catch (error) {
       this.logger.error(
         `Error encadenando Document Transaction para el documento ${payload.documentId} (colaborador ${payload.collaboratorId}): ${error}`,
       );
     }
+
     await this.recordAudit(payload, AUDIT_TYPE_ENUM.SIGNATURES_PARTIAL, {
       collaboratorId: payload.collaboratorId,
     });
+  }
+
+  /**
+   * Cierra la cadena del documento cuando ya no queda ningún firmante pendiente y el documento
+   * incluye firma avanzada. En un documento de pura firma simple no se agrega nada: la última
+   * firma ya dejó su propio registro y un registro final sería redundante.
+   */
+  private async registerCompletionIfDone(
+    documentId: string,
+    signers: CollaboratorEntity[],
+  ): Promise<void> {
+    const allSigned =
+      signers.length > 0 &&
+      signers.every((s) => s.status === SIGNEE_STATUS_ENUM.SIGNED);
+    const hasAdvancedSignature = signers.some(
+      (s) => s.signatureType === SIGNATURE_TYPE_ENUM.FIEL,
+    );
+    if (!allSigned || !hasAdvancedSignature) return;
+
+    const document = await this.documentRepository.findOne({
+      where: { id: documentId },
+    });
+    // El hash del PDF final ya estampado (finalizeSignedDocument corre antes de emitir el
+    // evento): liga el último eslabón de la cadena al archivo que quedó como resultado.
+    await this.documentTransactionService.registerCompletion(
+      documentId,
+      document?.signedHash ?? '',
+    );
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.SIGNED)
