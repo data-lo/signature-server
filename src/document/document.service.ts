@@ -1267,11 +1267,12 @@ export class DocumentService {
       BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     );
 
-    return this.efirmaService.firmar(
+    return await this.efirmaService.firmar(
       documentBuffer,
       cerFile.buffer,
       keyFile.buffer,
       password,
+      {permitirDegradadoSiOCSPFalla: false}
     ) as SignatureResult;
   }
 
