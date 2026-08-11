@@ -33,3 +33,23 @@ export class CadenaConfianzaInvalidaException extends UnprocessableEntityExcepti
         super(`El certificado no encadena a una AC del SAT valida${detalle ? `${detalle}`: '' }`)
     }
 }
+
+export class CertificadoRevocadoException extends Error {
+    constructor(
+        public readonly revokedDate?:Date, 
+        public readonly reason?:string
+    ){
+       super(
+      `El certificado fue revocado por el SAT${revokedDate ? ` el ${revokedDate.toISOString()}` : ''}${reason ? 
+        ` (razón: ${reason})` : ''}`,
+    );
+    this.name = 'CertificadoRevocadoException';
+  }
+}
+
+export class OCSPNotAvilableException extends Error {
+  constructor(reason: string) {
+    super(`No fue posible verificar el estado de revocación ante el SAT: ${reason}`);
+    this.name = 'OCSNotAvilableException';
+  }
+}

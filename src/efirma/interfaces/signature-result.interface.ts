@@ -1,3 +1,4 @@
+import { OCSPEvidence } from './OCSPEvidence.interface';
 
 export interface SignatureResult {
     
@@ -5,7 +6,8 @@ export interface SignatureResult {
     signatureBase64: String;
     algorithm: 'sha256';
     signedAt: Date;
-    certificate: SATCertificate
+    certificate: SATCertificate;
+    ocspEvidence: OCSPEvidence;
 }
 
 interface SATCertificate {
