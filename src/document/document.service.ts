@@ -58,6 +58,10 @@ import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from './utils/collaborator-display.util';
+import {
+  buildAllDocumentsUrl,
+  buildDocumentAccessUrl,
+} from './utils/document-access-url.util';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 import {
@@ -1181,15 +1185,15 @@ export class DocumentService {
 
     const document = await this.findOne(documentId);
     const creator = await this.userService.findOne(document.createdBy);
-    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3001';
+    const signerEmail = collaboratorEmail(nextSigner);
 
     await this.emailService.sendDocumentPendingNotification(
-      collaboratorEmail(nextSigner),
+      signerEmail,
       collaboratorDisplayName(nextSigner),
       creator.email,
       document.fileName,
-      `${frontendUrl}/documents/${documentId}`,
-      `${frontendUrl}/documents`,
+      buildDocumentAccessUrl(documentId, nextSigner.id, signerEmail),
+      buildAllDocumentsUrl(),
     );
   }
 
