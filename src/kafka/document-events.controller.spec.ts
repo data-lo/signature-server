@@ -10,6 +10,7 @@ import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
 import { AuditChainService } from 'src/audit-chain/audit-chain.service';
+import { SealClientService } from 'src/seal/seal-client.service';
 import { AUDIT_TYPE_ENUM } from 'src/audit-chain/enums/audit-type.enum';
 import type {
   DocumentEventPayload,
@@ -46,6 +47,7 @@ describe('DocumentEventsConsumer', () => {
   let documentRepository: ReturnType<typeof createMockRepository>;
   let documentTransactionService: Record<string, jest.Mock>;
   let auditChainService: Record<string, jest.Mock>;
+  let sealClientService: Record<string, jest.Mock>;
 
   const payload: DocumentEventPayload = {
     documentId: 'doc-1',
@@ -67,12 +69,14 @@ describe('DocumentEventsConsumer', () => {
     documentRepository.findOne.mockResolvedValue({
       id: 'doc-1',
       signedHash: 'hash-del-pdf-final',
+      originalHash: 'hash-del-pdf-original',
     });
     documentTransactionService = {
       registerSignature: jest.fn(),
       registerCompletion: jest.fn(),
     };
     auditChainService = { recordEvent: jest.fn() };
+    sealClientService = { sealDocumentSignatures: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -94,6 +98,7 @@ describe('DocumentEventsConsumer', () => {
           useValue: documentTransactionService,
         },
         { provide: AuditChainService, useValue: auditChainService },
+        { provide: SealClientService, useValue: sealClientService },
       ],
     }).compile();
 
@@ -326,6 +331,78 @@ describe('DocumentEventsConsumer', () => {
       await expect(
         consumer.handleCollaboratorSigned(collaboratorSignedPayload),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  /**
+   * El Seal Service recibe el arreglo con TODAS las firmas avanzadas del documento, así que se
+   * llama una sola vez, cuando la firma avanzada queda completa — el mismo momento en que se
+   * cierra la cadena con el registro final.
+   */
+  describe('integración con Seal Service', () => {
+    const signed = SIGNEE_STATUS_ENUM.SIGNED;
+
+    function buildFielSigner(overrides = {}) {
+      return buildCollaborator({
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        ...overrides,
+      });
+    }
+
+    it('al completarse la firma avanzada, solicita el sello con el documentId y el hash original', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildFielSigner({ id: 'collaborator-1', status: signed }),
+        buildFielSigner({ id: 'collaborator-2', status: signed }),
+      ]);
+
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+      expect(sealClientService.sealDocumentSignatures).toHaveBeenCalledWith(
+        'doc-1',
+        'hash-del-pdf-original',
+      );
+    });
+
+    it('una firma avanzada intermedia no solicita sello (faltan firmantes)', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildFielSigner({ id: 'collaborator-1', status: signed }),
+        buildFielSigner({
+          id: 'collaborator-2',
+          status: SIGNEE_STATUS_ENUM.PENDING,
+        }),
+      ]);
+
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+      expect(sealClientService.sealDocumentSignatures).not.toHaveBeenCalled();
+    });
+
+    it('un documento de pura firma simple no solicita sello', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildCollaborator({ id: 'collaborator-1', status: signed }),
+      ]);
+
+      await consumer.handleCollaboratorSigned(collaboratorSignedPayload);
+
+      expect(sealClientService.sealDocumentSignatures).not.toHaveBeenCalled();
+    });
+
+    it('si el Seal Service falla, la cadena ya cerrada se conserva y el consumer no revienta', async () => {
+      collaboratorRepository.find.mockResolvedValue([
+        buildFielSigner({ id: 'collaborator-1', status: signed }),
+      ]);
+      sealClientService.sealDocumentSignatures.mockRejectedValue(
+        new Error('Seal Service caído'),
+      );
+
+      await expect(
+        consumer.handleCollaboratorSigned(collaboratorSignedPayload),
+      ).resolves.toBeUndefined();
+
+      // El registro final es local y no debe deshacerse por un fallo del servicio externo.
+      expect(
+        documentTransactionService.registerCompletion,
+      ).toHaveBeenCalledWith('doc-1', 'hash-del-pdf-final');
     });
   });
 

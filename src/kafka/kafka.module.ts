@@ -19,6 +19,7 @@ import { SharedModule } from 'src/shared/shared.module';
 import { EventModule } from 'src/event/event.module';
 import { DocumentTransactionModule } from 'src/document/document-transaction.module';
 import { AuditChainModule } from 'src/audit-chain/audit-chain.module';
+import { SealModule } from 'src/seal/seal.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { AuditChainModule } from 'src/audit-chain/audit-chain.module';
     EventModule,
     DocumentTransactionModule,
     AuditChainModule,
+    SealModule,
     ClientsModule.registerAsync([
       {
         name: KAFKA_SERVICE,

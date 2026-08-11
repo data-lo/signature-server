@@ -19,6 +19,7 @@ import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
 import { AuditChainService } from 'src/audit-chain/audit-chain.service';
 import { AUDIT_TYPE_ENUM } from 'src/audit-chain/enums/audit-type.enum';
+import { SealClientService } from 'src/seal/seal-client.service';
 
 /**
  * Consumidor real de los eventos de negocio del ciclo de vida del documento (ver
@@ -54,6 +55,7 @@ export class DocumentEventsConsumer {
     private readonly documentRepository: Repository<DocumentEntity>,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly auditChainService: AuditChainService,
+    private readonly sealClientService: SealClientService,
   ) {}
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.CREATED)
@@ -139,6 +141,10 @@ export class DocumentEventsConsumer {
    * Cierra la cadena del documento cuando ya no queda ningún firmante pendiente y el documento
    * incluye firma avanzada. En un documento de pura firma simple no se agrega nada: la última
    * firma ya dejó su propio registro y un registro final sería redundante.
+   *
+   * Es también el punto donde se solicita el sello al Seal Service, por la misma condición: el
+   * servicio espera el arreglo con TODAS las firmas avanzadas del documento, así que solo tiene
+   * sentido llamarlo una vez, cuando ya están todas.
    */
   private async registerCompletionIfDone(
     documentId: string,
@@ -161,6 +167,20 @@ export class DocumentEventsConsumer {
       documentId,
       document?.signedHash ?? '',
     );
+
+    // En su propio try/catch: el sellado depende de un servicio externo (Seal Service → PSC), y
+    // que no esté disponible no debe deshacer ni bloquear el cierre de la cadena, que es local y
+    // ya quedó escrito. El sello es idempotente y puede reintentarse después.
+    try {
+      await this.sealClientService.sealDocumentSignatures(
+        documentId,
+        document?.originalHash ?? '',
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error solicitando el sello al Seal Service para el documento ${documentId}: ${error}`,
+      );
+    }
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.SIGNED)
