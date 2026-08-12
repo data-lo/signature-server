@@ -334,18 +334,20 @@ export class DocumentController {
   @Patch(':id/sign')
   @ApiOperation({
     summary:
-      'Firmar el documento (solo si es tu turno como firmante). Para firma electrónica ' +
-      'avanzada (FIEL) requiere además .key/.cer y contraseña como multipart/form-data.',
+      'Firmar el documento (solo si es tu turno como firmante). La geolocalización es ' +
+      'obligatoria. Para firma electrónica avanzada (FIEL) requiere además .key/.cer y ' +
+      'contraseña como multipart/form-data.',
   })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({ type: SignDocumentDto, required: false })
+  @ApiBody({ type: SignDocumentDto, required: true })
   @ApiResponse({ status: 200, description: 'Documento firmado correctamente' })
   @ApiResponse({
     status: 400,
     description:
-      'El documento no se encuentra en estatus PENDING, ya respondiste, o faltan/son inválidos ' +
-      'los archivos .key/.cer requeridos para firma FIEL',
+      'Falta la geolocalización (obligatoria para firmar), el documento no se encuentra en ' +
+      'estatus PENDING, ya respondiste, o faltan/son inválidos los archivos .key/.cer ' +
+      'requeridos para firma FIEL',
     type: BadRequestResponse,
   })
   @ApiResponse({
