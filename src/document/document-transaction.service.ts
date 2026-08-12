@@ -5,18 +5,40 @@ import { DocumentTransactionEntity } from './entities/document-transaction.entit
 import { HashService } from 'src/shared/hash/hash.service';
 
 /**
- * Namespace fijo para el advisory lock de Postgres usado por registerSignature (distinto del
- * namespace de AuditChainService, que encadena globalmente — este encadena por documento).
+ * Namespace fijo para el advisory lock de Postgres usado al encadenar (distinto del namespace de
+ * AuditChainService, que encadena globalmente — este encadena por documento).
  */
 const DOCUMENT_TRANSACTION_LOCK_NAMESPACE = 445566;
 
 /**
+ * Los dos registros sin `collaboratorId` (inicial y final) se distinguen por el chainHash: el
+ * inicial es el único de la cadena que no encadena con nada, así que su chainHash es ''.
+ */
+export function isCompletionRecord(record: DocumentTransactionEntity): boolean {
+  return record.collaboratorId === null && record.chainHash !== '';
+}
+
+/**
  * Registro de Transacciones (Document Transaction, ver diagrama ER-V2): bitácora de integridad
  * encadenada por documento, independiente de AuditService (Mongo, best-effort). Cada documento
- * arranca con un registro inicial (chainHash vacío); cada firma agrega un registro nuevo cuyo
- * chainHash es el actualHash del registro inmediato anterior — mismo criterio de encadenamiento
- * que ya usa AuditService, aplicado aquí a una tabla relacional propia para poder consultarse en
- * tiempo real junto con el resto del dominio de documentos (GET /document/:id).
+ * arranca con un registro inicial (chainHash vacío) y cada registro nuevo encadena con el
+ * actualHash del registro inmediato anterior — mismo criterio de encadenamiento que ya usa
+ * AuditService, aplicado aquí a una tabla relacional propia para poder consultarse en tiempo real
+ * junto con el resto del dominio de documentos (GET /document/:id).
+ *
+ * **Qué se encadena depende del tipo de firma** (ver DocumentEventsConsumer, que es quien decide):
+ *
+ * - **Firma simple**: un registro por cada firma (`registerSignature`). La rúbrica estampada no
+ *   es prueba criptográfica por sí misma, así que la integridad de cada acto de firma vive en
+ *   esta cadena.
+ * - **Firma avanzada (FIEL)**: las firmas intermedias NO generan registro. Cada una ya lleva su
+ *   propia evidencia criptográfica verificable (`CollaboratorEntity.advancedSignature`: hash del
+ *   documento, firma RSA en base64 y certificado del SAT, ver EfirmaService), así que duplicarla
+ *   en la cadena no agrega garantías. Solo se agrega un registro final (`registerCompletion`)
+ *   cuando el último firmante termina.
+ *
+ * En un documento mixto conviven ambas reglas: las firmas simples encadenan una a una y las
+ * avanzadas quedan representadas por el registro final.
  */
 @Injectable()
 export class DocumentTransactionService {
@@ -68,23 +90,83 @@ export class DocumentTransactionService {
   }
 
   /**
-   * Encadena un nuevo registro cuando un colaborador firma: el chainHash del registro nuevo es
-   * el actualHash del registro inmediato anterior de ese mismo documento (ver docblock de
-   * DocumentTransactionEntity). `signatureHash` identifica de forma estable la firma concreta
-   * que se está encadenando (p. ej. el signedAt/id del colaborador).
-   *
-   * Bug corregido: "leer el último registro, calcular el hash, insertar" es una sección crítica
-   * — sin serializarla, dos firmantes del MISMO documento firmando casi al mismo tiempo (posible
-   * a propósito en un documento `isSequential=false`, donde cualquiera puede firmar ya, sin
-   * esperar turno) podían leer el mismo "último" registro y encadenar dos filas nuevas al mismo
-   * padre, bifurcando la cadena de ESE documento. `pg_advisory_xact_lock` (con hashtext(documentId)
-   * como segunda clave, para no serializar documentos distintos entre sí) cierra esa ventana —
-   * mismo criterio que AuditChainService usa para su cadena global.
+   * Encadena un nuevo registro cuando un colaborador firma con **firma simple**: el chainHash del
+   * registro nuevo es el actualHash del registro inmediato anterior de ese mismo documento (ver
+   * docblock de DocumentTransactionEntity). `signatureHash` identifica de forma estable la firma
+   * concreta que se está encadenando (p. ej. el signedAt/id del colaborador).
    */
   async registerSignature(
     documentId: string,
     collaboratorId: string,
     signatureHash: string,
+  ): Promise<DocumentTransactionEntity> {
+    return this.appendChained(documentId, (chainHash, timeStamp) => ({
+      collaboratorId,
+      hashPayload: {
+        documentId,
+        collaboratorId,
+        signatureHash,
+        chainHash,
+        timeStamp: timeStamp.toISOString(),
+      },
+      event: 'COLLABORATOR_SIGNED',
+    }));
+  }
+
+  /**
+   * Registro final del documento: se agrega cuando el ÚLTIMO firmante completó su firma y el
+   * documento tiene al menos una firma avanzada (ver docblock de la clase). Va sin
+   * `collaboratorId` —igual que el inicial— porque representa al documento completo, no a un
+   * firmante: cierra la cadena ligándola al hash del PDF final ya estampado (`signedHash`).
+   *
+   * Es idempotente: si el documento ya tiene su registro final, lo devuelve en vez de encadenar
+   * otro. La comprobación corre dentro de la misma sección crítica que la inserción, así que dos
+   * eventos concurrentes del mismo documento no pueden crear dos registros finales.
+   */
+  async registerCompletion(
+    documentId: string,
+    signedHash: string,
+  ): Promise<DocumentTransactionEntity> {
+    return this.appendChained(
+      documentId,
+      (chainHash, timeStamp) => ({
+        collaboratorId: null,
+        hashPayload: {
+          documentId,
+          signedHash,
+          chainHash,
+          timeStamp: timeStamp.toISOString(),
+        },
+        event: 'DOCUMENT_COMPLETED',
+      }),
+      (existing) => existing.find(isCompletionRecord),
+    );
+  }
+
+  /**
+   * Sección crítica compartida por todos los registros encadenados: leer el último registro,
+   * calcular el hash y insertar.
+   *
+   * Bug corregido: sin serializar esa secuencia, dos firmantes del MISMO documento firmando casi
+   * al mismo tiempo (posible a propósito en un documento `isSequential=false`, donde cualquiera
+   * puede firmar ya, sin esperar turno) podían leer el mismo "último" registro y encadenar dos
+   * filas nuevas al mismo padre, bifurcando la cadena de ESE documento. `pg_advisory_xact_lock`
+   * (con hashtext(documentId) como segunda clave, para no serializar documentos distintos entre
+   * sí) cierra esa ventana — mismo criterio que AuditChainService usa para su cadena global.
+   */
+  private async appendChained(
+    documentId: string,
+    build: (
+      chainHash: string,
+      timeStamp: Date,
+    ) => {
+      collaboratorId: string | null;
+      hashPayload: Record<string, unknown>;
+      event: string;
+    },
+    findExisting?: (
+      records: DocumentTransactionEntity[],
+    ) => DocumentTransactionEntity | undefined,
   ): Promise<DocumentTransactionEntity> {
     return this.dataSource.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
@@ -93,30 +175,29 @@ export class DocumentTransactionService {
       ]);
 
       const repository = manager.getRepository(DocumentTransactionEntity);
-      const [previous] = await repository.find({
+      const records = await repository.find({
         where: { documentId },
         order: { timeStamp: 'DESC' },
-        take: 1,
       });
 
-      const chainHash = previous?.actualHash ?? '';
+      const alreadyRegistered = findExisting?.(records);
+      if (alreadyRegistered) {
+        return alreadyRegistered;
+      }
+
+      const chainHash = records[0]?.actualHash ?? '';
       const timeStamp = new Date();
-
-      const actualHash = await this.hashService.generateRegistryHash({
-        documentId,
-        collaboratorId,
-        signatureHash,
+      const { collaboratorId, hashPayload, event } = build(
         chainHash,
-        timeStamp: timeStamp.toISOString(),
-      });
+        timeStamp,
+      );
 
+      const actualHash =
+        await this.hashService.generateRegistryHash(hashPayload);
       const chipher = await this.hashService.generateCiperHash({
-        documentId,
-        collaboratorId,
-        signatureHash,
+        ...hashPayload,
         actualHash,
-        chainHash,
-        timeStamp: timeStamp.toISOString(),
+        event,
       });
 
       return repository.save(

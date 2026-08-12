@@ -58,6 +58,10 @@ import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from './utils/collaborator-display.util';
+import {
+  buildAllDocumentsUrl,
+  buildDocumentAccessUrl,
+} from './utils/document-access-url.util';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 import {
@@ -692,8 +696,11 @@ export class DocumentService {
       document.status === DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING &&
       myParticipant?.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER;
 
-    // Registro de Transacciones (Document Transaction): un registro por colaborador que firmó,
-    // más el registro inicial de creación (collaboratorId null) — ver DocumentTransactionService.
+    // Registro de Transacciones (Document Transaction): además del registro inicial de creación
+    // (collaboratorId null), hay un registro por cada firma SIMPLE; las firmas avanzadas no
+    // encadenan uno propio y el documento se cierra con un registro final, también sin
+    // collaboratorId — ver DocumentTransactionService. Por eso un firmante FIEL expone
+    // actualHash/chainHash en null: su evidencia vive en CollaboratorEntity.advancedSignature.
     const transactions =
       await this.documentTransactionService.findAllForDocument(documentId);
     const transactionByCollaboratorId = new Map(
@@ -1178,15 +1185,15 @@ export class DocumentService {
 
     const document = await this.findOne(documentId);
     const creator = await this.userService.findOne(document.createdBy);
-    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3001';
+    const signerEmail = collaboratorEmail(nextSigner);
 
     await this.emailService.sendDocumentPendingNotification(
-      collaboratorEmail(nextSigner),
+      signerEmail,
       collaboratorDisplayName(nextSigner),
       creator.email,
       document.fileName,
-      `${frontendUrl}/documents/${documentId}`,
-      `${frontendUrl}/documents`,
+      buildDocumentAccessUrl(documentId, nextSigner.id, signerEmail),
+      buildAllDocumentsUrl(),
     );
   }
 
@@ -1439,6 +1446,15 @@ export class DocumentService {
     advancedSignatureInput?: AdvancedSignatureInput,
     geolocation?: GeolocationDto,
   ): Promise<BaseResponse<{ id: string }>> {
+    // La ubicación es obligatoria para firmar. El DTO ya la exige (400 desde ValidationPipe),
+    // pero se revalida aquí porque `sign()` también se invoca desde otros puntos internos y una
+    // firma sin esta evidencia no debe poder registrarse por ninguna vía.
+    if (!geolocation) {
+      throw new BadRequestException(
+        'La geolocalización es obligatoria para poder firmar el documento',
+      );
+    }
+
     const document = await this.findOne(documentId);
 
     if (document.status !== DOCUMENT_STATUS_ENUM.PENDING) {
@@ -1517,9 +1533,9 @@ export class DocumentService {
     myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
     // Evidencia declarada por el dispositivo del firmante (navigator.geolocation), no verificada
-    // independientemente por el servidor — null cuando el permiso fue rechazado/no disponible,
-    // lo cual no bloquea la firma (ver historia "Capturar y almacenar la geolocalización").
-    myParticipant.geoLoc = geolocation ?? null;
+    // independientemente por el servidor. Siempre presente: firmar sin ubicación se rechaza al
+    // inicio de este método y en el DTO.
+    myParticipant.geoLoc = geolocation;
 
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       // Resultado ya validado arriba (antes del claim) — solo se persiste. No contiene la llave

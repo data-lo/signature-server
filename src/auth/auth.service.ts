@@ -255,27 +255,64 @@ export class AuthService {
    * para no permitir enumerar usuarios registrados.
    */
   async forgotPassword(dto: ForgotPasswordDto): Promise<BaseResponse<null>> {
-    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
+    const email = dto.email.toLowerCase();
+    const user = await this.userService.findOneByEmail(email);
 
-    if (user && user.isActive) {
-      try {
-        const resetCode = await this.passwordResetCodeService.issue(user.id);
-        await this.emailService.sendPasswordResetOtpNotification(
-          user.email,
-          resetCode.code,
-        );
-      } catch (error) {
-        // Best-effort, igual que el resto del código (ver UserService.createFromSignup): un
-        // fallo de SendGrid no debe delatar nada distinto al mensaje genérico ni tumbar la
-        // respuesta — el usuario puede volver a pedir el código.
-        this.logger.warn(
-          `No se pudo enviar el correo de recuperación de contraseña a ${user.email}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+    // Cada motivo de "no se mandó el correo" se registra por separado. La respuesta al cliente
+    // NO cambia (sigue siendo el mismo mensaje genérico anti-enumeración): estos logs son solo
+    // del servidor. Antes, "el usuario no existe", "está inactivo" y "falló el envío" eran
+    // indistinguibles —los dos primeros ni siquiera dejaban rastro—, y por eso este flujo pudo
+    // estar caído en producción sin que nadie lo notara.
+    if (!user) {
+      this.logger.warn(
+        `Recuperación de contraseña solicitada para un correo sin usuario registrado (${email}). No se envía correo.`,
+      );
+      return this.genericPasswordResetResponse();
     }
 
+    if (!user.isActive) {
+      this.logger.warn(
+        `Recuperación de contraseña solicitada para el usuario inactivo ${user.id}. No se envía correo.`,
+      );
+      return this.genericPasswordResetResponse();
+    }
+
+    // La emisión del código (base de datos) se separa del envío (SendGrid): antes ambos
+    // compartían el mismo catch y un fallo al escribir en `password_reset_codes` se reportaba
+    // como "no se pudo enviar el correo", apuntando al proveedor equivocado.
+    let resetCode: { code: string };
+    try {
+      resetCode = await this.passwordResetCodeService.issue(user.id);
+    } catch (error) {
+      this.logger.error(
+        `No se pudo EMITIR el código de recuperación para el usuario ${user.id} (fallo al escribir en base de datos, no del proveedor de correo): ${
+          error instanceof Error ? error.stack : String(error)
+        }`,
+      );
+      return this.genericPasswordResetResponse();
+    }
+
+    try {
+      await this.emailService.sendPasswordResetOtpNotification(
+        user.email,
+        resetCode.code,
+      );
+    } catch (error) {
+      // Best-effort, igual que el resto del código (ver UserService.createFromSignup): un
+      // fallo de SendGrid no debe delatar nada distinto al mensaje genérico ni tumbar la
+      // respuesta — el usuario puede volver a pedir el código.
+      this.logger.error(
+        `No se pudo ENVIAR el correo de recuperación de contraseña a ${user.email} (el código sí quedó emitido): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    return this.genericPasswordResetResponse();
+  }
+
+  /** Respuesta única del flujo de recuperación: idéntica en todos los casos (anti-enumeración). */
+  private genericPasswordResetResponse(): BaseResponse<null> {
     return {
       success: true,
       message: PASSWORD_RESET_GENERIC_MESSAGE,

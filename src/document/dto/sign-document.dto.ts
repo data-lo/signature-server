@@ -1,6 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
+import { plainToInstance, Transform, Type } from 'class-transformer';
+
+/** Devuelve el objeto parseado, o el string original si no es JSON válido (para que falle la validación, no el parseo). */
+function tryParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
 import {
+  IsDefined,
+  IsNotEmptyObject,
   IsNumber,
   IsOptional,
   IsString,
@@ -57,31 +68,45 @@ export class SignDocumentDto {
   password?: string;
 
   /**
-   * Opcional: rechazar el permiso de ubicación en el navegador no bloquea la firma (ver
-   * historia "Capturar y almacenar la geolocalización al firmar documentos") — cuando no llega,
-   * `CollaboratorEntity.geoLoc` queda en null y la evidencia lo refleja como no disponible.
+   * OBLIGATORIA: sin ubicación no se puede firmar. Antes era opcional (rechazar el permiso del
+   * navegador dejaba `geoLoc` en null y la firma seguía adelante); el requisito cambió y ahora
+   * la ubicación es parte no negociable de la evidencia de firma, así que su ausencia corta el
+   * proceso con un 400 en vez de registrar una firma sin ella.
+   *
+   * La validación vive aquí, en el servidor, y no solo en la UI: el bloqueo del cliente es
+   * evitable llamando al endpoint directamente, y esta es evidencia de una firma legalmente
+   * vinculante.
    *
    * Este endpoint siempre recibe multipart/form-data (lo exige `FileFieldsInterceptor`, usado
    * para los archivos `.key`/`.cer` de FIEL) — multer entrega cada campo de texto como string
-   * plano, así que `geolocation` llega como JSON serializado, no como objeto. El `@Transform`
-   * lo parsea antes de que corran `@ValidateNested`/`@Type`; si no es JSON válido se deja tal
-   * cual para que la validación de tipos falle con un 400 claro en vez de reventar aquí.
+   * plano, así que `geolocation` llega como JSON serializado, no como objeto.
+   *
+   * El `@Transform` devuelve una INSTANCIA de `GeolocationDto`, no el objeto plano del
+   * `JSON.parse`. Es imprescindible: cuando `@Transform` está presente, class-transformer usa su
+   * resultado tal cual y `@Type(() => GeolocationDto)` ya no se aplica. Con un objeto plano sin
+   * metadatos de clase, `@ValidateNested()` no validaba nada (se aceptaban coordenadas fuera de
+   * rango) y `whitelist: true` del ValidationPipe global borraba sus propiedades, guardando
+   * `{}` como evidencia de ubicación en TODA firma hecha por esta vía. Si el JSON es inválido se
+   * deja el valor tal cual para que la validación falle con un 400 claro en vez de reventar aquí.
    */
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: GeolocationDto,
     description:
-      'Serializado como JSON string dentro del multipart/form-data (ver @Transform).',
+      'Obligatoria. Serializado como JSON string dentro del multipart/form-data (ver @Transform).',
   })
-  @IsOptional()
+  @IsDefined({
+    message: 'La geolocalización es obligatoria para poder firmar el documento',
+  })
   @Transform(({ value }) => {
-    if (typeof value !== 'string') return value;
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
+    const raw: unknown =
+      typeof value === 'string' ? tryParseJson(value) : value;
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return raw;
     }
+    return plainToInstance(GeolocationDto, raw);
   })
+  @IsNotEmptyObject({ nullable: false })
   @ValidateNested()
   @Type(() => GeolocationDto)
-  geolocation?: GeolocationDto;
+  geolocation: GeolocationDto;
 }
