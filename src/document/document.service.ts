@@ -1347,7 +1347,6 @@ export class DocumentService {
       cerFile.buffer,
       keyFile.buffer,
       password,
-      {permitirDegradadoSiOCSPFalla: false}
     ) as SignatureResult;
   }
 

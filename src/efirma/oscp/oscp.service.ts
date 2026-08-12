@@ -1,20 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable} from '@nestjs/common';
 import { Logger } from '@nestjs/common';
 import { X509Certificate } from 'crypto';
 import { OCSPEvidence } from '../interfaces/OCSPEvidence.interface';
 import { getCertStatus } from 'easy-ocsp'
 import { OCSPNotAvilableException, CertificadoRevocadoException } from '../efirma.exceptions';
 
-
-
-const SAT_OCSP_URL = 'https://cfdi.sat.gob.mx/edofiel'
+const SAT_OCSP_URL = 'https://cfdi.sat.gob.mx/edofiel';
 const SAT_OCSP_TIMEOUT_MS = 5000;
 
 @Injectable()
-export class OscpService {
+export class OscpService{
     private readonly logger = new Logger(OscpService.name);
-
-
     async verifyRevokedOCSP(
         cerBuffer: Buffer,
         emisor: X509Certificate,
@@ -27,6 +23,7 @@ export class OscpService {
                 ocspUrl: SAT_OCSP_URL,
                 timeout: SAT_OCSP_TIMEOUT_MS,
                 rawResponse: true,
+                enableNonce: false,
             });
 
         }catch(err){
@@ -45,7 +42,7 @@ export class OscpService {
             verifiedAt: new Date(),
             thisUpdate: result.thisUpdate,
             nextUpdate: result.nextUpdate,
-            rawResponseBase64: (result as any).rawResponse ?
+            ocspResponse: (result as any).rawResponse ?
                 Buffer.from((result as any).rawResponse).toString('base64')
                 : '',
                 ocspUrl: SAT_OCSP_URL,

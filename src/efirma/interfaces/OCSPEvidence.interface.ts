@@ -3,6 +3,6 @@ export interface OCSPEvidence {
     verifiedAt: Date;
     thisUpdate: Date;
     nextUpdate: Date;
-    rawResponseBase64: string;
+    ocspResponse: string;
     ocspUrl: string; 
 }

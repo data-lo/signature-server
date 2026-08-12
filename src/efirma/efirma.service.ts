@@ -29,7 +29,9 @@ export class EfirmaService implements OnModuleInit {
   private readonly logger = new Logger(EfirmaService.name);
   private cadenaConfianza: X509Certificate[] = [];
 
-  constructor(private readonly ocspService: OscpService) {}
+  constructor(
+    private readonly ocspService: OscpService
+  ) {}
 
   onModuleInit() {
     this.cadenaConfianza = this.cargarCertificadosDeConfianza();
@@ -63,7 +65,7 @@ export class EfirmaService implements OnModuleInit {
     return {
       rfc,
       nombre: this.extraerCampoSubject(cert.subject, 'CN') ?? '',
-      emisor: cert.issuer,
+      emisor: this.extraerCampoSubject(cert.issuer, 'O') ?? '',
       numeroCertificado: this.serialAFormatoSat(cert.serialNumber),
       numeroSerial: cert.serialNumber,
       vigenciaDesde: new Date(cert.validFrom),
@@ -194,7 +196,6 @@ export class EfirmaService implements OnModuleInit {
     cerBuffer: Buffer,
     keyBuffer: Buffer,
     password: string,
-    opciones: { permitirDegradadoSiOCSPFalla?: boolean } = {},
   ): Promise<SignatureResult> {
     const infoCertificado = this.parsearCertificado(cerBuffer);
     this.validarVigencia(infoCertificado);
@@ -207,7 +208,7 @@ export class EfirmaService implements OnModuleInit {
       if (err instanceof CertificadoRevocadoException) {
         throw err; 
       }
-      if (err instanceof OCSPNotAvilableException && opciones.permitirDegradadoSiOCSPFalla) {
+      if (err instanceof OCSPNotAvilableException) {
         this.logger.warn(
           `Firmando en modo degradado sin confirmación OCSP: ${(err as Error).message}`,
         );
@@ -218,26 +219,24 @@ export class EfirmaService implements OnModuleInit {
 
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
     this.validarParCertificadoLlave(cerBuffer, privateKey);
-
-    const originalHash = this.calcularHashDocumento(document);
     const signatureBase64 = this.firmarDocumento(document, privateKey);
     this.logger.log(
       `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`,
     );
 
     return {
-      originalHash,
       signatureBase64,
       algorithm: 'sha256',
       signedAt: new Date(),
       certificate: {
         rfc: infoCertificado.rfc,
         name: infoCertificado.nombre,
+        issuer: infoCertificado.emisor,
         serialNumber: infoCertificado.numeroSerial,
         certificateNumber: infoCertificado.numeroCertificado,
         certificatePem: infoCertificado.certificadoPem,
       },
-      ocspEvidence, // <- tu evidencia de no-revocación al momento de firmar
+      ocspEvidence,
     };
   }
 
