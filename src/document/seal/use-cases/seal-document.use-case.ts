@@ -1,52 +1,54 @@
-import { BadGatewayException, HttpException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { SealDocumentDto } from '../dto/seal-document.dto';
-import { HttpService } from '@nestjs/axios';
 import { SealEntity } from '../entities/seal.entity';
-import { Repository } from 'typeorm';
-import { SealDocumentResponse } from '../interfaces/seal-document-response.interface';
-import { firstValueFrom } from 'rxjs';
+import { QueryFailedError, Repository } from 'typeorm';
+import { SealApiService } from '../services/seal-api.service';
+import { SealMapper } from '../mappers/seal.mapper';
+import {
+  DocumentAlreadySealedException,
+  SealPersistenceException,
+} from '../exceptions/seal.exceptions';
 
 @Injectable()
 export class SealDocumentUseCase {
+  private readonly logger = new Logger(SealDocumentUseCase.name);
 
   constructor(
-    readonly httpService: HttpService,
-    readonly sealRepository: Repository<SealEntity>
-  ) {
+    private readonly sealApiService: SealApiService,
+    @InjectRepository(SealEntity)
+    private readonly sealRepository: Repository<SealEntity>,
+  ) {}
 
+  async create(sealDocumentDto: SealDocumentDto): Promise<SealEntity> {
+    const response =
+      await this.sealApiService.generateDocumentSeals(sealDocumentDto);
+
+    const seal = this.sealRepository.create(
+      SealMapper.toEntity(sealDocumentDto, response),
+    );
+
+    try {
+      return await this.sealRepository.save(seal);
+    } catch (error) {
+      if (this.isDocumentAlreadySealedError(error)) {
+        throw new DocumentAlreadySealedException();
+      }
+
+      this.logger.error(
+        `No se pudo guardar la evidencia del documento ${sealDocumentDto.documentId}.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new SealPersistenceException();
+    }
   }
 
-  async create(sealDocumentDto: SealDocumentDto) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.post<SealDocumentResponse>(
-          `${process.env.SEAL_SERVICE_URL}/seal/signature`,
-          sealDocumentDto,
-          {
-            headers: {
-              'x-api-key': process.env.SEAL_SERVICE_API_KEY,
-            },
-            timeout: 15_000,
-          },
-        ),
-      );
-
-      if (!data) {
-
-      }
-
-      const newDocumentSeal = this.sealRepository.save(data)
-
-      return 
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-
-      throw new InternalServerErrorException(
-        'No fue posible completar el sellado del documento.',
-      );
+  private isDocumentAlreadySealedError(error: unknown): boolean {
+    if (!(error instanceof QueryFailedError)) {
+      return false;
     }
 
+    const driverError = error.driverError as { code?: string } | undefined;
+    return driverError?.code === '23505';
   }
 }
