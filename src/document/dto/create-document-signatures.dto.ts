@@ -32,10 +32,16 @@ export enum PAYLOAD_COLABORATOR_TYPE_ENUM {
   VIEWER = 'VIEWER',
 }
 
+/**
+ * Espejo de `documentData.signatureType` en vocabulario de dominio. Ya no admite `MIX`: desde la
+ * historia "Selección de tipo de firma al crear documentos" un documento tiene UN tipo de firma
+ * para todos sus firmantes, así que un documento con "firmas distintas" dejó de ser un estado
+ * alcanzable — `DocumentSignaturesService` rechaza el payload si este campo contradice a
+ * `documentData.signatureType`.
+ */
 export enum REQUIRES_DIFFERENT_SIGNATURES_ENUM {
   SIMPLE = 'SIMPLE',
   FIEL = 'FIEL',
-  MIX = 'MIX',
 }
 
 /**
@@ -111,6 +117,17 @@ export class DocumentDataDto {
   @IsNotEmpty()
   fileName: string;
 
+  /**
+   * Tipo de firma exigido a TODOS los firmantes del documento (historia "Selección de tipo de
+   * firma al crear documentos"). Es obligatorio y es la única fuente de verdad del flujo: antes
+   * cada colaborador traía el suyo, y una combinación de tipos producía un documento "mixto" que
+   * ningún proceso de firma implementa. Al vivir a nivel documento, esa configuración inválida
+   * deja de ser expresable en el contrato — no hay que detectarla, no se puede construir.
+   */
+  @ApiProperty({ enum: PAYLOAD_SIGNATURE_TYPE_ENUM })
+  @IsEnum(PAYLOAD_SIGNATURE_TYPE_ENUM)
+  signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM;
+
   @ApiPropertyOptional({
     default: false,
     description:
@@ -150,33 +167,27 @@ export class CollaboratorPayloadDto {
   email: string;
 
   /**
-   * Obligatorio si collaboratorType es VIEWER, o si es SIGNER con signatureType ADVANCED —
-   * ambas condiciones se resuelven sobre el propio objeto (sin depender de ningún default a
-   * nivel documento, a diferencia de la versión anterior de este DTO).
+   * Obligatorio SOLO para VIEWER. Los firmantes ya no lo mandan en ningún flujo (historia
+   * "Selección de tipo de firma al crear documentos"): en firma simple nunca se pidió, y en firma
+   * avanzada el RFC real se extrae del certificado de e.firma al momento de firmar (ver
+   * `EfirmaService.extaerRfcDeSubject`) — pedirlo al crear el documento capturaba un dato que
+   * nadie contrastaba contra el certificado. `DocumentSignaturesService` descarta lo que llegue
+   * acá para un SIGNER, así que un cliente viejo no puede reintroducirlo.
    */
   @ApiPropertyOptional({ example: 'PEAJ800101XXX', nullable: true })
   @ValidateIf(
     (c: CollaboratorPayloadDto) =>
-      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER ||
-      c.signatureType === PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER,
   )
   @IsString()
   @IsNotEmpty()
   rfc?: string | null;
 
-  /** Obligatorio (y solo aplica) cuando collaboratorType es SIGNER. */
-  @ApiPropertyOptional({ enum: PAYLOAD_SIGNATURE_TYPE_ENUM })
-  @ValidateIf(
-    (c: CollaboratorPayloadDto) =>
-      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-  )
-  @IsEnum(PAYLOAD_SIGNATURE_TYPE_ENUM)
-  signatureType?: PAYLOAD_SIGNATURE_TYPE_ENUM;
-
   /**
    * Ubicaciones de firma de este colaborador (ver historia "Ubicación de firmas por usuario").
-   * Solo aplica a SIGNER; el backend además refuerza requiresTwoFactorAuth=true para SIMPLE sin
-   * importar lo que llegue en el payload (ver DocumentSignaturesService). Un arreglo vacío u
+   * Solo aplica a SIGNER; el backend además refuerza requiresTwoFactorAuth=true cuando el
+   * documento es de firma SIMPLE, sin importar lo que llegue en el payload (ver
+   * DocumentSignaturesService). Un arreglo vacío u
    * omitido es válido: significa que este firmante no tiene ninguna posición asignada, y al
    * firmar se valida su firma sin estampar nada en el PDF (ver finalizeSignedDocument).
    */
@@ -221,9 +232,10 @@ export class CreateDocumentSignaturesDto {
   collaborators: CollaboratorPayloadDto[];
 
   /**
-   * Calculado por el frontend a partir de los SIGNER del arreglo (ver historia) — el backend lo
-   * acepta por compatibilidad de contrato pero no confía en él para nada: recalcula el
-   * signatureType real de cada documento a partir de los propios `collaborators`.
+   * Redundante con `documentData.signatureType` desde la historia "Selección de tipo de firma al
+   * crear documentos": se mantiene por compatibilidad del contrato multipart, pero ya no es una
+   * entrada — el backend no lee de acá el tipo de firma, solo verifica que no contradiga a
+   * `documentData.signatureType` y rechaza el payload si lo hace (ver DocumentSignaturesService).
    */
   @ApiPropertyOptional({ enum: REQUIRES_DIFFERENT_SIGNATURES_ENUM })
   @IsOptional()
