@@ -23,6 +23,7 @@ import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from '../verification-code.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
+import { SummaryDocumentService } from '../summary-document/summary-document.service';
 
 import { SealDocumentUseCase } from './use-cases/seal-document.use-case';
 import { SealApiService } from './services/seal-api.service';
@@ -218,11 +219,16 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
           provide: HashService,
           useValue: {
             generateFileHash: jest.fn().mockResolvedValue('hash-firmado'),
+            generateCiperHash: jest.fn().mockResolvedValue('cifrado'),
           },
         },
         {
           provide: UserService,
-          useValue: { findOne: jest.fn().mockResolvedValue({ id: 'user-1' }) },
+          useValue: {
+            findOne: jest
+              .fn()
+              .mockResolvedValue({ id: 'user-1', email: 'creador@correo.com' }),
+          },
         },
         {
           provide: PdfSignatureService,
@@ -232,6 +238,19 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
             getPdfPages: jest.fn(),
             stampRejectedWatermark: jest.fn(),
             stampCancelledWatermark: jest.fn(),
+            appendPdfPages: jest
+              .fn()
+              .mockResolvedValue(Buffer.from('pdf-final')),
+          },
+        },
+        {
+          // La hoja de firmas se anexa dentro de la misma finalización que dispara el sellado
+          // (ver historia "Anexar hoja existente de información de firmas al documento final").
+          provide: SummaryDocumentService,
+          useValue: {
+            generateSummaryPdf: jest
+              .fn()
+              .mockResolvedValue(Buffer.from('hoja-de-firmas')),
           },
         },
         { provide: SignatureService, useValue: { findOne: jest.fn() } },

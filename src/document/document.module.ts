@@ -17,6 +17,7 @@ import { AccountModule } from 'src/account/account.module';
 import { DocumentTransactionModule } from './document-transaction.module';
 import { EfirmaModule } from 'src/efirma/efirma.module';
 import { SealModule } from './seal/seal.module';
+import { SummaryDocumentModule } from './summary-document/summary-document.module';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -40,6 +41,7 @@ import { SealModule } from './seal/seal.module';
     DocumentTransactionModule,
     EfirmaModule,
     SealModule,
+    SummaryDocumentModule,
   ],
   exports: [DocumentService],
 })

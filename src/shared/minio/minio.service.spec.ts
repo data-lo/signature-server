@@ -24,6 +24,7 @@ describe('MinioService', () => {
     process.env.MINIO_SECRET_KEY = 'test-secret-key';
     process.env.MINIO_CREATED_DOCUMENTS_BUCKET = 'created-documents';
     process.env.MINIO_SIGNED_DOCUMENTS_BUCKET = 'signed-documents';
+    process.env.MINIO_FINALIZED_DOCUMENTS_BUCKET = 'finalized-documents';
     process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET = 'cancelled-documents';
     process.env.MINIO_REJECTED_DOCUMENTS_BUCKET = 'rejected-documents';
     process.env.MINIO_OFICIAL_CARDS_BUCKET = 'oficial-id-cards';
