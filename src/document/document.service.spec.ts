@@ -1763,6 +1763,106 @@ describe('DocumentService', () => {
     });
   });
 
+  /**
+   * `GET /document/file/:id` no es la única ruta que entrega el archivo: el detalle
+   * (`GET /document/:id`, lo que realmente renderiza el visor de la pantalla de firma) y el
+   * listado con `withUrl` traen su propio `secureUrl`. Los tres tienen que resolver el bucket
+   * por el mismo STATUS_BUCKET_MAP; si alguno se quedara en el bucket original, un documento ya
+   * firmado volvería a mostrarse sin firmas por esa vía aunque `getDocumentMinioURL` esté bien.
+   */
+  describe('bucket según el estatus en el resto de las rutas de lectura', () => {
+    const detailBucketCases: Array<[DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM]> =
+      [
+        [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS],
+        [
+          DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
+          BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        ],
+        [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
+        [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
+        [DOCUMENT_STATUS_ENUM.PENDING, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      ];
+
+    it.each(detailBucketCases)(
+      'findDetailForUser (GET /document/:id) con status=%s sirve el archivo desde %s',
+      async (status, expectedBucket) => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          fileType: 'application/pdf',
+          totalPages: 1,
+          objectKey: 'object-key-1',
+          status,
+          createdBy: 'creator-1',
+          requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+          collaborators: [buildSigner({ userId: 'user-1' })],
+        } as unknown as DocumentEntity);
+
+        await service.findDetailForUser('doc-1', 'user-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          expectedBucket,
+        );
+      },
+    );
+
+    it('findWithFilters (GET /document?withUrl=true) sirve cada documento desde el bucket de su propio estatus', async () => {
+      const qb: any = {};
+      [
+        'where',
+        'andWhere',
+        'leftJoinAndSelect',
+        'orderBy',
+        'skip',
+        'take',
+      ].forEach((method) => {
+        qb[method] = jest.fn().mockReturnValue(qb);
+      });
+      qb.getManyAndCount = jest.fn().mockResolvedValue([
+        [
+          {
+            id: 'doc-firmado',
+            fileName: 'firmado.pdf',
+            objectKey: 'object-key-firmado',
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+            collaborators: [],
+          },
+          {
+            id: 'doc-pendiente',
+            fileName: 'pendiente.pdf',
+            objectKey: 'object-key-pendiente',
+            status: DOCUMENT_STATUS_ENUM.PENDING,
+            requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+            collaborators: [],
+          },
+        ],
+        2,
+      ]);
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        page: 1,
+        limit: 10,
+        withUrl: true,
+      } as any);
+
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-firmado',
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      );
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-pendiente',
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      );
+    });
+  });
+
   // Test de caracterización (Fase 0/3 de la migración ER-V2): findDetailForUser() y sign()
   // calculan "a quién le toca firmar" de forma independiente (una en memoria sobre
   // document.collaborators, la otra sobre signerCollaborators cargados del repositorio).
