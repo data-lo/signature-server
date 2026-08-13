@@ -18,11 +18,10 @@ export class SealDocumentUseCase {
     private readonly sealApiService: SealApiService,
     @InjectRepository(SealEntity)
     private readonly sealRepository: Repository<SealEntity>,
-  ) {}
+  ) { }
 
   async create(sealDocumentDto: SealDocumentDto): Promise<SealEntity> {
-    const response =
-      await this.sealApiService.generateDocumentSeals(sealDocumentDto);
+    const response = await this.sealApiService.generateDocumentSeals(sealDocumentDto);
 
     const seal = this.sealRepository.create(
       SealMapper.toEntity(sealDocumentDto, response),
