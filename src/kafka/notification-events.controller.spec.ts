@@ -113,8 +113,12 @@ describe('NotificationEventsConsumer', () => {
       'Firmante Uno',
       'creador@correo.com',
       'contrato.pdf',
-      expect.stringContaining('/documents/doc-1'),
-      expect.stringContaining('/documents'),
+      // El enlace debe entrar por /access-document (no por /documents/:id, que se pierde en el
+      // redirect a /login cuando el destinatario abre el correo sin sesión).
+      expect.stringContaining(
+        '/access-document?docId=doc-1&collabId=collaborator-1',
+      ),
+      expect.stringContaining('/dashboard/documents'),
     );
   });
 

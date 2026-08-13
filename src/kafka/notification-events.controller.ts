@@ -24,6 +24,10 @@ import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from 'src/document/utils/collaborator-display.util';
+import {
+  buildAllDocumentsUrl,
+  buildDocumentAccessUrl,
+} from 'src/document/utils/document-access-url.util';
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 
 @Controller()
@@ -121,15 +125,14 @@ export class NotificationEventsConsumer {
     }
 
     const recipientName = collaboratorDisplayName(collaborator);
-    const frontendUrl = process.env.FRONTEND_URL ?? 'http://frontend:3000';
 
     await this.emailService.sendDocumentPendingNotification(
       recipientEmail,
       recipientName,
       creator.email,
       document.fileName,
-      `${frontendUrl}/documents/${document.id}`,
-      `${frontendUrl}/documents`,
+      buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
+      buildAllDocumentsUrl(),
     );
 
     this.logger.log(

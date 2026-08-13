@@ -436,6 +436,97 @@ describe('AuthService', () => {
 
       expect(result.success).toBe(true);
     });
+
+    /**
+     * Este flujo estuvo caído en producción sin que nadie lo notara: todos los motivos por los
+     * que no se manda el correo devuelven el mismo mensaje genérico (correcto, anti-enumeración)
+     * y además NO dejaban rastro en el servidor. Cada motivo debe quedar registrado por
+     * separado, sin cambiar jamás la respuesta al cliente.
+     */
+    describe('diagnóstico en el servidor (sin romper la anti-enumeración)', () => {
+      const GENERIC =
+        'Si el correo está registrado, recibirás un código de verificación';
+
+      it('si falla la EMISIÓN del código (base de datos), lo registra como tal y no lo atribuye al correo', async () => {
+        const warn = jest
+          .spyOn(service['logger'], 'error')
+          .mockImplementation(() => undefined);
+        passwordResetCodeService.issue.mockRejectedValue(
+          new Error('relation "password_reset_codes" does not exist'),
+        );
+
+        const result = await service.forgotPassword(dto);
+
+        expect(
+          emailService.sendPasswordResetOtpNotification,
+        ).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(/no se pudo EMITIR el código/i),
+        );
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(/password_reset_codes/),
+        );
+        // La respuesta al cliente no cambia.
+        expect(result).toEqual({ success: true, message: GENERIC, data: null });
+      });
+
+      it('deja rastro cuando el correo no corresponde a ningún usuario', async () => {
+        const warn = jest
+          .spyOn(service['logger'], 'warn')
+          .mockImplementation(() => undefined);
+        userService.findOneByEmail.mockResolvedValue(null);
+
+        const result = await service.forgotPassword(dto);
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(/sin usuario registrado/i),
+        );
+        expect(result.message).toBe(GENERIC);
+      });
+
+      it('deja rastro cuando el usuario está inactivo', async () => {
+        const warn = jest
+          .spyOn(service['logger'], 'warn')
+          .mockImplementation(() => undefined);
+        userService.findOneByEmail.mockResolvedValue({
+          ...user,
+          isActive: false,
+        });
+
+        const result = await service.forgotPassword(dto);
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(/usuario inactivo/i),
+        );
+        expect(result.message).toBe(GENERIC);
+      });
+
+      it('la respuesta es byte a byte idéntica en los cuatro escenarios', async () => {
+        jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+        jest
+          .spyOn(service['logger'], 'error')
+          .mockImplementation(() => undefined);
+
+        const ok = await service.forgotPassword(dto);
+
+        userService.findOneByEmail.mockResolvedValue(null);
+        const inexistente = await service.forgotPassword(dto);
+
+        userService.findOneByEmail.mockResolvedValue({
+          ...user,
+          isActive: false,
+        });
+        const inactivo = await service.forgotPassword(dto);
+
+        userService.findOneByEmail.mockResolvedValue(user);
+        passwordResetCodeService.issue.mockRejectedValue(new Error('db caida'));
+        const fallo = await service.forgotPassword(dto);
+
+        expect(inexistente).toEqual(ok);
+        expect(inactivo).toEqual(ok);
+        expect(fallo).toEqual(ok);
+      });
+    });
   });
 
   describe('verifyResetCode', () => {

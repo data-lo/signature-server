@@ -38,6 +38,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from './document-transaction.service';
+import { buildDocumentAccessUrl } from './utils/document-access-url.util';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -387,11 +388,8 @@ export class DocumentSignaturesService {
     // Igual que arriba: fuera de la transacción, y best-effort por destinatario — un correo que
     // falla no debe tumbar la creación del documento ni impedir que los demás se envíen (ver
     // historia "Notificación por Email para Firma Simple y Vinculación de Cuenta").
-    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3001';
     for (const { to, name, collaboratorId } of invitationEmailTargets) {
-      const accessUrl =
-        `${frontendUrl}/access-document?docId=${document.id}` +
-        `&collabId=${collaboratorId}&email=${encodeURIComponent(to)}`;
+      const accessUrl = buildDocumentAccessUrl(document.id, collaboratorId, to);
       try {
         await this.emailService.sendDocumentInvitationNotification(
           to,

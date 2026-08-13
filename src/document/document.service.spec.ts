@@ -74,6 +74,16 @@ function buildSigner(
   } as unknown as CollaboratorEntity;
 }
 
+/**
+ * Ubicación válida por defecto para las pruebas de firma. La geolocalización es obligatoria para
+ * firmar, así que toda llamada a `sign()` que espere completarse debe incluirla.
+ */
+const TEST_GEOLOCATION = {
+  latitude: 19.4326,
+  longitude: -99.1332,
+  accuracy: 15,
+};
+
 describe('DocumentService', () => {
   let service: DocumentService;
   let documentRepository: ReturnType<typeof createMockRepository>;
@@ -545,7 +555,12 @@ describe('DocumentService', () => {
       collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
       collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
 
-      const result = await service.sign('doc-1', 'user-1');
+      const result = await service.sign(
+        'doc-1',
+        'user-1',
+        undefined,
+        TEST_GEOLOCATION,
+      );
 
       expect(result.success).toBe(true);
       expect(collaboratorRepository.save).toHaveBeenCalledWith(
@@ -575,9 +590,9 @@ describe('DocumentService', () => {
       collaboratorRepository.find.mockResolvedValue([onlySigner]);
       collaboratorRepository.update.mockResolvedValue({ affected: 0 });
 
-      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(BadRequestException);
       // No debe desperdiciarse ningún trabajo de MinIO/estampado en una carrera perdida.
       expect(minioService.uploadObject).not.toHaveBeenCalled();
       expect(
@@ -593,7 +608,12 @@ describe('DocumentService', () => {
         .mockResolvedValueOnce([onlySigner]) // signerCollaborators en sign()
         .mockResolvedValueOnce([onlySigner]); // collaboratorRepository.find en sendCompletionEmails
 
-      const result = await service.sign('doc-1', 'user-1');
+      const result = await service.sign(
+        'doc-1',
+        'user-1',
+        undefined,
+        TEST_GEOLOCATION,
+      );
 
       expect(result.success).toBe(true);
       expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalled();
@@ -611,7 +631,7 @@ describe('DocumentService', () => {
         .mockResolvedValueOnce([onlySigner])
         .mockResolvedValueOnce([onlySigner]);
 
-      await service.sign('doc-1', 'user-1');
+      await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
 
       expect(userService.findOne).toHaveBeenCalledWith('creator-1');
       expect(
@@ -637,7 +657,7 @@ describe('DocumentService', () => {
       collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
       collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
 
-      await service.sign('doc-1', 'user-1');
+      await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
 
       expect(minioService.getFileInBytesFormat).toHaveBeenCalledWith(
         'sig-key',
@@ -669,7 +689,7 @@ describe('DocumentService', () => {
         .mockResolvedValueOnce([signerA, signerB])
         .mockResolvedValueOnce([signerA, signerB]);
 
-      await service.sign('doc-1', 'user-b');
+      await service.sign('doc-1', 'user-b', undefined, TEST_GEOLOCATION);
 
       // El PDF final debe estampar el snapshot ya guardado de signerA (tomado cuando signerA
       // realmente firmó), no volver a resolver su firma "en vivo" en este momento.
@@ -687,7 +707,7 @@ describe('DocumentService', () => {
         .mockResolvedValueOnce([onlySigner])
         .mockResolvedValueOnce([onlySigner]);
 
-      await service.sign('doc-1', 'user-1');
+      await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
 
       expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalledWith(
         expect.anything(),
@@ -714,7 +734,7 @@ describe('DocumentService', () => {
         .mockResolvedValueOnce([signerA, signerB])
         .mockResolvedValueOnce([signerA, signerB]);
 
-      await service.sign('doc-1', 'user-b');
+      await service.sign('doc-1', 'user-b', undefined, TEST_GEOLOCATION);
 
       const calls = documentSigningService.mergeSignatureIntoPdf.mock.calls;
       expect(calls[0][2]).toEqual(explicitCoords);
@@ -753,7 +773,7 @@ describe('DocumentService', () => {
         .mockResolvedValueOnce([onlySigner])
         .mockResolvedValueOnce([onlySigner]);
 
-      await service.sign('doc-1', 'user-1');
+      await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
 
       expect(documentSigningService.resolveRatioPosition).toHaveBeenCalledTimes(
         2,
@@ -780,7 +800,12 @@ describe('DocumentService', () => {
         .mockResolvedValueOnce([onlySigner])
         .mockResolvedValueOnce([onlySigner]);
 
-      const result = await service.sign('doc-1', 'user-1');
+      const result = await service.sign(
+        'doc-1',
+        'user-1',
+        undefined,
+        TEST_GEOLOCATION,
+      );
 
       expect(result.success).toBe(true);
       expect(
@@ -797,9 +822,9 @@ describe('DocumentService', () => {
         mockDocument({ status: DOCUMENT_STATUS_ENUM.CREATED }),
       );
 
-      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('rechaza si el usuario no es firmante del documento', async () => {
@@ -808,9 +833,9 @@ describe('DocumentService', () => {
         buildSigner({ userId: 'otro-usuario' }),
       ]);
 
-      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('rechaza si el firmante ya respondió antes', async () => {
@@ -822,9 +847,9 @@ describe('DocumentService', () => {
         }),
       ]);
 
-      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('rechaza si aún no es el turno del firmante', async () => {
@@ -834,9 +859,9 @@ describe('DocumentService', () => {
         buildSigner({ id: 'p-1', userId: 'user-1', signingOrder: 1 }),
       ]);
 
-      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('rechaza si el firmante no tiene credencial de firma activa', async () => {
@@ -850,9 +875,9 @@ describe('DocumentService', () => {
         officialCardObjectKey: null,
       });
 
-      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('rechaza si el documento requiere verificación y el firmante no ha validado su código (Fase 7)', async () => {
@@ -864,9 +889,9 @@ describe('DocumentService', () => {
       ]);
       verificationCodeService.hasConsumedCode.mockResolvedValue(false);
 
-      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(BadRequestException);
       expect(verificationCodeService.hasConsumedCode).toHaveBeenCalledWith(
         'doc-1',
         'collaborator-1',
@@ -888,7 +913,12 @@ describe('DocumentService', () => {
       collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
       verificationCodeService.hasConsumedCode.mockResolvedValue(true);
 
-      const result = await service.sign('doc-1', 'user-1');
+      const result = await service.sign(
+        'doc-1',
+        'user-1',
+        undefined,
+        TEST_GEOLOCATION,
+      );
 
       expect(result.success).toBe(true);
     });
@@ -916,7 +946,12 @@ describe('DocumentService', () => {
         accountId: null,
       });
 
-      const result = await service.sign('doc-1', 'user-1');
+      const result = await service.sign(
+        'doc-1',
+        'user-1',
+        undefined,
+        TEST_GEOLOCATION,
+      );
 
       expect(result.success).toBe(true);
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
@@ -936,7 +971,12 @@ describe('DocumentService', () => {
       });
       collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
 
-      const result = await service.sign('doc-1', 'user-b');
+      const result = await service.sign(
+        'doc-1',
+        'user-b',
+        undefined,
+        TEST_GEOLOCATION,
+      );
 
       expect(result.success).toBe(true);
     });
@@ -974,11 +1014,16 @@ describe('DocumentService', () => {
           buffer: Buffer.from('cert'),
         });
 
-        const result = await service.sign('doc-1', 'user-1', {
-          password: 'clave-correcta',
-          keyFile,
-          cerFile,
-        });
+        const result = await service.sign(
+          'doc-1',
+          'user-1',
+          {
+            password: 'clave-correcta',
+            keyFile,
+            cerFile,
+          },
+          TEST_GEOLOCATION,
+        );
 
         expect(result.success).toBe(true);
         expect(efirmaService.firmar).toHaveBeenCalledWith(
@@ -1021,9 +1066,9 @@ describe('DocumentService', () => {
           };
           delete input[field];
 
-          await expect(service.sign('doc-1', 'user-1', input)).rejects.toThrow(
-            expectedMessage,
-          );
+          await expect(
+            service.sign('doc-1', 'user-1', input, TEST_GEOLOCATION),
+          ).rejects.toThrow(expectedMessage);
           expect(efirmaService.firmar).not.toHaveBeenCalled();
           // El claim atómico (que marca SIGNED) tampoco debe haber corrido.
           expect(collaboratorRepository.update).not.toHaveBeenCalled();
@@ -1037,10 +1082,15 @@ describe('DocumentService', () => {
         collaboratorRepository.find.mockResolvedValue([signerA]);
 
         await expect(
-          service.sign('doc-1', 'user-1', {
-            keyFile: buildFile(),
-            cerFile: buildFile({ originalname: 'cert.cer' }),
-          }),
+          service.sign(
+            'doc-1',
+            'user-1',
+            {
+              keyFile: buildFile(),
+              cerFile: buildFile({ originalname: 'cert.cer' }),
+            },
+            TEST_GEOLOCATION,
+          ),
         ).rejects.toThrow('Falta la contraseña de la llave privada');
         expect(efirmaService.firmar).not.toHaveBeenCalled();
       });
@@ -1066,9 +1116,9 @@ describe('DocumentService', () => {
           };
           input[field] = buildFile(override);
 
-          await expect(service.sign('doc-1', 'user-1', input)).rejects.toThrow(
-            expectedExtension,
-          );
+          await expect(
+            service.sign('doc-1', 'user-1', input, TEST_GEOLOCATION),
+          ).rejects.toThrow(expectedExtension);
           expect(efirmaService.firmar).not.toHaveBeenCalled();
         },
       );
@@ -1080,11 +1130,16 @@ describe('DocumentService', () => {
         collaboratorRepository.find.mockResolvedValue([signerA]);
 
         await expect(
-          service.sign('doc-1', 'user-1', {
-            password: 'clave',
-            keyFile: buildFile({ size: 10 * 1024 * 1024 }),
-            cerFile: buildFile({ originalname: 'cert.cer' }),
-          }),
+          service.sign(
+            'doc-1',
+            'user-1',
+            {
+              password: 'clave',
+              keyFile: buildFile({ size: 10 * 1024 * 1024 }),
+              cerFile: buildFile({ originalname: 'cert.cer' }),
+            },
+            TEST_GEOLOCATION,
+          ),
         ).rejects.toThrow('excede el tamaño máximo permitido');
         expect(efirmaService.firmar).not.toHaveBeenCalled();
       });
@@ -1101,11 +1156,16 @@ describe('DocumentService', () => {
         });
 
         await expect(
-          service.sign('doc-1', 'user-1', {
-            password: 'clave-incorrecta',
-            keyFile: buildFile(),
-            cerFile: buildFile({ originalname: 'cert.cer' }),
-          }),
+          service.sign(
+            'doc-1',
+            'user-1',
+            {
+              password: 'clave-incorrecta',
+              keyFile: buildFile(),
+              cerFile: buildFile({ originalname: 'cert.cer' }),
+            },
+            TEST_GEOLOCATION,
+          ),
         ).rejects.toThrow('verifica la constraseña');
         // La validación corre ANTES del claim atómico: nunca debe quedar marcado SIGNED.
         expect(collaboratorRepository.update).not.toHaveBeenCalled();
@@ -1140,7 +1200,12 @@ describe('DocumentService', () => {
       );
     });
 
-    it('permite firmar sin geolocalización (permiso rechazado o no disponible) sin bloquear la firma', async () => {
+    /**
+     * La geolocalización pasó de opcional a obligatoria: antes, firmar sin ella guardaba
+     * `geoLoc: null` y la firma seguía adelante. Ahora se rechaza — la ubicación es parte no
+     * negociable de la evidencia de firma.
+     */
+    it('rechaza firmar sin geolocalización y no registra ninguna firma', async () => {
       const document = mockDocument();
       documentRepository.findOne.mockResolvedValue(document);
       const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
@@ -1151,15 +1216,12 @@ describe('DocumentService', () => {
       });
       collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
 
-      const result = await service.sign('doc-1', 'user-1');
+      await expect(service.sign('doc-1', 'user-1')).rejects.toThrow(
+        /geolocalización es obligatoria/i,
+      );
 
-      expect(result.success).toBe(true);
-      expect(collaboratorRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ geoLoc: null }),
-      );
-      expect(auditService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ geolocation: undefined }),
-      );
+      expect(collaboratorRepository.save).not.toHaveBeenCalled();
+      expect(auditService.create).not.toHaveBeenCalled();
     });
   });
 
@@ -1650,6 +1712,57 @@ describe('DocumentService', () => {
     });
   });
 
+  /**
+   * `GET /document/file/:id` debe resolver el bucket de MinIO a partir del estatus del documento
+   * (STATUS_BUCKET_MAP): un documento ya firmado tiene que servirse desde el bucket de firmados,
+   * no desde el original — devolver la versión sin firmar de un documento firmado fue un bug
+   * reportado.
+   */
+  describe('getDocumentMinioURL: bucket según el estatus del documento', () => {
+    it.each([
+      [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS],
+      [
+        DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      ],
+      [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
+      [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
+      [DOCUMENT_STATUS_ENUM.CREATED, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      [DOCUMENT_STATUS_ENUM.PENDING, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      [DOCUMENT_STATUS_ENUM.EXPIRED, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+    ])('status=%s resuelve el bucket %s', async (status, expectedBucket) => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status,
+        objectKey: 'object-key-1',
+      });
+
+      await service.getDocumentMinioURL('doc-1');
+
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-1',
+        expectedBucket,
+      );
+    });
+
+    it('nunca sirve el documento original cuando el documento ya está firmado', async () => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: DOCUMENT_STATUS_ENUM.SIGNED,
+        objectKey: 'object-key-1',
+      });
+
+      await service.getDocumentMinioURL('doc-1');
+
+      expect(minioService.getFile).not.toHaveBeenCalledWith(
+        'object-key-1',
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      );
+    });
+  });
+
   // Test de caracterización (Fase 0/3 de la migración ER-V2): findDetailForUser() y sign()
   // calculan "a quién le toca firmar" de forma independiente (una en memoria sobre
   // document.collaborators, la otra sobre signerCollaborators cargados del repositorio).
@@ -1705,11 +1818,16 @@ describe('DocumentService', () => {
       );
       collaboratorRepository.find.mockResolvedValue(participants);
 
-      await expect(service.sign('doc-1', 'user-c')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        service.sign('doc-1', 'user-c', undefined, TEST_GEOLOCATION),
+      ).rejects.toThrow(ForbiddenException);
 
-      const resultB = await service.sign('doc-1', 'user-b');
+      const resultB = await service.sign(
+        'doc-1',
+        'user-b',
+        undefined,
+        TEST_GEOLOCATION,
+      );
       expect(resultB.success).toBe(true);
     });
 
@@ -1829,7 +1947,9 @@ describe('DocumentService', () => {
 
     it('un colaborador con cuenta vinculada tiene acceso', async () => {
       documentRepository.findOne.mockResolvedValue(document);
-      collaboratorRepository.findOne.mockResolvedValue({ id: 'collaborator-1' });
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'collaborator-1',
+      });
 
       await expect(
         service.assertUserHasAccess('doc-1', 'user-2'),
