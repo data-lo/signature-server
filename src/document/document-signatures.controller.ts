@@ -58,7 +58,7 @@ export class DocumentSignaturesController {
   @ApiResponse({
     status: 400,
     description:
-      'Payload inválido, archivo no proporcionado, o colaborador con datos faltantes (rfc en VIEWER/ADVANCED, signatureType en SIGNER)',
+      'Payload inválido, archivo no proporcionado, tipo de firma del documento ausente o distinto de SIMPLE/ADVANCED, documento sin ningún SIGNER, o colaborador VIEWER sin rfc',
     type: BadRequestResponse,
   })
   @ApiResponse({
