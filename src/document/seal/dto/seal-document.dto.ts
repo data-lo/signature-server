@@ -1,14 +1,16 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMinSize,
   IsArray,
   IsDateString,
   IsNotEmpty,
   IsObject,
+  IsOptional,
   IsString,
   IsUUID,
   ValidateNested,
 } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class SatCertificateDto {
   @ApiProperty({ example: 'XAXX010101000' })
@@ -64,14 +66,22 @@ export class SealSignatureDto {
   @Type(() => SatCertificateDto)
   certificate: SatCertificateDto;
 
-  @ApiProperty({
+  /**
+   * Opcional: hoy nada la produce. `EfirmaService.firmar` (la única fuente de firmas avanzadas)
+   * no consulta OCSP —valida vigencia y cadena de confianza contra los certificados raíz del
+   * SAT—, y el contrato de Seal Service (`SignatureSealRequest`) ni siquiera declara este campo,
+   * así que exigirla hacía imposible construir un payload válido desde el propio flujo de firma.
+   * Se conserva el campo para cuando exista esa evidencia, sin bloquear el sellado mientras tanto.
+   */
+  @ApiPropertyOptional({
     type: 'object',
     additionalProperties: true,
     description:
       'Evidencia OCSP entregada por el proveedor de firma. Su estructura se conserva sin modificar.',
   })
+  @IsOptional()
   @IsObject()
-  ocspEvidence: Record<string, unknown>;
+  ocspEvidence?: Record<string, unknown>;
 }
 
 export class SealDocumentDto {
@@ -92,6 +102,7 @@ export class SealDocumentDto {
   @IsNotEmpty()
   originalHash: string;
 
+  /** Sellar un documento sin ninguna firma no tiene sentido: el hash del proveedor se construye a partir de ellas. */
   @ApiProperty({
     type: () => SealSignatureDto,
     isArray: true,
@@ -99,6 +110,7 @@ export class SealDocumentDto {
       'Firmas electrónicas de cada usuario participante que intervino en el documento.',
   })
   @IsArray()
+  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => SealSignatureDto)
   signatures: SealSignatureDto[];
