@@ -6,6 +6,7 @@ import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 jest.mock('minio', () => ({
   Client: jest.fn().mockImplementation(() => ({
     bucketExists: jest.fn().mockResolvedValue(true),
+    makeBucket: jest.fn().mockResolvedValue(undefined),
     putObject: jest.fn().mockResolvedValue({ etag: 'etag-1' }),
     statObject: jest.fn().mockResolvedValue({ size: 1 }),
     presignedGetObject: jest.fn().mockResolvedValue('https://minio/file'),
@@ -57,6 +58,81 @@ describe('MinioService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  /**
+   * Bug corregido: la verificación previa era `bucketExists(bucket, callback)`, pero minio-js
+   * devuelve una promesa y nunca invoca ese callback — un bucket inexistente no se detectaba y el
+   * flujo reventaba más adelante en `putObject` con un `NoSuchBucket` crudo. Se notó al agregar
+   * `finalized_documents`, que ningún entorno tenía creado.
+   */
+  describe('creación del bucket cuando no existe', () => {
+    const pdf = {
+      file: Buffer.from('%PDF-1.7'),
+      name: 'contrato.pdf',
+      mimetype: 'application/pdf',
+    };
+
+    it('crea el bucket antes de subir cuando no existe, en vez de fallar en putObject', async () => {
+      privateClient().bucketExists.mockResolvedValue(false);
+
+      await service.uploadPdfAObject(
+        pdf,
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        'Ana Lopez',
+        'object-key-1',
+      );
+
+      expect(privateClient().makeBucket).toHaveBeenCalledWith(
+        'finalized-documents',
+        undefined,
+      );
+      expect(privateClient().putObject).toHaveBeenCalled();
+    });
+
+    it('si el bucket ya existe no intenta crearlo', async () => {
+      await service.uploadPdfAObject(
+        pdf,
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        'Ana Lopez',
+      );
+
+      expect(privateClient().makeBucket).not.toHaveBeenCalled();
+    });
+
+    it('una carrera entre dos finalizaciones no rompe: BucketAlreadyOwnedByYou se trata como éxito', async () => {
+      privateClient().bucketExists.mockResolvedValue(false);
+      privateClient().makeBucket.mockRejectedValue(
+        Object.assign(new Error('ya existe'), {
+          code: 'BucketAlreadyOwnedByYou',
+        }),
+      );
+
+      await expect(
+        service.uploadPdfAObject(
+          pdf,
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+          'Ana Lopez',
+        ),
+      ).resolves.toEqual(
+        expect.objectContaining({ bucket: 'finalized-documents' }),
+      );
+    });
+
+    it('sin permiso para crearlo, el error dice qué hacer en vez de dejar un NoSuchBucket suelto', async () => {
+      privateClient().bucketExists.mockResolvedValue(false);
+      privateClient().makeBucket.mockRejectedValue(
+        Object.assign(new Error('denegado'), { code: 'AccessDenied' }),
+      );
+
+      await expect(
+        service.uploadPdfAObject(
+          pdf,
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+          'Ana Lopez',
+        ),
+      ).rejects.toThrow(/no existe y no se pudo crear/i);
+    });
   });
 
   /**
@@ -125,7 +201,6 @@ describe('MinioService', () => {
       expect(privateClient().putObject).toHaveBeenCalledTimes(1);
       expect(privateClient().bucketExists).toHaveBeenCalledWith(
         'signed-documents',
-        expect.any(Function),
       );
       expect(publicClient().putObject).not.toHaveBeenCalled();
     });

@@ -144,6 +144,51 @@ export class MinioService {
     return;
   }
 
+  /**
+   * Garantiza que el bucket exista antes de escribir en él, creándolo si hace falta.
+   *
+   * Bug corregido: acá se llamaba `bucketExists(bucket, callback)`. minio-js devuelve una promesa
+   * y no invoca ese callback, así que el `throw` de adentro era código muerto: un bucket
+   * inexistente no se detectaba y el flujo seguía hasta reventar en `putObject` con un
+   * `NoSuchBucket` crudo. Se notaba justo al agregar un bucket nuevo (`finalized_documents`),
+   * porque este proyecto no provisiona buckets en ningún lado —no hay job de `mc mb` en el
+   * docker-compose— y el error aparecía en el último paso del flujo de firma.
+   *
+   * Crear el bucket es idempotente y tolera la carrera entre dos finalizaciones simultáneas:
+   * MinIO responde `BucketAlreadyOwnedByYou` y eso se trata como éxito. Si las credenciales no
+   * tienen permiso para crearlo (típico en producción, donde los buckets los aprovisiona
+   * infraestructura), el error lo dice explícitamente en vez de dejar un `NoSuchBucket` suelto.
+   */
+  private async ensureBucketExists(
+    client: any,
+    bucketName: string,
+  ): Promise<void> {
+    const exists = await client.bucketExists(bucketName);
+    if (exists) {
+      return;
+    }
+
+    this.logger.warn(
+      `El bucket ${bucketName} no existe en MinIO; se crea automáticamente.`,
+    );
+
+    try {
+      await client.makeBucket(bucketName, process.env.MINIO_REGION);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (
+        code === 'BucketAlreadyOwnedByYou' ||
+        code === 'BucketAlreadyExists'
+      ) {
+        return;
+      }
+      throw new Error(
+        `El bucket ${bucketName} no existe y no se pudo crear (${code ?? error}). ` +
+          'Créalo en MinIO o dale permiso de creación a las credenciales del servicio.',
+      );
+    }
+  }
+
   private getBucketByType(type: BUCKET_TYPES_ENUM) {
     switch (type) {
       case BUCKET_TYPES_ENUM.CREATED_DOCUMENTS:
@@ -216,13 +261,7 @@ export class MinioService {
       const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = await this.getBucketByType(type);
 
-      await minioPrivateClient.bucketExists(bucketName, (err) => {
-        if (err) {
-          throw new Error(
-            `Error al verificar la existencia del bucket: ${err}`,
-          );
-        }
-      });
+      await this.ensureBucketExists(minioPrivateClient, bucketName);
 
       this.logger.log(file.name);
       const extension = file.name.split('.').pop()?.toLowerCase();
@@ -285,13 +324,7 @@ export class MinioService {
       const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = await this.getBucketByType(type);
 
-      await minioPrivateClient.bucketExists(bucketName, (err) => {
-        if (err) {
-          throw new Error(
-            `Error al verificar la existencia del bucket: ${err}`,
-          );
-        }
-      });
+      await this.ensureBucketExists(minioPrivateClient, bucketName);
 
       this.logger.log(file.name);
       const extension = file.name.split('.').pop()?.toLowerCase();
