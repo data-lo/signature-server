@@ -87,10 +87,25 @@ export class MinioService {
       secretKey: process.env.MINIO_SECRET_KEY,
     });
 
+    // `region` explícita, igual que en el cliente privado. Sin ella, el SDK resuelve la región del
+    // bucket con una llamada de red real (`getBucketLocation`) en la PRIMERA operación que la
+    // necesite, usando el protocolo de ESTE cliente: con useSSL=true contra un MinIO que responde
+    // en HTTP plano (cualquier despliegue donde el TLS lo termine un proxy delante), eso revienta
+    // con "EPROTO ... packet length too long" y tumba con un 500 toda vista que necesite un
+    // secureUrl.
+    //
+    // Hoy el fallo está disimulado por el orden de las llamadas: en `getFile`, bucketExists y
+    // statObject corren antes de firmar y dejan la región cacheada. Es incidental — cualquier
+    // reordenamiento, o una firma que sea la primera operación del proceso sobre ese bucket, lo
+    // vuelve a exponer.
+    //
+    // La había agregado el commit 171e43a ("Resolve MinIO region resolution and SSL issues for
+    // public client") y la quitó 8649093 junto con sus comentarios; se restaura acá.
     this.minioPublicClient = new Minio.Client({
       endPoint: process.env.MINIO_PUBLIC_HOST,
       port: Number(process.env.MINIO_PUBLIC_PORT),
       useSSL: publicUseSSL,
+      region,
       accessKey: process.env.MINIO_ACCESS_KEY,
       secretKey: process.env.MINIO_SECRET_KEY,
     });
