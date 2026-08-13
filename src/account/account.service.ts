@@ -564,6 +564,27 @@ export class AccountService {
     );
   }
 
+  /**
+   * Contraparte de `updatePasswordForUser` para el otro campo sincronizado desde UserEntity: el
+   * correo. Se usa al corregir un registro sin verificar (ver UserService.updatePreRegistration);
+   * sin esto `login()`, que resuelve la credencial por Account.email, seguiría buscando el correo
+   * viejo y el usuario no podría entrar con el que acaba de verificar.
+   *
+   * Acepta un EntityManager para poder correr dentro de la misma transacción que actualiza al
+   * usuario, y que credencial y usuario nunca queden desincronizados a medias.
+   */
+  async updateEmailForUser(
+    userId: string,
+    email: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(AccountEntity)
+      : this.accountRepository;
+
+    await repository.update({ userId }, { email });
+  }
+
   private toCatalogEntry(account: AccountEntity): AccountData {
     return {
       id: account.id,
