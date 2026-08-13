@@ -18,10 +18,6 @@ describe('MinioService', () => {
   beforeEach(async () => {
     process.env.MINIO_HOST = 'localhost';
     process.env.MINIO_PORT = '9010';
-    // Bug corregido: `setMinioClient` exige MINIO_PUBLIC_HOST desde que el servicio separó el
-    // cliente privado del público (commit "Refactor Minio client handling to separate private
-    // and public clients"), pero este spec nunca lo definió — el constructor lanzaba y la suite
-    // quedó en rojo. La app no se entera porque en ejecución la variable viene del entorno.
     process.env.MINIO_PUBLIC_HOST = 'localhost';
     process.env.MINIO_PUBLIC_PORT = '9010';
     process.env.MINIO_ACCESS_KEY = 'test-access-key';
@@ -42,8 +38,54 @@ describe('MinioService', () => {
     service = module.get<MinioService>(MinioService);
   });
 
+  /**
+   * `setMinioClient` construye primero el privado y después el público, así que el orden de
+   * instanciación es lo que distingue a uno de otro dentro del mock.
+   */
+  function privateClient() {
+    return (Minio.Client as unknown as jest.Mock).mock.results[0].value;
+  }
+
+  function publicClient() {
+    return (Minio.Client as unknown as jest.Mock).mock.results[1].value;
+  }
+
+  function clientOptions(index: number) {
+    return (Minio.Client as unknown as jest.Mock).mock.calls[index][0];
+  }
+
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  /**
+   * Sin `region` explícita el SDK la resuelve con una llamada de red en la primera operación que
+   * la necesite, sobre el protocolo del cliente que la dispara — con useSSL=true contra un MinIO
+   * en HTTP plano eso termina en EPROTO. Aplica a los DOS clientes, y más al público desde que la
+   * subida del PDF firmado pasa por él.
+   */
+  it('ambos clientes se construyen con una región explícita, para no resolverla por red', () => {
+    expect(clientOptions(0)).toEqual(
+      expect.objectContaining({ region: 'us-east-1' }),
+    );
+    expect(clientOptions(1)).toEqual(
+      expect.objectContaining({ region: 'us-east-1' }),
+    );
+  });
+
+  it('respeta MINIO_REGION cuando está configurada', async () => {
+    process.env.MINIO_REGION = 'mx-central-1';
+    (Minio.Client as unknown as jest.Mock).mockClear();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [MinioService],
+    }).compile();
+    module.get<MinioService>(MinioService);
+
+    expect(clientOptions(1)).toEqual(
+      expect.objectContaining({ region: 'mx-central-1' }),
+    );
+    delete process.env.MINIO_REGION;
   });
 
   /**
@@ -61,10 +103,31 @@ describe('MinioService', () => {
     };
 
     function putObjectCall() {
-      const client = (Minio.Client as unknown as jest.Mock).mock.results[0]
-        .value;
-      return client.putObject.mock.calls[0];
+      return privateClient().putObject.mock.calls[0];
     }
+
+    /**
+     * La subida es servidor→MinIO y va por la red interna. El cliente público existe solo para
+     * FIRMAR la URL que el navegador pide directamente (`getFile`), porque SigV4 firma incluyendo
+     * el host y hay que usar el que el navegador puede resolver. Mandar la subida por ahí la
+     * haría salir por el proxy que termina TLS —con su límite de tamaño de cuerpo— en el último
+     * paso del flujo de firma.
+     */
+    it('sube por el cliente privado: la subida no sale a la red pública', async () => {
+      await service.uploadPdfAObject(
+        pdf,
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        'Ana Lopez',
+        'object-key-1',
+      );
+
+      expect(privateClient().putObject).toHaveBeenCalledTimes(1);
+      expect(privateClient().bucketExists).toHaveBeenCalledWith(
+        'signed-documents',
+        expect.any(Function),
+      );
+      expect(publicClient().putObject).not.toHaveBeenCalled();
+    });
 
     it('manda los metadatos como 5º argumento, junto al tamaño, y no un 6º que se descartaría', async () => {
       await service.uploadPdfAObject(
