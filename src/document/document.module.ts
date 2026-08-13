@@ -16,6 +16,7 @@ import { KafkaModule } from 'src/kafka/kafka.module';
 import { AccountModule } from 'src/account/account.module';
 import { DocumentTransactionModule } from './document-transaction.module';
 import { EfirmaModule } from 'src/efirma/efirma.module';
+import { SealModule } from './seal/seal.module';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -38,6 +39,7 @@ import { EfirmaModule } from 'src/efirma/efirma.module';
     AccountModule,
     DocumentTransactionModule,
     EfirmaModule,
+    SealModule,
   ],
   exports: [DocumentService],
 })

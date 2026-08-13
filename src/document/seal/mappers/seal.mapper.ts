@@ -11,9 +11,22 @@ export class SealMapper {
     response: SealDocumentResponse,
   ): DeepPartial<SealEntity> {
     return {
-      documentId: response.documentId,
-      signatureHash: response.signHashHex,
-      canonicalPayload: JSON.stringify(dto),
+      // `documentId` sale del DTO, no de la respuesta: es NUESTRO identificador y la FK de la
+      // tabla — si el proveedor devolviera otro (o ninguno), la evidencia quedaría colgada de un
+      // documento equivocado.
+      documentId: dto.documentId,
+      signatureHash: response.hashHex,
+      /**
+       * La cadena canónica que devolvió el proveedor: la preimagen literal de `hashHex`. Con ella
+       * guardada, verificar el sello no requiere reimplementar la canonicalización de Seal Service
+       * ni conservar el request original — basta recomputar `sha256(canonicalPayload)` y comparar
+       * contra `signature_hash`. La versión del algoritmo va embebida como su primer segmento
+       * (ver `SealDocumentResponse.hashVersion`), así que no hace falta una columna aparte.
+       *
+       * Las ENTRADAS de esa cadena tampoco se pierden: siguen en `collaborators.advanced_signature`
+       * de este mismo documento, así que la evidencia se puede auditar de punta a punta.
+       */
+      canonicalPayload: response.canonicalString,
       timestampSeal: {
         isValid: response.timeStamp.status,
         processedHash: response.timeStamp.hashProcessed,
