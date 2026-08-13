@@ -26,6 +26,8 @@ import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
+import { UpdatePreRegistrationDto } from './dto/update-pre-registration.dto';
+import { SignupPendingVerificationData } from '../user/interfaces/response/signup-pending-verification-response';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { BaseResponse } from '../interfaces/api-response.dto';
 import { UserEntity } from '../user/entities/user.entity';
@@ -188,6 +190,49 @@ export class AuthService {
       message: 'Correo verificado correctamente',
       data: { user: this.userService.sanitize(verifiedUser), token },
     };
+  }
+
+  /**
+   * Corrige los datos de un registro que aún no verifica su correo (ver historia "Permitir
+   * corregir datos antes de verificar el correo").
+   *
+   * La autorización es la contraseña del propio pre-registro, no el OTP: cuando el error está
+   * justamente en el correo, el código nunca llega y no habría forma de demostrar nada. Se
+   * responde con los mismos mensajes que `login()` ante credenciales incorrectas, para no
+   * convertir este endpoint en un oráculo que confirme qué correos tienen un registro pendiente.
+   */
+  async updatePreRegistration(
+    dto: UpdatePreRegistrationDto,
+  ): Promise<BaseResponse<SignupPendingVerificationData>> {
+    const user = await this.userService.findOneByEmail(
+      dto.currentEmail.toLowerCase(),
+    );
+    if (!user) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    const matches = await this.passwordService.compare(
+      dto.password,
+      user.password,
+    );
+    if (!matches) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    // Una cuenta ya verificada se corrige desde la sesión iniciada, no por esta vía pública.
+    if (user.isEmailVerified) {
+      throw new ConflictException(
+        'Este correo ya fue verificado. Inicia sesión para editar tus datos.',
+      );
+    }
+
+    return this.userService.updatePreRegistration(user, {
+      email: dto.email,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      nationalId: dto.nationalId,
+      rfc: dto.rfc,
+    });
   }
 
   /** Reenvía un OTP nuevo para un pre-registro pendiente (ver botón "Reenviar código" en /signup/verify). */

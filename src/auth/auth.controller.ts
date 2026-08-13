@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -24,6 +25,7 @@ import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
+import { UpdatePreRegistrationDto } from './dto/update-pre-registration.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import {
   RegisterResponse,
@@ -32,6 +34,7 @@ import {
   VerifyResetCodeResponse,
   ResetPasswordResponse,
   ResendOtpResponse,
+  UpdatePreRegistrationResponse,
 } from './interfaces/response/auth-response';
 import { UserGetResponse } from '../user/interfaces/response/get-user-response';
 import {
@@ -93,6 +96,36 @@ export class AuthController {
   @ApiResponse({ status: 409, type: ConflictResponse })
   verifyOtp(@Body() dto: VerifyOtpDto) {
     return this.authService.verifyOtp(dto);
+  }
+
+  // Mismo límite que login: la contraseña del pre-registro es lo único que autoriza el cambio,
+  // así que este endpoint también hay que protegerlo de fuerza bruta.
+  @SkipJwtAuth()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  @Patch('pre-registration')
+  @ApiOperation({
+    summary:
+      'Corrige los datos de un registro que aún no verifica su correo (público, autorizado con la contraseña del propio registro)',
+    description:
+      'Pensado para el error de dedo en el correo, que dejaba la cuenta imposible de activar: el código se enviaba a una dirección inexistente y volver a registrarse tampoco servía, porque el CURP ya estaba tomado por ese mismo pre-registro. Si el correo cambia, se emite y envía un código nuevo a la dirección corregida.',
+  })
+  @ApiResponse({ status: 200, type: UpdatePreRegistrationResponse })
+  @ApiResponse({
+    status: 401,
+    type: UnauthorizedResponse,
+    description:
+      'No hay un registro pendiente con ese correo, o la contraseña no coincide (mismo mensaje en ambos casos, anti-enumeración)',
+  })
+  @ApiResponse({
+    status: 409,
+    type: ConflictResponse,
+    description:
+      'El correo ya fue verificado, o el nuevo correo/CURP/RFC ya pertenece a otro usuario',
+  })
+  updatePreRegistration(@Body() dto: UpdatePreRegistrationDto) {
+    return this.authService.updatePreRegistration(dto);
   }
 
   @SkipJwtAuth()

@@ -71,6 +71,8 @@ import {
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
+import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import type { SealDocumentDto } from './seal/dto/seal-document.dto';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
 
@@ -127,6 +129,7 @@ export class DocumentService {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly efirmaService: EfirmaService,
+    private readonly sealDocumentUseCase: SealDocumentUseCase,
   ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
@@ -1568,6 +1571,9 @@ export class DocumentService {
     if (remainingSigners.length === 0) {
       // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado).
       await this.finalizeSignedDocument(document, signerCollaborators);
+      // Sellado con Seal Service: recién acá el documento tiene TODAS sus firmas avanzadas, que
+      // es lo que el proveedor necesita para construir un único hash sellado del conjunto.
+      await this.sealAdvancedSignatures(document, signerCollaborators);
       this.documentEventsProducer.emitSigned({
         documentId,
         fileName: document.fileName,
@@ -1628,6 +1634,87 @@ export class DocumentService {
       success: true,
       message: 'Documento firmado exitosamente por todos los firmantes',
       data: { id: documentId },
+    };
+  }
+
+  /**
+   * Envía a Seal Service el arreglo con las firmas avanzadas del documento y persiste la
+   * evidencia que devuelve (historia "Completar flujo de firma avanzada e integración con Seal
+   * Service"). Corre una sola vez por documento, cuando el último firmante terminó: el proveedor
+   * calcula UN hash canónico sobre el conjunto completo de firmas, así que sellar antes —firma
+   * por firma— produciría un hash de un conjunto parcial que ya no representa al documento final.
+   *
+   * Un documento sin ninguna firma avanzada (todo firma simple) no se sella: no hay firma
+   * criptográfica de la cual construir la evidencia.
+   *
+   * Best-effort a propósito, igual que los correos de finalización: llegado este punto las firmas
+   * ya están registradas y el PDF ya está en el bucket de firmados. Propagar un fallo del
+   * proveedor devolvería un 500 al último firmante por algo que su firma sí logró, y su reintento
+   * chocaría contra el claim atómico ("ya respondiste") sin poder corregir nada. El error queda
+   * logueado, y el sellado puede reintentarse contra `POST /seal` con el mismo payload.
+   */
+  private async sealAdvancedSignatures(
+    document: DocumentEntity,
+    signerCollaborators: CollaboratorEntity[],
+  ): Promise<void> {
+    const advancedSigners = signerCollaborators.filter(
+      (collaborator) =>
+        collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
+        collaborator.advancedSignature !== null &&
+        collaborator.advancedSignature !== undefined,
+    );
+
+    if (advancedSigners.length === 0) {
+      return;
+    }
+
+    // La traducción del payload va DENTRO del try junto con la llamada: si una firma guardada
+    // tuviera una forma inesperada, el error debe tratarse como cualquier otro fallo de sellado
+    // (logueado, sin efecto sobre la firma) y no escaparse como una excepción no controlada al
+    // final de un flujo de firma que ya se completó.
+    try {
+      const sealDocumentDto: SealDocumentDto = {
+        documentId: document.id,
+        originalHash: document.originalHash,
+        signatures: advancedSigners.map((collaborator) =>
+          this.toSealSignature(collaborator.advancedSignature!),
+        ),
+      };
+
+      const seal = await this.sealDocumentUseCase.create(sealDocumentDto);
+      this.logger.log(
+        `Sellos generados para el documento ${document.id} (evidencia ${seal.id}, ${advancedSigners.length} firma(s) avanzada(s)).`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error sellando el documento ${document.id} con Seal Service: ${error}`,
+      );
+    }
+  }
+
+  /**
+   * Traduce el resultado de `EfirmaService.firmar` (persistido tal cual en
+   * `CollaboratorEntity.advancedSignature`) al contrato que espera Seal Service.
+   *
+   * `signedAt` se normaliza a ISO 8601 pasando por `Date` porque el mismo campo llega como `Date`
+   * cuando la firma se acaba de hacer en esta misma petición, y como string cuando se releyó de la
+   * columna jsonb — el proveedor ordena y canonicaliza las firmas por este valor, así que las dos
+   * rutas tienen que producir exactamente el mismo texto.
+   */
+  private toSealSignature(
+    signature: SignatureResult,
+  ): SealDocumentDto['signatures'][number] {
+    return {
+      signatureBase64: String(signature.signatureBase64),
+      algorithm: signature.algorithm,
+      signedAt: new Date(signature.signedAt).toISOString(),
+      certificate: {
+        rfc: signature.certificate.rfc,
+        name: signature.certificate.name,
+        serialNumber: signature.certificate.serialNumber,
+        certificateNumber: signature.certificate.certificateNumber,
+        certificatePem: signature.certificate.certificatePem,
+      },
     };
   }
 

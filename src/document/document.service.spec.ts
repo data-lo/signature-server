@@ -28,6 +28,7 @@ import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.consta
 import { DocumentTransactionService } from './document-transaction.service';
 import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
+import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
 function createMockRepository() {
@@ -100,6 +101,7 @@ describe('DocumentService', () => {
   let verificationCodeService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
+  let sealDocumentUseCase: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
@@ -194,19 +196,27 @@ describe('DocumentService', () => {
       registerSignature: jest.fn(),
       findAllForDocument: jest.fn().mockResolvedValue([]),
     };
+    // Forma REAL de `SignatureResult` (ver src/efirma/interfaces): este mock devolvía un objeto
+    // con las llaves en español (firmaBase64/certificado/...) que `EfirmaService.firmar` no
+    // produce, así que los tests pasaban contra un contrato inexistente — y lo que se persiste en
+    // `advancedSignature` es justo lo que después se le manda a Seal Service.
     efirmaService = {
       firmar: jest.fn().mockReturnValue({
-        hashDocumentoOriginal: 'hash-doc-1',
-        firmaBase64: 'firma-base64',
-        algoritmo: 'sha256',
-        firmadoEn: new Date('2026-01-01T00:00:00.000Z'),
-        certificado: {
+        originalHash: 'hash-doc-1',
+        signatureBase64: 'firma-base64',
+        algorithm: 'sha256',
+        signedAt: new Date('2026-01-01T00:00:00.000Z'),
+        certificate: {
           rfc: 'XAXX010101000',
-          nombre: 'Firmante Uno',
-          numeroCertificado: '30001000000400002434',
-          certificadoPem: '-----BEGIN CERTIFICATE-----...',
+          name: 'Firmante Uno',
+          serialNumber: '00001000000512345678',
+          certificateNumber: '30001000000400002434',
+          certificatePem: '-----BEGIN CERTIFICATE-----...',
         },
       }),
+    };
+    sealDocumentUseCase = {
+      create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -238,6 +248,7 @@ describe('DocumentService', () => {
           useValue: documentTransactionService,
         },
         { provide: EfirmaService, useValue: efirmaService },
+        { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
       ],
     }).compile();
 
@@ -1053,7 +1064,7 @@ describe('DocumentService', () => {
         expect(collaboratorRepository.save).toHaveBeenCalledWith(
           expect.objectContaining({
             advancedSignature: expect.objectContaining({
-              firmaBase64: 'firma-base64',
+              signatureBase64: 'firma-base64',
             }),
           }),
         );
@@ -1061,6 +1072,149 @@ describe('DocumentService', () => {
         expect(
           documentSigningService.mergeSignatureIntoPdf,
         ).not.toHaveBeenCalled();
+      });
+
+      describe('integración con Seal Service (historia "Completar flujo de firma avanzada")', () => {
+        function signWithEfirma(userId: string) {
+          return service.sign(
+            'doc-1',
+            userId,
+            {
+              password: 'clave-correcta',
+              keyFile: buildFile({ originalname: 'llave.key' }),
+              cerFile: buildFile({ originalname: 'certificado.cer' }),
+            },
+            TEST_GEOLOCATION,
+          );
+        }
+
+        it('al completarse el documento, manda el documentId y el arreglo con la información de cada firma', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const onlySigner = buildFielSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+          });
+          collaboratorRepository.find.mockResolvedValue([onlySigner]);
+
+          await signWithEfirma('user-1');
+
+          expect(sealDocumentUseCase.create).toHaveBeenCalledTimes(1);
+          expect(sealDocumentUseCase.create).toHaveBeenCalledWith({
+            documentId: 'doc-1',
+            originalHash: document.originalHash,
+            signatures: [
+              {
+                signatureBase64: 'firma-base64',
+                algorithm: 'sha256',
+                // Normalizado a ISO 8601: el proveedor ordena y canonicaliza por este valor.
+                signedAt: '2026-01-01T00:00:00.000Z',
+                certificate: {
+                  rfc: 'XAXX010101000',
+                  name: 'Firmante Uno',
+                  serialNumber: '00001000000512345678',
+                  certificateNumber: '30001000000400002434',
+                  certificatePem: '-----BEGIN CERTIFICATE-----...',
+                },
+              },
+            ],
+          });
+        });
+
+        it('sella UNA sola vez, con las firmas de TODOS los firmantes, cuando termina el último', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signerA = buildFielSigner({
+            id: 'p-a',
+            userId: 'user-a',
+            signingOrder: 0,
+            status: SIGNEE_STATUS_ENUM.SIGNED,
+            advancedSignature: {
+              originalHash: 'hash-doc-1',
+              signatureBase64: 'firma-de-a',
+              algorithm: 'sha256',
+              signedAt: '2026-01-01T00:00:00.000Z',
+              certificate: {
+                rfc: 'AAAA010101AAA',
+                name: 'Firmante A',
+                serialNumber: '1',
+                certificateNumber: '2',
+                certificatePem: 'pem-a',
+              },
+            },
+          } as any);
+          const signerB = buildFielSigner({
+            id: 'p-b',
+            userId: 'user-b',
+            signingOrder: 1,
+          });
+          collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+          await signWithEfirma('user-b');
+
+          expect(sealDocumentUseCase.create).toHaveBeenCalledTimes(1);
+          const [payload] = sealDocumentUseCase.create.mock.calls[0];
+          expect(payload.signatures).toHaveLength(2);
+          expect(
+            payload.signatures.map(
+              (signature: { signatureBase64: string }) =>
+                signature.signatureBase64,
+            ),
+          ).toEqual(['firma-de-a', 'firma-base64']);
+        });
+
+        it('no sella mientras queden firmantes pendientes: el hash canónico se calcula sobre el conjunto completo', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signerA = buildFielSigner({
+            id: 'p-a',
+            userId: 'user-a',
+            signingOrder: 0,
+          });
+          const signerB = buildFielSigner({
+            id: 'p-b',
+            userId: 'user-b',
+            signingOrder: 1,
+          });
+          collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+          await signWithEfirma('user-a');
+
+          expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
+        });
+
+        it('un documento de firma simple no se sella: no hay firma criptográfica que sellar', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+          collaboratorRepository.find
+            .mockResolvedValueOnce([onlySigner])
+            .mockResolvedValueOnce([onlySigner]);
+
+          await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+          expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
+        });
+
+        it('si Seal Service falla, la firma igual queda registrada: el sellado es best-effort', async () => {
+          sealDocumentUseCase.create.mockRejectedValue(
+            new Error('Seal Service caído'),
+          );
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const onlySigner = buildFielSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+          });
+          collaboratorRepository.find.mockResolvedValue([onlySigner]);
+
+          const result = await signWithEfirma('user-1');
+
+          expect(result.success).toBe(true);
+          expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+          expect(collaboratorRepository.save).toHaveBeenCalled();
+          expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
+        });
       });
 
       it.each([
@@ -1776,6 +1930,106 @@ describe('DocumentService', () => {
 
       expect(minioService.getFile).not.toHaveBeenCalledWith(
         'object-key-1',
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      );
+    });
+  });
+
+  /**
+   * `GET /document/file/:id` no es la única ruta que entrega el archivo: el detalle
+   * (`GET /document/:id`, lo que realmente renderiza el visor de la pantalla de firma) y el
+   * listado con `withUrl` traen su propio `secureUrl`. Los tres tienen que resolver el bucket
+   * por el mismo STATUS_BUCKET_MAP; si alguno se quedara en el bucket original, un documento ya
+   * firmado volvería a mostrarse sin firmas por esa vía aunque `getDocumentMinioURL` esté bien.
+   */
+  describe('bucket según el estatus en el resto de las rutas de lectura', () => {
+    const detailBucketCases: Array<[DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM]> =
+      [
+        [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS],
+        [
+          DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
+          BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        ],
+        [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
+        [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
+        [DOCUMENT_STATUS_ENUM.PENDING, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      ];
+
+    it.each(detailBucketCases)(
+      'findDetailForUser (GET /document/:id) con status=%s sirve el archivo desde %s',
+      async (status, expectedBucket) => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          fileType: 'application/pdf',
+          totalPages: 1,
+          objectKey: 'object-key-1',
+          status,
+          createdBy: 'creator-1',
+          requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+          collaborators: [buildSigner({ userId: 'user-1' })],
+        } as unknown as DocumentEntity);
+
+        await service.findDetailForUser('doc-1', 'user-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          expectedBucket,
+        );
+      },
+    );
+
+    it('findWithFilters (GET /document?withUrl=true) sirve cada documento desde el bucket de su propio estatus', async () => {
+      const qb: any = {};
+      [
+        'where',
+        'andWhere',
+        'leftJoinAndSelect',
+        'orderBy',
+        'skip',
+        'take',
+      ].forEach((method) => {
+        qb[method] = jest.fn().mockReturnValue(qb);
+      });
+      qb.getManyAndCount = jest.fn().mockResolvedValue([
+        [
+          {
+            id: 'doc-firmado',
+            fileName: 'firmado.pdf',
+            objectKey: 'object-key-firmado',
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+            collaborators: [],
+          },
+          {
+            id: 'doc-pendiente',
+            fileName: 'pendiente.pdf',
+            objectKey: 'object-key-pendiente',
+            status: DOCUMENT_STATUS_ENUM.PENDING,
+            requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+            collaborators: [],
+          },
+        ],
+        2,
+      ]);
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        page: 1,
+        limit: 10,
+        withUrl: true,
+      } as any);
+
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-firmado',
+        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      );
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-pendiente',
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
     });
