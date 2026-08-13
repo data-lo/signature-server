@@ -30,10 +30,17 @@ export class SealEntity {
   @Column({ name: 'canonical_payload', type: 'text' })
   canonicalPayload: string;
 
-  @Column({ name: 'timestamp_seal', type: 'jsonb' })
+  /**
+   * Bug corregido: estas dos columnas se declaraban como `timestamp_seal`/`integrity_seal`, pero
+   * la migración que crea la tabla (`CreateDocumentSeals1784300000025`) las llama
+   * `timestamp_evidence`/`nom151_evidence` — con los nombres viejos, el primer INSERT de un sello
+   * fallaba contra la base real ("column does not exist"). Se alinean con la migración, que es la
+   * que gobierna el esquema desplegado; los nombres de las propiedades TS no cambian.
+   */
+  @Column({ name: 'timestamp_evidence', type: 'jsonb' })
   timestampSeal: TimestampSeal;
 
-  @Column({ name: 'integrity_seal', type: 'jsonb' })
+  @Column({ name: 'nom151_evidence', type: 'jsonb' })
   integritySeal: IntegritySeal;
 
   @CreateDateColumn({ name: 'created_at' })
