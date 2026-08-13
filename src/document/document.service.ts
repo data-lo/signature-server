@@ -1631,7 +1631,17 @@ export class DocumentService {
     };
   }
 
-  /** Estampa las firmas de todos los firmantes (apiladas), mueve el archivo a firmados y notifica a todos los colaboradores. */
+  /**
+   * Estampa las firmas de todos los firmantes (apiladas), mueve el archivo a firmados y notifica
+   * a todos los colaboradores.
+   *
+   * Lo que se estampa es ÚNICAMENTE la imagen de la firma (historia "Eliminar nombre al estampar
+   * firma simple"): antes cada estampado agregaba también el nombre del firmante como texto
+   * debajo de la imagen, lo que ensuciaba el documento y duplicaba un dato que ya vive en la hoja
+   * de firmas del resumen (ver `SummaryDocumentService.buildSignerBlock`, que sigue imprimiendo
+   * Nombre/RFC/IP/OTP/fecha por firmante) — la identidad del firmante no se pierde, solo deja de
+   * dibujarse encima del contenido del PDF.
+   */
   private async finalizeSignedDocument(
     document: DocumentEntity,
     signerCollaborators: CollaboratorEntity[],
@@ -1689,8 +1699,6 @@ export class DocumentService {
           BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
         );
 
-        const signerName = `${signerUser.firstName} ${signerUser.lastName}`;
-
         if (collaborator.simpleSignature) {
           // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
           // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
@@ -1711,12 +1719,6 @@ export class DocumentService {
                   coordinates,
                   pageIndex,
                 );
-              documentBuffer = await this.documentSigningSerivice.addSignerName(
-                documentBuffer,
-                signerName,
-                coordinates,
-                pageIndex,
-              );
             } else {
               // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
               // sin ratios) — se respeta el comportamiento de siempre: página por defecto
@@ -1734,11 +1736,6 @@ export class DocumentService {
                   signatureBuffer,
                   legacyCoordinates,
                 );
-              documentBuffer = await this.documentSigningSerivice.addSignerName(
-                documentBuffer,
-                signerName,
-                legacyCoordinates,
-              );
             }
           }
         } else {
@@ -1757,11 +1754,6 @@ export class DocumentService {
               signatureBuffer,
               coordinates,
             );
-          documentBuffer = await this.documentSigningSerivice.addSignerName(
-            documentBuffer,
-            signerName,
-            coordinates,
-          );
         }
       }
 
