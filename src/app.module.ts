@@ -28,7 +28,7 @@ import { KafkaModule } from './kafka/kafka.module';
 import { StripeModule } from './stripe/stripe.module';
 import { RolesModule } from './roles/roles.module';
 import { EventModule } from './event/event.module';
-import { SealModule } from './seal/seal.module';
+import { SealModule } from './document/seal/seal.module';
 
 @Module({
   imports: [

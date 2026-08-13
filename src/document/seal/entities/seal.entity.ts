@@ -1,4 +1,6 @@
 import { DocumentEntity } from 'src/document/entities/document.entity';
+import type { IntegritySeal } from '../interfaces/integrity-seal.interface';
+import type { TimestampSeal } from '../interfaces/timestamp-seal.interface';
 
 import {
   Column,
@@ -9,21 +11,6 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-
-export interface TimestampEvidence {
-  isValid: boolean;
-  processedHash: string;
-  tokenBase64: string;
-  evidenceId: string;
-}
-
-export interface Nom151Evidence {
-  isValid: boolean;
-  processedHash: string;
-  tokenBase64: string;
-  evidenceId: string;
-  certificatePdfBase64: string;
-}
 
 @Entity('document_seals')
 export class SealEntity {
@@ -43,11 +30,11 @@ export class SealEntity {
   @Column({ name: 'canonical_payload', type: 'text' })
   canonicalPayload: string;
 
-  @Column({ name: 'timestamp_evidence', type: 'jsonb' })
-  timestampEvidence: TimestampEvidence;
+  @Column({ name: 'timestamp_seal', type: 'jsonb' })
+  timestampSeal: TimestampSeal;
 
-  @Column({ name: 'nom151_evidence', type: 'jsonb' })
-  nom151Evidence: Nom151Evidence;
+  @Column({ name: 'integrity_seal', type: 'jsonb' })
+  integritySeal: IntegritySeal;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
