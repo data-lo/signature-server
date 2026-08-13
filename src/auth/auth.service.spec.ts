@@ -24,6 +24,7 @@ describe('AuthService', () => {
     findOne: jest.Mock;
     findOneByEmail: jest.Mock;
     updatePassword: jest.Mock;
+    updatePreRegistration: jest.Mock;
     markEmailVerified: jest.Mock;
     sanitize: jest.Mock;
   };
@@ -58,6 +59,9 @@ describe('AuthService', () => {
   const user = {
     id: 'user-1',
     email: 'ana@empresa.com',
+    // Una pre-cuenta tiene contraseña real desde el registro: es lo que autoriza corregir sus
+    // datos mientras el correo sigue sin verificar (ver updatePreRegistration).
+    password: 'hashed-pw',
     roles: ['signer'],
     nationalId: 'GOMA900101MDFRNN01',
     isActive: true,
@@ -70,6 +74,7 @@ describe('AuthService', () => {
       findOne: jest.fn().mockResolvedValue(user),
       findOneByEmail: jest.fn().mockResolvedValue(user),
       updatePassword: jest.fn().mockResolvedValue(undefined),
+      updatePreRegistration: jest.fn(),
       markEmailVerified: jest
         .fn()
         .mockResolvedValue({ ...user, isEmailVerified: true }),
@@ -378,6 +383,88 @@ describe('AuthService', () => {
     });
   });
 
+  /**
+   * Corrección de datos antes de verificar el correo. Lo que se prueba aquí es la autorización:
+   * el OTP no sirve como prueba de identidad cuando el error está justamente en el correo (nunca
+   * llegó), así que la operación se autoriza con la contraseña del propio pre-registro. Sin ese
+   * requisito, conocer un CURP ajeno —que no es secreto— bastaría para redirigir el registro de
+   * otra persona a un correo propio.
+   */
+  describe('updatePreRegistration', () => {
+    const dto = {
+      currentEmail: 'ANA@empresa.con',
+      password: 'supersecret123',
+      email: 'ana@empresa.com',
+    };
+    const pendingUser = { ...user, isEmailVerified: false };
+
+    beforeEach(() => {
+      userService.findOneByEmail.mockResolvedValue(pendingUser);
+      userService.updatePreRegistration.mockResolvedValue({
+        success: true,
+        message: 'ok',
+        data: {
+          userId: 'user-1',
+          email: 'ana@empresa.com',
+          maskedEmail: 'a***a@empresa.com',
+          isNewPreRegistration: false,
+        },
+      });
+    });
+
+    it('con la contraseña correcta, delega la corrección de los datos', async () => {
+      const result = await service.updatePreRegistration(dto);
+
+      expect(userService.findOneByEmail).toHaveBeenCalledWith(
+        'ana@empresa.con',
+      );
+      expect(passwordService.compare).toHaveBeenCalledWith(
+        'supersecret123',
+        pendingUser.password,
+      );
+      expect(userService.updatePreRegistration).toHaveBeenCalledWith(
+        pendingUser,
+        {
+          email: 'ana@empresa.com',
+          firstName: undefined,
+          lastName: undefined,
+          nationalId: undefined,
+          rfc: undefined,
+        },
+      );
+      expect(result.data.email).toBe('ana@empresa.com');
+    });
+
+    it('con la contraseña incorrecta, rechaza sin tocar los datos', async () => {
+      passwordService.compare.mockResolvedValue(false);
+
+      await expect(service.updatePreRegistration(dto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(userService.updatePreRegistration).not.toHaveBeenCalled();
+    });
+
+    it('si no existe un registro con ese correo responde igual que con la contraseña incorrecta, para no revelar qué correos están registrados', async () => {
+      userService.findOneByEmail.mockResolvedValue(null);
+
+      await expect(service.updatePreRegistration(dto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('una cuenta ya verificada no se edita por esta vía pública, aunque la contraseña sea correcta', async () => {
+      userService.findOneByEmail.mockResolvedValue({
+        ...user,
+        isEmailVerified: true,
+      });
+
+      await expect(service.updatePreRegistration(dto)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(userService.updatePreRegistration).not.toHaveBeenCalled();
+    });
+  });
+
   describe('forgotPassword', () => {
     const dto = { email: 'ANA@empresa.com' };
 
@@ -502,7 +589,9 @@ describe('AuthService', () => {
       });
 
       it('la respuesta es byte a byte idéntica en los cuatro escenarios', async () => {
-        jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+        jest
+          .spyOn(service['logger'], 'warn')
+          .mockImplementation(() => undefined);
         jest
           .spyOn(service['logger'], 'error')
           .mockImplementation(() => undefined);

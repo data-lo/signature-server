@@ -37,6 +37,7 @@ function createMockQueryRunner() {
     manager: {
       create: jest.fn((_entity, data) => data),
       save: jest.fn(async (data) => ({ id: 'generated-id', ...data })),
+      update: jest.fn(),
     },
   };
 }
@@ -47,10 +48,11 @@ describe('UserService', () => {
   let personalInformationRepository: ReturnType<typeof createMockRepository>;
   let dataSource: { createQueryRunner: jest.Mock };
   let queryRunner: ReturnType<typeof createMockQueryRunner>;
-  let redisService: { set: jest.Mock; get: jest.Mock };
+  let redisService: { set: jest.Mock; get: jest.Mock; del: jest.Mock };
   let accountService: {
     createDefaultPersonalAccount: jest.Mock;
     appendAccountToCatalog: jest.Mock;
+    updateEmailForUser: jest.Mock;
   };
   let emailService: { sendRegistrationOtpNotification: jest.Mock };
   let emailVerificationCodeService: { issue: jest.Mock };
@@ -62,12 +64,13 @@ describe('UserService', () => {
     dataSource = {
       createQueryRunner: jest.fn(() => queryRunner),
     };
-    redisService = { set: jest.fn(), get: jest.fn() };
+    redisService = { set: jest.fn(), get: jest.fn(), del: jest.fn() };
     accountService = {
       createDefaultPersonalAccount: jest.fn().mockResolvedValue({
         account: { id: 'personal-account-1' },
       }),
       appendAccountToCatalog: jest.fn(),
+      updateEmailForUser: jest.fn().mockResolvedValue(undefined),
     };
     emailService = {
       sendRegistrationOtpNotification: jest.fn().mockResolvedValue(undefined),
@@ -212,9 +215,10 @@ describe('UserService', () => {
       expect(emailVerificationCodeService.issue).toHaveBeenCalledWith(
         expect.any(String),
       );
-      expect(
-        emailService.sendRegistrationOtpNotification,
-      ).toHaveBeenCalledWith(dto.email, '123456');
+      expect(emailService.sendRegistrationOtpNotification).toHaveBeenCalledWith(
+        dto.email,
+        '123456',
+      );
       expect(result.data.isNewPreRegistration).toBe(true);
       expect(result.data.maskedEmail).toBe('a***a@empresa.com');
     });
@@ -233,9 +237,10 @@ describe('UserService', () => {
       expect(emailVerificationCodeService.issue).toHaveBeenCalledWith(
         'existing-user',
       );
-      expect(
-        emailService.sendRegistrationOtpNotification,
-      ).toHaveBeenCalledWith('original@empresa.com', '123456');
+      expect(emailService.sendRegistrationOtpNotification).toHaveBeenCalledWith(
+        'original@empresa.com',
+        '123456',
+      );
       expect(result.data).toEqual({
         userId: 'existing-user',
         email: 'original@empresa.com',
@@ -279,6 +284,173 @@ describe('UserService', () => {
       await expect(
         service.createFromSignup(dto, 'hashed-password'),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  /**
+   * Corrección de un registro sin verificar (ver historia "Permitir corregir datos antes de
+   * verificar el correo"). El caso que motiva todo es el error de dedo en el correo: el código
+   * se iba a una dirección inexistente y volver a registrarse tampoco servía, porque el CURP ya
+   * estaba tomado por ese mismo pre-registro y `createFromSignup` reenviaba el código otra vez
+   * al correo equivocado.
+   */
+  describe('updatePreRegistration', () => {
+    const pendingUser = {
+      id: 'user-1',
+      email: 'ana@empresa.con',
+      nationalId: 'GOMA900101MDFRNN01',
+      personalInformationId: 'pi-1',
+      isEmailVerified: false,
+    } as never;
+
+    beforeEach(() => {
+      // Estado por defecto: el correo/CURP/RFC nuevos están libres y, tras la transacción, la
+      // relectura devuelve al usuario ya actualizado.
+      userRepository.findOne.mockResolvedValue(null);
+      personalInformationRepository.findOne.mockResolvedValue({
+        id: 'pi-1',
+        rfc: 'GOMA900101XYZ',
+      });
+    });
+
+    function mockReloadedUser(overrides: Record<string, unknown> = {}) {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'ana@empresa.com',
+        nationalId: 'GOMA900101MDFRNN01',
+        personalInformation: { id: 'pi-1' },
+        ...overrides,
+      });
+    }
+
+    it('corrige el correo, lo sincroniza en las cuentas y manda un código nuevo a la dirección corregida', async () => {
+      userRepository.findOne.mockResolvedValueOnce(null); // el correo nuevo está libre
+      mockReloadedUser();
+
+      const result = await service.updatePreRegistration(pendingUser, {
+        email: 'Ana@Empresa.com',
+      });
+
+      expect(queryRunner.manager.update).toHaveBeenCalledWith(
+        UserEntity,
+        'user-1',
+        expect.objectContaining({ email: 'ana@empresa.com' }),
+      );
+      expect(accountService.updateEmailForUser).toHaveBeenCalledWith(
+        'user-1',
+        'ana@empresa.com',
+        queryRunner.manager,
+      );
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
+      expect(emailVerificationCodeService.issue).toHaveBeenCalledWith('user-1');
+      expect(emailService.sendRegistrationOtpNotification).toHaveBeenCalledWith(
+        'ana@empresa.com',
+        '123456',
+      );
+      expect(result.data.maskedEmail).toBe('a***a@empresa.com');
+    });
+
+    it('bug corregido: corregir solo el correo no manda un update vacío a información personal (TypeORM responde UpdateValuesMissingError y el endpoint devolvía 500)', async () => {
+      userRepository.findOne.mockResolvedValueOnce(null);
+      mockReloadedUser();
+
+      await service.updatePreRegistration(pendingUser, {
+        email: 'ana@empresa.com',
+      });
+
+      const updatedEntities = queryRunner.manager.update.mock.calls.map(
+        (call) => call[0],
+      );
+      expect(updatedEntities).toEqual([UserEntity]);
+      for (const call of queryRunner.manager.update.mock.calls) {
+        expect(Object.keys(call[2]).length).toBeGreaterThan(0);
+      }
+    });
+
+    it('si el correo nuevo ya es de otro usuario, rechaza sin abrir la transacción', async () => {
+      userRepository.findOne.mockResolvedValueOnce({ id: 'otro-usuario' });
+
+      await expect(
+        service.updatePreRegistration(pendingUser, {
+          email: 'ocupado@empresa.com',
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('corregir solo los datos personales no dispara un código nuevo: el correo sigue siendo el mismo', async () => {
+      mockReloadedUser({ email: 'ana@empresa.con' });
+
+      await service.updatePreRegistration(pendingUser, {
+        firstName: 'Ana',
+        lastName: 'Gómez',
+      });
+
+      expect(queryRunner.manager.update).toHaveBeenCalledWith(
+        PersonalInformationEntity,
+        'pi-1',
+        expect.objectContaining({ name: 'ANA', lastName: 'GÓMEZ' }),
+      );
+      expect(accountService.updateEmailForUser).not.toHaveBeenCalled();
+      expect(emailVerificationCodeService.issue).not.toHaveBeenCalled();
+    });
+
+    it('al corregir el CURP borra el snapshot de Redis del anterior, que quedaría huérfano', async () => {
+      userRepository.findOne.mockResolvedValueOnce(null); // el CURP nuevo está libre
+      mockReloadedUser({ nationalId: 'GOMA900101MDFRNN99' });
+
+      await service.updatePreRegistration(pendingUser, {
+        nationalId: 'goma900101mdfrnn99',
+      });
+
+      expect(queryRunner.manager.update).toHaveBeenCalledWith(
+        UserEntity,
+        'user-1',
+        expect.objectContaining({ nationalId: 'GOMA900101MDFRNN99' }),
+      );
+      expect(redisService.del).toHaveBeenCalledWith('GOMA900101MDFRNN01');
+      expect(redisService.set).toHaveBeenCalledWith(
+        'GOMA900101MDFRNN99',
+        expect.any(String),
+      );
+    });
+
+    it('si el CURP nuevo ya es de otro usuario, rechaza', async () => {
+      userRepository.findOne.mockResolvedValueOnce({ id: 'otro-usuario' });
+
+      await expect(
+        service.updatePreRegistration(pendingUser, {
+          nationalId: 'GOMA900101MDFRNN99',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('si el RFC nuevo ya es de otro usuario, rechaza', async () => {
+      personalInformationRepository.findOne
+        .mockResolvedValueOnce({ id: 'pi-1', rfc: 'GOMA900101XYZ' })
+        .mockResolvedValueOnce({ id: 'pi-de-otro' });
+
+      await expect(
+        service.updatePreRegistration(pendingUser, { rfc: 'AAAA900101XYZ' }),
+      ).rejects.toThrow(ConflictException);
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+
+    it('si falla la escritura, revierte la transacción y no envía ningún código', async () => {
+      userRepository.findOne.mockResolvedValueOnce(null);
+      queryRunner.manager.update.mockRejectedValueOnce(new Error('DB caída'));
+
+      await expect(
+        service.updatePreRegistration(pendingUser, {
+          email: 'ana@empresa.com',
+        }),
+      ).rejects.toThrow('DB caída');
+
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(
+        emailService.sendRegistrationOtpNotification,
+      ).not.toHaveBeenCalled();
     });
   });
 

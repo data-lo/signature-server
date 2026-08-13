@@ -10,6 +10,19 @@ import { v4 as uuid4 } from 'uuid';
 import { GetFileResponse } from './interfaces/minio.get-file-response.interface';
 import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 
+/**
+ * Los metadatos de un objeto viajan como cabeceras HTTP `x-amz-meta-*`, que solo admiten ASCII
+ * imprimible. Un nombre como "José Pérez" se enviaría en latin1 y llegaría corrupto, y un
+ * carácter fuera de latin1 (una comilla tipográfica pegada desde Word, por ejemplo) haría que
+ * Node rechazara la petición con ERR_INVALID_CHAR — es decir, tumbaría la subida del PDF firmado,
+ * que es lo último que puede fallar en el flujo de firma. Se codifican solo los caracteres
+ * problemáticos, así que el valor sigue siendo legible y se recupera con `decodeURIComponent`.
+ */
+export function toHeaderSafeValue(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[^\x20-\x7e]/g, (char) => encodeURIComponent(char));
+}
+
 @Injectable()
 export class MinioService {
   private readonly logger = new Logger(MinioService.name);
@@ -204,17 +217,23 @@ export class MinioService {
         throw new Error('El archivo no contiene datos válidos');
       }
 
+      // Bug corregido: la llamada pasaba `mimetype` como 5º argumento y los metadatos como 6º,
+      // pero la firma de minio-js es `putObject(bucket, objeto, stream, size?, metaData?)` — solo
+      // recibe cinco. El resultado era que el string 'application/pdf' se guardaba deletreado
+      // (`{"0":"a","1":"p","2":"p",...}`), los metadatos reales se descartaban en silencio y el
+      // objeto quedaba almacenado como `binary/octet-stream`: cada PDF firmado, rechazado o
+      // cancelado se servía con ese Content-Type (el navegador lo descarga en vez de mostrarlo)
+      // y sin la evidencia de quién firmó y cuándo.
       await minioPrivateClient.putObject(
         bucketName,
         objectKey,
         fileBuffer,
         fileBuffer.length,
-        mimetype,
         {
           'Content-Type': mimetype,
           'x-amz-meta-pdfa-conformance': 'PDF/A-2B',
-          'x-amz-meta-signed-at': new Date().toString(),
-          'x-amz-meta-signer': signerFullName,
+          'x-amz-meta-signed-at': new Date().toISOString(),
+          'x-amz-meta-signer': toHeaderSafeValue(signerFullName),
         },
       );
 
