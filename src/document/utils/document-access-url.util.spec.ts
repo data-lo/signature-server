@@ -1,7 +1,7 @@
 import {
   buildAllDocumentsUrl,
   buildDocumentAccessUrl,
-  frontendBaseUrl,
+  buildPublicDocumentUrl,
 } from './document-access-url.util';
 
 describe('document-access-url.util', () => {
@@ -40,25 +40,22 @@ describe('document-access-url.util', () => {
     });
   });
 
-  describe('frontendBaseUrl', () => {
+  // La normalización de `FRONTEND_URL` (diagonal final, espacios, fallback) se prueba en
+  // `shared/utils/frontend-url.util.spec.ts`, que es donde vive ahora. Acá solo se verifica que
+  // estos enlaces la apliquen — un `//` en medio dejaría el correo con una URL rota.
+  describe('normalización de la base', () => {
     it('quita las diagonales finales para no generar URLs con //', () => {
       process.env.FRONTEND_URL = 'https://app.example.com/';
 
       expect(buildAllDocumentsUrl()).toBe(
         'https://app.example.com/dashboard/documents',
       );
-    });
-
-    it('cae a localhost — nunca a un host interno de Docker — si no hay FRONTEND_URL', () => {
-      delete process.env.FRONTEND_URL;
-
-      expect(frontendBaseUrl()).toBe('http://localhost:3001');
-    });
-
-    it('trata una FRONTEND_URL vacía como no configurada', () => {
-      process.env.FRONTEND_URL = '   ';
-
-      expect(frontendBaseUrl()).toBe('http://localhost:3001');
+      expect(buildPublicDocumentUrl('doc-1')).toBe(
+        'https://app.example.com/public/documents/doc-1',
+      );
+      expect(buildDocumentAccessUrl('doc-1', 'collab-1', 'a@b.com')).toContain(
+        'https://app.example.com/access-document?',
+      );
     });
   });
 

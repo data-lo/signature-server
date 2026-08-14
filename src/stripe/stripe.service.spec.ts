@@ -26,12 +26,13 @@ function createMockRepository() {
   };
 }
 
+// `FRONTEND_URL` ya no se lee por ConfigService sino de `process.env` (vía `frontendBaseUrl`),
+// que es la misma fuente normalizada que usan los enlaces de correo y el origin de CORS.
 const CONFIG_VALUES: Record<string, string> = {
   STRIPE_SECRET_KEY: 'sk_test_123',
   STRIPE_PRICE_ID_BASIC: 'price_basic',
   STRIPE_PRICE_ID_PRO: 'price_pro',
   STRIPE_PRICE_ID_ENTERPRISE: 'price_enterprise',
-  FRONTEND_URL: 'https://app.example.com',
 };
 
 describe('StripeService', () => {
@@ -39,8 +40,15 @@ describe('StripeService', () => {
   let subscriptionRepository: ReturnType<typeof createMockRepository>;
   let accountRepository: ReturnType<typeof createMockRepository>;
 
+  const originalFrontendUrl = process.env.FRONTEND_URL;
+
+  afterEach(() => {
+    process.env.FRONTEND_URL = originalFrontendUrl;
+  });
+
   beforeEach(async () => {
     jest.clearAllMocks();
+    process.env.FRONTEND_URL = 'https://app.example.com';
     subscriptionRepository = createMockRepository();
     accountRepository = createMockRepository();
 
@@ -116,6 +124,34 @@ describe('StripeService', () => {
         sessionId: 'cs_test_123',
         url: 'https://checkout.stripe.com/cs_test_123',
       });
+    });
+
+    // Regresión: `FRONTEND_URL` se leía cruda, así que una base con diagonal final generaba
+    // `https://app.example.com//dashboard/plans/success` y Stripe redirige a esa URL tal cual.
+    it('normaliza la diagonal final de FRONTEND_URL en las URLs de retorno', async () => {
+      process.env.FRONTEND_URL = 'https://app.example.com/';
+      subscriptionRepository.findOne.mockResolvedValue({
+        id: 'subscription-1',
+        stripeCustomerId: 'cus_existing',
+      });
+      mockSessionsCreate.mockResolvedValue({
+        id: 'cs_test_slash',
+        url: 'https://checkout.stripe.com/cs_test_slash',
+      });
+
+      await service.createCheckoutSession(
+        'account-1',
+        'user@example.com',
+        PLAN_ID_ENUM.BASIC,
+      );
+
+      const [payload] = mockSessionsCreate.mock.calls[0];
+      expect(payload.success_url).toBe(
+        'https://app.example.com/dashboard/plans/success?session_id={CHECKOUT_SESSION_ID}',
+      );
+      expect(payload.cancel_url).toBe(
+        'https://app.example.com/dashboard/plans/cancel',
+      );
     });
 
     it('reutiliza el customer existente sin crear uno nuevo', async () => {

@@ -944,12 +944,18 @@ describe('DocumentService', () => {
 
       // Se afirma sobre TODAS las operaciones del servicio de firmado, no sobre la ausencia de
       // una en particular: así, si alguien reintroduce un estampado de texto (el nombre u otro
-      // dato) con cualquier nombre de método, este test lo detecta.
+      // dato) con cualquier nombre de método, este test lo detecta. `appendPdfPages` sí se espera
+      // aquí: como este firmante es el único, la firma completa el documento y dispara
+      // `attachSignaturesSheet` (anexar la hoja de información de firmas) — no es un estampado de
+      // texto sobre el PDF firmado, sino la concatenación de la hoja ya generada aparte.
       const invokedOperations = Object.entries(documentSigningService)
         .filter(([, mock]) => mock.mock.calls.length > 0)
         .map(([name]) => name)
         .sort();
-      expect(invokedOperations).toEqual(['mergeSignatureIntoPdf']);
+      expect(invokedOperations).toEqual([
+        'appendPdfPages',
+        'mergeSignatureIntoPdf',
+      ]);
       expect(
         documentSigningService.mergeSignatureIntoPdf,
       ).toHaveBeenCalledTimes(1);

@@ -1,11 +1,11 @@
 import { Controller, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { EventPattern, Payload } from '@nestjs/microservices';
 import {
   ORGANIZATION_INVITATION_KAFKA_TOPICS,
   OrganizationInvitationEventPayload,
 } from './organization-invitation.topics';
 import { EmailService } from 'src/shared/email/email.service';
+import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
 
 /**
  * Worker que consume `organization.member.invited` (ver OrganizationInvitationEventsProducer)
@@ -20,10 +20,7 @@ export class OrganizationInvitationEventsConsumer {
     OrganizationInvitationEventsConsumer.name,
   );
 
-  constructor(
-    private readonly emailService: EmailService,
-    private readonly configService: ConfigService,
-  ) {}
+  constructor(private readonly emailService: EmailService) {}
 
   @EventPattern(ORGANIZATION_INVITATION_KAFKA_TOPICS.INVITED)
   async handleInvited(@Payload() payload: OrganizationInvitationEventPayload) {
@@ -32,10 +29,9 @@ export class OrganizationInvitationEventsConsumer {
     );
 
     try {
-      const frontendUrl =
-        this.configService.get<string>('FRONTEND_URL') ??
-        'http://localhost:3001';
-      const joinUrl = `${frontendUrl}/join?token=${payload.invitationToken}&orgId=${payload.organizationId}`;
+      // Normalizada: leída cruda, una `FRONTEND_URL` con diagonal final generaba
+      // `https://app.ejemplo.com//join?token=...` en el correo de invitación.
+      const joinUrl = `${frontendBaseUrl()}/join?token=${payload.invitationToken}&orgId=${payload.organizationId}`;
 
       await this.emailService.sendOrganizationInvitationNotification(
         payload.email,

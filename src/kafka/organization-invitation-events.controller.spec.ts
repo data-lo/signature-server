@@ -1,5 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { OrganizationInvitationEventsConsumer } from './organization-invitation-events.controller';
 import { EmailService } from 'src/shared/email/email.service';
 import type { OrganizationInvitationEventPayload } from './organization-invitation.topics';
@@ -7,7 +6,10 @@ import type { OrganizationInvitationEventPayload } from './organization-invitati
 describe('OrganizationInvitationEventsConsumer', () => {
   let consumer: OrganizationInvitationEventsConsumer;
   let emailService: { sendOrganizationInvitationNotification: jest.Mock };
-  let configService: { get: jest.Mock };
+
+  // La base del frontend se lee de `process.env` (vía `frontendBaseUrl`), no de ConfigService:
+  // es la misma fuente normalizada que usan los enlaces de documentos y el origin de CORS.
+  const originalFrontendUrl = process.env.FRONTEND_URL;
 
   const payload: OrganizationInvitationEventPayload = {
     eventId: 'event-1',
@@ -25,13 +27,11 @@ describe('OrganizationInvitationEventsConsumer', () => {
         .fn()
         .mockResolvedValue(undefined),
     };
-    configService = { get: jest.fn().mockReturnValue('http://localhost:3001') };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrganizationInvitationEventsConsumer,
         { provide: EmailService, useValue: emailService },
-        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -40,7 +40,16 @@ describe('OrganizationInvitationEventsConsumer', () => {
     );
   });
 
+  afterEach(() => {
+    process.env.FRONTEND_URL = originalFrontendUrl;
+  });
+
+  const joinUrlSentTo = (): string =>
+    emailService.sendOrganizationInvitationNotification.mock.calls[0][2];
+
   it('construye el enlace de /join con token+orgId y despacha el correo vía SendGrid', async () => {
+    process.env.FRONTEND_URL = 'https://app.ejemplo.com';
+
     await consumer.handleInvited(payload);
 
     expect(
@@ -48,12 +57,25 @@ describe('OrganizationInvitationEventsConsumer', () => {
     ).toHaveBeenCalledWith(
       'nuevo@empresa.com',
       'Acme Corp',
-      'http://localhost:3001/join?token=token-1&orgId=org-1',
+      'https://app.ejemplo.com/join?token=token-1&orgId=org-1',
     );
   });
 
+  // Regresión: este consumer leía `FRONTEND_URL` crudo, así que una base con diagonal final
+  // —lo natural de escribir en un panel de despliegue— mandaba `...//join` en el correo.
+  it('normaliza la diagonal final de FRONTEND_URL: nunca manda un enlace con //', async () => {
+    process.env.FRONTEND_URL = 'https://app.ejemplo.com/';
+
+    await consumer.handleInvited(payload);
+
+    expect(joinUrlSentTo()).toBe(
+      'https://app.ejemplo.com/join?token=token-1&orgId=org-1',
+    );
+    expect(joinUrlSentTo()).not.toContain('//join');
+  });
+
   it('usa el fallback localhost:3001 si FRONTEND_URL no está configurado', async () => {
-    configService.get.mockReturnValue(undefined);
+    delete process.env.FRONTEND_URL;
 
     await consumer.handleInvited(payload);
 
