@@ -11,6 +11,7 @@ import { getPlansConfig } from './config/plans.config';
 import { PlanDetails } from './interfaces/plan-details.interface';
 import { StripeCheckoutResponse } from './interfaces/stripe-checkout-response.interface';
 import { UserSubscriptionState } from './interfaces/user-subscription-state.interface';
+import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
 
 @Injectable()
 export class StripeService {
@@ -77,7 +78,9 @@ export class StripeService {
       });
     }
 
-    const frontendUrl = this.configService.get<string>('FRONTEND_URL');
+    // Normalizada: leída cruda, una `FRONTEND_URL` con diagonal final generaba
+    // `https://app.ejemplo.com//dashboard/plans/success`, y Stripe redirige a esa URL tal cual.
+    const frontendUrl = frontendBaseUrl();
 
     const session = await this.client.checkout.sessions.create(
       {
