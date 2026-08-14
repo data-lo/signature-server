@@ -29,6 +29,7 @@ import { DocumentTransactionService } from './document-transaction.service';
 import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import { SummaryDocumentService } from './summary-document/summary-document.service';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
 function createMockRepository() {
@@ -102,6 +103,7 @@ describe('DocumentService', () => {
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
+  let summaryDocumentService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
@@ -122,6 +124,8 @@ describe('DocumentService', () => {
     };
     hashService = {
       generateFileHash: jest.fn().mockResolvedValue('hash123'),
+      // Alimenta el campo "Cifrado" de la hoja de información de firmas.
+      generateCiperHash: jest.fn().mockResolvedValue('cifrado-reversible'),
     };
     userService = {
       findOne: jest.fn().mockResolvedValue({
@@ -136,6 +140,9 @@ describe('DocumentService', () => {
       mergeSignatureIntoPdf: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampRejectedWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampCancelledWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
+      appendPdfPages: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('pdf-con-hoja-anexada')),
       // Página de prueba fija de 600x800pt — suficiente para verificar que la conversión
       // ratio→puntos y el pageIndex correcto llegan a mergeSignatureIntoPdf sin necesitar un
       // PDF real (eso ya lo cubre document-signing.service.spec.ts).
@@ -218,6 +225,11 @@ describe('DocumentService', () => {
     sealDocumentUseCase = {
       create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
     };
+    summaryDocumentService = {
+      generateSummaryPdf: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('hoja-de-firmas')),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -249,6 +261,10 @@ describe('DocumentService', () => {
         },
         { provide: EfirmaService, useValue: efirmaService },
         { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
+        {
+          provide: SummaryDocumentService,
+          useValue: summaryDocumentService,
+        },
       ],
     }).compile();
 
@@ -631,6 +647,127 @@ describe('DocumentService', () => {
       expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
       expect(emailService.sendDocumentSignedNotification).toHaveBeenCalled();
       expect(document.completedSignersCount).toBe(1);
+    });
+
+    /**
+     * Historia "Anexar hoja existente de información de firmas al documento final": al completarse
+     * la firma se anexa la hoja YA EXISTENTE (SummaryDocumentService) al documento firmado y esa
+     * copia —la definitiva— se guarda en un bucket aparte.
+     */
+    describe('hoja de información de firmas anexada al documento final', () => {
+      async function signLastSigner() {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+        return document;
+      }
+
+      function uploadTo(bucket: BUCKET_TYPES_ENUM) {
+        return minioService.uploadPdfAObject.mock.calls.find(
+          (call) => call[1] === bucket,
+        );
+      }
+
+      it('anexa la hoja al documento firmado y guarda el resultado en el bucket de finalizados', async () => {
+        const document = await signLastSigner();
+
+        expect(summaryDocumentService.generateSummaryPdf).toHaveBeenCalledTimes(
+          1,
+        );
+        expect(documentSigningService.appendPdfPages).toHaveBeenCalledWith(
+          Buffer.from('pdf'), // documento firmado (estampado)
+          Buffer.from('hoja-de-firmas'), // hoja existente, sin regenerar
+        );
+
+        const finalizedUpload = uploadTo(BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS);
+        expect(finalizedUpload).toBeDefined();
+        expect(finalizedUpload![0].file).toEqual(
+          Buffer.from('pdf-con-hoja-anexada'),
+        );
+        // Misma object key que el resto de las versiones: lo que cambia es el bucket.
+        expect(finalizedUpload![3]).toBe(document.objectKey);
+      });
+
+      it('el documento firmado sigue guardándose sin la hoja: es el insumo de signedHash', async () => {
+        await signLastSigner();
+
+        const signedUpload = uploadTo(BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS);
+        expect(signedUpload).toBeDefined();
+        expect(signedUpload![0].file).toEqual(Buffer.from('pdf'));
+        // El hash se calcula sobre el documento firmado, NO sobre el que lleva la hoja anexada.
+        expect(hashService.generateFileHash).toHaveBeenCalledWith(
+          Buffer.from('pdf'),
+        );
+      });
+
+      it('la hoja se genera con el hash firmado, el total de páginas y los datos de cada firmante', async () => {
+        const document = await signLastSigner();
+
+        const [info, signers] =
+          summaryDocumentService.generateSummaryPdf.mock.calls[0];
+        expect(info).toEqual(
+          expect.objectContaining({
+            id: 'doc-1',
+            documentName: document.fileName,
+            hash: document.signedHash,
+            totalPages: document.totalPages,
+            createdBy: 'creador@correo.com',
+            verificationUrl: expect.stringContaining('/public/documents/doc-1'),
+          }),
+        );
+        expect(info.cipher).toEqual(expect.any(String));
+        expect(signers).toEqual([
+          expect.objectContaining({
+            name: 'Firmante Uno',
+            ipAddress: '127.0.0.1',
+            geoLocation: '19.4326, -99.1332',
+          }),
+        ]);
+      });
+
+      it('si no se puede armar la versión final, el documento no queda firmado y la firma puede reintentarse', async () => {
+        documentSigningService.appendPdfPages.mockRejectedValue(
+          new Error('PDF corrupto'),
+        );
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find.mockResolvedValue([onlySigner]);
+
+        await expect(
+          service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+        ).rejects.toThrow(/estampando el documento/i);
+
+        expect(document.status).toBe(DOCUMENT_STATUS_ENUM.PENDING);
+        expect(uploadTo(BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS)).toBeUndefined();
+      });
+
+      it('el usuario descarga la versión finalizada, no la del bucket de firmados', async () => {
+        documentRepository.findOne.mockResolvedValue(
+          mockDocument({ status: DOCUMENT_STATUS_ENUM.SIGNED }),
+        );
+
+        await service.getDocumentMinioURL('doc-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        );
+      });
+
+      it('el correo de finalización adjunta la versión definitiva, la misma que se ve en la plataforma', async () => {
+        await signLastSigner();
+
+        expect(minioService.getFileInBytesFormat).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        );
+      });
     });
 
     it('bug corregido: además de a los participantes, notifica por correo a quien creó el documento con la lista de firmantes, ya que el creador no siempre es también un participante', async () => {
@@ -1852,7 +1989,7 @@ describe('DocumentService', () => {
       },
     );
 
-    it('con status=SIGNED: genera y devuelve la URL prefirmada de Minio desde el bucket de firmados', async () => {
+    it('con status=SIGNED: genera y devuelve la URL prefirmada de Minio desde el bucket de finalizados', async () => {
       documentRepository.findOne.mockResolvedValue({
         id: 'doc-1',
         fileName: 'contrato.pdf',
@@ -1860,15 +1997,17 @@ describe('DocumentService', () => {
         objectKey: 'object-key-1',
       });
       minioService.getFile.mockResolvedValue({
-        secureUrl: 'https://minio/signed-documents/object-key-1',
+        secureUrl: 'https://minio/finalized-documents/object-key-1',
         expiresIn: 86400,
       });
 
       const result = await service.getPublicDocumentView('doc-1');
 
+      // La vista pública comparte la versión definitiva (documento + hoja de firmas), igual que
+      // el resto de las rutas de lectura.
       expect(minioService.getFile).toHaveBeenCalledWith(
         'object-key-1',
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
       );
       expect(result).toEqual({
         success: true,
@@ -1877,7 +2016,7 @@ describe('DocumentService', () => {
           id: 'doc-1',
           fileName: 'contrato.pdf',
           status: DOCUMENT_STATUS_ENUM.SIGNED,
-          secureUrl: 'https://minio/signed-documents/object-key-1',
+          secureUrl: 'https://minio/finalized-documents/object-key-1',
           expiresIn: 86400,
         },
       });
@@ -1892,10 +2031,12 @@ describe('DocumentService', () => {
    */
   describe('getDocumentMinioURL: bucket según el estatus del documento', () => {
     it.each([
-      [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS],
+      // Firmado y con cancelación en curso sirven la versión definitiva (documento + hoja de
+      // firmas) desde `finalized_documents` — ver historia "Anexar hoja existente...".
+      [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS],
       [
         DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
       ],
       [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
       [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
@@ -1945,10 +2086,10 @@ describe('DocumentService', () => {
   describe('bucket según el estatus en el resto de las rutas de lectura', () => {
     const detailBucketCases: Array<[DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM]> =
       [
-        [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS],
+        [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS],
         [
           DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
-          BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
         ],
         [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
         [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
@@ -2026,7 +2167,7 @@ describe('DocumentService', () => {
 
       expect(minioService.getFile).toHaveBeenCalledWith(
         'object-key-firmado',
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
       );
       expect(minioService.getFile).toHaveBeenCalledWith(
         'object-key-pendiente',

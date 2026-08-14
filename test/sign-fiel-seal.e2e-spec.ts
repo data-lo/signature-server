@@ -32,6 +32,7 @@ import { AccountMemberService } from './../src/account/account-member.service';
 import { VerificationCodeService } from './../src/document/verification-code.service';
 import { DocumentTransactionService } from './../src/document/document-transaction.service';
 import { EfirmaService } from './../src/efirma/efirma.service';
+import { SummaryDocumentService } from './../src/document/summary-document/summary-document.service';
 import { SealDocumentUseCase } from './../src/document/seal/use-cases/seal-document.use-case';
 import { SealApiService } from './../src/document/seal/services/seal-api.service';
 import { SealEntity } from './../src/document/seal/entities/seal.entity';
@@ -231,12 +232,16 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
           provide: HashService,
           useValue: {
             generateFileHash: jest.fn().mockResolvedValue('hash-del-firmado'),
+            generateCiperHash: jest.fn().mockResolvedValue('cifrado'),
           },
         },
         {
           provide: UserService,
           useValue: {
-            findOne: jest.fn().mockResolvedValue({ id: SIGNER_USER_ID }),
+            findOne: jest.fn().mockResolvedValue({
+              id: SIGNER_USER_ID,
+              email: 'creador@correo.com',
+            }),
           },
         },
         {
@@ -247,6 +252,17 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
             getPdfPages: jest.fn(),
             stampRejectedWatermark: jest.fn(),
             stampCancelledWatermark: jest.fn(),
+            appendPdfPages: jest
+              .fn()
+              .mockResolvedValue(Buffer.from('pdf-con-hoja')),
+          },
+        },
+        {
+          provide: SummaryDocumentService,
+          useValue: {
+            generateSummaryPdf: jest
+              .fn()
+              .mockResolvedValue(Buffer.from('hoja-de-firmas')),
           },
         },
         { provide: SignatureService, useValue: { findOne: jest.fn() } },

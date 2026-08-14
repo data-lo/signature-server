@@ -61,6 +61,7 @@ import {
 import {
   buildAllDocumentsUrl,
   buildDocumentAccessUrl,
+  buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
@@ -72,6 +73,8 @@ import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import { SummaryDocumentService } from './summary-document/summary-document.service';
+import type { SummaryDocumentSigner } from './summary-document/interfaces/summary-document.interface';
 import type { SealDocumentDto } from './seal/dto/seal-document.dto';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
@@ -104,9 +107,13 @@ export class DocumentService {
   > = {
     [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    // Una vez firmado, lo que se sirve es la versión definitiva —documento + hoja de información
+    // de firmas— y no la copia de `signed_documents`, que existe solo como insumo interno del
+    // `signedHash` (ver `attachSignaturesSheet`). CANCELLATION_PENDING es un estado posterior a la
+    // firma, así que muestra esa misma versión mientras se resuelve la solicitud de cancelación.
+    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
@@ -130,6 +137,7 @@ export class DocumentService {
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly efirmaService: EfirmaService,
     private readonly sealDocumentUseCase: SealDocumentUseCase,
+    private readonly summaryDocumentService: SummaryDocumentService,
   ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
@@ -931,9 +939,10 @@ export class DocumentService {
       };
     }
 
+    // Versión definitiva (documento + hoja de firmas): es la única que se comparte hacia afuera.
     const { secureUrl, expiresIn } = await this.minioService.getFile(
       document.objectKey,
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
 
     return {
@@ -1862,6 +1871,18 @@ export class DocumentService {
       document.signedHash =
         await this.hashService.generateFileHash(documentBuffer);
       document.signedAt = new Date();
+
+      // La versión definitiva se arma DESPUÉS de calcular signedHash y ANTES de marcar el
+      // documento como SIGNED: la hoja imprime ese hash, y si el anexado falla el documento no
+      // queda firmado (el flujo de `sign()` deshace la firma y permite reintentar), en vez de
+      // dejar un documento firmado que el usuario no podría ver porque su versión final no existe.
+      await this.attachSignaturesSheet(
+        document,
+        signerCollaborators,
+        documentBuffer,
+        signerNames,
+      );
+
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
       await this.documentRepository.save(document);
     } catch (error) {
@@ -1879,6 +1900,90 @@ export class DocumentService {
   }
 
   /**
+   * Anexa la hoja de información de firmas al documento firmado y guarda ese resultado en el
+   * bucket de documentos finalizados (historia "Anexar hoja existente de información de firmas al
+   * documento final"). Esa copia es la versión definitiva: la única que el usuario ve y descarga.
+   *
+   * No se inventa una hoja nueva — se usa la que ya existía, `SummaryDocumentService`, que replica
+   * la plantilla de referencia "Firmalo Hoja de Firmas". Aplica igual a firma simple y a firma
+   * avanzada: la diferencia entre ambas ya quedó resuelta antes, en el estampado (la simple llega
+   * con las rúbricas dibujadas en el documento, la avanzada sin imagen porque su evidencia es
+   * criptográfica), y acá solo se concatenan páginas.
+   *
+   * Nada de lo que entra se modifica: el original sigue intacto en `created_documents` y el
+   * documento firmado en `signed_documents` —que es el insumo con el que se calculó `signedHash`,
+   * y por eso no puede llevar la hoja encima—. Esto solo escribe una tercera copia.
+   */
+  private async attachSignaturesSheet(
+    document: DocumentEntity,
+    signerCollaborators: CollaboratorEntity[],
+    signedDocument: Buffer,
+    signerNames: string,
+  ): Promise<void> {
+    const creator = await this.userService.findOne(document.createdBy);
+
+    // "Cifrado" en la plantilla: copia cifrada y reversible (ver `HashService.reverseCiperHash`)
+    // del registro de esta finalización, para poder reconstruir qué se firmó y quién lo firmó
+    // desde la propia hoja.
+    const cipher = await this.hashService.generateCiperHash({
+      documentId: document.id,
+      signedHash: document.signedHash,
+      signedAt: document.signedAt,
+      signers: signerCollaborators.map((collaborator) => ({
+        id: collaborator.id,
+        name: collaboratorDisplayName(collaborator),
+        signedAt: collaborator.signedAt,
+      })),
+    });
+
+    const summarySheet = await this.summaryDocumentService.generateSummaryPdf(
+      {
+        id: document.id,
+        documentName: document.fileName,
+        hash: document.signedHash,
+        cipher,
+        totalPages: document.totalPages,
+        createdBy: creator.email,
+        verificationUrl: buildPublicDocumentUrl(document.id),
+      },
+      signerCollaborators.map((collaborator) =>
+        this.toSummarySigner(collaborator),
+      ),
+    );
+
+    const finalizedDocument = await this.documentSigningSerivice.appendPdfPages(
+      signedDocument,
+      summarySheet,
+    );
+
+    await this.minioService.uploadPdfAObject(
+      {
+        file: finalizedDocument,
+        name: document.fileName,
+        mimetype: 'application/pdf',
+      },
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+      signerNames,
+      document.objectKey,
+    );
+  }
+
+  /** Traduce un colaborador firmante a un renglón de la sección "Firmas" de la hoja. */
+  private toSummarySigner(
+    collaborator: CollaboratorEntity,
+  ): SummaryDocumentSigner {
+    return {
+      name: collaboratorDisplayName(collaborator),
+      rfc: collaborator.rfc,
+      ipAddress: collaborator.ipAddress,
+      signedAt: collaborator.signedAt,
+      geoLocation: collaborator.geoLoc
+        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
+        : null,
+    };
+  }
+
+  /**
    * Envía el PDF final firmado por correo a todos los colaboradores (firmantes, watchers y
    * reviewers) y, por separado, a quien creó el documento — que no siempre es también un
    * colaborador, así que sin esto se quedaba sin ningún aviso de que ya se completó la firma.
@@ -1891,9 +1996,12 @@ export class DocumentService {
     });
     const creator = await this.userService.findOne(document.createdBy);
 
+    // Se adjunta la versión definitiva (documento + hoja de firmas), no la de `signed_documents`:
+    // el correo de finalización es, para la mayoría de los colaboradores, la única copia que van a
+    // conservar, así que tiene que ser exactamente la misma que verían en la plataforma.
     const signedBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
 
     const signerNames = collaborators
@@ -2150,9 +2258,12 @@ export class DocumentService {
     document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
     document.cancelledAt = cancelledAt;
 
+    // Se cancela sobre la versión definitiva (con la hoja de firmas anexada), que es la que el
+    // usuario venía viendo: el sello "CANCELADO" queda entonces sobre TODAS sus páginas, hoja
+    // incluida, y no sobre una copia intermedia que nadie había visto nunca.
     const documentBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
     const cancelledDocument =
       await this.documentSigningSerivice.stampCancelledWatermark(

@@ -43,3 +43,12 @@ export function buildDocumentAccessUrl(
 export function buildAllDocumentsUrl(): string {
   return `${frontendBaseUrl()}/dashboard/documents`;
 }
+
+/**
+ * Enlace a la vista pública del documento firmado (sin sesión). Es lo que se codifica en el QR de
+ * la hoja de información de firmas: quien reciba el PDF impreso o reenviado puede escanearlo y
+ * llegar a la verificación en línea sin tener cuenta.
+ */
+export function buildPublicDocumentUrl(documentId: string): string {
+  return `${frontendBaseUrl()}/public/documents/${documentId}`;
+}
