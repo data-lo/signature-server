@@ -138,15 +138,14 @@ describe('DocumentService', () => {
     documentSigningService = {
       getPdfPages: jest.fn().mockResolvedValue(3),
       mergeSignatureIntoPdf: jest.fn().mockResolvedValue(Buffer.from('pdf')),
-      addSignerName: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampRejectedWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampCancelledWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       appendPdfPages: jest
         .fn()
         .mockResolvedValue(Buffer.from('pdf-con-hoja-anexada')),
       // Página de prueba fija de 600x800pt — suficiente para verificar que la conversión
-      // ratio→puntos y el pageIndex correcto llegan a mergeSignatureIntoPdf/addSignerName sin
-      // necesitar un PDF real (eso ya lo cubre document-signing.service.spec.ts).
+      // ratio→puntos y el pageIndex correcto llegan a mergeSignatureIntoPdf sin necesitar un
+      // PDF real (eso ya lo cubre document-signing.service.spec.ts).
       resolveRatioPosition: jest.fn(async (_buffer: Buffer, position: any) => ({
         pageIndex: position.page - 1,
         coordinates: {
@@ -931,9 +930,29 @@ describe('DocumentService', () => {
       expect(mergeCalls).toHaveLength(2);
       expect(mergeCalls[0][3]).toBe(0); // page 1 → pageIndex 0
       expect(mergeCalls[1][3]).toBe(2); // page 3 → pageIndex 2
-      const addNameCalls = documentSigningService.addSignerName.mock.calls;
-      expect(addNameCalls[0][3]).toBe(0);
-      expect(addNameCalls[1][3]).toBe(2);
+    });
+
+    it('historia "Eliminar nombre al estampar firma simple": el estampado es solo la imagen — ninguna otra operación de dibujo sobre el PDF', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      collaboratorRepository.find
+        .mockResolvedValueOnce([onlySigner])
+        .mockResolvedValueOnce([onlySigner]);
+
+      await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+      // Se afirma sobre TODAS las operaciones del servicio de firmado, no sobre la ausencia de
+      // una en particular: así, si alguien reintroduce un estampado de texto (el nombre u otro
+      // dato) con cualquier nombre de método, este test lo detecta.
+      const invokedOperations = Object.entries(documentSigningService)
+        .filter(([, mock]) => mock.mock.calls.length > 0)
+        .map(([name]) => name)
+        .sort();
+      expect(invokedOperations).toEqual(['mergeSignatureIntoPdf']);
+      expect(
+        documentSigningService.mergeSignatureIntoPdf,
+      ).toHaveBeenCalledTimes(1);
     });
 
     it('historia "Ubicación de firmas por usuario": con signatures vacío, firma sin estampar nada visualmente', async () => {
@@ -959,7 +978,6 @@ describe('DocumentService', () => {
       expect(
         documentSigningService.mergeSignatureIntoPdf,
       ).not.toHaveBeenCalled();
-      expect(documentSigningService.addSignerName).not.toHaveBeenCalled();
       // Sigue subiendo el PDF (sin cambios visuales) y marcando el documento como firmado.
       expect(minioService.uploadPdfAObject).toHaveBeenCalled();
       expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);

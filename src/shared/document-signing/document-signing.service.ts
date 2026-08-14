@@ -315,35 +315,13 @@ export class PdfSignatureService {
     );
   }
 
-  async addSignerName(
-    documentBuffer: Buffer,
-    signerName: string,
-    coord: SignatureCoordinates,
-    pageIndex?: number,
-  ): Promise<Buffer> {
-    try {
-      const pdfDoc = await PDFDocument.load(documentBuffer);
-      const pages = pdfDoc.getPages();
-      const targetPage =
-        pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
-
-      targetPage.drawText(signerName, {
-        x: coord.x,
-        y: coord.y - 20,
-        size: 10,
-      });
-
-      this.applyPdfA2bConformance(pdfDoc);
-      const signedPdfBytes: Uint8Array = await pdfDoc.save({
-        useObjectStreams: false,
-      });
-      return Buffer.from(signedPdfBytes);
-    } catch (error) {
-      throw new InternalServerErrorException(
-        `Error añadiendo el nombre del firmante ${error}`,
-      );
-    }
-  }
+  /**
+   * Historia "Eliminar nombre al estampar firma simple": acá vivía `addSignerName`, que dibujaba
+   * el nombre del firmante como texto 20pt debajo de cada firma estampada. Se eliminó junto con
+   * su único llamador (`DocumentService.finalizeSignedDocument`): el estampado ahora es solo la
+   * imagen de la firma. El nombre del firmante sigue registrado en la hoja de firmas del resumen
+   * (`SummaryDocumentService`), que es donde corresponde la evidencia en texto.
+   */
 
   /** Estampa "RECHAZADO" en diagonal naranja semitransparente en todas las páginas del PDF. */
   async stampRejectedWatermark(documentBuffer: Buffer): Promise<Buffer> {

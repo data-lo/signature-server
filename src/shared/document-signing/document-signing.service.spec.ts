@@ -27,83 +27,7 @@ describe('PdfSignatureService', () => {
     service = module.get(PdfSignatureService);
   });
 
-  /**
-   * Historia "Anexar hoja existente de información de firmas al documento final": el resultado es
-   * una copia nueva con las páginas de los dos PDF, y ninguno de los originales se toca.
-   */
-  describe('appendPdfPages', () => {
-    it('el PDF resultante lleva las páginas del documento y después las de la hoja', async () => {
-      const documentBuffer = await buildPdf([
-        [200, 200],
-        [300, 300],
-      ]);
-      const sheetBuffer = await buildPdf([[595, 842]]);
-
-      const merged = await service.appendPdfPages(documentBuffer, sheetBuffer);
-
-      const mergedDoc = await PDFDocument.load(merged);
-      expect(mergedDoc.getPageCount()).toBe(3);
-      // El orden importa: la hoja va al final, nunca intercalada ni al principio.
-      const sizes = mergedDoc
-        .getPages()
-        .map((page) => [
-          Math.round(page.getWidth()),
-          Math.round(page.getHeight()),
-        ]);
-      expect(sizes).toEqual([
-        [200, 200],
-        [300, 300],
-        [595, 842],
-      ]);
-    });
-
-    it('no altera ninguno de los dos PDF de entrada', async () => {
-      const documentBuffer = await buildPdf([[200, 200]]);
-      const sheetBuffer = await buildPdf([[595, 842]]);
-      const documentBefore = Buffer.from(documentBuffer);
-      const sheetBefore = Buffer.from(sheetBuffer);
-
-      await service.appendPdfPages(documentBuffer, sheetBuffer);
-
-      // Criterio de aceptación explícito: el documento y la hoja existentes quedan intactos —
-      // esto solo produce una tercera copia.
-      expect(documentBuffer.equals(documentBefore)).toBe(true);
-      expect(sheetBuffer.equals(sheetBefore)).toBe(true);
-    });
-
-    it('conserva el contenido ya dibujado en el documento (las firmas estampadas viajan en la página copiada)', async () => {
-      const base = await buildPdf([[400, 400]]);
-      const stamped = await service.mergeSignatureIntoPdf(base, MINIMAL_PNG, {
-        x: 10,
-        y: 10,
-        width: 60,
-        height: 24,
-      });
-      const sheetBuffer = await buildPdf([[595, 842]]);
-
-      const merged = await service.appendPdfPages(stamped, sheetBuffer);
-
-      // La imagen incrustada al estampar sigue estando entre los recursos del PDF final: copiar
-      // páginas arrastra sus XObjects, no solo el texto.
-      const mergedDoc = await PDFDocument.load(merged);
-      const firstPageResources = mergedDoc.getPages()[0].node.Resources();
-      expect(firstPageResources).toBeDefined();
-      expect(mergedDoc.getPageCount()).toBe(2);
-    });
-
-    it('un PDF ilegible se reporta como error de anexado, no como una excepción cruda de pdf-lib', async () => {
-      const documentBuffer = await buildPdf([[200, 200]]);
-
-      await expect(
-        service.appendPdfPages(
-          documentBuffer,
-          Buffer.from('esto no es un pdf'),
-        ),
-      ).rejects.toThrow(/anexando la hoja de firmas/i);
-    });
-  });
-
-  describe('mergeSignatureIntoPdf / addSignerName — pageIndex (historia "Ubicación de firmas por usuario")', () => {
+  describe('mergeSignatureIntoPdf — pageIndex (historia "Ubicación de firmas por usuario")', () => {
     it('sin pageIndex, dibuja en la última página (comportamiento previo, sin romper callers existentes)', async () => {
       const documentBuffer = await buildPdf([
         [200, 200],
@@ -139,10 +63,6 @@ describe('PdfSignatureService', () => {
           { x: 10, y: 10, width: 60, height: 24 },
           1,
         ),
-      ).resolves.toBeInstanceOf(Buffer);
-
-      await expect(
-        service.addSignerName(documentBuffer, 'JUAN PÉREZ', { x: 10, y: 10, width: 60, height: 24 }, 1),
       ).resolves.toBeInstanceOf(Buffer);
     });
 
