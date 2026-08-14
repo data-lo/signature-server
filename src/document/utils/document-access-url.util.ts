@@ -42,3 +42,19 @@ export function buildAllDocumentsUrl(): string {
 export function buildPublicDocumentUrl(documentId: string): string {
   return `${frontendBaseUrl()}/public/documents/${documentId}`;
 }
+
+/**
+ * Enlace a la información de UNA firma avanzada concreta (historia "Generar código QR para firmas
+ * avanzadas"). Es lo que se codifica en el QR que se estampa en el documento: como la firma
+ * avanzada no deja rúbrica visible, el QR es su representación visual, y quien lo escanea llega a
+ * la constancia de esa firma —quién firmó y cuándo— sin necesidad de tener cuenta.
+ *
+ * Lleva el id del colaborador y no solo el del documento: cada firmante tiene su propio QR, así
+ * que dos firmas avanzadas del mismo documento nunca codifican la misma URL.
+ */
+export function buildAdvancedSignatureUrl(
+  documentId: string,
+  collaboratorId: string,
+): string {
+  return `${frontendBaseUrl()}/public/documents/${documentId}/signatures/${collaboratorId}`;
+}

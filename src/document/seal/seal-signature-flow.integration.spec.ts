@@ -24,6 +24,7 @@ import { VerificationCodeService } from '../verification-code.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SummaryDocumentService } from '../summary-document/summary-document.service';
+import { SignatureQrService } from '../services/signature-qr.service';
 
 import { SealDocumentUseCase } from './use-cases/seal-document.use-case';
 import { SealApiService } from './services/seal-api.service';
@@ -253,6 +254,9 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
               .mockResolvedValue(Buffer.from('hoja-de-firmas')),
           },
         },
+        // Servicio real: el QR de cada firma avanzada se genera dentro de la misma finalización
+        // que dispara el sellado, así que la cadena bajo prueba lo ejercita de verdad.
+        SignatureQrService,
         { provide: SignatureService, useValue: { findOne: jest.fn() } },
         {
           provide: EmailService,

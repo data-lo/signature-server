@@ -59,10 +59,13 @@ import {
   collaboratorEmail,
 } from './utils/collaborator-display.util';
 import {
+  buildAdvancedSignatureUrl,
   buildAllDocumentsUrl,
   buildDocumentAccessUrl,
   buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
+import { SignatureQrService } from './services/signature-qr.service';
+import { AdvancedSignaturePublicViewData } from './interfaces/responses/advanced-signature-public-view-response';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 import {
@@ -138,6 +141,7 @@ export class DocumentService {
     private readonly efirmaService: EfirmaService,
     private readonly sealDocumentUseCase: SealDocumentUseCase,
     private readonly summaryDocumentService: SummaryDocumentService,
+    private readonly signatureQrService: SignatureQrService,
   ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
@@ -1738,6 +1742,123 @@ export class DocumentService {
    * Nombre/RFC/IP/OTP/fecha por firmante) — la identidad del firmante no se pierde, solo deja de
    * dibujarse encima del contenido del PDF.
    */
+  /**
+   * Constancia pública de una firma avanzada — el destino del código QR estampado en el documento
+   * (historia "Generar código QR para firmas avanzadas").
+   *
+   * Sin autenticación, igual que `getPublicDocumentView`: quien tiene el documento en la mano
+   * puede escanear el QR y verificar quién firmó y cuándo sin necesidad de tener cuenta. Por eso
+   * el gate es estricto — solo responde para una firma avanzada YA COMPLETADA de ese documento:
+   *
+   *  - si el colaborador no pertenece al documento, no existe o no es firmante → 404
+   *  - si su firma es simple → 404 (su constancia es la rúbrica visible, no este QR)
+   *  - si todavía no firmó → 404, no hay firma que consultar
+   *
+   * Se responde 404 y no 403 a propósito: un 403 confirmaría que ese colaborador existe, y esta
+   * ruta la puede llamar cualquiera con un UUID.
+   */
+  async getAdvancedSignaturePublicView(
+    documentId: string,
+    collaboratorId: string,
+  ): Promise<BaseResponse<AdvancedSignaturePublicViewData>> {
+    const collaborator = await this.collaboratorRepository.findOne({
+      where: {
+        id: collaboratorId,
+        documentId,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { account: { user: true } },
+    });
+
+    if (
+      !collaborator ||
+      collaborator.signatureType !== SIGNATURE_TYPE_ENUM.FIEL ||
+      collaborator.status !== SIGNEE_STATUS_ENUM.SIGNED ||
+      !collaborator.signedAt
+    ) {
+      throw new NotFoundException('Firma avanzada no encontrada');
+    }
+
+    const document = await this.findOne(documentId);
+    const certificate = collaborator.advancedSignature?.certificate;
+
+    return {
+      success: true,
+      message: 'Firma obtenida correctamente',
+      data: {
+        documentId: document.id,
+        fileName: document.fileName,
+        // El nombre del certificado es el que el SAT tiene registrado para ese RFC, así que es el
+        // más fiel a quién firmó; el del perfil es el respaldo cuando no hay evidencia guardada.
+        signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
+        rfc: certificate?.rfc ?? null,
+        certificateSerialNumber: certificate?.serialNumber ?? null,
+        signedAt: collaborator.signedAt.toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Imagen que se estampa por un firmante, o `null` si no hay nada que dibujar.
+   *
+   * Los dos tipos de firma se distinguen SOLO acá; de este punto en adelante el estampado es
+   * idéntico para ambos —misma caja, mismas coordenadas, mismo `mergeSignatureIntoPdf`—, que es
+   * justamente lo que pide la historia "Generar código QR para firmas avanzadas": que el QR sea
+   * el equivalente visual de la rúbrica de una firma simple.
+   *
+   *  - Firma simple: la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar
+   *    (ver `signatureSnapshotObjectKey`), no de su perfil en vivo.
+   *  - Firma avanzada (e.firma): un código QR que lleva a la constancia de esa firma. Su evidencia
+   *    es criptográfica y no produce ninguna imagen, así que antes su espacio quedaba vacío.
+   *
+   * El QR se genera únicamente cuando la firma avanzada YA se completó: mientras el firmante siga
+   * pendiente no hay firma que consultar, así que no se dibuja nada y su espacio sigue libre.
+   */
+  private async resolveStampImage(
+    document: DocumentEntity,
+    collaborator: CollaboratorEntity,
+  ): Promise<Buffer | null> {
+    if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+      if (collaborator.status !== SIGNEE_STATUS_ENUM.SIGNED) {
+        return null;
+      }
+
+      return this.signatureQrService.generatePngBuffer(
+        buildAdvancedSignatureUrl(document.id, collaborator.id),
+      );
+    }
+
+    // Los firmantes siempre tienen cuenta de plataforma (accountId no-nulo): solo watchers
+    // y reviewers pueden invitarse por email únicamente (ver create()). Fallback defensivo
+    // por si la relación account.user no vino cargada (no debería pasar: signerCollaborators
+    // siempre se consulta con relations: { account: { user: true } }).
+    const signerUser =
+      collaborator.account?.user ??
+      (await this.userService.findOne(
+        (
+          await this.collaboratorRepository.findOneOrFail({
+            where: { id: collaborator.id },
+            relations: { account: { user: true } },
+          })
+        ).account!.userId,
+      ));
+
+    // Usa el snapshot inmutable tomado en el momento real de la firma (ver
+    // `signatureSnapshotObjectKey` / `snapshotSignatureImage`) — NO la firma en vivo del
+    // perfil del usuario, que pudo haber sido desactivada/reemplazada después de firmar.
+    // El fallback a la firma en vivo es solo defensivo, para filas ya firmadas antes de
+    // este fix que todavía no tienen snapshot.
+    const signatureObjectKey =
+      collaborator.signatureSnapshotObjectKey ??
+      (await this.signatureService.findOne(signerUser.signatureId))
+        .signatureObjectKey;
+
+    return this.minioService.getFileInBytesFormat(
+      signatureObjectKey,
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+    );
+  }
+
   private async finalizeSignedDocument(
     document: DocumentEntity,
     signerCollaborators: CollaboratorEntity[],
@@ -1759,41 +1880,16 @@ export class DocumentService {
       // los colaboradores SIN coordenadas explícitas, para que no colisionen entre sí.
       let autoStackIndex = 0;
       for (const collaborator of signerCollaborators) {
-        // Firma electrónica avanzada (FIEL): la evidencia es criptográfica (ver
-        // `CollaboratorEntity.advancedSignature`, poblado en `sign()`), no una imagen — no hay
-        // nada que estampar visualmente en el PDF para este colaborador.
-        if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+        const signatureBuffer = await this.resolveStampImage(
+          document,
+          collaborator,
+        );
+
+        // Nada que estampar por este firmante: firma avanzada todavía pendiente (su QR no existe
+        // hasta que firma) o firma simple sin rúbrica resoluble.
+        if (!signatureBuffer) {
           continue;
         }
-
-        // Los firmantes siempre tienen cuenta de plataforma (accountId no-nulo): solo watchers
-        // y reviewers pueden invitarse por email únicamente (ver create()). Fallback defensivo
-        // por si la relación account.user no vino cargada (no debería pasar: signerCollaborators
-        // siempre se consulta con relations: { account: { user: true } }).
-        const signerUser =
-          collaborator.account?.user ??
-          (await this.userService.findOne(
-            (
-              await this.collaboratorRepository.findOneOrFail({
-                where: { id: collaborator.id },
-                relations: { account: { user: true } },
-              })
-            ).account!.userId,
-          ));
-
-        // Usa el snapshot inmutable tomado en el momento real de la firma (ver
-        // `signatureSnapshotObjectKey` / `snapshotSignatureImage`) — NO la firma en vivo del
-        // perfil del usuario, que pudo haber sido desactivada/reemplazada después de firmar.
-        // El fallback a la firma en vivo es solo defensivo, para filas ya firmadas antes de
-        // este fix que todavía no tienen snapshot.
-        const signatureObjectKey =
-          collaborator.signatureSnapshotObjectKey ??
-          (await this.signatureService.findOne(signerUser.signatureId))
-            .signatureObjectKey;
-        const signatureBuffer = await this.minioService.getFileInBytesFormat(
-          signatureObjectKey,
-          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
-        );
 
         if (collaborator.simpleSignature) {
           // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
