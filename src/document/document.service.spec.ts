@@ -679,7 +679,9 @@ describe('DocumentService', () => {
 
         expect(signatureQrService.generatePngBuffer).toHaveBeenCalledTimes(1);
         const url = signatureQrService.generatePngBuffer.mock.calls[0][0];
-        expect(url).toContain(`/public/documents/doc-1/signatures/${signer.id}`);
+        expect(url).toContain(
+          `/public/documents/doc-1/signatures/${signer.id}`,
+        );
       });
 
       // El QR ocupa el lugar que tenía asignado esa firma, igual que la rúbrica de una simple: es
@@ -713,8 +715,8 @@ describe('DocumentService', () => {
 
         await service.sign('doc-1', 'user-1', efirmaInput(), TEST_GEOLOCATION);
 
-        // Firmó uno de dos: no se estampa nada todavía (el documento se cierra con el último),
-        // y en ningún caso se pide el QR del que sigue pendiente.
+        // Firmó uno de dos: se regenera la vista previa con el avance, así que sí se pide el QR
+        // del que ya firmó — pero en ninguna de las dos pasadas el del que sigue pendiente.
         const urls = signatureQrService.generatePngBuffer.mock.calls.map(
           (call) => call[0] as string,
         );
@@ -735,6 +737,119 @@ describe('DocumentService', () => {
 
         expect(signatureQrService.generatePngBuffer).not.toHaveBeenCalled();
         expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * Historia "Actualizar el previsualizador con el avance de firmas": antes las rúbricas solo
+     * se dibujaban sobre el PDF cuando firmaba el ÚLTIMO participante, así que quien abría un
+     * documento a medio firmar veía el original limpio. Ahora, tras cada firma que no cierra el
+     * documento, se regenera una vista previa con las firmas registradas hasta ese momento.
+     */
+    describe('vista previa con el avance de firmas', () => {
+      /** Firma `user-1` de dos firmantes, dejando a `user-2` pendiente. */
+      async function signFirstOfTwo() {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        const signerB = buildSigner({
+          id: 'collaborator-2',
+          userId: 'user-2',
+          signingOrder: 1,
+        });
+        collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+        collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+        return { document, signerA, signerB };
+      }
+
+      function previewUpload() {
+        return minioService.uploadPdfAObject.mock.calls.find(
+          (call) => call[1] === BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
+        );
+      }
+
+      it('con firmantes pendientes, guarda la vista previa en su propio bucket', async () => {
+        await signFirstOfTwo();
+
+        const upload = previewUpload();
+        expect(upload).toBeDefined();
+        expect(upload![0].name).toBe('contrato.pdf');
+        expect(upload![3]).toBe('object-key-1');
+      });
+
+      // Solo se estampa a quien ya firmó: el firmante pendiente debe seguir con su espacio vacío.
+      it('estampa únicamente a los firmantes que ya firmaron', async () => {
+        await signFirstOfTwo();
+
+        expect(
+          documentSigningService.mergeSignatureIntoPdf,
+        ).toHaveBeenCalledTimes(1);
+      });
+
+      /**
+       * La vista previa se reconstruye desde el ORIGINAL, no encima de la vista previa anterior:
+       * estampar de forma incremental acumularía cada pasada y una firma repetida terminaría
+       * dibujando dos veces sobre el mismo lugar.
+       */
+      it('parte siempre del documento original', async () => {
+        await signFirstOfTwo();
+
+        expect(minioService.getFileInBytesFormat).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        );
+        expect(minioService.getFileInBytesFormat).not.toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
+        );
+      });
+
+      // Es una copia de conveniencia: la firma ya quedó registrada y no debe perderse porque
+      // MinIO falle al guardar una vista previa.
+      it('si falla, no rompe la firma que ya se registró', async () => {
+        minioService.uploadPdfAObject.mockRejectedValueOnce(
+          new Error('MinIO caído'),
+        );
+
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        const signerB = buildSigner({
+          id: 'collaborator-2',
+          userId: 'user-2',
+          signingOrder: 1,
+        });
+        collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+        collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
+
+        const result = await service.sign(
+          'doc-1',
+          'user-1',
+          undefined,
+          TEST_GEOLOCATION,
+        );
+
+        expect(result.success).toBe(true);
+        expect(collaboratorRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({ status: SIGNEE_STATUS_ENUM.SIGNED }),
+        );
+      });
+
+      // Con el último firmante el documento pasa a SIGNED y lo que se sirve es la versión
+      // definitiva: una vista previa ahí quedaría huérfana y desactualizada.
+      it('no genera vista previa cuando firma el último participante', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+        expect(previewUpload()).toBeUndefined();
       });
     });
 
@@ -2334,6 +2449,59 @@ describe('DocumentService', () => {
       expect(minioService.getFile).not.toHaveBeenCalledWith(
         'object-key-1',
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      );
+    });
+
+    /**
+     * Historia "Actualizar el previsualizador con el avance de firmas": el estatus por sí solo no
+     * alcanza para decidir qué versión sirve un documento PENDING — depende de si ya firmó
+     * alguien. Es la única excepción a STATUS_BUCKET_MAP.
+     */
+    it.each([
+      [0, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      [undefined, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      [1, BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS],
+      [3, BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS],
+    ])(
+      'pendiente con completedSignersCount=%s resuelve el bucket %s',
+      async (completedSignersCount, expectedBucket) => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          status: DOCUMENT_STATUS_ENUM.PENDING,
+          objectKey: 'object-key-1',
+          completedSignersCount,
+        });
+
+        await service.getDocumentMinioURL('doc-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          expectedBucket,
+        );
+      },
+    );
+
+    // La vista previa solo aplica mientras se está firmando: un documento ya firmado, rechazado o
+    // cancelado tiene su propia versión definitiva y no debe caer nunca en el bucket de avance.
+    it.each([
+      DOCUMENT_STATUS_ENUM.SIGNED,
+      DOCUMENT_STATUS_ENUM.REJECTED,
+      DOCUMENT_STATUS_ENUM.CANCELLED,
+    ])('status=%s nunca sirve la vista previa del avance', async (status) => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status,
+        objectKey: 'object-key-1',
+        completedSignersCount: 2,
+      });
+
+      await service.getDocumentMinioURL('doc-1');
+
+      expect(minioService.getFile).not.toHaveBeenCalledWith(
+        'object-key-1',
+        BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
       );
     });
   });
