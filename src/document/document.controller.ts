@@ -59,6 +59,7 @@ import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { DocumentUpdateResponse } from './interfaces/responses/document-update-response';
 import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
+import { AdvancedSignaturePublicViewResponse } from './interfaces/responses/advanced-signature-public-view-response';
 import { SubmitForAuthorizationResponse } from './interfaces/responses/submit-for-authorization-response';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
@@ -99,6 +100,39 @@ export class DocumentController {
   })
   async getPublicDocument(@Param('id') id: string) {
     return this.documentService.getPublicDocumentView(id);
+  }
+
+  @Get('public/:id/signatures/:collaboratorId')
+  @SkipJwtAuth()
+  @ApiOperation({
+    summary: 'Constancia pública de una firma avanzada (sin autenticación)',
+    description:
+      'Público (sin JWT ni x-api-key, ver SkipJwtAuth) — es el destino del código QR que se estampa en el documento por cada firma avanzada (historia "Generar código QR para firmas avanzadas"). Devuelve quién firmó y cuándo. Responde 404 si el colaborador no pertenece al documento, si su firma es simple o si todavía no ha firmado: mientras la firma avanzada esté pendiente no hay constancia que consultar.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiParam({
+    name: 'collaboratorId',
+    description: 'UUID del colaborador firmante',
+    format: 'uuid',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Firma obtenida correctamente',
+    type: AdvancedSignaturePublicViewResponse,
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Firma avanzada no encontrada, o todavía pendiente',
+    type: NotFoundResponse,
+  })
+  async getAdvancedSignature(
+    @Param('id') id: string,
+    @Param('collaboratorId') collaboratorId: string,
+  ) {
+    return this.documentService.getAdvancedSignaturePublicView(
+      id,
+      collaboratorId,
+    );
   }
 
   @Post()

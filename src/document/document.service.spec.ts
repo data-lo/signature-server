@@ -30,6 +30,7 @@ import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
+import { SignatureQrService } from './services/signature-qr.service';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
 function createMockRepository() {
@@ -104,6 +105,7 @@ describe('DocumentService', () => {
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
+  let signatureQrService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
@@ -230,6 +232,9 @@ describe('DocumentService', () => {
         .fn()
         .mockResolvedValue(Buffer.from('hoja-de-firmas')),
     };
+    signatureQrService = {
+      generatePngBuffer: jest.fn().mockResolvedValue(Buffer.from('qr-png')),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -265,6 +270,7 @@ describe('DocumentService', () => {
           provide: SummaryDocumentService,
           useValue: summaryDocumentService,
         },
+        { provide: SignatureQrService, useValue: signatureQrService },
       ],
     }).compile();
 
@@ -606,6 +612,131 @@ describe('DocumentService', () => {
       expect(emailService.sendDocumentPendingNotification).toHaveBeenCalled();
       expect(documentRepository.update).toHaveBeenCalledWith('doc-1', {
         completedSignersCount: 1,
+      });
+    });
+
+    /**
+     * Historia "Generar código QR para firmas avanzadas": la firma avanzada (e.firma) no produce
+     * ninguna imagen —su evidencia es criptográfica— y hasta ahora el espacio reservado para ella
+     * quedaba vacío en el documento. Ahora se estampa ahí un código QR que lleva a la constancia
+     * de esa firma, cumpliendo la misma función que la rúbrica de una firma simple.
+     */
+    describe('código QR de la firma avanzada', () => {
+      /** Credenciales de e.firma válidas para el mock de EfirmaService. */
+      function efirmaInput() {
+        const file = (originalname: string) =>
+          ({
+            originalname,
+            size: 1024,
+            buffer: Buffer.from('contenido'),
+          }) as Express.Multer.File;
+        return {
+          password: 'clave-correcta',
+          keyFile: file('llave.key'),
+          cerFile: file('certificado.cer'),
+        };
+      }
+
+      /** Firmante avanzado con una posición de firma colocada. */
+      function buildAdvancedSigner(
+        overrides: Partial<CollaboratorEntity> = {},
+      ) {
+        return buildSigner({
+          userId: 'user-1',
+          signingOrder: 0,
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          simpleSignature: {
+            id: 'ss-1',
+            signatureCoordinates: [
+              {
+                signatureId: 'sig-1',
+                page: 1,
+                xRatio: 0.1,
+                yRatio: 0.2,
+                widthRatio: 0.2,
+                heightRatio: 0.08,
+              },
+            ],
+          },
+          ...overrides,
+        } as Partial<CollaboratorEntity> & { userId?: string });
+      }
+
+      async function signAdvanced() {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signer = buildAdvancedSigner();
+        collaboratorRepository.find
+          .mockResolvedValueOnce([signer])
+          .mockResolvedValueOnce([signer]);
+
+        await service.sign('doc-1', 'user-1', efirmaInput(), TEST_GEOLOCATION);
+        return { document, signer };
+      }
+
+      it('genera el QR con la URL de consulta de esa firma', async () => {
+        const { signer } = await signAdvanced();
+
+        expect(signatureQrService.generatePngBuffer).toHaveBeenCalledTimes(1);
+        const url = signatureQrService.generatePngBuffer.mock.calls[0][0];
+        expect(url).toContain(
+          `/public/documents/doc-1/signatures/${signer.id}`,
+        );
+      });
+
+      // El QR ocupa el lugar que tenía asignado esa firma, igual que la rúbrica de una simple: es
+      // el mismo `mergeSignatureIntoPdf` con las mismas coordenadas.
+      it('lo estampa en la ubicación asignada a la firma', async () => {
+        await signAdvanced();
+
+        expect(
+          documentSigningService.mergeSignatureIntoPdf,
+        ).toHaveBeenCalledTimes(1);
+        const [, stampedImage] =
+          documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
+        expect(stampedImage).toEqual(Buffer.from('qr-png'));
+      });
+
+      // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".
+      it('no genera QR para una firma avanzada que sigue pendiente', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signer = buildAdvancedSigner();
+        const pendingSigner = buildAdvancedSigner({
+          id: 'collaborator-2',
+          signingOrder: 1,
+        } as Partial<CollaboratorEntity>);
+        collaboratorRepository.find
+          .mockResolvedValueOnce([signer, pendingSigner])
+          .mockResolvedValueOnce([signer, pendingSigner]);
+        collaboratorRepository.findOne = jest
+          .fn()
+          .mockResolvedValue(pendingSigner);
+
+        await service.sign('doc-1', 'user-1', efirmaInput(), TEST_GEOLOCATION);
+
+        // Firmó uno de dos: se regenera la vista previa con el avance, así que sí se pide el QR
+        // del que ya firmó — pero en ninguna de las dos pasadas el del que sigue pendiente.
+        const urls = signatureQrService.generatePngBuffer.mock.calls.map(
+          (call) => call[0] as string,
+        );
+        expect(urls.some((url) => url.includes('collaborator-2'))).toBe(false);
+      });
+
+      // La firma simple no debe verse afectada: sigue estampando la rúbrica del firmante y sin
+      // pedirle ningún QR al servicio.
+      it('no toca el flujo de la firma simple', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const simpleSigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([simpleSigner])
+          .mockResolvedValueOnce([simpleSigner]);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+        expect(signatureQrService.generatePngBuffer).not.toHaveBeenCalled();
+        expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalled();
       });
     });
 
@@ -1324,10 +1455,14 @@ describe('DocumentService', () => {
             }),
           }),
         );
-        // No debe intentar estampar ninguna imagen (firma FIEL no tiene snapshot de imagen).
-        expect(
-          documentSigningService.mergeSignatureIntoPdf,
-        ).not.toHaveBeenCalled();
+        // No usa ninguna imagen de rúbrica: la firma FIEL no tiene snapshot. Desde la historia
+        // "Generar código QR para firmas avanzadas" sí se estampa algo en su lugar —el código QR
+        // de la firma— pero nunca una firma tomada del perfil del usuario.
+        expect(signatureService.findOne).not.toHaveBeenCalled();
+        expect(minioService.getFileInBytesFormat).not.toHaveBeenCalledWith(
+          expect.anything(),
+          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+        );
       });
 
       describe('integración con Seal Service (historia "Completar flujo de firma avanzada")', () => {
@@ -2148,6 +2283,129 @@ describe('DocumentService', () => {
    * no desde el original — devolver la versión sin firmar de un documento firmado fue un bug
    * reportado.
    */
+  /**
+   * Historia "Generar código QR para firmas avanzadas": el destino del QR estampado en el
+   * documento. Ruta pública sin autenticación, así que el gate es estricto y todo lo que no sea
+   * una firma avanzada ya completada responde 404 (no 403: un 403 confirmaría que ese colaborador
+   * existe, y cualquiera puede llamar esta ruta con un UUID).
+   */
+  describe('getAdvancedSignaturePublicView', () => {
+    const SIGNED_AT = new Date('2026-08-14T18:24:11.000Z');
+
+    function advancedCollaborator(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'collaborator-1',
+        documentId: 'doc-1',
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        status: SIGNEE_STATUS_ENUM.SIGNED,
+        signedAt: SIGNED_AT,
+        firstName: 'MANUEL',
+        lastName: 'BALDERRAMA',
+        advancedSignature: {
+          certificate: {
+            name: 'MANUEL BALDERRAMA CHAVEZ',
+            rfc: 'BACM800101ABC',
+            serialNumber: '00001000000512345678',
+          },
+        },
+        ...overrides,
+      };
+    }
+
+    beforeEach(() => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: DOCUMENT_STATUS_ENUM.SIGNED,
+        objectKey: 'object-key-1',
+      });
+    });
+
+    it('devuelve quién firmó y cuándo', async () => {
+      collaboratorRepository.findOne = jest
+        .fn()
+        .mockResolvedValue(advancedCollaborator());
+
+      const result = await service.getAdvancedSignaturePublicView(
+        'doc-1',
+        'collaborator-1',
+      );
+
+      expect(result.data).toEqual({
+        documentId: 'doc-1',
+        fileName: 'contrato.pdf',
+        signerName: 'MANUEL BALDERRAMA CHAVEZ',
+        rfc: 'BACM800101ABC',
+        certificateSerialNumber: '00001000000512345678',
+        signedAt: SIGNED_AT.toISOString(),
+      });
+    });
+
+    // El nombre del certificado es el que el SAT tiene registrado; el del perfil es el respaldo
+    // para firmas anteriores a que se guardara esa evidencia.
+    it('cae al nombre del perfil si la firma no guardó certificado', async () => {
+      collaboratorRepository.findOne = jest
+        .fn()
+        .mockResolvedValue(advancedCollaborator({ advancedSignature: null }));
+
+      const result = await service.getAdvancedSignaturePublicView(
+        'doc-1',
+        'collaborator-1',
+      );
+
+      expect(result.data.signerName).toContain('MANUEL');
+      expect(result.data.rfc).toBeNull();
+      expect(result.data.certificateSerialNumber).toBeNull();
+    });
+
+    // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente" — y
+    // su constancia tampoco debe poder consultarse antes de que la firma exista.
+    it('responde 404 si la firma avanzada todavía está pendiente', async () => {
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(
+        advancedCollaborator({
+          status: SIGNEE_STATUS_ENUM.PENDING,
+          signedAt: null,
+        }),
+      );
+
+      await expect(
+        service.getAdvancedSignaturePublicView('doc-1', 'collaborator-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('responde 404 para una firma simple: su constancia es la rúbrica visible, no este QR', async () => {
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(
+        advancedCollaborator({
+          signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+        }),
+      );
+
+      await expect(
+        service.getAdvancedSignaturePublicView('doc-1', 'collaborator-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('responde 404 si el colaborador no pertenece al documento', async () => {
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(null);
+
+      await expect(
+        service.getAdvancedSignaturePublicView('doc-1', 'otro-colaborador'),
+      ).rejects.toThrow(NotFoundException);
+
+      // La pertenencia se filtra en la consulta, no después: no se puede leer la firma de un
+      // documento pasando el id de un colaborador de otro.
+      expect(collaboratorRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'otro-colaborador',
+            documentId: 'doc-1',
+          }),
+        }),
+      );
+    });
+  });
+
   describe('getDocumentMinioURL: bucket según el estatus del documento', () => {
     it.each([
       // Firmado y con cancelación en curso sirven la versión definitiva (documento + hoja de
