@@ -416,8 +416,8 @@ export class DocumentService {
 
     const {
       id,
-      participantEmail,
-      email,
+      participantEmail: participantEmailRaw,
+      email: emailRaw,
       status,
       dateFrom,
       dateTo,
@@ -430,6 +430,25 @@ export class DocumentService {
       limit,
       withUrl,
     } = query;
+
+    /**
+     * Bug corregido ("las solicitudes FIEL sin 2FA no aparecen en Por firmar"): este listado era
+     * el único punto del flujo que comparaba correos con `=` exacto. `users.email` se guarda
+     * siempre en minúsculas (ver UserService), pero `collaborators.email` conserva tal cual lo
+     * que tecleó quien invitó — así que a un firmante invitado como "Juan.Perez@mail.com" el
+     * listado no le mostraba nada, aunque el detalle (`resolveMyCollaborator`), la vinculación
+     * (`linkPendingCollaboratorAccount`) y `sign()`/`reject()` sí lo reconocen (todos comparan
+     * sin distinguir mayúsculas).
+     *
+     * El síntoma se veía solo en documentos FIEL sin 2FA porque en todos los demás casos algo
+     * termina vinculando la cuenta al colaborador y el emparejamiento pasa a hacerse por
+     * `users.email` (ya normalizado): la firma SIMPLE siempre exige 2FA, y pedir el código
+     * (`requestVerificationCode` → `findMySignerCollaborator`) vincula la cuenta antes de firmar.
+     * Sin 2FA no existe ese paso previo, así que la fila se queda sin `accountId` y el documento
+     * permanece invisible en "Por firmar" hasta que el firmante entra por el enlace del correo.
+     */
+    const participantEmail = participantEmailRaw?.toLowerCase();
+    const email = emailRaw?.toLowerCase();
 
     const qb = this.documentRepository
       .createQueryBuilder('document')
@@ -462,7 +481,8 @@ export class DocumentService {
           SELECT c.document_id FROM collaborators c
           LEFT JOIN accounts a ON a.id = c.account_id
           LEFT JOIN users u ON u.id = a.user_id
-          WHERE u.email = :participantEmail OR c.email = :participantEmail
+          WHERE LOWER(u.email) = :participantEmail
+             OR LOWER(c.email) = :participantEmail
         )`,
         { participantEmail },
       );
@@ -470,11 +490,11 @@ export class DocumentService {
 
     if (email) {
       qb.andWhere(
-        `(requester.email = :email OR document.id IN (
+        `(LOWER(requester.email) = :email OR document.id IN (
           SELECT c.document_id FROM collaborators c
           LEFT JOIN accounts a ON a.id = c.account_id
           LEFT JOIN users u ON u.id = a.user_id
-          WHERE u.email = :email OR c.email = :email
+          WHERE LOWER(u.email) = :email OR LOWER(c.email) = :email
         ))`,
         { email },
       );
@@ -540,7 +560,8 @@ export class DocumentService {
           SELECT c.document_id FROM collaborators c
           LEFT JOIN accounts a ON a.id = c.account_id
           LEFT JOIN users u ON u.id = a.user_id
-          WHERE (u.email = :participantEmail OR c.email = :participantEmail)
+          WHERE (LOWER(u.email) = :participantEmail
+                 OR LOWER(c.email) = :participantEmail)
             AND c.colaborator_type = 'signer'
             AND c.status = 'pending'
             AND c.signing_order = (

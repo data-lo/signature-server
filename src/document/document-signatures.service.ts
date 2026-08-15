@@ -320,7 +320,13 @@ export class DocumentSignaturesService {
           const collaborator = await collaboratorRepo.save(
             collaboratorRepo.create({
               documentId: document.id,
-              email: participant.email,
+              // Normalizado igual que `users.email` (ver UserService): mientras el colaborador no
+              // tiene cuenta vinculada, este correo es su única identidad, y todo lo que lo
+              // empareja después —listado "Por firmar", vinculación de cuenta, firma y rechazo—
+              // lo compara contra el correo ya normalizado del usuario. Guardarlo tal cual se
+              // tecleó dejaba invisibles en "Por firmar" a los firmantes invitados con
+              // mayúsculas (ver el bug corregido en DocumentService.findWithFilters).
+              email: participant.email.toLowerCase(),
               firstName: participant.firstName,
               lastName: participant.lastName,
               // Solo el VIEWER guarda RFC: para un firmante el dato ya no se pide al crear el

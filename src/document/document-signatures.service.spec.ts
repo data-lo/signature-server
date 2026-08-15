@@ -247,6 +247,35 @@ describe('DocumentSignaturesService', () => {
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Ver el bug corregido en DocumentService.findWithFilters: mientras el colaborador no tiene
+   * cuenta vinculada, su correo es la única identidad con la que el listado "Por firmar" lo
+   * empareja — se guarda normalizado, igual que `users.email`.
+   */
+  it('guarda el correo del colaborador normalizado en minúsculas, no como se tecleó', async () => {
+    const dtoConMayusculas: CreateDocumentSignaturesDto = {
+      ...advancedDto,
+      collaborators: [
+        {
+          ...advancedDto.collaborators[0],
+          email: 'Juan.Perez@Mail.com',
+        },
+      ],
+    };
+
+    await service.create(
+      'creator-1',
+      'account-1',
+      dtoConMayusculas,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(collaboratorRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'juan.perez@mail.com' }),
+    );
+  });
+
   it('un documento ADVANCED respeta el requiresTwoFactorAuth de cada firmante', async () => {
     await service.create(
       'creator-1',

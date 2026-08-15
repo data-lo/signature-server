@@ -560,6 +560,86 @@ describe('DocumentService', () => {
         expect.anything(),
       );
     });
+
+    /**
+     * Bug corregido ("las solicitudes FIEL sin 2FA no se muestran en Por firmar"): el listado
+     * comparaba `collaborators.email` con `=` exacto contra el correo (ya en minúsculas) del
+     * usuario en sesión, mientras que el detalle, la vinculación de cuenta y sign()/reject()
+     * comparan sin distinguir mayúsculas. Un firmante invitado como "Juan.Perez@mail.com" no
+     * veía el documento en "Por firmar" mientras su fila siguiera sin `accountId` — y sin 2FA
+     * nada la vincula antes de firmar (con 2FA, pedir el código sí lo hace).
+     */
+    it('empareja al participante sin distinguir mayúsculas (firmante invitado con el correo en mayúsculas)', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        ...query,
+        participantEmail: 'Juan.Perez@Mail.com',
+      } as any);
+
+      const participantClause = qb.andWhere.mock.calls.find(
+        ([sql]: [string]) => sql.includes('SELECT c.document_id'),
+      );
+
+      expect(participantClause).toBeDefined();
+      expect(participantClause[0]).toContain('LOWER(c.email)');
+      expect(participantClause[0]).toContain('LOWER(u.email)');
+      expect(participantClause[1]).toEqual({
+        participantEmail: 'juan.perez@mail.com',
+      });
+    });
+
+    it('aplica el mismo emparejamiento insensible a mayúsculas en el filtro "me toca firmar"', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        ...query,
+        participantEmail: 'Juan.Perez@Mail.com',
+        myTurnOnly: true,
+      } as any);
+
+      const myTurnClause = qb.andWhere.mock.calls.find(([sql]: [string]) =>
+        sql.includes("c.colaborator_type = 'signer'"),
+      );
+
+      expect(myTurnClause).toBeDefined();
+      expect(myTurnClause[0]).toContain('LOWER(c.email)');
+      expect(myTurnClause[1]).toEqual({
+        participantEmail: 'juan.perez@mail.com',
+      });
+    });
+
+    it('empareja al creador sin distinguir mayúsculas (filtro `email`, "Enviados para firma")', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        ...query,
+        email: 'Creador@Mail.com',
+      } as any);
+
+      const creatorClause = qb.andWhere.mock.calls.find(([sql]: [string]) =>
+        sql.includes('requester.email'),
+      );
+
+      expect(creatorClause).toBeDefined();
+      expect(creatorClause[0]).toContain('LOWER(requester.email)');
+      expect(creatorClause[1]).toEqual({ email: 'creador@mail.com' });
+    });
   });
 
   describe('sign', () => {
