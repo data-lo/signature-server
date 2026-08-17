@@ -640,6 +640,88 @@ describe('DocumentService', () => {
       expect(creatorClause[0]).toContain('LOWER(requester.email)');
       expect(creatorClause[1]).toEqual({ email: 'creador@mail.com' });
     });
+
+    /**
+     * La columna "Creado por" de las tres secciones del módulo Documentos muestra el nombre del
+     * creador y su RFC como texto secundario. El RFC no está en `users` sino en
+     * `personal_information`, así que sin el join el campo llegaba siempre en null al frontend.
+     */
+    it('devuelve el RFC del creador (join a personal_information) junto al nombre en cada documento', async () => {
+      const qb = createMockQueryBuilder(
+        [
+          {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            fileType: 'application/pdf',
+            totalPages: 3,
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            createdAt: new Date('2026-03-15T23:55:00.000Z'),
+            collaborators: [],
+            requestedBy: {
+              firstName: 'Sara',
+              lastName: 'Ramírez',
+              personalInformation: { rfc: 'SARA850315HN2' },
+            },
+          },
+        ],
+        1,
+      );
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      const result = await service.findWithFilters(
+        'user-1',
+        'account-1',
+        query,
+      );
+
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith(
+        'requester.personalInformation',
+        'requesterPersonalInfo',
+      );
+      expect(result.data[0]).toEqual(
+        expect.objectContaining({
+          creator: 'Sara Ramírez',
+          creatorRfc: 'SARA850315HN2',
+        }),
+      );
+    });
+
+    it('deja `creatorRfc` en null si el creador todavía no registró su RFC, sin romper el listado', async () => {
+      const qb = createMockQueryBuilder(
+        [
+          {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            fileType: 'application/pdf',
+            totalPages: 3,
+            status: DOCUMENT_STATUS_ENUM.PENDING,
+            createdAt: new Date('2026-03-15T23:55:00.000Z'),
+            collaborators: [],
+            requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+          },
+        ],
+        1,
+      );
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      const result = await service.findWithFilters(
+        'user-1',
+        'account-1',
+        query,
+      );
+
+      expect(result.data[0]).toEqual(
+        expect.objectContaining({ creatorRfc: null }),
+      );
+    });
   });
 
   describe('sign', () => {
