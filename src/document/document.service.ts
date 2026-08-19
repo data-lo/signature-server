@@ -603,6 +603,7 @@ export class DocumentService {
           creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,
           totalPages: doc.totalPages,
           status: doc.status,
+          signatureType: this.resolveDocumentSignatureType(doc.collaborators),
           createdAt: doc.createdAt,
         };
 
@@ -633,6 +634,32 @@ export class DocumentService {
         hasPrevPage: page > 1,
       },
     };
+  }
+
+  /**
+   * Tipo de firma del documento (`simple` / `fiel`) para el listado, o `null` si no se puede
+   * determinar — lo consume la columna "Tipo de firma" de las tablas del frontend.
+   *
+   * El tipo no vive en `DocumentEntity` sino en cada SIGNER: es una decisión del documento que
+   * `DocumentSignaturesService` copia igual a todos sus firmantes al crearlo, así que basta con
+   * mirarlos. Los colaboradores ya vienen en el mismo query del listado, así que esto no agrega
+   * ninguna consulta.
+   *
+   * Se exige que todos coincidan en vez de tomar el primero: los documentos del endpoint viejo
+   * (`POST /document`) nunca asignaron tipo, y un `null` explícito es información honesta —el
+   * frontend muestra un guion— mientras que el tipo del primer firmante sería una suposición.
+   */
+  private resolveDocumentSignatureType(
+    collaborators: CollaboratorEntity[] | undefined,
+  ): SIGNATURE_TYPE_ENUM | null {
+    const signatureTypes = new Set(
+      (collaborators ?? [])
+        .filter((c) => c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER)
+        .map((c) => c.signatureType)
+        .filter((type): type is SIGNATURE_TYPE_ENUM => Boolean(type)),
+    );
+
+    return signatureTypes.size === 1 ? [...signatureTypes][0] : null;
   }
 
   /**
