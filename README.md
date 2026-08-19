@@ -142,7 +142,7 @@ Cuando firma el último firmante pendiente:
 | Endpoint | Método de servicio | Qué hace |
 |---|---|---|
 | `POST /document` | `create()` | Sube el PDF, crea documento + participantes. **Requiere el header `X-Account-Id`** (cuenta activa); el documento queda scopeado a esa cuenta (`DocumentEntity.accountId`) |
-| `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros |
+| `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros. Cada fila incluye `creator` y `creatorRfc` (el RFC sale de `personal_information` vía `leftJoinAndSelect` sobre `requester`, no de `users`; `null` si el creador aún no lo registró) |
 | `GET /document/:id` | `findDetailForUser()` | Detalle + permisos del usuario (`canSign`/`canReject`). **Todavía no scopeado por cuenta** (ver Pendientes) |
 | `GET /document/file/:id` | `getDocumentMinioURL()` | URL prefirmada según estado |
 | `GET /document/public/:id` | `getPublicDocument()` | **Nuevo, `@SkipJwtAuth()`** — expone `secureUrl` sin autenticación, solo si `status = SIGNED`. Consumido por `signature-app` en `/public/documents/:id` |
@@ -362,6 +362,18 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 ---
 
 ## 7. Pendientes / trabajo futuro
+
+### Resuelto en esta ronda (las solicitudes FIEL sin 2FA no aparecían en "Por firmar") — 2026-08-15
+
+`GET /document?participantEmail=` era el **único** punto del flujo que comparaba correos con `=` exacto. `users.email` se guarda siempre en minúsculas (ver `UserService`), pero `collaborators.email` conservaba tal cual lo que tecleó quien invitó — así que un firmante invitado como `Juan.Perez@mail.com` no veía el documento en su bandeja "Por firmar", aunque el detalle (`resolveMyCollaborator`), la vinculación (`linkPendingCollaboratorAccount`) y `sign()`/`reject()` sí lo reconocen: todos ellos comparan sin distinguir mayúsculas.
+
+**Por qué se veía solo en documentos FIEL sin 2FA** (la parte que hacía parecer que el bug era del tipo de firma): en todos los demás casos algo termina vinculando la cuenta al colaborador, y a partir de ahí el emparejamiento del listado pasa a hacerse contra `users.email`, ya normalizado. La firma SIMPLE **siempre** exige 2FA, y solicitar el código (`POST /document/:id/verification-codes` → `findMySignerCollaborator` → `linkPendingCollaboratorAccount`) vincula la cuenta antes de firmar. Al desactivar el 2FA —solo posible en FIEL— ese paso previo desaparece: la fila se queda sin `accountId` y el documento permanece invisible en "Por firmar" hasta que el firmante entra por el enlace del correo.
+
+- `DocumentService.findWithFilters`: `participantEmail`/`email` se normalizan a minúsculas y las tres subconsultas (participante, creador y "me toca firmar") comparan con `LOWER(...)`. Corrige también los documentos ya existentes en la base, sin migración de datos.
+- `DocumentSignaturesService.create`: el correo del colaborador se guarda normalizado en minúsculas, igual que `users.email` — mientras no hay cuenta vinculada, ese correo es la única identidad del firmante.
+- Tests: 4 casos nuevos (3 en `document.service.spec.ts` — participante, "me toca firmar" y creador con mayúsculas; 1 en `document-signatures.service.spec.ts` — el correo se persiste normalizado). 582 tests en total.
+
+**Pendiente relacionado, no corregido aquí** (afecta a la misma bandeja pero tiene otra causa): el filtro "Requiere mi firma o revisión" (`myTurnOnly`) exige en SQL que el firmante tenga el `signing_order` más bajo pendiente, sin mirar `document.isSequential` — en un documento sin orden (`isSequential: false`, el default del formulario cuando no se pide firma en orden) cualquier firmante pendiente puede firmar, así que ese filtro esconde el documento a todos menos al primero. Es la única implementación de "a quién le toca" que no pasa por `isSignerTurn()` (ver `utils/next-signer.util.ts`, que sí contempla el caso).
 
 ### Resuelto en esta ronda (un fallo de correo ya no bloquea la firma) — 2026-08-09
 

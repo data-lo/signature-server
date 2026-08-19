@@ -59,9 +59,13 @@ import {
   collaboratorEmail,
 } from './utils/collaborator-display.util';
 import {
+  buildAdvancedSignatureUrl,
   buildAllDocumentsUrl,
   buildDocumentAccessUrl,
+  buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
+import { SignatureQrService } from './services/signature-qr.service';
+import { AdvancedSignaturePublicViewData } from './interfaces/responses/advanced-signature-public-view-response';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
 import {
@@ -71,6 +75,10 @@ import {
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
+import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import { SummaryDocumentService } from './summary-document/summary-document.service';
+import type { SummaryDocumentSigner } from './summary-document/interfaces/summary-document.interface';
+import type { SealDocumentDto } from './seal/dto/seal-document.dto';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
 
@@ -102,9 +110,13 @@ export class DocumentService {
   > = {
     [DOCUMENT_STATUS_ENUM.CANCELLED]: BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.REJECTED]: BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+    // Una vez firmado, lo que se sirve es la versión definitiva —documento + hoja de información
+    // de firmas— y no la copia de `signed_documents`, que existe solo como insumo interno del
+    // `signedHash` (ver `attachSignaturesSheet`). CANCELLATION_PENDING es un estado posterior a la
+    // firma, así que muestra esa misma versión mientras se resuelve la solicitud de cancelación.
+    [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
@@ -127,6 +139,9 @@ export class DocumentService {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly efirmaService: EfirmaService,
+    private readonly sealDocumentUseCase: SealDocumentUseCase,
+    private readonly summaryDocumentService: SummaryDocumentService,
+    private readonly signatureQrService: SignatureQrService,
   ) {}
 
   /** Sube el archivo a Minio, genera su hash y registra el documento y sus colaboradores (firmantes/watchers/reviewers) en la base de datos. */
@@ -401,8 +416,8 @@ export class DocumentService {
 
     const {
       id,
-      participantEmail,
-      email,
+      participantEmail: participantEmailRaw,
+      email: emailRaw,
       status,
       dateFrom,
       dateTo,
@@ -416,9 +431,35 @@ export class DocumentService {
       withUrl,
     } = query;
 
+    /**
+     * Bug corregido ("las solicitudes FIEL sin 2FA no aparecen en Por firmar"): este listado era
+     * el único punto del flujo que comparaba correos con `=` exacto. `users.email` se guarda
+     * siempre en minúsculas (ver UserService), pero `collaborators.email` conserva tal cual lo
+     * que tecleó quien invitó — así que a un firmante invitado como "Juan.Perez@mail.com" el
+     * listado no le mostraba nada, aunque el detalle (`resolveMyCollaborator`), la vinculación
+     * (`linkPendingCollaboratorAccount`) y `sign()`/`reject()` sí lo reconocen (todos comparan
+     * sin distinguir mayúsculas).
+     *
+     * El síntoma se veía solo en documentos FIEL sin 2FA porque en todos los demás casos algo
+     * termina vinculando la cuenta al colaborador y el emparejamiento pasa a hacerse por
+     * `users.email` (ya normalizado): la firma SIMPLE siempre exige 2FA, y pedir el código
+     * (`requestVerificationCode` → `findMySignerCollaborator`) vincula la cuenta antes de firmar.
+     * Sin 2FA no existe ese paso previo, así que la fila se queda sin `accountId` y el documento
+     * permanece invisible en "Por firmar" hasta que el firmante entra por el enlace del correo.
+     */
+    const participantEmail = participantEmailRaw?.toLowerCase();
+    const email = emailRaw?.toLowerCase();
+
     const qb = this.documentRepository
       .createQueryBuilder('document')
       .leftJoinAndSelect('document.requestedBy', 'requester')
+      // El RFC no vive en `users` sino en `personal_information` (ver UserEntity): el listado lo
+      // muestra como texto secundario bajo el nombre en la columna "Creado por", así que se trae
+      // en el mismo query en vez de resolverlo documento por documento.
+      .leftJoinAndSelect(
+        'requester.personalInformation',
+        'requesterPersonalInfo',
+      )
       .leftJoinAndSelect('document.collaborators', 'collaborator')
       .leftJoinAndSelect('collaborator.account', 'collaboratorAccount')
       .leftJoinAndSelect('collaboratorAccount.user', 'collaboratorUser')
@@ -447,7 +488,8 @@ export class DocumentService {
           SELECT c.document_id FROM collaborators c
           LEFT JOIN accounts a ON a.id = c.account_id
           LEFT JOIN users u ON u.id = a.user_id
-          WHERE u.email = :participantEmail OR c.email = :participantEmail
+          WHERE LOWER(u.email) = :participantEmail
+             OR LOWER(c.email) = :participantEmail
         )`,
         { participantEmail },
       );
@@ -455,11 +497,11 @@ export class DocumentService {
 
     if (email) {
       qb.andWhere(
-        `(requester.email = :email OR document.id IN (
+        `(LOWER(requester.email) = :email OR document.id IN (
           SELECT c.document_id FROM collaborators c
           LEFT JOIN accounts a ON a.id = c.account_id
           LEFT JOIN users u ON u.id = a.user_id
-          WHERE u.email = :email OR c.email = :email
+          WHERE LOWER(u.email) = :email OR LOWER(c.email) = :email
         ))`,
         { email },
       );
@@ -525,7 +567,8 @@ export class DocumentService {
           SELECT c.document_id FROM collaborators c
           LEFT JOIN accounts a ON a.id = c.account_id
           LEFT JOIN users u ON u.id = a.user_id
-          WHERE (u.email = :participantEmail OR c.email = :participantEmail)
+          WHERE (LOWER(u.email) = :participantEmail
+                 OR LOWER(c.email) = :participantEmail)
             AND c.colaborator_type = 'signer'
             AND c.status = 'pending'
             AND c.signing_order = (
@@ -557,6 +600,7 @@ export class DocumentService {
           watchers: byType(COLABORATOR_TYPE_ENUM.WATCHER),
           reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
           creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
+          creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,
           totalPages: doc.totalPages,
           status: doc.status,
           createdAt: doc.createdAt,
@@ -566,9 +610,7 @@ export class DocumentService {
           return base;
         }
 
-        const bucket =
-          this.STATUS_BUCKET_MAP[doc.status] ??
-          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+        const bucket = this.resolveDocumentBucket(doc);
         const { secureUrl, expiresIn } = await this.minioService.getFile(
           doc.objectKey,
           bucket,
@@ -676,9 +718,7 @@ export class DocumentService {
       ),
     );
 
-    const bucket =
-      this.STATUS_BUCKET_MAP[document.status] ??
-      BUCKET_TYPES_ENUM.CREATED_DOCUMENTS;
+    const bucket = this.resolveDocumentBucket(document);
     const { secureUrl, expiresIn } = await this.minioService.getFile(
       document.objectKey,
       bucket,
@@ -882,11 +922,38 @@ export class DocumentService {
     return { signerCollaborators, myParticipant };
   }
 
+  /**
+   * Bucket del que se sirve un documento. Es `STATUS_BUCKET_MAP` más la única excepción que el
+   * estatus por sí solo no alcanza a expresar: un documento PENDING en el que ya firmó alguien se
+   * sirve desde la vista previa con esas firmas estampadas, no desde el original (historia
+   * "Actualizar el previsualizador con el avance de firmas"). Mientras no haya firmado nadie no
+   * existe vista previa que servir, así que sigue el original.
+   *
+   * Toda ruta de lectura pasa por acá para que no puedan discrepar entre sí sobre qué versión del
+   * archivo le corresponde a un documento.
+   */
+  private resolveDocumentBucket(document: {
+    status: DOCUMENT_STATUS_ENUM;
+    completedSignersCount?: number | null;
+  }): BUCKET_TYPES_ENUM {
+    if (
+      document.status === DOCUMENT_STATUS_ENUM.PENDING &&
+      (document.completedSignersCount ?? 0) > 0
+    ) {
+      return BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS;
+    }
+
+    return (
+      this.STATUS_BUCKET_MAP[document.status] ??
+      BUCKET_TYPES_ENUM.CREATED_DOCUMENTS
+    );
+  }
+
   /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
   async getDocumentMinioURL(documentId: string) {
     try {
       const document = await this.findOne(documentId);
-      const bucket = this.STATUS_BUCKET_MAP[document.status];
+      const bucket = this.resolveDocumentBucket(document);
       const fileResponse = await this.minioService.getFile(
         document.objectKey,
         bucket,
@@ -928,9 +995,10 @@ export class DocumentService {
       };
     }
 
+    // Versión definitiva (documento + hoja de firmas): es la única que se comparte hacia afuera.
     const { secureUrl, expiresIn } = await this.minioService.getFile(
       document.objectKey,
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
 
     return {
@@ -1568,6 +1636,9 @@ export class DocumentService {
     if (remainingSigners.length === 0) {
       // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado).
       await this.finalizeSignedDocument(document, signerCollaborators);
+      // Sellado con Seal Service: recién acá el documento tiene TODAS sus firmas avanzadas, que
+      // es lo que el proveedor necesita para construir un único hash sellado del conjunto.
+      await this.sealAdvancedSignatures(document, signerCollaborators);
       this.documentEventsProducer.emitSigned({
         documentId,
         fileName: document.fileName,
@@ -1577,6 +1648,12 @@ export class DocumentService {
       await this.documentRepository.update(documentId, {
         completedSignersCount: document.completedSignersCount,
       });
+      // Todavía faltan firmantes: se refresca la vista previa para que quien abra el documento
+      // vea ya estampada esta firma (historia "Actualizar el previsualizador con el avance de
+      // firmas"). `myParticipant` ya está marcado como SIGNED en memoria, así que entra en el
+      // estampado; los que faltan quedan con su espacio vacío. No se hace cuando firma el último
+      // porque ahí el documento pasa a SIGNED y lo que se sirve es la versión definitiva.
+      await this.refreshPartiallySignedPreview(document, signerCollaborators);
     }
 
     // El claim atómico ya persistió status/signedAt — este save solo persiste
@@ -1631,139 +1708,224 @@ export class DocumentService {
     };
   }
 
-  /** Estampa las firmas de todos los firmantes (apiladas), mueve el archivo a firmados y notifica a todos los colaboradores. */
+  /**
+   * Envía a Seal Service el arreglo con las firmas avanzadas del documento y persiste la
+   * evidencia que devuelve (historia "Completar flujo de firma avanzada e integración con Seal
+   * Service"). Corre una sola vez por documento, cuando el último firmante terminó: el proveedor
+   * calcula UN hash canónico sobre el conjunto completo de firmas, así que sellar antes —firma
+   * por firma— produciría un hash de un conjunto parcial que ya no representa al documento final.
+   *
+   * Un documento sin ninguna firma avanzada (todo firma simple) no se sella: no hay firma
+   * criptográfica de la cual construir la evidencia.
+   *
+   * Best-effort a propósito, igual que los correos de finalización: llegado este punto las firmas
+   * ya están registradas y el PDF ya está en el bucket de firmados. Propagar un fallo del
+   * proveedor devolvería un 500 al último firmante por algo que su firma sí logró, y su reintento
+   * chocaría contra el claim atómico ("ya respondiste") sin poder corregir nada. El error queda
+   * logueado, y el sellado puede reintentarse contra `POST /seal` con el mismo payload.
+   */
+  private async sealAdvancedSignatures(
+    document: DocumentEntity,
+    signerCollaborators: CollaboratorEntity[],
+  ): Promise<void> {
+    const advancedSigners = signerCollaborators.filter(
+      (collaborator) =>
+        collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
+        collaborator.advancedSignature !== null &&
+        collaborator.advancedSignature !== undefined,
+    );
+
+    if (advancedSigners.length === 0) {
+      return;
+    }
+
+    // La traducción del payload va DENTRO del try junto con la llamada: si una firma guardada
+    // tuviera una forma inesperada, el error debe tratarse como cualquier otro fallo de sellado
+    // (logueado, sin efecto sobre la firma) y no escaparse como una excepción no controlada al
+    // final de un flujo de firma que ya se completó.
+    try {
+      const sealDocumentDto: SealDocumentDto = {
+        documentId: document.id,
+        originalHash: document.originalHash,
+        signatures: advancedSigners.map((collaborator) =>
+          this.toSealSignature(collaborator.advancedSignature!),
+        ),
+      };
+
+      const seal = await this.sealDocumentUseCase.create(sealDocumentDto);
+      this.logger.log(
+        `Sellos generados para el documento ${document.id} (evidencia ${seal.id}, ${advancedSigners.length} firma(s) avanzada(s)).`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error sellando el documento ${document.id} con Seal Service: ${error}`,
+      );
+    }
+  }
+
+  /**
+   * Traduce el resultado de `EfirmaService.firmar` (persistido tal cual en
+   * `CollaboratorEntity.advancedSignature`) al contrato que espera Seal Service.
+   *
+   * `signedAt` se normaliza a ISO 8601 pasando por `Date` porque el mismo campo llega como `Date`
+   * cuando la firma se acaba de hacer en esta misma petición, y como string cuando se releyó de la
+   * columna jsonb — el proveedor ordena y canonicaliza las firmas por este valor, así que las dos
+   * rutas tienen que producir exactamente el mismo texto.
+   */
+  private toSealSignature(
+    signature: SignatureResult,
+  ): SealDocumentDto['signatures'][number] {
+    return {
+      signatureBase64: String(signature.signatureBase64),
+      algorithm: signature.algorithm,
+      signedAt: new Date(signature.signedAt).toISOString(),
+      certificate: {
+        rfc: signature.certificate.rfc,
+        name: signature.certificate.name,
+        serialNumber: signature.certificate.serialNumber,
+        certificateNumber: signature.certificate.certificateNumber,
+        certificatePem: signature.certificate.certificatePem,
+      },
+    };
+  }
+
+  /**
+   * Constancia pública de una firma avanzada — el destino del código QR estampado en el documento
+   * (historia "Generar código QR para firmas avanzadas").
+   *
+   * Sin autenticación, igual que `getPublicDocumentView`: quien tiene el documento en la mano
+   * puede escanear el QR y verificar quién firmó y cuándo sin necesidad de tener cuenta. Por eso
+   * el gate es estricto — solo responde para una firma avanzada YA COMPLETADA de ese documento:
+   *
+   *  - si el colaborador no pertenece al documento, no existe o no es firmante → 404
+   *  - si su firma es simple → 404 (su constancia es la rúbrica visible, no este QR)
+   *  - si todavía no firmó → 404, no hay firma que consultar
+   *
+   * Se responde 404 y no 403 a propósito: un 403 confirmaría que ese colaborador existe, y esta
+   * ruta la puede llamar cualquiera con un UUID.
+   */
+  async getAdvancedSignaturePublicView(
+    documentId: string,
+    collaboratorId: string,
+  ): Promise<BaseResponse<AdvancedSignaturePublicViewData>> {
+    const collaborator = await this.collaboratorRepository.findOne({
+      where: {
+        id: collaboratorId,
+        documentId,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { account: { user: true } },
+    });
+
+    if (
+      !collaborator ||
+      collaborator.signatureType !== SIGNATURE_TYPE_ENUM.FIEL ||
+      collaborator.status !== SIGNEE_STATUS_ENUM.SIGNED ||
+      !collaborator.signedAt
+    ) {
+      throw new NotFoundException('Firma avanzada no encontrada');
+    }
+
+    const document = await this.findOne(documentId);
+    const certificate = collaborator.advancedSignature?.certificate;
+
+    return {
+      success: true,
+      message: 'Firma obtenida correctamente',
+      data: {
+        documentId: document.id,
+        fileName: document.fileName,
+        // El nombre del certificado es el que el SAT tiene registrado para ese RFC, así que es el
+        // más fiel a quién firmó; el del perfil es el respaldo cuando no hay evidencia guardada.
+        signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
+        rfc: certificate?.rfc ?? null,
+        certificateSerialNumber: certificate?.serialNumber ?? null,
+        signedAt: collaborator.signedAt.toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Imagen que se estampa por un firmante, o `null` si no hay nada que dibujar.
+   *
+   * Los dos tipos de firma se distinguen SOLO acá; de este punto en adelante el estampado es
+   * idéntico para ambos —misma caja, mismas coordenadas, mismo `mergeSignatureIntoPdf`—, que es
+   * justamente lo que pide la historia "Generar código QR para firmas avanzadas": que el QR sea
+   * el equivalente visual de la rúbrica de una firma simple.
+   *
+   *  - Firma simple: la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar
+   *    (ver `signatureSnapshotObjectKey`), no de su perfil en vivo.
+   *  - Firma avanzada (e.firma): un código QR que lleva a la constancia de esa firma. Su evidencia
+   *    es criptográfica y no produce ninguna imagen, así que antes su espacio quedaba vacío.
+   *
+   * El QR se genera únicamente cuando la firma avanzada YA se completó: mientras el firmante siga
+   * pendiente no hay firma que consultar, así que no se dibuja nada y su espacio sigue libre.
+   */
+  private async resolveStampImage(
+    document: DocumentEntity,
+    collaborator: CollaboratorEntity,
+  ): Promise<Buffer | null> {
+    if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+      if (collaborator.status !== SIGNEE_STATUS_ENUM.SIGNED) {
+        return null;
+      }
+
+      return this.signatureQrService.generatePngBuffer(
+        buildAdvancedSignatureUrl(document.id, collaborator.id),
+      );
+    }
+
+    // Los firmantes siempre tienen cuenta de plataforma (accountId no-nulo): solo watchers
+    // y reviewers pueden invitarse por email únicamente (ver create()). Fallback defensivo
+    // por si la relación account.user no vino cargada (no debería pasar: signerCollaborators
+    // siempre se consulta con relations: { account: { user: true } }).
+    const signerUser =
+      collaborator.account?.user ??
+      (await this.userService.findOne(
+        (
+          await this.collaboratorRepository.findOneOrFail({
+            where: { id: collaborator.id },
+            relations: { account: { user: true } },
+          })
+        ).account!.userId,
+      ));
+
+    // Usa el snapshot inmutable tomado en el momento real de la firma (ver
+    // `signatureSnapshotObjectKey` / `snapshotSignatureImage`) — NO la firma en vivo del
+    // perfil del usuario, que pudo haber sido desactivada/reemplazada después de firmar.
+    // El fallback a la firma en vivo es solo defensivo, para filas ya firmadas antes de
+    // este fix que todavía no tienen snapshot.
+    const signatureObjectKey =
+      collaborator.signatureSnapshotObjectKey ??
+      (await this.signatureService.findOne(signerUser.signatureId))
+        .signatureObjectKey;
+
+    return this.minioService.getFileInBytesFormat(
+      signatureObjectKey,
+      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+    );
+  }
+
+  /**
+   * Estampa las firmas de todos los firmantes (apiladas), mueve el archivo a firmados y notifica
+   * a todos los colaboradores.
+   *
+   * Lo que se estampa es ÚNICAMENTE la imagen de la firma (historia "Eliminar nombre al estampar
+   * firma simple"): antes cada estampado agregaba también el nombre del firmante como texto
+   * debajo de la imagen, lo que ensuciaba el documento y duplicaba un dato que ya vive en la hoja
+   * de firmas del resumen (ver `SummaryDocumentService.buildSignerBlock`, que sigue imprimiendo
+   * Nombre/RFC/IP/OTP/fecha por firmante) — la identidad del firmante no se pierde, solo deja de
+   * dibujarse encima del contenido del PDF.
+   */
   private async finalizeSignedDocument(
     document: DocumentEntity,
     signerCollaborators: CollaboratorEntity[],
   ): Promise<void> {
     try {
-      let documentBuffer = await this.minioService.getFileInBytesFormat(
-        document.objectKey,
-        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      const documentBuffer = await this.stampSignaturesOnto(
+        document,
+        signerCollaborators,
       );
-
-      const baseCoordinates: SignatureCoordinates =
-        document.signatureCoordinates ?? DEFAULT_COORDINATES;
-      const verticalStep =
-        baseCoordinates.height + SIGNATURE_STAMP_VERTICAL_GAP;
-
-      // Coordenadas por colaborador (ver Fase 4 del plan de migración ER-V2): quien tiene
-      // simpleSignature explícita se estampa ahí; el resto se apila automáticamente desde el
-      // ancla del documento, exactamente como antes — el índice de apilado solo avanza para
-      // los colaboradores SIN coordenadas explícitas, para que no colisionen entre sí.
-      let autoStackIndex = 0;
-      for (const collaborator of signerCollaborators) {
-        // Firma electrónica avanzada (FIEL): la evidencia es criptográfica (ver
-        // `CollaboratorEntity.advancedSignature`, poblado en `sign()`), no una imagen — no hay
-        // nada que estampar visualmente en el PDF para este colaborador.
-        if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
-          continue;
-        }
-
-        // Los firmantes siempre tienen cuenta de plataforma (accountId no-nulo): solo watchers
-        // y reviewers pueden invitarse por email únicamente (ver create()). Fallback defensivo
-        // por si la relación account.user no vino cargada (no debería pasar: signerCollaborators
-        // siempre se consulta con relations: { account: { user: true } }).
-        const signerUser =
-          collaborator.account?.user ??
-          (await this.userService.findOne(
-            (
-              await this.collaboratorRepository.findOneOrFail({
-                where: { id: collaborator.id },
-                relations: { account: { user: true } },
-              })
-            ).account!.userId,
-          ));
-
-        // Usa el snapshot inmutable tomado en el momento real de la firma (ver
-        // `signatureSnapshotObjectKey` / `snapshotSignatureImage`) — NO la firma en vivo del
-        // perfil del usuario, que pudo haber sido desactivada/reemplazada después de firmar.
-        // El fallback a la firma en vivo es solo defensivo, para filas ya firmadas antes de
-        // este fix que todavía no tienen snapshot.
-        const signatureObjectKey =
-          collaborator.signatureSnapshotObjectKey ??
-          (await this.signatureService.findOne(signerUser.signatureId))
-            .signatureObjectKey;
-        const signatureBuffer = await this.minioService.getFileInBytesFormat(
-          signatureObjectKey,
-          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
-        );
-
-        const signerName = `${signerUser.firstName} ${signerUser.lastName}`;
-
-        if (collaborator.simpleSignature) {
-          // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
-          // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
-          // sin estampar nada visualmente, y el loop de abajo simplemente no itera. Con
-          // elementos, se estampa UNA vez por cada posición (páginas/zonas distintas).
-          for (const position of collaborator.simpleSignature
-            .signatureCoordinates) {
-            if (isRatioSignaturePosition(position)) {
-              const { coordinates, pageIndex } =
-                await this.documentSigningSerivice.resolveRatioPosition(
-                  documentBuffer,
-                  position,
-                );
-              documentBuffer =
-                await this.documentSigningSerivice.mergeSignatureIntoPdf(
-                  documentBuffer,
-                  signatureBuffer,
-                  coordinates,
-                  pageIndex,
-                );
-              documentBuffer = await this.documentSigningSerivice.addSignerName(
-                documentBuffer,
-                signerName,
-                coordinates,
-                pageIndex,
-              );
-            } else {
-              // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
-              // sin ratios) — se respeta el comportamiento de siempre: página por defecto
-              // (última), sin intentar una conversión a ratios con pérdida de precisión.
-              const legacyCoordinates: SignatureCoordinates = {
-                x: position.x,
-                y: position.y,
-                width: position.width,
-                height: position.height,
-                opacity: position.opacity,
-              };
-              documentBuffer =
-                await this.documentSigningSerivice.mergeSignatureIntoPdf(
-                  documentBuffer,
-                  signatureBuffer,
-                  legacyCoordinates,
-                );
-              documentBuffer = await this.documentSigningSerivice.addSignerName(
-                documentBuffer,
-                signerName,
-                legacyCoordinates,
-              );
-            }
-          }
-        } else {
-          // Colaborador creado por el endpoint POST /document más antiguo (nunca asigna
-          // simpleSignatureId) — apilado automático sin cambios respecto al comportamiento
-          // previo a esta historia.
-          const coordinates: SignatureCoordinates = {
-            ...baseCoordinates,
-            y: baseCoordinates.y + autoStackIndex * verticalStep,
-          };
-          autoStackIndex += 1;
-
-          documentBuffer =
-            await this.documentSigningSerivice.mergeSignatureIntoPdf(
-              documentBuffer,
-              signatureBuffer,
-              coordinates,
-            );
-          documentBuffer = await this.documentSigningSerivice.addSignerName(
-            documentBuffer,
-            signerName,
-            coordinates,
-          );
-        }
-      }
 
       const signerNames = signerCollaborators
         .map(collaboratorDisplayName)
@@ -1783,6 +1945,18 @@ export class DocumentService {
       document.signedHash =
         await this.hashService.generateFileHash(documentBuffer);
       document.signedAt = new Date();
+
+      // La versión definitiva se arma DESPUÉS de calcular signedHash y ANTES de marcar el
+      // documento como SIGNED: la hoja imprime ese hash, y si el anexado falla el documento no
+      // queda firmado (el flujo de `sign()` deshace la firma y permite reintentar), en vez de
+      // dejar un documento firmado que el usuario no podría ver porque su versión final no existe.
+      await this.attachSignaturesSheet(
+        document,
+        signerCollaborators,
+        documentBuffer,
+        signerNames,
+      );
+
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
       await this.documentRepository.save(document);
     } catch (error) {
@@ -1800,6 +1974,241 @@ export class DocumentService {
   }
 
   /**
+   * Dibuja sobre el PDF ORIGINAL las rúbricas de los colaboradores recibidos y devuelve el buffer
+   * resultante. Siempre parte del original y nunca de una versión ya estampada: así el resultado
+   * depende solo de quiénes se le pasen, y estampar dos veces no puede superponer una firma sobre
+   * otra ni desplazarla.
+   *
+   * Qué se dibuja por cada colaborador lo decide `resolveStampImage` —rúbrica para firma simple,
+   * código QR para firma avanzada ya completada—; acá solo se resuelve DÓNDE va.
+   *
+   * Lo usan los dos caminos que producen un PDF con firmas —el documento final
+   * (`finalizeSignedDocument`) y la vista previa del avance (`refreshPartiallySignedPreview`)—
+   * para que ambos coloquen cada rúbrica exactamente en el mismo lugar: la vista previa no es una
+   * aproximación de cómo va a quedar el documento, es literalmente el mismo estampado con menos
+   * firmantes.
+   */
+  private async stampSignaturesOnto(
+    document: DocumentEntity,
+    signerCollaborators: CollaboratorEntity[],
+  ): Promise<Buffer> {
+    let documentBuffer = await this.minioService.getFileInBytesFormat(
+      document.objectKey,
+      BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    );
+
+    const baseCoordinates: SignatureCoordinates =
+      document.signatureCoordinates ?? DEFAULT_COORDINATES;
+    const verticalStep = baseCoordinates.height + SIGNATURE_STAMP_VERTICAL_GAP;
+
+    // Coordenadas por colaborador (ver Fase 4 del plan de migración ER-V2): quien tiene
+    // simpleSignature explícita se estampa ahí; el resto se apila automáticamente desde el
+    // ancla del documento, exactamente como antes — el índice de apilado solo avanza para
+    // los colaboradores SIN coordenadas explícitas, para que no colisionen entre sí.
+    let autoStackIndex = 0;
+    for (const collaborator of signerCollaborators) {
+      const signatureBuffer = await this.resolveStampImage(
+        document,
+        collaborator,
+      );
+
+      // Nada que estampar por este firmante: firma avanzada todavía pendiente (su QR no existe
+      // hasta que firma) o firma simple sin rúbrica resoluble.
+      if (!signatureBuffer) {
+        continue;
+      }
+
+      if (collaborator.simpleSignature) {
+        // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
+        // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
+        // sin estampar nada visualmente, y el loop de abajo simplemente no itera. Con
+        // elementos, se estampa UNA vez por cada posición (páginas/zonas distintas).
+        for (const position of collaborator.simpleSignature
+          .signatureCoordinates) {
+          if (isRatioSignaturePosition(position)) {
+            const { coordinates, pageIndex } =
+              await this.documentSigningSerivice.resolveRatioPosition(
+                documentBuffer,
+                position,
+              );
+            documentBuffer =
+              await this.documentSigningSerivice.mergeSignatureIntoPdf(
+                documentBuffer,
+                signatureBuffer,
+                coordinates,
+                pageIndex,
+              );
+          } else {
+            // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
+            // sin ratios) — se respeta el comportamiento de siempre: página por defecto
+            // (última), sin intentar una conversión a ratios con pérdida de precisión.
+            const legacyCoordinates: SignatureCoordinates = {
+              x: position.x,
+              y: position.y,
+              width: position.width,
+              height: position.height,
+              opacity: position.opacity,
+            };
+            documentBuffer =
+              await this.documentSigningSerivice.mergeSignatureIntoPdf(
+                documentBuffer,
+                signatureBuffer,
+                legacyCoordinates,
+              );
+          }
+        }
+      } else {
+        // Colaborador creado por el endpoint POST /document más antiguo (nunca asigna
+        // simpleSignatureId) — apilado automático sin cambios respecto al comportamiento
+        // previo a esta historia.
+        const coordinates: SignatureCoordinates = {
+          ...baseCoordinates,
+          y: baseCoordinates.y + autoStackIndex * verticalStep,
+        };
+        autoStackIndex += 1;
+
+        documentBuffer =
+          await this.documentSigningSerivice.mergeSignatureIntoPdf(
+            documentBuffer,
+            signatureBuffer,
+            coordinates,
+          );
+      }
+    }
+
+    return documentBuffer;
+  }
+
+  /**
+   * Regenera la vista previa del documento con las firmas registradas hasta ahora (historia
+   * "Actualizar el previsualizador con el avance de firmas"). Se llama después de cada firma que
+   * NO cierra el documento: quien lo abra mientras faltan firmantes ve las rúbricas de los que ya
+   * firmaron, en su posición definitiva, y los espacios de quienes faltan siguen vacíos.
+   *
+   * Se reconstruye entera desde el original en vez de agregarle una rúbrica a la vista previa
+   * anterior: estampar de forma incremental acumularía el resultado de cada pasada, y un
+   * reintento o una firma repetida terminaría dibujando dos veces sobre el mismo lugar.
+   *
+   * Nunca interrumpe la firma: es una copia de conveniencia, y quien acaba de firmar ya tiene su
+   * firma registrada en la base pase lo que pase acá. Si falla, el visor sigue mostrando la vista
+   * previa anterior (o el original) y la próxima firma vuelve a intentarlo.
+   */
+  private async refreshPartiallySignedPreview(
+    document: DocumentEntity,
+    signerCollaborators: CollaboratorEntity[],
+  ): Promise<void> {
+    const signed = signerCollaborators.filter(
+      (collaborator) => collaborator.status === SIGNEE_STATUS_ENUM.SIGNED,
+    );
+    if (signed.length === 0) {
+      return;
+    }
+
+    try {
+      const previewBuffer = await this.stampSignaturesOnto(document, signed);
+
+      await this.minioService.uploadPdfAObject(
+        {
+          file: previewBuffer,
+          name: document.fileName,
+          mimetype: 'application/pdf',
+        },
+        BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
+        signed.map(collaboratorDisplayName).join(', '),
+        document.objectKey,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error generando la vista previa con el avance de firmas del documento ${document.id}: ${error}`,
+      );
+    }
+  }
+
+  /**
+   * Anexa la hoja de información de firmas al documento firmado y guarda ese resultado en el
+   * bucket de documentos finalizados (historia "Anexar hoja existente de información de firmas al
+   * documento final"). Esa copia es la versión definitiva: la única que el usuario ve y descarga.
+   *
+   * No se inventa una hoja nueva — se usa la que ya existía, `SummaryDocumentService`, que replica
+   * la plantilla de referencia "Firmalo Hoja de Firmas". Aplica igual a firma simple y a firma
+   * avanzada: la diferencia entre ambas ya quedó resuelta antes, en el estampado (la simple llega
+   * con las rúbricas dibujadas en el documento, la avanzada sin imagen porque su evidencia es
+   * criptográfica), y acá solo se concatenan páginas.
+   *
+   * Nada de lo que entra se modifica: el original sigue intacto en `created_documents` y el
+   * documento firmado en `signed_documents` —que es el insumo con el que se calculó `signedHash`,
+   * y por eso no puede llevar la hoja encima—. Esto solo escribe una tercera copia.
+   */
+  private async attachSignaturesSheet(
+    document: DocumentEntity,
+    signerCollaborators: CollaboratorEntity[],
+    signedDocument: Buffer,
+    signerNames: string,
+  ): Promise<void> {
+    const creator = await this.userService.findOne(document.createdBy);
+
+    // "Cifrado" en la plantilla: copia cifrada y reversible (ver `HashService.reverseCiperHash`)
+    // del registro de esta finalización, para poder reconstruir qué se firmó y quién lo firmó
+    // desde la propia hoja.
+    const cipher = await this.hashService.generateCiperHash({
+      documentId: document.id,
+      signedHash: document.signedHash,
+      signedAt: document.signedAt,
+      signers: signerCollaborators.map((collaborator) => ({
+        id: collaborator.id,
+        name: collaboratorDisplayName(collaborator),
+        signedAt: collaborator.signedAt,
+      })),
+    });
+
+    const summarySheet = await this.summaryDocumentService.generateSummaryPdf(
+      {
+        id: document.id,
+        documentName: document.fileName,
+        hash: document.signedHash,
+        cipher,
+        totalPages: document.totalPages,
+        createdBy: creator.email,
+        verificationUrl: buildPublicDocumentUrl(document.id),
+      },
+      signerCollaborators.map((collaborator) =>
+        this.toSummarySigner(collaborator),
+      ),
+    );
+
+    const finalizedDocument = await this.documentSigningSerivice.appendPdfPages(
+      signedDocument,
+      summarySheet,
+    );
+
+    await this.minioService.uploadPdfAObject(
+      {
+        file: finalizedDocument,
+        name: document.fileName,
+        mimetype: 'application/pdf',
+      },
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+      signerNames,
+      document.objectKey,
+    );
+  }
+
+  /** Traduce un colaborador firmante a un renglón de la sección "Firmas" de la hoja. */
+  private toSummarySigner(
+    collaborator: CollaboratorEntity,
+  ): SummaryDocumentSigner {
+    return {
+      name: collaboratorDisplayName(collaborator),
+      rfc: collaborator.rfc,
+      ipAddress: collaborator.ipAddress,
+      signedAt: collaborator.signedAt,
+      geoLocation: collaborator.geoLoc
+        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
+        : null,
+    };
+  }
+
+  /**
    * Envía el PDF final firmado por correo a todos los colaboradores (firmantes, watchers y
    * reviewers) y, por separado, a quien creó el documento — que no siempre es también un
    * colaborador, así que sin esto se quedaba sin ningún aviso de que ya se completó la firma.
@@ -1812,9 +2221,12 @@ export class DocumentService {
     });
     const creator = await this.userService.findOne(document.createdBy);
 
+    // Se adjunta la versión definitiva (documento + hoja de firmas), no la de `signed_documents`:
+    // el correo de finalización es, para la mayoría de los colaboradores, la única copia que van a
+    // conservar, así que tiene que ser exactamente la misma que verían en la plataforma.
     const signedBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
 
     const signerNames = collaborators
@@ -2071,9 +2483,12 @@ export class DocumentService {
     document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
     document.cancelledAt = cancelledAt;
 
+    // Se cancela sobre la versión definitiva (con la hoja de firmas anexada), que es la que el
+    // usuario venía viendo: el sello "CANCELADO" queda entonces sobre TODAS sus páginas, hoja
+    // incluida, y no sobre una copia intermedia que nadie había visto nunca.
     const documentBuffer = await this.minioService.getFileInBytesFormat(
       document.objectKey,
-      BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
     const cancelledDocument =
       await this.documentSigningSerivice.stampCancelledWatermark(

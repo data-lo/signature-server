@@ -11,19 +11,9 @@
  * vincula la cuenta al colaborador y devuelve al usuario al documento correcto.
  */
 
-/**
- * Mismo fallback que `.env.example` y que el resto del backend. Deliberadamente NO se usa un
- * host interno de Docker (`http://frontend:3000`): estas URLs se abren desde el cliente de
- * correo del destinatario, donde un hostname de red interna es irresoluble y el enlace queda
- * muerto aunque el correo se haya enviado bien.
- */
-const DEFAULT_FRONTEND_URL = 'http://localhost:3001';
-
-/** Base del frontend sin diagonales finales, para no generar URLs con `//`. */
-export function frontendBaseUrl(): string {
-  const configured = process.env.FRONTEND_URL?.trim();
-  return (configured || DEFAULT_FRONTEND_URL).replace(/\/+$/, '');
-}
+// La base del frontend se resuelve en `shared/utils/frontend-url.util`: la misma normalización la
+// necesitan Stripe, las invitaciones a organización y el origin de CORS, no solo estos enlaces.
+import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
 
 /** Enlace al documento para un colaborador concreto (punto de entrada `/access-document`). */
 export function buildDocumentAccessUrl(
@@ -42,4 +32,29 @@ export function buildDocumentAccessUrl(
 /** Enlace al listado de documentos, ya bajo `/dashboard` para evitar el redirect 308 heredado. */
 export function buildAllDocumentsUrl(): string {
   return `${frontendBaseUrl()}/dashboard/documents`;
+}
+
+/**
+ * Enlace a la vista pública del documento firmado (sin sesión). Es lo que se codifica en el QR de
+ * la hoja de información de firmas: quien reciba el PDF impreso o reenviado puede escanearlo y
+ * llegar a la verificación en línea sin tener cuenta.
+ */
+export function buildPublicDocumentUrl(documentId: string): string {
+  return `${frontendBaseUrl()}/public/documents/${documentId}`;
+}
+
+/**
+ * Enlace a la información de UNA firma avanzada concreta (historia "Generar código QR para firmas
+ * avanzadas"). Es lo que se codifica en el QR que se estampa en el documento: como la firma
+ * avanzada no deja rúbrica visible, el QR es su representación visual, y quien lo escanea llega a
+ * la constancia de esa firma —quién firmó y cuándo— sin necesidad de tener cuenta.
+ *
+ * Lleva el id del colaborador y no solo el del documento: cada firmante tiene su propio QR, así
+ * que dos firmas avanzadas del mismo documento nunca codifican la misma URL.
+ */
+export function buildAdvancedSignatureUrl(
+  documentId: string,
+  collaboratorId: string,
+): string {
+  return `${frontendBaseUrl()}/public/documents/${documentId}/signatures/${collaboratorId}`;
 }

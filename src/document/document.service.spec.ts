@@ -28,6 +28,9 @@ import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.consta
 import { DocumentTransactionService } from './document-transaction.service';
 import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
+import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import { SummaryDocumentService } from './summary-document/summary-document.service';
+import { SignatureQrService } from './services/signature-qr.service';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
 function createMockRepository() {
@@ -100,6 +103,9 @@ describe('DocumentService', () => {
   let verificationCodeService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
+  let sealDocumentUseCase: Record<string, jest.Mock>;
+  let summaryDocumentService: Record<string, jest.Mock>;
+  let signatureQrService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     documentRepository = createMockRepository();
@@ -120,6 +126,8 @@ describe('DocumentService', () => {
     };
     hashService = {
       generateFileHash: jest.fn().mockResolvedValue('hash123'),
+      // Alimenta el campo "Cifrado" de la hoja de información de firmas.
+      generateCiperHash: jest.fn().mockResolvedValue('cifrado-reversible'),
     };
     userService = {
       findOne: jest.fn().mockResolvedValue({
@@ -132,12 +140,14 @@ describe('DocumentService', () => {
     documentSigningService = {
       getPdfPages: jest.fn().mockResolvedValue(3),
       mergeSignatureIntoPdf: jest.fn().mockResolvedValue(Buffer.from('pdf')),
-      addSignerName: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampRejectedWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
       stampCancelledWatermark: jest.fn().mockResolvedValue(Buffer.from('pdf')),
+      appendPdfPages: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('pdf-con-hoja-anexada')),
       // Página de prueba fija de 600x800pt — suficiente para verificar que la conversión
-      // ratio→puntos y el pageIndex correcto llegan a mergeSignatureIntoPdf/addSignerName sin
-      // necesitar un PDF real (eso ya lo cubre document-signing.service.spec.ts).
+      // ratio→puntos y el pageIndex correcto llegan a mergeSignatureIntoPdf sin necesitar un
+      // PDF real (eso ya lo cubre document-signing.service.spec.ts).
       resolveRatioPosition: jest.fn(async (_buffer: Buffer, position: any) => ({
         pageIndex: position.page - 1,
         coordinates: {
@@ -195,19 +205,35 @@ describe('DocumentService', () => {
       registerSignature: jest.fn(),
       findAllForDocument: jest.fn().mockResolvedValue([]),
     };
+    // Forma REAL de `SignatureResult` (ver src/efirma/interfaces): este mock devolvía un objeto
+    // con las llaves en español (firmaBase64/certificado/...) que `EfirmaService.firmar` no
+    // produce, así que los tests pasaban contra un contrato inexistente — y lo que se persiste en
+    // `advancedSignature` es justo lo que después se le manda a Seal Service.
     efirmaService = {
       firmar: jest.fn().mockReturnValue({
-        hashDocumentoOriginal: 'hash-doc-1',
-        firmaBase64: 'firma-base64',
-        algoritmo: 'sha256',
-        firmadoEn: new Date('2026-01-01T00:00:00.000Z'),
-        certificado: {
+        originalHash: 'hash-doc-1',
+        signatureBase64: 'firma-base64',
+        algorithm: 'sha256',
+        signedAt: new Date('2026-01-01T00:00:00.000Z'),
+        certificate: {
           rfc: 'XAXX010101000',
-          nombre: 'Firmante Uno',
-          numeroCertificado: '30001000000400002434',
-          certificadoPem: '-----BEGIN CERTIFICATE-----...',
+          name: 'Firmante Uno',
+          serialNumber: '00001000000512345678',
+          certificateNumber: '30001000000400002434',
+          certificatePem: '-----BEGIN CERTIFICATE-----...',
         },
       }),
+    };
+    sealDocumentUseCase = {
+      create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
+    };
+    summaryDocumentService = {
+      generateSummaryPdf: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('hoja-de-firmas')),
+    };
+    signatureQrService = {
+      generatePngBuffer: jest.fn().mockResolvedValue(Buffer.from('qr-png')),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -239,6 +265,12 @@ describe('DocumentService', () => {
           useValue: documentTransactionService,
         },
         { provide: EfirmaService, useValue: efirmaService },
+        { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
+        {
+          provide: SummaryDocumentService,
+          useValue: summaryDocumentService,
+        },
+        { provide: SignatureQrService, useValue: signatureQrService },
       ],
     }).compile();
 
@@ -528,6 +560,168 @@ describe('DocumentService', () => {
         expect.anything(),
       );
     });
+
+    /**
+     * Bug corregido ("las solicitudes FIEL sin 2FA no se muestran en Por firmar"): el listado
+     * comparaba `collaborators.email` con `=` exacto contra el correo (ya en minúsculas) del
+     * usuario en sesión, mientras que el detalle, la vinculación de cuenta y sign()/reject()
+     * comparan sin distinguir mayúsculas. Un firmante invitado como "Juan.Perez@mail.com" no
+     * veía el documento en "Por firmar" mientras su fila siguiera sin `accountId` — y sin 2FA
+     * nada la vincula antes de firmar (con 2FA, pedir el código sí lo hace).
+     */
+    it('empareja al participante sin distinguir mayúsculas (firmante invitado con el correo en mayúsculas)', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        ...query,
+        participantEmail: 'Juan.Perez@Mail.com',
+      } as any);
+
+      const participantClause = qb.andWhere.mock.calls.find(
+        ([sql]: [string]) => sql.includes('SELECT c.document_id'),
+      );
+
+      expect(participantClause).toBeDefined();
+      expect(participantClause[0]).toContain('LOWER(c.email)');
+      expect(participantClause[0]).toContain('LOWER(u.email)');
+      expect(participantClause[1]).toEqual({
+        participantEmail: 'juan.perez@mail.com',
+      });
+    });
+
+    it('aplica el mismo emparejamiento insensible a mayúsculas en el filtro "me toca firmar"', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        ...query,
+        participantEmail: 'Juan.Perez@Mail.com',
+        myTurnOnly: true,
+      } as any);
+
+      const myTurnClause = qb.andWhere.mock.calls.find(([sql]: [string]) =>
+        sql.includes("c.colaborator_type = 'signer'"),
+      );
+
+      expect(myTurnClause).toBeDefined();
+      expect(myTurnClause[0]).toContain('LOWER(c.email)');
+      expect(myTurnClause[1]).toEqual({
+        participantEmail: 'juan.perez@mail.com',
+      });
+    });
+
+    it('empareja al creador sin distinguir mayúsculas (filtro `email`, "Enviados para firma")', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        ...query,
+        email: 'Creador@Mail.com',
+      } as any);
+
+      const creatorClause = qb.andWhere.mock.calls.find(([sql]: [string]) =>
+        sql.includes('requester.email'),
+      );
+
+      expect(creatorClause).toBeDefined();
+      expect(creatorClause[0]).toContain('LOWER(requester.email)');
+      expect(creatorClause[1]).toEqual({ email: 'creador@mail.com' });
+    });
+
+    /**
+     * La columna "Creado por" de las tres secciones del módulo Documentos muestra el nombre del
+     * creador y su RFC como texto secundario. El RFC no está en `users` sino en
+     * `personal_information`, así que sin el join el campo llegaba siempre en null al frontend.
+     */
+    it('devuelve el RFC del creador (join a personal_information) junto al nombre en cada documento', async () => {
+      const qb = createMockQueryBuilder(
+        [
+          {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            fileType: 'application/pdf',
+            totalPages: 3,
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            createdAt: new Date('2026-03-15T23:55:00.000Z'),
+            collaborators: [],
+            requestedBy: {
+              firstName: 'Sara',
+              lastName: 'Ramírez',
+              personalInformation: { rfc: 'SARA850315HN2' },
+            },
+          },
+        ],
+        1,
+      );
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      const result = await service.findWithFilters(
+        'user-1',
+        'account-1',
+        query,
+      );
+
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith(
+        'requester.personalInformation',
+        'requesterPersonalInfo',
+      );
+      expect(result.data[0]).toEqual(
+        expect.objectContaining({
+          creator: 'Sara Ramírez',
+          creatorRfc: 'SARA850315HN2',
+        }),
+      );
+    });
+
+    it('deja `creatorRfc` en null si el creador todavía no registró su RFC, sin romper el listado', async () => {
+      const qb = createMockQueryBuilder(
+        [
+          {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            fileType: 'application/pdf',
+            totalPages: 3,
+            status: DOCUMENT_STATUS_ENUM.PENDING,
+            createdAt: new Date('2026-03-15T23:55:00.000Z'),
+            collaborators: [],
+            requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+          },
+        ],
+        1,
+      );
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      const result = await service.findWithFilters(
+        'user-1',
+        'account-1',
+        query,
+      );
+
+      expect(result.data[0]).toEqual(
+        expect.objectContaining({ creatorRfc: null }),
+      );
+    });
   });
 
   describe('sign', () => {
@@ -583,6 +777,244 @@ describe('DocumentService', () => {
       });
     });
 
+    /**
+     * Historia "Generar código QR para firmas avanzadas": la firma avanzada (e.firma) no produce
+     * ninguna imagen —su evidencia es criptográfica— y hasta ahora el espacio reservado para ella
+     * quedaba vacío en el documento. Ahora se estampa ahí un código QR que lleva a la constancia
+     * de esa firma, cumpliendo la misma función que la rúbrica de una firma simple.
+     */
+    describe('código QR de la firma avanzada', () => {
+      /** Credenciales de e.firma válidas para el mock de EfirmaService. */
+      function efirmaInput() {
+        const file = (originalname: string) =>
+          ({
+            originalname,
+            size: 1024,
+            buffer: Buffer.from('contenido'),
+          }) as Express.Multer.File;
+        return {
+          password: 'clave-correcta',
+          keyFile: file('llave.key'),
+          cerFile: file('certificado.cer'),
+        };
+      }
+
+      /** Firmante avanzado con una posición de firma colocada. */
+      function buildAdvancedSigner(
+        overrides: Partial<CollaboratorEntity> = {},
+      ) {
+        return buildSigner({
+          userId: 'user-1',
+          signingOrder: 0,
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          simpleSignature: {
+            id: 'ss-1',
+            signatureCoordinates: [
+              {
+                signatureId: 'sig-1',
+                page: 1,
+                xRatio: 0.1,
+                yRatio: 0.2,
+                widthRatio: 0.2,
+                heightRatio: 0.08,
+              },
+            ],
+          },
+          ...overrides,
+        } as Partial<CollaboratorEntity> & { userId?: string });
+      }
+
+      async function signAdvanced() {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signer = buildAdvancedSigner();
+        collaboratorRepository.find
+          .mockResolvedValueOnce([signer])
+          .mockResolvedValueOnce([signer]);
+
+        await service.sign('doc-1', 'user-1', efirmaInput(), TEST_GEOLOCATION);
+        return { document, signer };
+      }
+
+      it('genera el QR con la URL de consulta de esa firma', async () => {
+        const { signer } = await signAdvanced();
+
+        expect(signatureQrService.generatePngBuffer).toHaveBeenCalledTimes(1);
+        const url = signatureQrService.generatePngBuffer.mock.calls[0][0];
+        expect(url).toContain(
+          `/public/documents/doc-1/signatures/${signer.id}`,
+        );
+      });
+
+      // El QR ocupa el lugar que tenía asignado esa firma, igual que la rúbrica de una simple: es
+      // el mismo `mergeSignatureIntoPdf` con las mismas coordenadas.
+      it('lo estampa en la ubicación asignada a la firma', async () => {
+        await signAdvanced();
+
+        expect(
+          documentSigningService.mergeSignatureIntoPdf,
+        ).toHaveBeenCalledTimes(1);
+        const [, stampedImage] =
+          documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
+        expect(stampedImage).toEqual(Buffer.from('qr-png'));
+      });
+
+      // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".
+      it('no genera QR para una firma avanzada que sigue pendiente', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signer = buildAdvancedSigner();
+        const pendingSigner = buildAdvancedSigner({
+          id: 'collaborator-2',
+          signingOrder: 1,
+        } as Partial<CollaboratorEntity>);
+        collaboratorRepository.find
+          .mockResolvedValueOnce([signer, pendingSigner])
+          .mockResolvedValueOnce([signer, pendingSigner]);
+        collaboratorRepository.findOne = jest
+          .fn()
+          .mockResolvedValue(pendingSigner);
+
+        await service.sign('doc-1', 'user-1', efirmaInput(), TEST_GEOLOCATION);
+
+        // Firmó uno de dos: se regenera la vista previa con el avance, así que sí se pide el QR
+        // del que ya firmó — pero en ninguna de las dos pasadas el del que sigue pendiente.
+        const urls = signatureQrService.generatePngBuffer.mock.calls.map(
+          (call) => call[0] as string,
+        );
+        expect(urls.some((url) => url.includes('collaborator-2'))).toBe(false);
+      });
+
+      // La firma simple no debe verse afectada: sigue estampando la rúbrica del firmante y sin
+      // pedirle ningún QR al servicio.
+      it('no toca el flujo de la firma simple', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const simpleSigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([simpleSigner])
+          .mockResolvedValueOnce([simpleSigner]);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+        expect(signatureQrService.generatePngBuffer).not.toHaveBeenCalled();
+        expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * Historia "Actualizar el previsualizador con el avance de firmas": antes las rúbricas solo
+     * se dibujaban sobre el PDF cuando firmaba el ÚLTIMO participante, así que quien abría un
+     * documento a medio firmar veía el original limpio. Ahora, tras cada firma que no cierra el
+     * documento, se regenera una vista previa con las firmas registradas hasta ese momento.
+     */
+    describe('vista previa con el avance de firmas', () => {
+      /** Firma `user-1` de dos firmantes, dejando a `user-2` pendiente. */
+      async function signFirstOfTwo() {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        const signerB = buildSigner({
+          id: 'collaborator-2',
+          userId: 'user-2',
+          signingOrder: 1,
+        });
+        collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+        collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+        return { document, signerA, signerB };
+      }
+
+      function previewUpload() {
+        return minioService.uploadPdfAObject.mock.calls.find(
+          (call) => call[1] === BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
+        );
+      }
+
+      it('con firmantes pendientes, guarda la vista previa en su propio bucket', async () => {
+        await signFirstOfTwo();
+
+        const upload = previewUpload();
+        expect(upload).toBeDefined();
+        expect(upload![0].name).toBe('contrato.pdf');
+        expect(upload![3]).toBe('object-key-1');
+      });
+
+      // Solo se estampa a quien ya firmó: el firmante pendiente debe seguir con su espacio vacío.
+      it('estampa únicamente a los firmantes que ya firmaron', async () => {
+        await signFirstOfTwo();
+
+        expect(
+          documentSigningService.mergeSignatureIntoPdf,
+        ).toHaveBeenCalledTimes(1);
+      });
+
+      /**
+       * La vista previa se reconstruye desde el ORIGINAL, no encima de la vista previa anterior:
+       * estampar de forma incremental acumularía cada pasada y una firma repetida terminaría
+       * dibujando dos veces sobre el mismo lugar.
+       */
+      it('parte siempre del documento original', async () => {
+        await signFirstOfTwo();
+
+        expect(minioService.getFileInBytesFormat).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        );
+        expect(minioService.getFileInBytesFormat).not.toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
+        );
+      });
+
+      // Es una copia de conveniencia: la firma ya quedó registrada y no debe perderse porque
+      // MinIO falle al guardar una vista previa.
+      it('si falla, no rompe la firma que ya se registró', async () => {
+        minioService.uploadPdfAObject.mockRejectedValueOnce(
+          new Error('MinIO caído'),
+        );
+
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        const signerB = buildSigner({
+          id: 'collaborator-2',
+          userId: 'user-2',
+          signingOrder: 1,
+        });
+        collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+        collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
+
+        const result = await service.sign(
+          'doc-1',
+          'user-1',
+          undefined,
+          TEST_GEOLOCATION,
+        );
+
+        expect(result.success).toBe(true);
+        expect(collaboratorRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({ status: SIGNEE_STATUS_ENUM.SIGNED }),
+        );
+      });
+
+      // Con el último firmante el documento pasa a SIGNED y lo que se sirve es la versión
+      // definitiva: una vista previa ahí quedaría huérfana y desactualizada.
+      it('no genera vista previa cuando firma el último participante', async () => {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+        expect(previewUpload()).toBeUndefined();
+      });
+    });
+
     it('bug corregido: rechaza con BadRequestException si dos peticiones casi simultáneas firman lo mismo (carrera perdida)', async () => {
       const document = mockDocument();
       documentRepository.findOne.mockResolvedValue(document);
@@ -621,6 +1053,127 @@ describe('DocumentService', () => {
       expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
       expect(emailService.sendDocumentSignedNotification).toHaveBeenCalled();
       expect(document.completedSignersCount).toBe(1);
+    });
+
+    /**
+     * Historia "Anexar hoja existente de información de firmas al documento final": al completarse
+     * la firma se anexa la hoja YA EXISTENTE (SummaryDocumentService) al documento firmado y esa
+     * copia —la definitiva— se guarda en un bucket aparte.
+     */
+    describe('hoja de información de firmas anexada al documento final', () => {
+      async function signLastSigner() {
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+        return document;
+      }
+
+      function uploadTo(bucket: BUCKET_TYPES_ENUM) {
+        return minioService.uploadPdfAObject.mock.calls.find(
+          (call) => call[1] === bucket,
+        );
+      }
+
+      it('anexa la hoja al documento firmado y guarda el resultado en el bucket de finalizados', async () => {
+        const document = await signLastSigner();
+
+        expect(summaryDocumentService.generateSummaryPdf).toHaveBeenCalledTimes(
+          1,
+        );
+        expect(documentSigningService.appendPdfPages).toHaveBeenCalledWith(
+          Buffer.from('pdf'), // documento firmado (estampado)
+          Buffer.from('hoja-de-firmas'), // hoja existente, sin regenerar
+        );
+
+        const finalizedUpload = uploadTo(BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS);
+        expect(finalizedUpload).toBeDefined();
+        expect(finalizedUpload![0].file).toEqual(
+          Buffer.from('pdf-con-hoja-anexada'),
+        );
+        // Misma object key que el resto de las versiones: lo que cambia es el bucket.
+        expect(finalizedUpload![3]).toBe(document.objectKey);
+      });
+
+      it('el documento firmado sigue guardándose sin la hoja: es el insumo de signedHash', async () => {
+        await signLastSigner();
+
+        const signedUpload = uploadTo(BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS);
+        expect(signedUpload).toBeDefined();
+        expect(signedUpload![0].file).toEqual(Buffer.from('pdf'));
+        // El hash se calcula sobre el documento firmado, NO sobre el que lleva la hoja anexada.
+        expect(hashService.generateFileHash).toHaveBeenCalledWith(
+          Buffer.from('pdf'),
+        );
+      });
+
+      it('la hoja se genera con el hash firmado, el total de páginas y los datos de cada firmante', async () => {
+        const document = await signLastSigner();
+
+        const [info, signers] =
+          summaryDocumentService.generateSummaryPdf.mock.calls[0];
+        expect(info).toEqual(
+          expect.objectContaining({
+            id: 'doc-1',
+            documentName: document.fileName,
+            hash: document.signedHash,
+            totalPages: document.totalPages,
+            createdBy: 'creador@correo.com',
+            verificationUrl: expect.stringContaining('/public/documents/doc-1'),
+          }),
+        );
+        expect(info.cipher).toEqual(expect.any(String));
+        expect(signers).toEqual([
+          expect.objectContaining({
+            name: 'Firmante Uno',
+            ipAddress: '127.0.0.1',
+            geoLocation: '19.4326, -99.1332',
+          }),
+        ]);
+      });
+
+      it('si no se puede armar la versión final, el documento no queda firmado y la firma puede reintentarse', async () => {
+        documentSigningService.appendPdfPages.mockRejectedValue(
+          new Error('PDF corrupto'),
+        );
+        const document = mockDocument();
+        documentRepository.findOne.mockResolvedValue(document);
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find.mockResolvedValue([onlySigner]);
+
+        await expect(
+          service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+        ).rejects.toThrow(/estampando el documento/i);
+
+        expect(document.status).toBe(DOCUMENT_STATUS_ENUM.PENDING);
+        expect(uploadTo(BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS)).toBeUndefined();
+      });
+
+      it('el usuario descarga la versión finalizada, no la del bucket de firmados', async () => {
+        documentRepository.findOne.mockResolvedValue(
+          mockDocument({ status: DOCUMENT_STATUS_ENUM.SIGNED }),
+        );
+
+        await service.getDocumentMinioURL('doc-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        );
+      });
+
+      it('el correo de finalización adjunta la versión definitiva, la misma que se ve en la plataforma', async () => {
+        await signLastSigner();
+
+        expect(minioService.getFileInBytesFormat).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        );
+      });
     });
 
     it('bug corregido: además de a los participantes, notifica por correo a quien creó el documento con la lista de firmantes, ya que el creador no siempre es también un participante', async () => {
@@ -783,9 +1336,35 @@ describe('DocumentService', () => {
       expect(mergeCalls).toHaveLength(2);
       expect(mergeCalls[0][3]).toBe(0); // page 1 → pageIndex 0
       expect(mergeCalls[1][3]).toBe(2); // page 3 → pageIndex 2
-      const addNameCalls = documentSigningService.addSignerName.mock.calls;
-      expect(addNameCalls[0][3]).toBe(0);
-      expect(addNameCalls[1][3]).toBe(2);
+    });
+
+    it('historia "Eliminar nombre al estampar firma simple": el estampado es solo la imagen — ninguna otra operación de dibujo sobre el PDF', async () => {
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+      collaboratorRepository.find
+        .mockResolvedValueOnce([onlySigner])
+        .mockResolvedValueOnce([onlySigner]);
+
+      await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+      // Se afirma sobre TODAS las operaciones del servicio de firmado, no sobre la ausencia de
+      // una en particular: así, si alguien reintroduce un estampado de texto (el nombre u otro
+      // dato) con cualquier nombre de método, este test lo detecta. `appendPdfPages` sí se espera
+      // aquí: como este firmante es el único, la firma completa el documento y dispara
+      // `attachSignaturesSheet` (anexar la hoja de información de firmas) — no es un estampado de
+      // texto sobre el PDF firmado, sino la concatenación de la hoja ya generada aparte.
+      const invokedOperations = Object.entries(documentSigningService)
+        .filter(([, mock]) => mock.mock.calls.length > 0)
+        .map(([name]) => name)
+        .sort();
+      expect(invokedOperations).toEqual([
+        'appendPdfPages',
+        'mergeSignatureIntoPdf',
+      ]);
+      expect(
+        documentSigningService.mergeSignatureIntoPdf,
+      ).toHaveBeenCalledTimes(1);
     });
 
     it('historia "Ubicación de firmas por usuario": con signatures vacío, firma sin estampar nada visualmente', async () => {
@@ -811,7 +1390,6 @@ describe('DocumentService', () => {
       expect(
         documentSigningService.mergeSignatureIntoPdf,
       ).not.toHaveBeenCalled();
-      expect(documentSigningService.addSignerName).not.toHaveBeenCalled();
       // Sigue subiendo el PDF (sin cambios visuales) y marcando el documento como firmado.
       expect(minioService.uploadPdfAObject).toHaveBeenCalled();
       expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
@@ -1035,14 +1613,161 @@ describe('DocumentService', () => {
         expect(collaboratorRepository.save).toHaveBeenCalledWith(
           expect.objectContaining({
             advancedSignature: expect.objectContaining({
-              firmaBase64: 'firma-base64',
+              signatureBase64: 'firma-base64',
             }),
           }),
         );
-        // No debe intentar estampar ninguna imagen (firma FIEL no tiene snapshot de imagen).
-        expect(
-          documentSigningService.mergeSignatureIntoPdf,
-        ).not.toHaveBeenCalled();
+        // No usa ninguna imagen de rúbrica: la firma FIEL no tiene snapshot. Desde la historia
+        // "Generar código QR para firmas avanzadas" sí se estampa algo en su lugar —el código QR
+        // de la firma— pero nunca una firma tomada del perfil del usuario.
+        expect(signatureService.findOne).not.toHaveBeenCalled();
+        expect(minioService.getFileInBytesFormat).not.toHaveBeenCalledWith(
+          expect.anything(),
+          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
+        );
+      });
+
+      describe('integración con Seal Service (historia "Completar flujo de firma avanzada")', () => {
+        function signWithEfirma(userId: string) {
+          return service.sign(
+            'doc-1',
+            userId,
+            {
+              password: 'clave-correcta',
+              keyFile: buildFile({ originalname: 'llave.key' }),
+              cerFile: buildFile({ originalname: 'certificado.cer' }),
+            },
+            TEST_GEOLOCATION,
+          );
+        }
+
+        it('al completarse el documento, manda el documentId y el arreglo con la información de cada firma', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const onlySigner = buildFielSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+          });
+          collaboratorRepository.find.mockResolvedValue([onlySigner]);
+
+          await signWithEfirma('user-1');
+
+          expect(sealDocumentUseCase.create).toHaveBeenCalledTimes(1);
+          expect(sealDocumentUseCase.create).toHaveBeenCalledWith({
+            documentId: 'doc-1',
+            originalHash: document.originalHash,
+            signatures: [
+              {
+                signatureBase64: 'firma-base64',
+                algorithm: 'sha256',
+                // Normalizado a ISO 8601: el proveedor ordena y canonicaliza por este valor.
+                signedAt: '2026-01-01T00:00:00.000Z',
+                certificate: {
+                  rfc: 'XAXX010101000',
+                  name: 'Firmante Uno',
+                  serialNumber: '00001000000512345678',
+                  certificateNumber: '30001000000400002434',
+                  certificatePem: '-----BEGIN CERTIFICATE-----...',
+                },
+              },
+            ],
+          });
+        });
+
+        it('sella UNA sola vez, con las firmas de TODOS los firmantes, cuando termina el último', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signerA = buildFielSigner({
+            id: 'p-a',
+            userId: 'user-a',
+            signingOrder: 0,
+            status: SIGNEE_STATUS_ENUM.SIGNED,
+            advancedSignature: {
+              originalHash: 'hash-doc-1',
+              signatureBase64: 'firma-de-a',
+              algorithm: 'sha256',
+              signedAt: '2026-01-01T00:00:00.000Z',
+              certificate: {
+                rfc: 'AAAA010101AAA',
+                name: 'Firmante A',
+                serialNumber: '1',
+                certificateNumber: '2',
+                certificatePem: 'pem-a',
+              },
+            },
+          } as any);
+          const signerB = buildFielSigner({
+            id: 'p-b',
+            userId: 'user-b',
+            signingOrder: 1,
+          });
+          collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+          await signWithEfirma('user-b');
+
+          expect(sealDocumentUseCase.create).toHaveBeenCalledTimes(1);
+          const [payload] = sealDocumentUseCase.create.mock.calls[0];
+          expect(payload.signatures).toHaveLength(2);
+          expect(
+            payload.signatures.map(
+              (signature: { signatureBase64: string }) =>
+                signature.signatureBase64,
+            ),
+          ).toEqual(['firma-de-a', 'firma-base64']);
+        });
+
+        it('no sella mientras queden firmantes pendientes: el hash canónico se calcula sobre el conjunto completo', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signerA = buildFielSigner({
+            id: 'p-a',
+            userId: 'user-a',
+            signingOrder: 0,
+          });
+          const signerB = buildFielSigner({
+            id: 'p-b',
+            userId: 'user-b',
+            signingOrder: 1,
+          });
+          collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+
+          await signWithEfirma('user-a');
+
+          expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
+        });
+
+        it('un documento de firma simple no se sella: no hay firma criptográfica que sellar', async () => {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+          collaboratorRepository.find
+            .mockResolvedValueOnce([onlySigner])
+            .mockResolvedValueOnce([onlySigner]);
+
+          await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+          expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
+        });
+
+        it('si Seal Service falla, la firma igual queda registrada: el sellado es best-effort', async () => {
+          sealDocumentUseCase.create.mockRejectedValue(
+            new Error('Seal Service caído'),
+          );
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const onlySigner = buildFielSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+          });
+          collaboratorRepository.find.mockResolvedValue([onlySigner]);
+
+          const result = await signWithEfirma('user-1');
+
+          expect(result.success).toBe(true);
+          expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+          expect(collaboratorRepository.save).toHaveBeenCalled();
+          expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
+        });
       });
 
       it.each([
@@ -1680,7 +2405,7 @@ describe('DocumentService', () => {
       },
     );
 
-    it('con status=SIGNED: genera y devuelve la URL prefirmada de Minio desde el bucket de firmados', async () => {
+    it('con status=SIGNED: genera y devuelve la URL prefirmada de Minio desde el bucket de finalizados', async () => {
       documentRepository.findOne.mockResolvedValue({
         id: 'doc-1',
         fileName: 'contrato.pdf',
@@ -1688,15 +2413,17 @@ describe('DocumentService', () => {
         objectKey: 'object-key-1',
       });
       minioService.getFile.mockResolvedValue({
-        secureUrl: 'https://minio/signed-documents/object-key-1',
+        secureUrl: 'https://minio/finalized-documents/object-key-1',
         expiresIn: 86400,
       });
 
       const result = await service.getPublicDocumentView('doc-1');
 
+      // La vista pública comparte la versión definitiva (documento + hoja de firmas), igual que
+      // el resto de las rutas de lectura.
       expect(minioService.getFile).toHaveBeenCalledWith(
         'object-key-1',
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
       );
       expect(result).toEqual({
         success: true,
@@ -1705,7 +2432,7 @@ describe('DocumentService', () => {
           id: 'doc-1',
           fileName: 'contrato.pdf',
           status: DOCUMENT_STATUS_ENUM.SIGNED,
-          secureUrl: 'https://minio/signed-documents/object-key-1',
+          secureUrl: 'https://minio/finalized-documents/object-key-1',
           expiresIn: 86400,
         },
       });
@@ -1718,12 +2445,137 @@ describe('DocumentService', () => {
    * no desde el original — devolver la versión sin firmar de un documento firmado fue un bug
    * reportado.
    */
+  /**
+   * Historia "Generar código QR para firmas avanzadas": el destino del QR estampado en el
+   * documento. Ruta pública sin autenticación, así que el gate es estricto y todo lo que no sea
+   * una firma avanzada ya completada responde 404 (no 403: un 403 confirmaría que ese colaborador
+   * existe, y cualquiera puede llamar esta ruta con un UUID).
+   */
+  describe('getAdvancedSignaturePublicView', () => {
+    const SIGNED_AT = new Date('2026-08-14T18:24:11.000Z');
+
+    function advancedCollaborator(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'collaborator-1',
+        documentId: 'doc-1',
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        status: SIGNEE_STATUS_ENUM.SIGNED,
+        signedAt: SIGNED_AT,
+        firstName: 'MANUEL',
+        lastName: 'BALDERRAMA',
+        advancedSignature: {
+          certificate: {
+            name: 'MANUEL BALDERRAMA CHAVEZ',
+            rfc: 'BACM800101ABC',
+            serialNumber: '00001000000512345678',
+          },
+        },
+        ...overrides,
+      };
+    }
+
+    beforeEach(() => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: DOCUMENT_STATUS_ENUM.SIGNED,
+        objectKey: 'object-key-1',
+      });
+    });
+
+    it('devuelve quién firmó y cuándo', async () => {
+      collaboratorRepository.findOne = jest
+        .fn()
+        .mockResolvedValue(advancedCollaborator());
+
+      const result = await service.getAdvancedSignaturePublicView(
+        'doc-1',
+        'collaborator-1',
+      );
+
+      expect(result.data).toEqual({
+        documentId: 'doc-1',
+        fileName: 'contrato.pdf',
+        signerName: 'MANUEL BALDERRAMA CHAVEZ',
+        rfc: 'BACM800101ABC',
+        certificateSerialNumber: '00001000000512345678',
+        signedAt: SIGNED_AT.toISOString(),
+      });
+    });
+
+    // El nombre del certificado es el que el SAT tiene registrado; el del perfil es el respaldo
+    // para firmas anteriores a que se guardara esa evidencia.
+    it('cae al nombre del perfil si la firma no guardó certificado', async () => {
+      collaboratorRepository.findOne = jest
+        .fn()
+        .mockResolvedValue(advancedCollaborator({ advancedSignature: null }));
+
+      const result = await service.getAdvancedSignaturePublicView(
+        'doc-1',
+        'collaborator-1',
+      );
+
+      expect(result.data.signerName).toContain('MANUEL');
+      expect(result.data.rfc).toBeNull();
+      expect(result.data.certificateSerialNumber).toBeNull();
+    });
+
+    // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente" — y
+    // su constancia tampoco debe poder consultarse antes de que la firma exista.
+    it('responde 404 si la firma avanzada todavía está pendiente', async () => {
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(
+        advancedCollaborator({
+          status: SIGNEE_STATUS_ENUM.PENDING,
+          signedAt: null,
+        }),
+      );
+
+      await expect(
+        service.getAdvancedSignaturePublicView('doc-1', 'collaborator-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('responde 404 para una firma simple: su constancia es la rúbrica visible, no este QR', async () => {
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(
+        advancedCollaborator({
+          signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+        }),
+      );
+
+      await expect(
+        service.getAdvancedSignaturePublicView('doc-1', 'collaborator-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('responde 404 si el colaborador no pertenece al documento', async () => {
+      collaboratorRepository.findOne = jest.fn().mockResolvedValue(null);
+
+      await expect(
+        service.getAdvancedSignaturePublicView('doc-1', 'otro-colaborador'),
+      ).rejects.toThrow(NotFoundException);
+
+      // La pertenencia se filtra en la consulta, no después: no se puede leer la firma de un
+      // documento pasando el id de un colaborador de otro.
+      expect(collaboratorRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'otro-colaborador',
+            documentId: 'doc-1',
+          }),
+        }),
+      );
+    });
+  });
+
   describe('getDocumentMinioURL: bucket según el estatus del documento', () => {
     it.each([
-      [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS],
+      // Firmado y con cancelación en curso sirven la versión definitiva (documento + hoja de
+      // firmas) desde `finalized_documents` — ver historia "Anexar hoja existente...".
+      [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS],
       [
         DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
-        BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS,
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
       ],
       [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
       [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
@@ -1758,6 +2610,159 @@ describe('DocumentService', () => {
 
       expect(minioService.getFile).not.toHaveBeenCalledWith(
         'object-key-1',
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      );
+    });
+
+    /**
+     * Historia "Actualizar el previsualizador con el avance de firmas": el estatus por sí solo no
+     * alcanza para decidir qué versión sirve un documento PENDING — depende de si ya firmó
+     * alguien. Es la única excepción a STATUS_BUCKET_MAP.
+     */
+    it.each([
+      [0, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      [undefined, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      [1, BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS],
+      [3, BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS],
+    ])(
+      'pendiente con completedSignersCount=%s resuelve el bucket %s',
+      async (completedSignersCount, expectedBucket) => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          status: DOCUMENT_STATUS_ENUM.PENDING,
+          objectKey: 'object-key-1',
+          completedSignersCount,
+        });
+
+        await service.getDocumentMinioURL('doc-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          expectedBucket,
+        );
+      },
+    );
+
+    // La vista previa solo aplica mientras se está firmando: un documento ya firmado, rechazado o
+    // cancelado tiene su propia versión definitiva y no debe caer nunca en el bucket de avance.
+    it.each([
+      DOCUMENT_STATUS_ENUM.SIGNED,
+      DOCUMENT_STATUS_ENUM.REJECTED,
+      DOCUMENT_STATUS_ENUM.CANCELLED,
+    ])('status=%s nunca sirve la vista previa del avance', async (status) => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status,
+        objectKey: 'object-key-1',
+        completedSignersCount: 2,
+      });
+
+      await service.getDocumentMinioURL('doc-1');
+
+      expect(minioService.getFile).not.toHaveBeenCalledWith(
+        'object-key-1',
+        BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
+      );
+    });
+  });
+
+  /**
+   * `GET /document/file/:id` no es la única ruta que entrega el archivo: el detalle
+   * (`GET /document/:id`, lo que realmente renderiza el visor de la pantalla de firma) y el
+   * listado con `withUrl` traen su propio `secureUrl`. Los tres tienen que resolver el bucket
+   * por el mismo STATUS_BUCKET_MAP; si alguno se quedara en el bucket original, un documento ya
+   * firmado volvería a mostrarse sin firmas por esa vía aunque `getDocumentMinioURL` esté bien.
+   */
+  describe('bucket según el estatus en el resto de las rutas de lectura', () => {
+    const detailBucketCases: Array<[DOCUMENT_STATUS_ENUM, BUCKET_TYPES_ENUM]> =
+      [
+        [DOCUMENT_STATUS_ENUM.SIGNED, BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS],
+        [
+          DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        ],
+        [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
+        [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
+        [DOCUMENT_STATUS_ENUM.PENDING, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      ];
+
+    it.each(detailBucketCases)(
+      'findDetailForUser (GET /document/:id) con status=%s sirve el archivo desde %s',
+      async (status, expectedBucket) => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          fileType: 'application/pdf',
+          totalPages: 1,
+          objectKey: 'object-key-1',
+          status,
+          createdBy: 'creator-1',
+          requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+          collaborators: [buildSigner({ userId: 'user-1' })],
+        } as unknown as DocumentEntity);
+
+        await service.findDetailForUser('doc-1', 'user-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          expectedBucket,
+        );
+      },
+    );
+
+    it('findWithFilters (GET /document?withUrl=true) sirve cada documento desde el bucket de su propio estatus', async () => {
+      const qb: any = {};
+      [
+        'where',
+        'andWhere',
+        'leftJoinAndSelect',
+        'orderBy',
+        'skip',
+        'take',
+      ].forEach((method) => {
+        qb[method] = jest.fn().mockReturnValue(qb);
+      });
+      qb.getManyAndCount = jest.fn().mockResolvedValue([
+        [
+          {
+            id: 'doc-firmado',
+            fileName: 'firmado.pdf',
+            objectKey: 'object-key-firmado',
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+            collaborators: [],
+          },
+          {
+            id: 'doc-pendiente',
+            fileName: 'pendiente.pdf',
+            objectKey: 'object-key-pendiente',
+            status: DOCUMENT_STATUS_ENUM.PENDING,
+            requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+            collaborators: [],
+          },
+        ],
+        2,
+      ]);
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await service.findWithFilters('user-1', 'account-1', {
+        page: 1,
+        limit: 10,
+        withUrl: true,
+      } as any);
+
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-firmado',
+        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+      );
+      expect(minioService.getFile).toHaveBeenCalledWith(
+        'object-key-pendiente',
         BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
       );
     });

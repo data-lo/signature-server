@@ -11,6 +11,15 @@ export class RegisterResponse extends BaseResponse<SignupPendingVerificationData
   data: SignupPendingVerificationData;
 }
 
+export class UpdatePreRegistrationResponse extends BaseResponse<SignupPendingVerificationData> {
+  @ApiProperty({
+    type: SignupPendingVerificationData,
+    description:
+      'Datos del pre-registro ya corregido. `email`/`maskedEmail` son los vigentes tras la corrección: si el correo cambió, es a esa dirección a la que se envió el código nuevo',
+  })
+  data: SignupPendingVerificationData;
+}
+
 export class ResendOtpResponseData {
   @ApiProperty({
     example: 'juan.perez@empresa.com',

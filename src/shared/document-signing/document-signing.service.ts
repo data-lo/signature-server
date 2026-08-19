@@ -263,6 +263,49 @@ export class PdfSignatureService {
     };
   }
 
+  /**
+   * Devuelve un PDF nuevo con las páginas de `documentBuffer` seguidas de las de `pagesBuffer`
+   * (historia "Anexar hoja existente de información de firmas al documento final").
+   *
+   * Ninguno de los dos PDF de entrada se modifica: `copyPages` serializa las páginas del origen y
+   * las incrusta en un documento destino recién creado, así que el documento firmado y la hoja
+   * quedan intactos en sus buckets y esto solo produce una tercera copia. Tampoco se re-estampa ni
+   * se recalcula nada del contenido: las firmas ya dibujadas viajan tal cual dentro de las páginas
+   * copiadas, que es justo lo que pide el criterio de conservar la hoja con las firmas existentes.
+   *
+   * El resultado se serializa con la misma conformidad PDF/A-2B que el resto del servicio: la
+   * versión definitiva que ve el usuario no puede ser menos archivable que la que la originó.
+   */
+  async appendPdfPages(
+    documentBuffer: Buffer,
+    pagesBuffer: Buffer,
+  ): Promise<Buffer> {
+    try {
+      const mergedDoc = await PDFDocument.create();
+
+      for (const source of [documentBuffer, pagesBuffer]) {
+        const sourceDoc = await PDFDocument.load(source);
+        const copiedPages = await mergedDoc.copyPages(
+          sourceDoc,
+          sourceDoc.getPageIndices(),
+        );
+        for (const page of copiedPages) {
+          mergedDoc.addPage(page);
+        }
+      }
+
+      this.applyPdfA2bConformance(mergedDoc);
+      const mergedBytes: Uint8Array = await mergedDoc.save({
+        useObjectStreams: false,
+      });
+      return Buffer.from(mergedBytes);
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Error anexando la hoja de firmas al documento: ${error}`,
+      );
+    }
+  }
+
   /** Estampa "CANCELADO" en diagonal rojo semitransparente en todas las páginas del PDF. */
   async stampCancelledWatermark(documentBuffer: Buffer): Promise<Buffer> {
     return this.stampDiagonalWatermark(
@@ -272,35 +315,13 @@ export class PdfSignatureService {
     );
   }
 
-  async addSignerName(
-    documentBuffer: Buffer,
-    signerName: string,
-    coord: SignatureCoordinates,
-    pageIndex?: number,
-  ): Promise<Buffer> {
-    try {
-      const pdfDoc = await PDFDocument.load(documentBuffer);
-      const pages = pdfDoc.getPages();
-      const targetPage =
-        pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
-
-      targetPage.drawText(signerName, {
-        x: coord.x,
-        y: coord.y - 20,
-        size: 10,
-      });
-
-      this.applyPdfA2bConformance(pdfDoc);
-      const signedPdfBytes: Uint8Array = await pdfDoc.save({
-        useObjectStreams: false,
-      });
-      return Buffer.from(signedPdfBytes);
-    } catch (error) {
-      throw new InternalServerErrorException(
-        `Error añadiendo el nombre del firmante ${error}`,
-      );
-    }
-  }
+  /**
+   * Historia "Eliminar nombre al estampar firma simple": acá vivía `addSignerName`, que dibujaba
+   * el nombre del firmante como texto 20pt debajo de cada firma estampada. Se eliminó junto con
+   * su único llamador (`DocumentService.finalizeSignedDocument`): el estampado ahora es solo la
+   * imagen de la firma. El nombre del firmante sigue registrado en la hoja de firmas del resumen
+   * (`SummaryDocumentService`), que es donde corresponde la evidencia en texto.
+   */
 
   /** Estampa "RECHAZADO" en diagonal naranja semitransparente en todas las páginas del PDF. */
   async stampRejectedWatermark(documentBuffer: Buffer): Promise<Buffer> {

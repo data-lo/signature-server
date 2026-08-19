@@ -19,10 +19,12 @@ import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
+import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 import {
   CreateDocumentSignaturesDto,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
   PAYLOAD_SIGNATURE_TYPE_ENUM,
+  REQUIRES_DIFFERENT_SIGNATURES_ENUM,
 } from './dto/create-document-signatures.dto';
 
 function createMockRepository() {
@@ -61,8 +63,17 @@ describe('DocumentSignaturesService', () => {
     size: 1024,
   } as Express.Multer.File;
 
+  /**
+   * Documento de firma SIMPLE (el tipo lo define `documentData`, no cada colaborador — ver
+   * historia "Selección de tipo de firma al crear documentos"). Juan trae un `rfc` que el backend
+   * debe descartar por ser SIGNER, y María trae requiresTwoFactorAuth:false que el backend debe
+   * forzar a true por ser un documento SIMPLE.
+   */
   const baseDto: CreateDocumentSignaturesDto = {
-    documentData: { fileName: 'contrato_prestacion_servicios.pdf' },
+    documentData: {
+      fileName: 'contrato_prestacion_servicios.pdf',
+      signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE,
+    },
     collaborators: [
       {
         collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
@@ -70,7 +81,6 @@ describe('DocumentSignaturesService', () => {
         lastName: 'Pérez',
         email: 'juan.perez@mail.com',
         rfc: 'PEAJ800101XXX',
-        signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
         signatures: [
           { signatureId: 'sig-1', page: 1, xRatio: 0.65, yRatio: 0.8, widthRatio: 0.2, heightRatio: 0.08 },
         ],
@@ -82,7 +92,6 @@ describe('DocumentSignaturesService', () => {
         lastName: 'Gómez',
         email: 'maria.gomez@mail.com',
         rfc: null,
-        signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE,
         signatures: [],
         requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
       },
@@ -94,6 +103,15 @@ describe('DocumentSignaturesService', () => {
         rfc: 'AUDI990101YYY',
       },
     ],
+  };
+
+  /** El mismo documento, pero en el otro (y único) flujo posible: firma electrónica avanzada. */
+  const advancedDto: CreateDocumentSignaturesDto = {
+    ...baseDto,
+    documentData: {
+      ...baseDto.documentData,
+      signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
+    },
   };
 
   beforeEach(async () => {
@@ -189,7 +207,7 @@ describe('DocumentSignaturesService', () => {
     expect(collaboratorRepo.save).toHaveBeenCalledTimes(3);
     expect(notificationRepo.save).toHaveBeenCalledTimes(3);
     expect(result.data.collaboratorsCount).toBe(3);
-    // ADVANCED (explícito true) + SIMPLE (forzado true) = 2 verification_codes
+    // Documento SIMPLE: 2FA forzado en los 2 firmantes = 2 verification_codes
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
     expect(result.data.verificationCodesCount).toBe(2);
     expect(documentRepo.update).toHaveBeenCalledWith(
@@ -208,12 +226,12 @@ describe('DocumentSignaturesService', () => {
     );
   });
 
-  it('SIMPLE fuerza verification_code aunque el payload mande requiresTwoFactorAuth:false', async () => {
+  it('un documento SIMPLE fuerza verification_code aunque el payload mande requiresTwoFactorAuth:false', async () => {
     const dtoSoloSimpleSinFlag: CreateDocumentSignaturesDto = {
       ...baseDto,
       collaborators: [
         {
-          ...baseDto.collaborators[1], // María, SIMPLE, requiresTwoFactorAuth: false
+          ...baseDto.collaborators[1], // María, requiresTwoFactorAuth: false
         },
       ],
     };
@@ -227,6 +245,137 @@ describe('DocumentSignaturesService', () => {
     );
 
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Ver el bug corregido en DocumentService.findWithFilters: mientras el colaborador no tiene
+   * cuenta vinculada, su correo es la única identidad con la que el listado "Por firmar" lo
+   * empareja — se guarda normalizado, igual que `users.email`.
+   */
+  it('guarda el correo del colaborador normalizado en minúsculas, no como se tecleó', async () => {
+    const dtoConMayusculas: CreateDocumentSignaturesDto = {
+      ...advancedDto,
+      collaborators: [
+        {
+          ...advancedDto.collaborators[0],
+          email: 'Juan.Perez@Mail.com',
+        },
+      ],
+    };
+
+    await service.create(
+      'creator-1',
+      'account-1',
+      dtoConMayusculas,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(collaboratorRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'juan.perez@mail.com' }),
+    );
+  });
+
+  it('un documento ADVANCED respeta el requiresTwoFactorAuth de cada firmante', async () => {
+    await service.create(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    // Solo Juan lo pidió explícitamente; María mandó false y en ADVANCED esa elección se respeta.
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+  });
+
+  it('historia "Selección de tipo de firma": el tipo del documento se copia a todos los firmantes', async () => {
+    await service.create(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    const signerCalls = collaboratorRepo.create.mock.calls.filter(
+      (call) => call[0].colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER,
+    );
+    expect(signerCalls).toHaveLength(2);
+    expect(
+      signerCalls.every(
+        (call) => call[0].signatureType === SIGNATURE_TYPE_ENUM.FIEL,
+      ),
+    ).toBe(true);
+  });
+
+  it('historia "Selección de tipo de firma": descarta el rfc que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
+    await service.create(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    // El payload trae rfc: 'PEAJ800101XXX' — un cliente viejo no puede reintroducir el campo.
+    expect(juanCall[0].rfc).toBeNull();
+  });
+
+  it('rechaza el payload si requiresDifferentSignatures contradice el tipo de firma del documento', async () => {
+    const dtoContradictorio: CreateDocumentSignaturesDto = {
+      ...baseDto, // documento SIMPLE
+      requiresDifferentSignatures: REQUIRES_DIFFERENT_SIGNATURES_ENUM.FIEL,
+    };
+
+    await expect(
+      service.create(
+        'creator-1',
+        'account-1',
+        dtoContradictorio,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(minioService.uploadObject).not.toHaveBeenCalled();
+  });
+
+  it('acepta requiresDifferentSignatures cuando coincide con el tipo de firma del documento', async () => {
+    const dtoCoherente: CreateDocumentSignaturesDto = {
+      ...advancedDto,
+      requiresDifferentSignatures: REQUIRES_DIFFERENT_SIGNATURES_ENUM.FIEL,
+    };
+
+    const result = await service.create(
+      'creator-1',
+      'account-1',
+      dtoCoherente,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rechaza un documento sin ningún SIGNER: nadie podría firmarlo nunca', async () => {
+    const dtoSoloViewer: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: [baseDto.collaborators[2]], // Carlos, VIEWER
+    };
+
+    await expect(
+      service.create(
+        'creator-1',
+        'account-1',
+        dtoSoloViewer,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(minioService.uploadObject).not.toHaveBeenCalled();
   });
 
   it('bug corregido: asigna signingOrder consecutivo (0,1,2...) solo entre los SIGNER, en el orden del payload; VIEWER queda en null', async () => {
@@ -287,7 +436,7 @@ describe('DocumentSignaturesService', () => {
     expect(savedDocumentCall.isSequential).toBe(true);
   });
 
-  it('documento sin orden (isSequential:false): invita por correo solo a los firmantes SIMPLE, no a ADVANCED ni al viewer', async () => {
+  it('documento SIMPLE sin orden (isSequential:false): invita por correo a los firmantes, no al viewer', async () => {
     const dtoSinOrden: CreateDocumentSignaturesDto = {
       ...baseDto,
       documentData: { ...baseDto.documentData, isSequential: false },
@@ -303,9 +452,10 @@ describe('DocumentSignaturesService', () => {
 
     const savedDocumentCall = documentRepo.save.mock.calls[0][0];
     expect(savedDocumentCall.isSequential).toBe(false);
+    // Los 2 SIGNER, ninguno para Carlos (VIEWER).
     expect(
       emailService.sendDocumentInvitationNotification,
-    ).toHaveBeenCalledTimes(1);
+    ).toHaveBeenCalledTimes(2);
     expect(
       emailService.sendDocumentInvitationNotification,
     ).toHaveBeenCalledWith(
@@ -314,6 +464,25 @@ describe('DocumentSignaturesService', () => {
       dtoSinOrden.documentData.fileName,
       expect.stringContaining('/access-document?docId='),
     );
+  });
+
+  it('documento ADVANCED sin orden: no manda la invitación de firma simple a nadie', async () => {
+    const dtoAvanzadoSinOrden: CreateDocumentSignaturesDto = {
+      ...advancedDto,
+      documentData: { ...advancedDto.documentData, isSequential: false },
+    };
+
+    await service.create(
+      'creator-1',
+      'account-1',
+      dtoAvanzadoSinOrden,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(
+      emailService.sendDocumentInvitationNotification,
+    ).not.toHaveBeenCalled();
   });
 
   it('un fallo al enviar la invitación no tumba la creación del documento', async () => {

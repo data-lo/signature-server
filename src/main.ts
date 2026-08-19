@@ -10,6 +10,7 @@ import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 import { MulterExceptionFilter } from './shared/filters/multer-exception.filter';
+import { frontendBaseUrl } from './shared/utils/frontend-url.util';
 
 process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
 
@@ -19,8 +20,12 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  // `frontendBaseUrl()` y no `process.env.FRONTEND_URL` crudo: el header `Origin` que manda el
+  // navegador nunca lleva diagonal final, así que un `https://app.ejemplo.com/` configurado en el
+  // despliegue no casaba con `https://app.ejemplo.com` y el navegador bloqueaba cada petición sin
+  // que el servidor registrara ningún error — un fallo mudo y difícil de rastrear desde acá.
   app.enableCors({
-    origin: process.env.FRONTEND_URL ?? 'http://localhost:3001',
+    origin: frontendBaseUrl(),
   });
 
   // Conexión del Microservicio Kafka (Consumer)

@@ -12,6 +12,7 @@ import {
   CreateDocumentSignaturesDto,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
   PAYLOAD_SIGNATURE_TYPE_ENUM,
+  REQUIRES_DIFFERENT_SIGNATURES_ENUM,
   SignaturePositionDto,
 } from './dto/create-document-signatures.dto';
 import { assertNoOverlappingSignaturePositions } from './utils/signature-collision.util';
@@ -56,6 +57,21 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
   [PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED]: SIGNATURE_TYPE_ENUM.FIEL,
 };
 
+/**
+ * `requiresDifferentSignatures` es el mismo dato que `documentData.signatureType` con otro
+ * vocabulario (ver DTO): esta tabla existe solo para verificar que un cliente no mande los dos
+ * campos contradiciéndose.
+ */
+const EXPECTED_REQUIRES_DIFFERENT_SIGNATURES: Record<
+  PAYLOAD_SIGNATURE_TYPE_ENUM,
+  REQUIRES_DIFFERENT_SIGNATURES_ENUM
+> = {
+  [PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE]:
+    REQUIRES_DIFFERENT_SIGNATURES_ENUM.SIMPLE,
+  [PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED]:
+    REQUIRES_DIFFERENT_SIGNATURES_ENUM.FIEL,
+};
+
 export interface CreateDocumentSignaturesResult {
   id: string;
   status: DOCUMENT_STATUS_ENUM;
@@ -73,6 +89,10 @@ export interface CreateDocumentSignaturesResult {
  *
  * Trata a todos los colaboradores como invitación por email (accountId siempre null) — no
  * intenta resolver si ese correo ya tiene cuenta en la plataforma.
+ *
+ * El tipo de firma es del documento, no de cada firmante (historia "Selección de tipo de firma al
+ * crear documentos"): llega en `documentData.signatureType`, admite solo SIMPLE o ADVANCED, y se
+ * copia igual a todos los SIGNER — no existe el documento con firmas de tipos distintos.
  *
  * Crea Document -> Collaborator (+ SimpleSignature por firmante, con su arreglo `signatures` —
  * ver historia "Ubicación de firmas por usuario") -> Notification -> verification_code dentro de
@@ -117,6 +137,39 @@ export class DocumentSignaturesService {
       );
     }
 
+    // Historia "Selección de tipo de firma al crear documentos": el tipo de firma es UNA decisión
+    // del documento (SIMPLE o ADVANCED, nada más) y se aplica igual a todos sus firmantes. Se
+    // resuelve acá arriba, una sola vez, para que ningún punto del flujo pueda derivar un tipo
+    // distinto por colaborador.
+    const payloadSignatureType = dto.documentData.signatureType;
+    const documentSignatureType =
+      SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN[payloadSignatureType];
+
+    // `requiresDifferentSignatures` quedó como espejo redundante del campo de arriba: si un
+    // cliente manda los dos y no coinciden, no hay forma de saber cuál refleja la intención real
+    // — se rechaza en vez de elegir uno en silencio.
+    if (
+      dto.requiresDifferentSignatures &&
+      dto.requiresDifferentSignatures !==
+        EXPECTED_REQUIRES_DIFFERENT_SIGNATURES[payloadSignatureType]
+    ) {
+      throw new BadRequestException(
+        `requiresDifferentSignatures (${dto.requiresDifferentSignatures}) contradice el tipo de firma del documento (${payloadSignatureType})`,
+      );
+    }
+
+    const totalSigners = dto.collaborators.filter(
+      (c) => c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+    ).length;
+
+    // `ArrayMinSize(1)` del DTO solo garantiza que haya colaboradores: un documento con puros
+    // VIEWER nace en PENDING y no puede completarse nunca porque no hay a quién pedirle una firma.
+    if (totalSigners === 0) {
+      throw new BadRequestException(
+        'El documento debe tener al menos un colaborador de tipo SIGNER',
+      );
+    }
+
     const activeAccount = await this.accountMemberService.assertIsActiveMember(
       createdBy,
       accountId,
@@ -147,9 +200,6 @@ export class DocumentSignaturesService {
       throw new Error('Error guardando archivo en bucket Minio');
     }
 
-    const totalSigners = dto.collaborators.filter(
-      (c) => c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-    ).length;
     const isSequential = dto.documentData.isSequential ?? true;
 
     // Defensa en profundidad (ver signature-collision.util.ts): valida ANTES de tocar la base de
@@ -270,17 +320,24 @@ export class DocumentSignaturesService {
           const collaborator = await collaboratorRepo.save(
             collaboratorRepo.create({
               documentId: document.id,
-              email: participant.email,
+              // Normalizado igual que `users.email` (ver UserService): mientras el colaborador no
+              // tiene cuenta vinculada, este correo es su única identidad, y todo lo que lo
+              // empareja después —listado "Por firmar", vinculación de cuenta, firma y rechazo—
+              // lo compara contra el correo ya normalizado del usuario. Guardarlo tal cual se
+              // tecleó dejaba invisibles en "Por firmar" a los firmantes invitados con
+              // mayúsculas (ver el bug corregido en DocumentService.findWithFilters).
+              email: participant.email.toLowerCase(),
               firstName: participant.firstName,
               lastName: participant.lastName,
-              rfc: participant.rfc ?? null,
+              // Solo el VIEWER guarda RFC: para un firmante el dato ya no se pide al crear el
+              // documento, y el del flujo avanzado sale del certificado de e.firma al firmar (ver
+              // `CollaboratorPayloadDto.rfc`). Se descarta explícitamente lo que mande el cliente.
+              rfc: isSigner ? null : (participant.rfc ?? null),
               colaboratorType:
                 COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN[
                   participant.collaboratorType
                 ],
-              signatureType: isSigner
-                ? SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN[participant.signatureType!]
-                : null,
+              signatureType: isSigner ? documentSignatureType : null,
               simpleSignatureId,
               signingOrder: isSigner ? signerIndex : null,
               status: SIGNEE_STATUS_ENUM.PENDING,
@@ -310,7 +367,7 @@ export class DocumentSignaturesService {
 
           if (
             isSigner &&
-            participant.signatureType === PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE &&
+            documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE &&
             !isSequential
           ) {
             invitationEmailTargets.push({
@@ -324,10 +381,11 @@ export class DocumentSignaturesService {
 
           if (isSigner) {
             // Regla de negocio reforzada en el backend, no solo confiada del payload (ver
-            // historia): SIMPLE siempre requiere 2FA sin importar lo que mande el cliente;
-            // ADVANCED respeta la elección explícita del usuario en el checkbox.
+            // historia): un documento de firma SIMPLE siempre requiere 2FA sin importar lo que
+            // mande el cliente; en ADVANCED se respeta la elección explícita del usuario en el
+            // checkbox, firmante por firmante.
             const needsVerification =
-              participant.signatureType === PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE
+              documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE
                 ? true
                 : participant.requiresTwoFactorAuth === true;
 

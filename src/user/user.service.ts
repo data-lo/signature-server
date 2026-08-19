@@ -501,6 +501,183 @@ export class UserService {
   }
 
   /**
+   * Corrige los datos de un registro que todavía no verifica su correo (ver AuthService
+   * .updatePreRegistration, que es quien valida la contraseña antes de llamar aquí).
+   *
+   * Existe porque un error de dedo en el correo dejaba la cuenta imposible de activar: el código
+   * de verificación se iba a una dirección inexistente y volver a registrarse tampoco servía —
+   * el CURP ya estaba tomado por ese mismo pre-registro, así que `createFromSignup` entraba por
+   * su "Caso A" y reenviaba el código *otra vez al correo equivocado*, en un bucle sin salida.
+   *
+   * Cuando el correo cambia se emite un código nuevo y se manda a la dirección corregida. Los
+   * códigos anteriores no se invalidan explícitamente porque `verifyAndConsume` solo mira el
+   * último emitido sin usar, y los previos caducan solos a los 15 minutos.
+   */
+  async updatePreRegistration(
+    user: UserEntity,
+    changes: {
+      email?: string;
+      firstName?: string;
+      lastName?: string;
+      nationalId?: string;
+      rfc?: string;
+    },
+  ): Promise<BaseResponse<SignupPendingVerificationData>> {
+    const nextEmail = changes.email?.toLowerCase() ?? user.email;
+    const nextCurp = changes.nationalId?.toUpperCase() ?? user.nationalId;
+    const nextRfc = changes.rfc?.toUpperCase();
+
+    const emailChanged = nextEmail !== user.email;
+    const curpChanged = nextCurp !== user.nationalId;
+
+    if (emailChanged) {
+      const existingByEmail = await this.userRepository.findOne({
+        where: { email: nextEmail },
+      });
+      // Un pre-registro abandonado con ese correo tampoco se puede reutilizar: el correo es
+      // único en la tabla, así que el conflicto es real aunque la otra cuenta no esté verificada.
+      if (existingByEmail && existingByEmail.id !== user.id) {
+        throw new ConflictException(
+          'Ya existe un usuario registrado con ese correo electrónico',
+        );
+      }
+    }
+
+    if (curpChanged) {
+      const existingByCurp = await this.userRepository.findOne({
+        where: { nationalId: nextCurp },
+      });
+      if (existingByCurp && existingByCurp.id !== user.id) {
+        throw new ConflictException(
+          'Ya existe un usuario registrado con ese CURP',
+        );
+      }
+    }
+
+    const personalInformation =
+      await this.personalInformationRepository.findOne({
+        where: { id: user.personalInformationId },
+      });
+
+    if (nextRfc && nextRfc !== personalInformation?.rfc) {
+      const existingByRfc = await this.personalInformationRepository.findOne({
+        where: { rfc: nextRfc },
+      });
+      if (existingByRfc && existingByRfc.id !== user.personalInformationId) {
+        throw new ConflictException(
+          'Ya existe un usuario registrado con ese RFC',
+        );
+      }
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    // Bug corregido: TypeORM lanza UpdateValuesMissingError ante un `update` sin campos, y eso
+    // ocurría en el caso más común de todos — corregir SOLO el correo deja la actualización de
+    // PersonalInformation vacía (nombre, CURP y RFC siguen igual), y el endpoint respondía 500.
+    // Cada tabla se toca únicamente si de verdad tiene algo que cambiar.
+    const userChanges = {
+      ...(changes.firstName && {
+        firstName: changes.firstName.toUpperCase(),
+      }),
+      ...(changes.lastName && { lastName: changes.lastName.toUpperCase() }),
+      ...(emailChanged && { email: nextEmail }),
+      ...(curpChanged && { nationalId: nextCurp }),
+    };
+    const personalInformationChanges = {
+      ...(changes.firstName && { name: changes.firstName.toUpperCase() }),
+      ...(changes.lastName && {
+        lastName: changes.lastName.toUpperCase(),
+      }),
+      ...(curpChanged && { curp: nextCurp }),
+      ...(nextRfc && { rfc: nextRfc }),
+    };
+
+    try {
+      if (Object.keys(userChanges).length > 0) {
+        await queryRunner.manager.update(UserEntity, user.id, userChanges);
+      }
+
+      if (
+        user.personalInformationId &&
+        Object.keys(personalInformationChanges).length > 0
+      ) {
+        await queryRunner.manager.update(
+          PersonalInformationEntity,
+          user.personalInformationId,
+          personalInformationChanges,
+        );
+      }
+
+      // `login()` autentica contra AccountEntity.email (decisión D6), que es una copia
+      // sincronizada: sin esto el usuario verificaría su correo nuevo y después no podría
+      // iniciar sesión con él — el mismo motivo por el que existe `updatePasswordForUser`.
+      if (emailChanged) {
+        await this.accountService.updateEmailForUser(
+          user.id,
+          nextEmail,
+          queryRunner.manager,
+        );
+      }
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    const updatedUser = await this.userRepository.findOne({
+      where: { id: user.id },
+      relations: { personalInformation: true },
+    });
+    if (!updatedUser) {
+      throw new NotFoundException(`Usuario con ID ${user.id} no encontrado`);
+    }
+
+    // El snapshot de Redis está indexado por CURP: si el CURP se corrigió, el de la key vieja
+    // quedaría huérfano apuntando a datos que ya no existen (y GET /users/me lo serviría).
+    if (curpChanged) {
+      try {
+        await this.redisService.del(user.nationalId);
+      } catch (error) {
+        this.logger.warn(
+          `No se pudo limpiar el cache de Redis del CURP anterior ${user.nationalId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    await this.refreshUserCurpCache(
+      updatedUser,
+      updatedUser.personalInformation,
+    );
+
+    if (emailChanged) {
+      await this.sendRegistrationOtpBestEffort(
+        updatedUser.id,
+        updatedUser.email,
+      );
+    }
+
+    return {
+      success: true,
+      message: emailChanged
+        ? 'Actualizamos tus datos y enviamos un código de verificación a tu nuevo correo'
+        : 'Actualizamos tus datos de registro',
+      data: {
+        userId: updatedUser.id,
+        email: updatedUser.email,
+        maskedEmail: maskEmail(updatedUser.email),
+        isNewPreRegistration: false,
+      },
+    };
+  }
+
+  /**
    * Marca isEmailVerified=true tras un OTP válido (ver AuthService.verifyOtp) y refresca el
    * snapshot cacheado en Redis, igual criterio que updateStatus.
    */

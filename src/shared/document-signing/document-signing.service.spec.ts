@@ -27,7 +27,7 @@ describe('PdfSignatureService', () => {
     service = module.get(PdfSignatureService);
   });
 
-  describe('mergeSignatureIntoPdf / addSignerName — pageIndex (historia "Ubicación de firmas por usuario")', () => {
+  describe('mergeSignatureIntoPdf — pageIndex (historia "Ubicación de firmas por usuario")', () => {
     it('sin pageIndex, dibuja en la última página (comportamiento previo, sin romper callers existentes)', async () => {
       const documentBuffer = await buildPdf([
         [200, 200],
@@ -63,10 +63,6 @@ describe('PdfSignatureService', () => {
           { x: 10, y: 10, width: 60, height: 24 },
           1,
         ),
-      ).resolves.toBeInstanceOf(Buffer);
-
-      await expect(
-        service.addSignerName(documentBuffer, 'JUAN PÉREZ', { x: 10, y: 10, width: 60, height: 24 }, 1),
       ).resolves.toBeInstanceOf(Buffer);
     });
 

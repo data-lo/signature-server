@@ -10,6 +10,19 @@ import { v4 as uuid4 } from 'uuid';
 import { GetFileResponse } from './interfaces/minio.get-file-response.interface';
 import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 
+/**
+ * Los metadatos de un objeto viajan como cabeceras HTTP `x-amz-meta-*`, que solo admiten ASCII
+ * imprimible. Un nombre como "José Pérez" se enviaría en latin1 y llegaría corrupto, y un
+ * carácter fuera de latin1 (una comilla tipográfica pegada desde Word, por ejemplo) haría que
+ * Node rechazara la petición con ERR_INVALID_CHAR — es decir, tumbaría la subida del PDF firmado,
+ * que es lo último que puede fallar en el flujo de firma. Se codifican solo los caracteres
+ * problemáticos, así que el valor sigue siendo legible y se recupera con `decodeURIComponent`.
+ */
+export function toHeaderSafeValue(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[^\x20-\x7e]/g, (char) => encodeURIComponent(char));
+}
+
 @Injectable()
 export class MinioService {
   private readonly logger = new Logger(MinioService.name);
@@ -19,6 +32,8 @@ export class MinioService {
 
   MINIO_CREATED_DOCUMENTS_BUCKET: any;
   MINIO_SIGNED_DOCUMENTS_BUCKET: any;
+  MINIO_FINALIZED_DOCUMENTS_BUCKET: any;
+  MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET: any;
   MINIO_CANCELLED_DOCUMENTS_BUCKET: any;
   MINIO_REJECTED_DOCUMENTS_BUCKET: any;
   MINIO_OFICIAL_CARDS_BUCKET: any;
@@ -74,10 +89,25 @@ export class MinioService {
       secretKey: process.env.MINIO_SECRET_KEY,
     });
 
+    // `region` explícita, igual que en el cliente privado. Sin ella, el SDK resuelve la región del
+    // bucket con una llamada de red real (`getBucketLocation`) en la PRIMERA operación que la
+    // necesite, usando el protocolo de ESTE cliente: con useSSL=true contra un MinIO que responde
+    // en HTTP plano (cualquier despliegue donde el TLS lo termine un proxy delante), eso revienta
+    // con "EPROTO ... packet length too long" y tumba con un 500 toda vista que necesite un
+    // secureUrl.
+    //
+    // Hoy el fallo está disimulado por el orden de las llamadas: en `getFile`, bucketExists y
+    // statObject corren antes de firmar y dejan la región cacheada. Es incidental — cualquier
+    // reordenamiento, o una firma que sea la primera operación del proceso sobre ese bucket, lo
+    // vuelve a exponer.
+    //
+    // La había agregado el commit 171e43a ("Resolve MinIO region resolution and SSL issues for
+    // public client") y la quitó 8649093 junto con sus comentarios; se restaura acá.
     this.minioPublicClient = new Minio.Client({
       endPoint: process.env.MINIO_PUBLIC_HOST,
       port: Number(process.env.MINIO_PUBLIC_PORT),
       useSSL: publicUseSSL,
+      region,
       accessKey: process.env.MINIO_ACCESS_KEY,
       secretKey: process.env.MINIO_SECRET_KEY,
     });
@@ -85,6 +115,8 @@ export class MinioService {
     if (
       !process.env.MINIO_CREATED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_SIGNED_DOCUMENTS_BUCKET ||
+      !process.env.MINIO_FINALIZED_DOCUMENTS_BUCKET ||
+      !process.env.MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_REJECTED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_OFICIAL_CARDS_BUCKET ||
@@ -99,6 +131,10 @@ export class MinioService {
       process.env.MINIO_CREATED_DOCUMENTS_BUCKET;
     this.MINIO_SIGNED_DOCUMENTS_BUCKET =
       process.env.MINIO_SIGNED_DOCUMENTS_BUCKET;
+    this.MINIO_FINALIZED_DOCUMENTS_BUCKET =
+      process.env.MINIO_FINALIZED_DOCUMENTS_BUCKET;
+    this.MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET =
+      process.env.MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET;
     this.MINIO_CANCELLED_DOCUMENTS_BUCKET =
       process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET;
     this.MINIO_REJECTED_DOCUMENTS_BUCKET =
@@ -112,12 +148,61 @@ export class MinioService {
     return;
   }
 
+  /**
+   * Garantiza que el bucket exista antes de escribir en él, creándolo si hace falta.
+   *
+   * Bug corregido: acá se llamaba `bucketExists(bucket, callback)`. minio-js devuelve una promesa
+   * y no invoca ese callback, así que el `throw` de adentro era código muerto: un bucket
+   * inexistente no se detectaba y el flujo seguía hasta reventar en `putObject` con un
+   * `NoSuchBucket` crudo. Se notaba justo al agregar un bucket nuevo (`finalized_documents`),
+   * porque este proyecto no provisiona buckets en ningún lado —no hay job de `mc mb` en el
+   * docker-compose— y el error aparecía en el último paso del flujo de firma.
+   *
+   * Crear el bucket es idempotente y tolera la carrera entre dos finalizaciones simultáneas:
+   * MinIO responde `BucketAlreadyOwnedByYou` y eso se trata como éxito. Si las credenciales no
+   * tienen permiso para crearlo (típico en producción, donde los buckets los aprovisiona
+   * infraestructura), el error lo dice explícitamente en vez de dejar un `NoSuchBucket` suelto.
+   */
+  private async ensureBucketExists(
+    client: any,
+    bucketName: string,
+  ): Promise<void> {
+    const exists = await client.bucketExists(bucketName);
+    if (exists) {
+      return;
+    }
+
+    this.logger.warn(
+      `El bucket ${bucketName} no existe en MinIO; se crea automáticamente.`,
+    );
+
+    try {
+      await client.makeBucket(bucketName, process.env.MINIO_REGION);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (
+        code === 'BucketAlreadyOwnedByYou' ||
+        code === 'BucketAlreadyExists'
+      ) {
+        return;
+      }
+      throw new Error(
+        `El bucket ${bucketName} no existe y no se pudo crear (${code ?? error}). ` +
+          'Créalo en MinIO o dale permiso de creación a las credenciales del servicio.',
+      );
+    }
+  }
+
   private getBucketByType(type: BUCKET_TYPES_ENUM) {
     switch (type) {
       case BUCKET_TYPES_ENUM.CREATED_DOCUMENTS:
         return this.MINIO_CREATED_DOCUMENTS_BUCKET;
       case BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS:
         return this.MINIO_SIGNED_DOCUMENTS_BUCKET;
+      case BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS:
+        return this.MINIO_FINALIZED_DOCUMENTS_BUCKET;
+      case BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS:
+        return this.MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET;
       case BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS:
         return this.MINIO_CANCELLED_DOCUMENTS_BUCKET;
       case BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS:
@@ -182,13 +267,7 @@ export class MinioService {
       const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = await this.getBucketByType(type);
 
-      await minioPrivateClient.bucketExists(bucketName, (err) => {
-        if (err) {
-          throw new Error(
-            `Error al verificar la existencia del bucket: ${err}`,
-          );
-        }
-      });
+      await this.ensureBucketExists(minioPrivateClient, bucketName);
 
       this.logger.log(file.name);
       const extension = file.name.split('.').pop()?.toLowerCase();
@@ -204,17 +283,23 @@ export class MinioService {
         throw new Error('El archivo no contiene datos válidos');
       }
 
+      // Bug corregido: la llamada pasaba `mimetype` como 5º argumento y los metadatos como 6º,
+      // pero la firma de minio-js es `putObject(bucket, objeto, stream, size?, metaData?)` — solo
+      // recibe cinco. El resultado era que el string 'application/pdf' se guardaba deletreado
+      // (`{"0":"a","1":"p","2":"p",...}`), los metadatos reales se descartaban en silencio y el
+      // objeto quedaba almacenado como `binary/octet-stream`: cada PDF firmado, rechazado o
+      // cancelado se servía con ese Content-Type (el navegador lo descarga en vez de mostrarlo)
+      // y sin la evidencia de quién firmó y cuándo.
       await minioPrivateClient.putObject(
         bucketName,
         objectKey,
         fileBuffer,
         fileBuffer.length,
-        mimetype,
         {
           'Content-Type': mimetype,
           'x-amz-meta-pdfa-conformance': 'PDF/A-2B',
-          'x-amz-meta-signed-at': new Date().toString(),
-          'x-amz-meta-signer': signerFullName,
+          'x-amz-meta-signed-at': new Date().toISOString(),
+          'x-amz-meta-signer': toHeaderSafeValue(signerFullName),
         },
       );
 
@@ -245,13 +330,7 @@ export class MinioService {
       const minioPrivateClient = this.getMinioPrivateClient();
       const bucketName = await this.getBucketByType(type);
 
-      await minioPrivateClient.bucketExists(bucketName, (err) => {
-        if (err) {
-          throw new Error(
-            `Error al verificar la existencia del bucket: ${err}`,
-          );
-        }
-      });
+      await this.ensureBucketExists(minioPrivateClient, bucketName);
 
       this.logger.log(file.name);
       const extension = file.name.split('.').pop()?.toLowerCase();
@@ -470,6 +549,8 @@ export class MinioService {
     switch (bucketType) {
       case BUCKET_TYPES_ENUM.CREATED_DOCUMENTS:
       case BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS:
+      case BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS:
+      case BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS:
       case BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS:
       case BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS:
       case BUCKET_TYPES_ENUM.OFICIAL_CARDS:

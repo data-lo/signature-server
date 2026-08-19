@@ -16,6 +16,9 @@ import { KafkaModule } from 'src/kafka/kafka.module';
 import { AccountModule } from 'src/account/account.module';
 import { DocumentTransactionModule } from './document-transaction.module';
 import { EfirmaModule } from 'src/efirma/efirma.module';
+import { SealModule } from './seal/seal.module';
+import { SummaryDocumentModule } from './summary-document/summary-document.module';
+import { SignatureQrService } from './services/signature-qr.service';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -23,6 +26,7 @@ import { EfirmaModule } from 'src/efirma/efirma.module';
     DocumentService,
     VerificationCodeService,
     DocumentSignaturesService,
+    SignatureQrService,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -38,6 +42,8 @@ import { EfirmaModule } from 'src/efirma/efirma.module';
     AccountModule,
     DocumentTransactionModule,
     EfirmaModule,
+    SealModule,
+    SummaryDocumentModule,
   ],
   exports: [DocumentService],
 })
