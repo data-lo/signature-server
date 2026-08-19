@@ -2018,6 +2018,16 @@ export class DocumentService {
         continue;
       }
 
+      // La caja de firma es apaisada (200x80 por defecto) porque está pensada para una rúbrica
+      // manuscrita: un código QR estirado ahí queda al doble de ancho que de alto y los lectores
+      // dejan de reconocer su patrón. Se encaja centrado dentro de la caja, sin deformarlo, sea
+      // cual sea la forma que tenga esa caja. Las rúbricas siguen ocupándola completa, como
+      // siempre.
+      const stampOptions = {
+        preserveAspectRatio:
+          collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL,
+      };
+
       if (collaborator.simpleSignature) {
         // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
         // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
@@ -2037,6 +2047,7 @@ export class DocumentService {
                 signatureBuffer,
                 coordinates,
                 pageIndex,
+                stampOptions,
               );
           } else {
             // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
@@ -2054,6 +2065,8 @@ export class DocumentService {
                 documentBuffer,
                 signatureBuffer,
                 legacyCoordinates,
+                undefined,
+                stampOptions,
               );
           }
         }
@@ -2072,6 +2085,8 @@ export class DocumentService {
             documentBuffer,
             signatureBuffer,
             coordinates,
+            undefined,
+            stampOptions,
           );
       }
     }

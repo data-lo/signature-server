@@ -859,6 +859,18 @@ describe('DocumentService', () => {
         expect(stampedImage).toEqual(Buffer.from('qr-png'));
       });
 
+      /**
+       * Historia "Ajustar proporciones del código QR en firma avanzada": la caja de firma es
+       * apaisada, así que el QR se encaja dentro sin deformarse en vez de rellenarla.
+       */
+      it('lo estampa sin deformarlo dentro de la caja de firma', async () => {
+        await signAdvanced();
+
+        const [, , , , options] =
+          documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
+        expect(options).toEqual({ preserveAspectRatio: true });
+      });
+
       // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".
       it('no genera QR para una firma avanzada que sigue pendiente', async () => {
         const document = mockDocument();
@@ -1266,6 +1278,9 @@ describe('DocumentService', () => {
         expect.anything(),
         expect.anything(),
         { x: 50, y: 200, width: 100, height: 80 },
+        undefined,
+        // Una rúbrica sigue llenando su caja completa: el encaje sin deformar es solo del QR.
+        { preserveAspectRatio: false },
       );
     });
 
