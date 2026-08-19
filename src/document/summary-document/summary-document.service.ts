@@ -51,12 +51,12 @@ const SIGNATURE_BACKING_LABEL =
   'Firma Electrónica Simple (Arts. 89, 90 y 93 del Código de Comercio)';
 
 /**
- * Renglones de la constancia NOM-151. Se imprimen SIN valor: el sellado con el PSC existe
- * (`SealApiService` guarda el sello de tiempo y la constancia en `document_seals`) pero ocurre
- * DESPUÉS de armar esta hoja —`sealAdvancedSignatures()` corre a continuación de
- * `finalizeSignedDocument()`— y solo para firma avanzada, así que al generar la hoja todavía no
- * hay constancia que imprimir. La tabla queda armada y vacía, como en la plantilla, en vez de
- * desaparecer del documento legal.
+ * Renglones de la constancia NOM-151. En esta hoja se imprimen SIEMPRE vacíos: el sellado ante el
+ * PSC solo corre para documentos de firma AVANZADA (`sealAdvancedSignatures` filtra por firmantes
+ * con e.firma), así que un documento de firma simple no tiene constancia que mostrar.
+ *
+ * La tabla se imprime igual porque es parte de la plantilla de referencia: quitarla del documento
+ * legal sería peor que mostrarla sin llenar.
  */
 const NOM151_ROW_LABELS = ['Certificado (TSA)', 'NUMERO DE SERIE', 'EMITIDO'];
 

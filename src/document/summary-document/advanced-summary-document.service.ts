@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ContentTable, TDocumentDefinitions } from 'pdfmake/interfaces';
+import { ConservationRecordInfo } from './conservation-record.util';
 import {
   AdvancedSummaryDocumentInfo,
   AdvancedSummaryDocumentSigner,
@@ -55,14 +56,22 @@ const SIGNATURE_BACKING_LABEL =
   'Certificado emitido por el Sistema de Administración Tributaria PSC (Art. 97 del Código de Comercio)';
 
 /**
- * Renglones de la constancia NOM-151. Se imprimen SIN valor: el sellado con el PSC existe
- * (`SealApiService` guarda el sello de tiempo y la constancia en `document_seals`) pero ocurre
- * DESPUÉS de armar esta hoja — `sealAdvancedSignatures()` corre a continuación de
- * `finalizeSignedDocument()`, que es quien la genera —, así que al imprimirla todavía no hay
- * constancia. La tabla queda armada y vacía, como en la plantilla, en vez de desaparecer del
- * documento legal.
+ * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
+ *
+ * Solo "EMITIDO" se llena hoy. El DN del certificado (TSA) y el número de serie del sello viajan
+ * únicamente dentro del token RFC 3161 del PSC y nadie los expone por separado — ver la nota de
+ * `toConservationRecord`, que es donde está el detalle. Los renglones se imprimen igual, vacíos:
+ * la tabla es parte de la plantilla y desaparecerla del documento legal sería peor.
  */
-const NOM151_ROW_LABELS = ['Certificado (TSA)', 'NUMERO DE SERIE', 'EMITIDO'];
+function buildConservationRecordRows(
+  record: ConservationRecordInfo | null | undefined,
+): string[][] {
+  return [
+    ['Certificado (TSA)', record?.tsaCertificate ?? ''],
+    ['NUMERO DE SERIE', record?.serialNumber ?? ''],
+    ['EMITIDO', formatSheetDate(record?.issuedAt)],
+  ];
+}
 
 /**
  * Hoja de evidencia de FIRMA AVANZADA (e.firma del SAT).
@@ -121,7 +130,9 @@ export class AdvancedSummaryDocumentService {
           style: 'sectionTitle',
           margin: [0, 14, 0, 6],
         },
-        buildInfoTable(NOM151_ROW_LABELS.map((label) => [label, ''])),
+        buildInfoTable(
+          buildConservationRecordRows(document.conservationRecord),
+        ),
         {
           text: dashBanner('Firmas'),
           style: 'mono',

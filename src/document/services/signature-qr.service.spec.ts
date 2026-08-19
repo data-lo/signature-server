@@ -25,6 +25,14 @@ async function decodeQr(png: Buffer): Promise<string | null> {
 /** Firma de un PNG: los 8 bytes iniciales que todo archivo PNG válido debe tener. */
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+/**
+ * Generar y decodificar códigos QR de 512px es trabajo de CPU real: sueltas estas pruebas tardan
+ * ~3s, pero corriendo la suite completa en paralelo llegan a pasarse de los 5s por defecto de jest
+ * y fallaban por timeout de forma intermitente. El límite se sube acá en vez de bajar la
+ * resolución del QR, que es lo que hace que la comprobación con un decodificador real valga.
+ */
+jest.setTimeout(30_000);
+
 describe('SignatureQrService', () => {
   const service = new SignatureQrService();
 

@@ -62,7 +62,11 @@ Cuando firma el último firmante pendiente:
 
 Lo compartido entre ambas hojas es solo el layout (`sheet-rendering.ts`: tipografías, logo, encabezado, pie, tabla informativa y render a Buffer). Ni un texto legal se comparte: cada tipo de evidencia puede cambiar sin arrastrar al otro.
 
-**La tabla NOM-151 se imprime vacía**, en las dos hojas. No es un pendiente de diseño sino de orden de ejecución: la constancia la emite `SealApiService` desde `sealAdvancedSignatures()`, que corre **después** de `finalizeSignedDocument()` —que es quien arma la hoja— y solo para firma avanzada. Para poblarla habría que sellar antes de generar la hoja, o regenerar la hoja después del sellado.
+**Tabla NOM-151.** El sellado ante el PSC corre **antes** de armar la hoja (dentro de `finalizeSignedDocument`, justo antes de `attachSignaturesSheet`); antes era al revés y por eso la tabla salía siempre vacía. Sigue siendo best-effort: si el sellado falla, la firma se completa igual y la hoja se arma sin constancia. Si el documento ya estaba sellado —un intento previo selló y falló más adelante—, la constancia se relee (`SealDocumentUseCase.findByDocumentId`) en vez de perderse.
+
+De los tres renglones de la plantilla solo se llena **EMITIDO**, desde `SealEntity.sealedAt` (columna agregada en `AddSealedAtToDocumentSeals1784300000026`: la respuesta de Seal Service ya traía el dato y el mapper lo descartaba, contradiciendo su propio criterio de "esta es la única oportunidad de guardarlo"). El DN del certificado (TSA) y el número de serie del sello viajan **solo dentro del token RFC 3161** del PSC, y ni PSC CODEX ni Seal Service los exponen por separado (ver `PscCodexResponseHash`: solo `status`, `hashProcessed`, `fileBase64` y `uuid`); sacarlos exige parsear ASN.1 del token, y ese parseo corresponde a Seal Service, que es quien habla con el PSC y ya tiene el token. Los renglones se imprimen vacíos en vez de omitirse: la tabla es parte de la plantilla. En la hoja simple van siempre vacíos, porque un documento de firma simple nunca se sella.
+
+**Dos campos que estas hojas ya no imprimen**, porque las plantillas de referencia no los contemplan: el **"Cifrado"** de la tabla del documento —no se pierde nada, sigue en `AuditChainEntity.chipher`, que es su fuente de verdad; la hoja solo lo mostraba, y se dejó de calcular para no gastar un cifrado que nadie lee— y el **RFC del firmante**, que sigue en `CollaboratorEntity.rfc` y, en la hoja avanzada, dentro del certificado del SAT.
 
 ### 1.4 Integridad y auditoría
 

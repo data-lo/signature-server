@@ -17,7 +17,6 @@ describe('SummaryDocumentService', () => {
     id: '283dfad3-211e-48aa-9879-75ccf46b60ce',
     documentName: 'Cotizacion-FIEAC-Dig-2025',
     hash: 'bcca56f3e3ce15de8965d985312efef9598440d89cf6e90da35d5b0702c2deeb',
-    cipher: 'axQt1g9gnWM48EAptMHZ2THiezR71EJlxCT9f1V7d2/HKFR6ayViaeNbakCQKps=',
     totalPages: 1,
     createdBy: 'juan.cepeda@data-lo.com',
     verificationUrl: 'https://app.firmalo.mx/public/documents/283dfad3',
@@ -26,7 +25,6 @@ describe('SummaryDocumentService', () => {
   const signers: SummaryDocumentSigner[] = [
     {
       name: 'JUAN ANGEL CEPEDA FERNANDEZ',
-      rfc: null,
       ipAddress: '189.237.82.225',
       otpCode: '482913',
       signedAt: new Date('2026-01-15T10:30:00Z'),
@@ -34,7 +32,6 @@ describe('SummaryDocumentService', () => {
     },
     {
       name: 'MARIA GUADALUPE PEREZ LOPEZ',
-      rfc: 'PELM850101ABC',
       ipAddress: '201.100.10.5',
       otpCode: '109233',
       signedAt: new Date('2026-01-15T11:05:00Z'),
@@ -172,7 +169,6 @@ describe('SummaryDocumentService', () => {
         buildDefinition([
           {
             name: 'SIN DATOS',
-            rfc: null,
             ipAddress: '10.0.0.1',
             otpCode: null,
             signedAt: null,

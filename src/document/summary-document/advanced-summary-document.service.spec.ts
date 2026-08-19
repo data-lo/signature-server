@@ -86,6 +86,43 @@ describe('AdvancedSummaryDocumentService', () => {
     expect(JSON.stringify(definition.content)).toContain('Firmalo_FIEL');
   });
 
+  describe('Constancia de Conservación (NOM-151)', () => {
+    /**
+     * Antes esta tabla salía siempre vacía porque el sellado corría DESPUÉS de armar la hoja. Con
+     * el orden corregido, la constancia llega y "EMITIDO" se imprime.
+     */
+    it('imprime la fecha de emisión cuando el documento ya fue sellado', () => {
+      const definition = service['buildDocDefinition'](
+        {
+          ...document,
+          conservationRecord: {
+            tsaCertificate: null,
+            serialNumber: null,
+            issuedAt: new Date('2026-07-30T15:59:22Z'),
+          },
+        },
+        signers,
+      );
+      const [, nom151] = tablesOf(definition);
+
+      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toMatch(
+        /30\/07\/26/,
+      );
+    });
+
+    // Sin sello (firma no sellada, o sellado fallido: es best-effort) la tabla se imprime igual,
+    // vacía: es parte de la plantilla y quitarla del documento legal sería peor.
+    it('sin constancia, imprime la tabla vacía en vez de omitirla', () => {
+      const [, nom151] = tablesOf(buildDefinition());
+
+      expect(nom151).toEqual([
+        ['Certificado (TSA)', ''],
+        ['NUMERO DE SERIE', ''],
+        ['EMITIDO', ''],
+      ]);
+    });
+  });
+
   it('el pie lleva el QR a la vista pública del documento y las leyendas legales', () => {
     const footer = JSON.stringify(
       (buildDefinition().footer as () => Content)(),

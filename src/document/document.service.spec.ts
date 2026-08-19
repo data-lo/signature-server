@@ -1220,7 +1220,11 @@ describe('DocumentService', () => {
             verificationUrl: expect.stringContaining('/public/documents/doc-1'),
           }),
         );
-        expect(info.cipher).toEqual(expect.any(String));
+        // "Cifrado" y el RFC del firmante ya no se imprimen: la plantilla vigente no los
+        // contempla (historia "Estructura y diseño de las hojas de firma"). El cifrado sigue
+        // viviendo en el Audit Trail, que es su fuente de verdad.
+        expect(info).not.toHaveProperty('cipher');
+        expect(signers[0]).not.toHaveProperty('rfc');
         expect(signers).toEqual([
           expect.objectContaining({
             name: 'Firmante Uno',
