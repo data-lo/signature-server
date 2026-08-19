@@ -19,6 +19,7 @@ describe('AdvancedSummaryDocumentService', () => {
     hash: 'bcca56f3e3ce15de8965d985312efef9598440d89cf6e90da35d5b0702c2deeb',
     totalPages: 1,
     createdBy: 'juan.cepeda@data-lo.com',
+    verificationUrl: 'https://app.firmalo.mx/public/documents/283dfad3',
   };
 
   const signers: AdvancedSummaryDocumentSigner[] = [
@@ -76,12 +77,37 @@ describe('AdvancedSummaryDocumentService', () => {
     expect(buffer.length).toBeGreaterThan(0);
   });
 
-  it('identifica la hoja como evidencia de firma avanzada', () => {
+  it('identifica la hoja como evidencia de firma avanzada y lleva el logo', () => {
     const definition = buildDefinition();
-    const header = (definition.header as () => Content)();
+    const header = JSON.stringify((definition.header as () => Content)());
 
-    expect(JSON.stringify(header)).toContain('Firma_Electrónica_Avanzada');
+    expect(header).toContain('Firma_Electrónica_Avanzada');
+    expect(header).toContain('firmalo-logo.png');
     expect(JSON.stringify(definition.content)).toContain('Firmalo_FIEL');
+  });
+
+  it('el pie lleva el QR a la vista pública del documento y las leyendas legales', () => {
+    const footer = JSON.stringify(
+      (buildDefinition().footer as () => Content)(),
+    );
+
+    expect(footer).toContain(document.verificationUrl as string);
+    expect(footer).toContain('no ha sido modificada');
+    expect(footer).toContain('representación visual de un XML');
+  });
+
+  it('usa JetBrains Mono en tablas y separadores, y Lato en el texto corrido', () => {
+    const definition = buildDefinition();
+
+    expect(definition.defaultStyle).toEqual(
+      expect.objectContaining({ font: 'Lato' }),
+    );
+    expect(definition.styles).toEqual(
+      expect.objectContaining({
+        mono: expect.objectContaining({ font: 'JetBrainsMono' }),
+        legal: expect.objectContaining({ font: 'Lato' }),
+      }),
+    );
   });
 
   it('imprime la información del documento sin el campo "Cifrado" de la hoja simple', () => {

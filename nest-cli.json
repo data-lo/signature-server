@@ -9,6 +9,8 @@
         "watchAssets": true },
       { "include": "**/*.ttf",
         "watchAssets": true },
+      { "include": "**/*.png",
+        "watchAssets": true },
       {
         "include": "certificates/*",
         "outDir": "dist"

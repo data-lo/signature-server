@@ -14,7 +14,12 @@ export interface SummaryDocumentInfo {
   hash: string;
   /**
    * Copia cifrada del registro de auditoría asociado (ver HashService.generateCiperHash /
-   * AuditChainEntity.chipher) — es lo que la plantilla de referencia rotula "Cifrado".
+   * AuditChainEntity.chipher).
+   *
+   * OJO: la plantilla de referencia vigente ("Firmalo Hoja de Firmas SIMPLE") NO incluye este
+   * campo en la tabla del documento, así que hoy no se imprime. El campo se conserva —lo calcula
+   * `attachSignaturesSheet` y se sigue recibiendo— para no romper al caller mientras se confirma
+   * si la omisión en la plantilla es intencional o un olvido.
    */
   cipher: string;
   totalPages: number;
@@ -31,7 +36,12 @@ export interface SummaryDocumentInfo {
 export interface SummaryDocumentSigner {
   /** Nombre completo del firmante. */
   name: string;
-  /** RFC del firmante — null/undefined cuando no aplica (ver CollaboratorEntity.rfc). */
+  /**
+   * RFC del firmante — null/undefined cuando no aplica (ver CollaboratorEntity.rfc).
+   *
+   * Mismo caso que `cipher`: la plantilla vigente no lo incluye entre los renglones del firmante,
+   * así que hoy no se imprime.
+   */
   rfc?: string | null;
   ipAddress: string;
   /** Código OTP usado para verificar la identidad del firmante, si aplica. */

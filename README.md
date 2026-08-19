@@ -49,14 +49,20 @@ Cuando firma el último firmante pendiente:
 
 **Hay una hoja de evidencia por tipo de firma**, y son independientes entre sí (módulo `document/summary-document`):
 
-| Hoja | Servicio | Qué acredita |
-|---|---|---|
-| Firma simple | `SummaryDocumentService` | Artículos 89, 89 Bis, 90 y 93 del Código de Comercio; por firmante imprime Nombre/RFC/IP/OTP/fecha/Geo, y el campo "Cifrado" del Audit Trail |
-| Firma avanzada (e.firma) | `AdvancedSummaryDocumentService` | Artículos 89, 90, 93 y **97**; una tabla por firmante con el número de serie del certificado del SAT y su firma electrónica, ambos leídos de `CollaboratorEntity.advancedSignature` |
+| Hoja | Servicio | Encabezado | Qué acredita |
+|---|---|---|---|
+| Firma simple | `SummaryDocumentService` | `Firma_Digital_Simple` / banner `Firmalo_Grafo` | Artículos 89, 90 y 93 del Código de Comercio; por firmante imprime Nombre/Tipo/IP/Sustentada/OTP/Fecha/Geo |
+| Firma avanzada (e.firma) | `AdvancedSummaryDocumentService` | `Firma_Electrónica_Avanzada` / banner `Firmalo_FIEL` | Artículos 89, 90, 93 y **97**; agrega el número de serie del certificado del SAT y la firma electrónica, leídos de `CollaboratorEntity.advancedSignature` |
 
-`isAdvancedSignatureDocument()` elige cuál se anexa: el tipo de firma es una decisión del documento (`DocumentSignaturesService` lo copia igual a todos sus SIGNER), así que basta con mirar a los firmantes. Las dos hojas comparten solo la plomería de render (`sheet-rendering.ts`: fuentes, pdfmake → Buffer, helpers de formato), nunca el contenido — cada tipo de evidencia puede cambiar sin arrastrar al otro.
+`isAdvancedSignatureDocument()` elige cuál se anexa: el tipo de firma es una decisión del documento (`DocumentSignaturesService` lo copia igual a todos sus SIGNER), así que basta con mirar a los firmantes.
 
-La tabla "Información de la Constancia de Conservación (NOM-151)" de la hoja avanzada se imprime **vacía** por ahora: el sellado con el PSC ya existe (`SealApiService` guarda el timestamp TSA y la constancia en `document_seals`), pero todavía no se define cómo se refleja en la hoja.
+**Estructura, idéntica en las dos** (plantillas "Firmalo Hoja de Firmas SIMPLE / AVANZADA"): encabezado con el logo PNG a la izquierda y el tipo de firma a la derecha; banner de guiones; texto legal; tabla **Documento**; tabla **Constancia de Conservación (NOM-151)**; banner `Firmas`; y una tabla **por cada firmante**. El pie lleva el código QR a la vista pública del documento (`/public/documents/:id`, la única consultable sin sesión) más las leyendas legales sobre la descarga de los archivos oficiales. Encabezado y pie se declaran como `header`/`footer` de pdfmake, así que se repiten en todas las páginas — la hoja crece con el número de firmantes.
+
+**Tipografías**: **Lato** para texto corrido (párrafos legales, títulos de sección, pie) y **JetBrains Mono** para el contenido de las tablas y los separadores de guiones, que dependen del ancho fijo por carácter para alinearse. Los `.ttf`, el logo del encabezado y el isotipo del pie viven en `summary-document/fonts/` y `summary-document/assets/`; `nest-cli.json` los copia a `dist/` (`**/*.ttf` y `**/*.png`), y `sheet-rendering.ts` los resuelve por `__dirname` para que funcionen igual en `src/` y en el build.
+
+Lo compartido entre ambas hojas es solo el layout (`sheet-rendering.ts`: tipografías, logo, encabezado, pie, tabla informativa y render a Buffer). Ni un texto legal se comparte: cada tipo de evidencia puede cambiar sin arrastrar al otro.
+
+**La tabla NOM-151 se imprime vacía**, en las dos hojas. No es un pendiente de diseño sino de orden de ejecución: la constancia la emite `SealApiService` desde `sealAdvancedSignatures()`, que corre **después** de `finalizeSignedDocument()` —que es quien arma la hoja— y solo para firma avanzada. Para poblarla habría que sellar antes de generar la hoja, o regenerar la hoja después del sellado.
 
 ### 1.4 Integridad y auditoría
 
