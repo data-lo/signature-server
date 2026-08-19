@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import * as zlib from 'zlib';
 import { PDFDocument } from 'pdf-lib';
 import { PdfSignatureService } from './document-signing.service';
 
@@ -16,6 +17,56 @@ async function buildPdf(pageSizes: [number, number][]): Promise<Buffer> {
   return Buffer.from(await pdfDoc.save());
 }
 
+/**
+ * Posición y tamaño con los que quedó dibujada la imagen, leídos del flujo de contenido de la
+ * página. pdf-lib emite `1 0 0 1 x y cm` (traslación) seguido de `w 0 0 h 0 0 cm` (escala), así
+ * que es lo que de verdad ve un lector de PDF — no lo que el servicio dice que hizo.
+ */
+async function drawnPlacement(pdf: Buffer): Promise<{
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}> {
+  const doc = await PDFDocument.load(pdf);
+  const page = doc.getPage(0);
+  const contents = page.node.Contents() as unknown as {
+    asArray?: () => unknown[];
+  };
+  const refs = contents.asArray ? contents.asArray() : [contents];
+
+  for (const ref of refs) {
+    const stream = doc.context.lookup(ref as never) as unknown as {
+      contents?: Uint8Array;
+    };
+    if (!stream?.contents) continue;
+
+    const raw = Buffer.from(stream.contents);
+    let text: string;
+    try {
+      text = zlib.inflateSync(raw).toString();
+    } catch {
+      text = raw.toString();
+    }
+
+    // La secuencia se ancla entera (traslación, identidad, escala) porque la matriz identidad
+    // intermedia también encaja con el patrón de una escala, y una búsqueda laxa la tomaría a ella.
+    const match = text.match(
+      /1 0 0 1 ([\d.-]+) ([\d.-]+) cm\s+1 0 0 1 0 0 cm\s+([\d.-]+) 0 0 ([\d.-]+) 0 0 cm/,
+    );
+    if (match) {
+      return {
+        x: Number(match[1]),
+        y: Number(match[2]),
+        width: Number(match[3]),
+        height: Number(match[4]),
+      };
+    }
+  }
+
+  throw new Error('No se encontró ninguna imagen dibujada en la página');
+}
+
 describe('PdfSignatureService', () => {
   let service: PdfSignatureService;
 
@@ -25,6 +76,49 @@ describe('PdfSignatureService', () => {
     }).compile();
 
     service = module.get(PdfSignatureService);
+  });
+
+  /**
+   * Historia "Actualizar contenido del código QR en firma avanzada", criterio "el QR conserva una
+   * proporción cuadrada, sin estiramiento". La caja de firma es apaisada porque está pensada para
+   * una rúbrica manuscrita; un código QR estirado ahí deja de ser cuadrado y los lectores no
+   * reconocen su patrón.
+   */
+  describe('mergeSignatureIntoPdf — preserveAspectRatio', () => {
+    // La caja es 200x80 y el PNG de prueba es cuadrado (1x1).
+    const LANDSCAPE_BOX = { x: 50, y: 100, width: 200, height: 80 };
+
+    it('encaja la imagen sin deformarla y la centra en la caja', async () => {
+      const documentBuffer = await buildPdf([[400, 400]]);
+
+      const signed = await service.mergeSignatureIntoPdf(
+        documentBuffer,
+        MINIMAL_PNG,
+        LANDSCAPE_BOX,
+        undefined,
+        { preserveAspectRatio: true },
+      );
+
+      const placement = await drawnPlacement(signed);
+      expect(placement.width).toBe(placement.height);
+      // Escala al lado menor de la caja (80) y se centra en el eje largo.
+      expect(placement.width).toBe(80);
+      expect(placement.x).toBe(50 + (200 - 80) / 2);
+      expect(placement.y).toBe(100);
+    });
+
+    it('sin la opción, la imagen sigue llenando la caja completa (rúbricas, sin cambios)', async () => {
+      const documentBuffer = await buildPdf([[400, 400]]);
+
+      const signed = await service.mergeSignatureIntoPdf(
+        documentBuffer,
+        MINIMAL_PNG,
+        LANDSCAPE_BOX,
+      );
+
+      const placement = await drawnPlacement(signed);
+      expect(placement).toEqual(LANDSCAPE_BOX);
+    });
   });
 
   describe('mergeSignatureIntoPdf — pageIndex (historia "Ubicación de firmas por usuario")', () => {

@@ -46,6 +46,15 @@ Cuando firma el último firmante pendiente:
 3. Aplica conformidad **PDF/A-2B** (metadatos XMP + `OutputIntent` con perfil ICC sRGB) y sube el resultado a `signed_documents` reutilizando el mismo `objectKey`.
 4. Calcula `signedHash`, marca `status = SIGNED`, `signedAt`, y envía el PDF final por correo a todos los participantes.
 
+**Qué se estampa por cada firmante** lo decide `resolveStampImage`:
+
+- **Firma simple** — la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar (`signatureSnapshotObjectKey`), no de su perfil en vivo.
+- **Firma avanzada (e.firma)** — un **código QR** (`SignatureQrService`), porque la firma avanzada no produce ninguna imagen: su evidencia es criptográfica y su espacio quedaba vacío. Se genera solo cuando esa firma ya se completó.
+
+El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar contenido del código QR en firma avanzada"), no solo un enlace: nombre del firmante y RFC —los del certificado del SAT, con los del colaborador como respaldo—, fecha y hora **con el desfase de la zona horaria del sistema** (`TZ`, o la que resuelva el sistema operativo), IP y geolocalización registradas al firmar, y como última línea la URL de la constancia pública (`GET /document/:id/signatures/:collaboratorId`, ver `getAdvancedSignaturePublicView`). Así quien escanea con cualquier lector ve los datos ahí mismo, sin depender de tener red, y la verificación en línea sigue disponible.
+
+El QR se estampa con `preserveAspectRatio`: la caja de firma es apaisada (200x80 por defecto, pensada para una rúbrica) y estirar ahí un código cuadrado hace que los lectores dejen de reconocer su patrón, así que se escala al lado menor de la caja y se centra. Las rúbricas siguen ocupando la caja completa.
+
 ### 1.4 Integridad y auditoría
 
 - `HashService` combina tres mecanismos:

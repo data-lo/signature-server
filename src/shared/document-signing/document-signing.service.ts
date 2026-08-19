@@ -109,6 +109,9 @@ export class PdfSignatureService {
    *                        usuario"). Por defecto la última página, mismo comportamiento que
    *                        antes de que existiera soporte multipágina — ningún caller que no lo
    *                        pase explícitamente cambia de comportamiento.
+   * @param options         `preserveAspectRatio` encaja la imagen dentro de la caja sin
+   *                        deformarla, centrada. Lo usa el QR de la firma avanzada (ver más
+   *                        abajo); las rúbricas siguen ocupando la caja completa, como siempre.
    * @returns               PDF firmado en formato PDF/A-2B como Buffer.
    */
   async mergeSignatureIntoPdf(
@@ -116,6 +119,7 @@ export class PdfSignatureService {
     signatureBuffer: Buffer,
     coordinates: SignatureCoordinates,
     pageIndex?: number,
+    options?: { preserveAspectRatio?: boolean },
   ): Promise<Buffer> {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
@@ -148,11 +152,12 @@ export class PdfSignatureService {
     const drawSize = this.resolveSignatureSize(coordinates);
 
     // Paso 6: dibujar la firma en la página con las coordenadas, dimensiones y opacidad resueltas
+    const placement = options?.preserveAspectRatio
+      ? this.fitPreservingAspectRatio(signatureImage, coordinates, drawSize)
+      : { x: coordinates.x, y: coordinates.y, ...drawSize };
+
     targetPage.drawImage(signatureImage, {
-      x: coordinates.x,
-      y: coordinates.y,
-      width: drawSize.width,
-      height: drawSize.height,
+      ...placement,
       opacity: coordinates.opacity ?? 1.0,
     });
 
@@ -378,6 +383,35 @@ export class PdfSignatureService {
     this.applyPdfA2bConformance(pdfDoc);
     const bytes = await pdfDoc.save({ useObjectStreams: false });
     return Buffer.from(bytes);
+  }
+
+  /**
+   * Encaja la imagen dentro de la caja resuelta SIN deformarla, centrada en ella.
+   *
+   * La caja de firma es un rectángulo apaisado (200x80 por defecto), pensado para una rúbrica
+   * manuscrita: estirar ahí una imagen cuadrada la deja el doble de ancha que de alta. Para una
+   * rúbrica eso es un detalle estético, pero el código QR de una firma avanzada deja de ser
+   * cuadrado y los lectores dejan de reconocer su patrón — por eso se escala al lado menor de la
+   * caja y se centra, en vez de rellenarla.
+   */
+  private fitPreservingAspectRatio(
+    image: PDFImage,
+    coordinates: SignatureCoordinates,
+    boxSize: { width: number; height: number },
+  ): { x: number; y: number; width: number; height: number } {
+    const scale = Math.min(
+      boxSize.width / image.width,
+      boxSize.height / image.height,
+    );
+    const width = image.width * scale;
+    const height = image.height * scale;
+
+    return {
+      x: coordinates.x + (boxSize.width - width) / 2,
+      y: coordinates.y + (boxSize.height - height) / 2,
+      width,
+      height,
+    };
   }
 
   /**

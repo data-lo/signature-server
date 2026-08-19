@@ -64,7 +64,10 @@ import {
   buildDocumentAccessUrl,
   buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
-import { SignatureQrService } from './services/signature-qr.service';
+import {
+  SignatureQrService,
+  type AdvancedSignatureQrData,
+} from './services/signature-qr.service';
 import { AdvancedSignaturePublicViewData } from './interfaces/responses/advanced-signature-public-view-response';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
@@ -1855,12 +1858,40 @@ export class DocumentService {
    *
    *  - Firma simple: la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar
    *    (ver `signatureSnapshotObjectKey`), no de su perfil en vivo.
-   *  - Firma avanzada (e.firma): un código QR que lleva a la constancia de esa firma. Su evidencia
-   *    es criptográfica y no produce ninguna imagen, así que antes su espacio quedaba vacío.
+   *  - Firma avanzada (e.firma): un código QR con los datos del firmante y del evento de firma
+   *    (ver `SignatureQrService`). Su evidencia es criptográfica y no produce ninguna imagen, así
+   *    que antes su espacio quedaba vacío.
    *
    * El QR se genera únicamente cuando la firma avanzada YA se completó: mientras el firmante siga
    * pendiente no hay firma que consultar, así que no se dibuja nada y su espacio sigue libre.
    */
+  /**
+   * Datos que se codifican en el QR de una firma avanzada (historia "Actualizar contenido del
+   * código QR en firma avanzada").
+   *
+   * Todo describe a ESA firma y no al perfil del firmante hoy: el nombre y el RFC salen del
+   * certificado del SAT con el que firmó —con los datos del colaborador como respaldo, mismo
+   * criterio que `getAdvancedSignaturePublicView`— y la IP, la ubicación y la fecha son las que
+   * quedaron registradas al firmar. El documento se puede leer años después; el QR tiene que
+   * seguir diciendo lo que pasó, no lo que pasa.
+   */
+  private toAdvancedSignatureQrData(
+    document: DocumentEntity,
+    collaborator: CollaboratorEntity,
+  ): AdvancedSignatureQrData {
+    const certificate = collaborator.advancedSignature?.certificate;
+
+    return {
+      signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
+      rfc: certificate?.rfc ?? collaborator.rfc,
+      ipAddress: collaborator.ipAddress,
+      geoLocation: collaborator.geoLoc,
+      signedAt:
+        collaborator.advancedSignature?.signedAt ?? collaborator.signedAt,
+      verificationUrl: buildAdvancedSignatureUrl(document.id, collaborator.id),
+    };
+  }
+
   private async resolveStampImage(
     document: DocumentEntity,
     collaborator: CollaboratorEntity,
@@ -1870,8 +1901,8 @@ export class DocumentService {
         return null;
       }
 
-      return this.signatureQrService.generatePngBuffer(
-        buildAdvancedSignatureUrl(document.id, collaborator.id),
+      return this.signatureQrService.generateAdvancedSignaturePng(
+        this.toAdvancedSignatureQrData(document, collaborator),
       );
     }
 
@@ -2018,6 +2049,14 @@ export class DocumentService {
         continue;
       }
 
+      // La caja de firma es apaisada porque está pensada para una rúbrica; un QR estirado ahí
+      // deja de ser cuadrado y los lectores no reconocen su patrón. Se encaja centrado, sin
+      // deformarlo. Las rúbricas siguen ocupando la caja completa, exactamente como antes.
+      const stampOptions = {
+        preserveAspectRatio:
+          collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL,
+      };
+
       if (collaborator.simpleSignature) {
         // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
         // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
@@ -2037,6 +2076,7 @@ export class DocumentService {
                 signatureBuffer,
                 coordinates,
                 pageIndex,
+                stampOptions,
               );
           } else {
             // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
@@ -2054,6 +2094,8 @@ export class DocumentService {
                 documentBuffer,
                 signatureBuffer,
                 legacyCoordinates,
+                undefined,
+                stampOptions,
               );
           }
         }
@@ -2072,6 +2114,8 @@ export class DocumentService {
             documentBuffer,
             signatureBuffer,
             coordinates,
+            undefined,
+            stampOptions,
           );
       }
     }
