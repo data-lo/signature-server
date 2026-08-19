@@ -453,6 +453,13 @@ export class DocumentService {
     const qb = this.documentRepository
       .createQueryBuilder('document')
       .leftJoinAndSelect('document.requestedBy', 'requester')
+      // El RFC no vive en `users` sino en `personal_information` (ver UserEntity): el listado lo
+      // muestra como texto secundario bajo el nombre en la columna "Creado por", así que se trae
+      // en el mismo query en vez de resolverlo documento por documento.
+      .leftJoinAndSelect(
+        'requester.personalInformation',
+        'requesterPersonalInfo',
+      )
       .leftJoinAndSelect('document.collaborators', 'collaborator')
       .leftJoinAndSelect('collaborator.account', 'collaboratorAccount')
       .leftJoinAndSelect('collaboratorAccount.user', 'collaboratorUser')
@@ -593,6 +600,7 @@ export class DocumentService {
           watchers: byType(COLABORATOR_TYPE_ENUM.WATCHER),
           reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
           creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
+          creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,
           totalPages: doc.totalPages,
           status: doc.status,
           createdAt: doc.createdAt,

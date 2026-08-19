@@ -66,6 +66,14 @@ export class DocumentGetData {
     description: 'Nombre completo del firmante',
   })
   creator: string;
+
+  @ApiProperty({
+    example: 'SARA850315HN2',
+    nullable: true,
+    description:
+      'RFC de quien creó el documento (personal_information.rfc). Null si el creador todavía no lo registró.',
+  })
+  creatorRfc: string | null;
 }
 
 export class PaginationMeta {
