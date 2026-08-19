@@ -16,6 +16,7 @@ import { EmailVerificationCodeService } from '../user/email-verification-code.se
 import { EmailService } from '../shared/email/email.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
+import { TurnstileService } from '../shared/turnstile/turnstile.service';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -48,6 +49,7 @@ describe('AuthService', () => {
   let passwordService: { hash: jest.Mock; compare: jest.Mock };
   let jwtService: { sign: jest.Mock; verifyAsync: jest.Mock };
   let redisService: { set: jest.Mock; get: jest.Mock };
+  let turnstileService: { verifyToken: jest.Mock };
 
   const account = {
     id: 'account-1',
@@ -112,6 +114,7 @@ describe('AuthService', () => {
       }),
     };
     redisService = { set: jest.fn(), get: jest.fn().mockResolvedValue(null) };
+    turnstileService = { verifyToken: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -134,6 +137,7 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: jwtService },
         { provide: PasswordService, useValue: passwordService },
         { provide: RedisService, useValue: redisService },
+        { provide: TurnstileService, useValue: turnstileService },
       ],
     }).compile();
 
@@ -210,6 +214,7 @@ describe('AuthService', () => {
       rfc: 'GOMA900101XYZ',
       password: 'Password123!',
       confirmPassword: 'Password123!',
+      turnstileToken: '0.token-del-widget',
     };
     const pendingVerificationData = {
       userId: 'user-1',
@@ -268,6 +273,34 @@ describe('AuthService', () => {
       } as any);
 
       expect(result.success).toBe(true);
+    });
+
+    it('verifica el CAPTCHA de Turnstile antes de crear el pre-registro', async () => {
+      userService.createFromSignup.mockResolvedValue({
+        success: true,
+        data: pendingVerificationData,
+      });
+
+      await service.register(dto as any);
+
+      expect(turnstileService.verifyToken).toHaveBeenCalledWith(
+        '0.token-del-widget',
+      );
+    });
+
+    // El punto entero de la historia: un token rechazado no debe dejar rastro — ni pre-registro,
+    // ni hash de contraseña, ni OTP enviado.
+    it('no crea ni actualiza el pre-registro si el CAPTCHA no es válido', async () => {
+      turnstileService.verifyToken.mockRejectedValue(
+        new BadRequestException('CAPTCHA inválido'),
+      );
+
+      await expect(service.register(dto as any)).rejects.toThrow(
+        BadRequestException,
+      );
+
+      expect(userService.createFromSignup).not.toHaveBeenCalled();
+      expect(passwordService.hash).not.toHaveBeenCalled();
     });
   });
 
