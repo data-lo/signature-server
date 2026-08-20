@@ -45,6 +45,33 @@ Cuando firma el último firmante pendiente:
 2. Para **cada firmante en orden**, descarga su imagen de firma y usa `PdfSignatureService.mergeSignatureIntoPdf` (incrusta el PNG en la última página, normaliza tamaño a un rango válido) + `addSignerName` (nombre debajo de la firma). Las firmas se apilan verticalmente.
 3. Aplica conformidad **PDF/A-2B** (metadatos XMP + `OutputIntent` con perfil ICC sRGB) y sube el resultado a `signed_documents` reutilizando el mismo `objectKey`.
 4. Calcula `signedHash`, marca `status = SIGNED`, `signedAt`, y envía el PDF final por correo a todos los participantes.
+5. Anexa la **hoja de evidencia** al documento firmado (`attachSignaturesSheet`) y guarda esa copia —la definitiva, la única que el usuario ve y descarga— en el bucket `finalized_documents`. Se arma después de calcular `signedHash` (la hoja lo imprime) y antes de marcar el documento como `SIGNED`: si falla, el documento no queda firmado y el intento se puede repetir, en vez de dejar una versión final que no existe.
+
+**Hay una hoja de evidencia por tipo de firma**, y son independientes entre sí (módulo `document/summary-document`):
+
+| Hoja | Servicio | Qué acredita |
+|---|---|---|
+| Firma simple | `SummaryDocumentService` | Artículos 89, 89 Bis, 90 y 93 del Código de Comercio; por firmante imprime Nombre/RFC/IP/OTP/fecha/Geo, y el campo "Cifrado" del Audit Trail |
+| Firma avanzada (e.firma) | `AdvancedSummaryDocumentService` | Artículos 89, 90, 93 y **97**; una tabla por firmante con el número de serie del certificado del SAT y su firma electrónica, ambos leídos de `CollaboratorEntity.advancedSignature` |
+
+`isAdvancedSignatureDocument()` elige cuál se anexa: el tipo de firma es una decisión del documento (`DocumentSignaturesService` lo copia igual a todos sus SIGNER), así que basta con mirar a los firmantes. Las dos hojas comparten solo la plomería de render (`sheet-rendering.ts`: fuentes, pdfmake → Buffer, helpers de formato), nunca el contenido — cada tipo de evidencia puede cambiar sin arrastrar al otro.
+
+La tabla "Información de la Constancia de Conservación (NOM-151)" de la hoja avanzada se imprime **vacía** por ahora: el sellado con el PSC ya existe (`SealApiService` guarda el timestamp TSA y la constancia en `document_seals`), pero todavía no se define cómo se refleja en la hoja.
+
+**Qué se estampa por cada firmante** lo decide `resolveStampImage`:
+
+- **Firma simple** — la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar (`signatureSnapshotObjectKey`), no de su perfil en vivo.
+- **Firma avanzada (e.firma)** — un **código QR** (`SignatureQrService`), porque la firma avanzada no produce ninguna imagen: su evidencia es criptográfica y su espacio quedaba vacío. Se genera solo cuando esa firma ya se completó.
+
+El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar contenido del código QR en firma avanzada"), no solo un enlace: nombre del firmante y RFC —los del certificado del SAT, con los del colaborador como respaldo—, fecha y hora **con el desfase de la zona horaria del sistema** (`TZ`, o la que resuelva el sistema operativo), IP y geolocalización registradas al firmar, y como última línea la URL de la constancia pública (`GET /document/:id/signatures/:collaboratorId`, ver `getAdvancedSignaturePublicView`). Así quien escanea con cualquier lector ve los datos ahí mismo, sin depender de tener red, y la verificación en línea sigue disponible.
+
+El QR se estampa con `preserveAspectRatio`: la caja de firma es apaisada (200x80 por defecto, pensada para una rúbrica) y estirar ahí un código cuadrado hace que los lectores dejen de reconocer su patrón, así que se escala al lado menor de la caja y se centra. Las rúbricas siguen ocupando la caja completa.
+
+Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt alrededor del código. El PNG se genera sin margen propio a propósito —así los módulos quedan lo más grandes posible dentro de la caja— y el borde se dibuja por fuera. No es cosmético: medido con un decodificador real sobre la página rasterizada, un QR con el texto del documento pegado **no se lee** a 150 DPI, y con la separación sí.
+
+**Tamaño mínimo.** Una caja de firma puede ser tan chica como 60x24pt, y ahí el QR queda en 24pt de lado (~8.5mm, módulos de 0.12mm): no lo lee ningún decodificador a 96, 150 ni 300 DPI. Se estampa igual —quitarlo dejaría la firma avanzada sin representación visual— pero se registra una advertencia (`PdfSignatureService`) en vez de producir en silencio un código ilegible. A partir de ~60pt de lado se lee sin problema en papel.
+
+**Densidad.** Con los seis renglones de datos más la URL de la constancia, el código sale de 69x69 módulos. En la caja por defecto (80pt de lado) eso deja ~1.55 px por módulo a 96 DPI —pantalla estándar al 100%—, que está en el límite: a esa resolución decodifica o no según dónde caigan los bordes de módulo respecto a la rejilla de píxeles. A 150 DPI o más (impresión, pantalla HiDPI, o simplemente acercar el zoom) se lee siempre. Bajar de 53 módulos exigiría quitar la URL de la constancia o acortarla.
 
 ### 1.4 Integridad y auditoría
 
