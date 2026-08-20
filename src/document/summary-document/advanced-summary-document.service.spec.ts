@@ -19,6 +19,7 @@ describe('AdvancedSummaryDocumentService', () => {
     hash: 'bcca56f3e3ce15de8965d985312efef9598440d89cf6e90da35d5b0702c2deeb',
     totalPages: 1,
     createdBy: 'juan.cepeda@data-lo.com',
+    verificationUrl: 'https://app.firmalo.mx/public/documents/283dfad3',
   };
 
   const signers: AdvancedSummaryDocumentSigner[] = [
@@ -76,12 +77,74 @@ describe('AdvancedSummaryDocumentService', () => {
     expect(buffer.length).toBeGreaterThan(0);
   });
 
-  it('identifica la hoja como evidencia de firma avanzada', () => {
+  it('identifica la hoja como evidencia de firma avanzada y lleva el logo', () => {
     const definition = buildDefinition();
-    const header = (definition.header as () => Content)();
+    const header = JSON.stringify((definition.header as () => Content)());
 
-    expect(JSON.stringify(header)).toContain('Firma_Electrónica_Avanzada');
+    expect(header).toContain('Firma_Electrónica_Avanzada');
+    expect(header).toContain('firmalo-logo.png');
     expect(JSON.stringify(definition.content)).toContain('Firmalo_FIEL');
+  });
+
+  describe('Constancia de Conservación (NOM-151)', () => {
+    /**
+     * Antes esta tabla salía siempre vacía porque el sellado corría DESPUÉS de armar la hoja. Con
+     * el orden corregido, la constancia llega y "EMITIDO" se imprime.
+     */
+    it('imprime la fecha de emisión cuando el documento ya fue sellado', () => {
+      const definition = service['buildDocDefinition'](
+        {
+          ...document,
+          conservationRecord: {
+            tsaCertificate: null,
+            serialNumber: null,
+            issuedAt: new Date('2026-07-30T15:59:22Z'),
+          },
+        },
+        signers,
+      );
+      const [, nom151] = tablesOf(definition);
+
+      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toMatch(
+        /30\/07\/26/,
+      );
+    });
+
+    // Sin sello (firma no sellada, o sellado fallido: es best-effort) la tabla se imprime igual,
+    // vacía: es parte de la plantilla y quitarla del documento legal sería peor.
+    it('sin constancia, imprime la tabla vacía en vez de omitirla', () => {
+      const [, nom151] = tablesOf(buildDefinition());
+
+      expect(nom151).toEqual([
+        ['Certificado (TSA)', ''],
+        ['NUMERO DE SERIE', ''],
+        ['EMITIDO', ''],
+      ]);
+    });
+  });
+
+  it('el pie lleva el QR a la vista pública del documento y las leyendas legales', () => {
+    const footer = JSON.stringify(
+      (buildDefinition().footer as () => Content)(),
+    );
+
+    expect(footer).toContain(document.verificationUrl as string);
+    expect(footer).toContain('no ha sido modificada');
+    expect(footer).toContain('representación visual de un XML');
+  });
+
+  it('usa JetBrains Mono en tablas y separadores, y Lato en el texto corrido', () => {
+    const definition = buildDefinition();
+
+    expect(definition.defaultStyle).toEqual(
+      expect.objectContaining({ font: 'Lato' }),
+    );
+    expect(definition.styles).toEqual(
+      expect.objectContaining({
+        mono: expect.objectContaining({ font: 'JetBrainsMono' }),
+        legal: expect.objectContaining({ font: 'Lato' }),
+      }),
+    );
   });
 
   it('imprime la información del documento sin el campo "Cifrado" de la hoja simple', () => {

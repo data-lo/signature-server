@@ -169,6 +169,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
   let documentRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let sealRepository: ReturnType<typeof createMockRepository>;
+  let advancedSummaryDocumentService: { generateAdvancedSummaryPdf: jest.Mock };
   let configValues: Record<string, string>;
 
   beforeEach(async () => {
@@ -183,6 +184,11 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     documentRepository = createMockRepository();
     collaboratorRepository = createMockRepository();
     sealRepository = createMockRepository();
+    advancedSummaryDocumentService = {
+      generateAdvancedSummaryPdf: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -258,11 +264,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         {
           // Estos documentos son FIEL, así que la hoja que se anexa es la avanzada.
           provide: AdvancedSummaryDocumentService,
-          useValue: {
-            generateAdvancedSummaryPdf: jest
-              .fn()
-              .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
-          },
+          useValue: advancedSummaryDocumentService,
         },
         // Servicio real: el QR de cada firma avanzada se genera dentro de la misma finalización
         // que dispara el sellado, así que la cadena bajo prueba lo ejercita de verdad.
@@ -387,6 +389,9 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       signatureHash: 'f00dcafe',
       // La preimagen del hash, tal como la devolvió el proveedor.
       canonicalPayload: 'v1||13:hash-original|5:doc-1||...',
+      // El momento de emisión que reporta el PSC: se persiste porque la respuesta es la única
+      // oportunidad de guardarlo, y es lo que la hoja de evidencia imprime como "EMITIDO".
+      sealedAt: new Date('2026-08-13T19:00:00.000Z'),
       timestampSeal: {
         isValid: true,
         processedHash: 'f00dcafe',
@@ -402,6 +407,94 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       },
     });
     expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+  });
+
+  /**
+   * El sellado corre ANTES de armar la hoja de evidencia. Antes era al revés, y por eso la tabla
+   * "Información de la Constancia de Conservación (NOM-151)" salía siempre vacía: al imprimirla
+   * todavía no existía la constancia.
+   */
+  it('sella antes de armar la hoja, y la hoja recibe la constancia emitida', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    const orden: string[] = [];
+    sealRepository.save.mockImplementation(async (data: object) => {
+      orden.push('sellado');
+      return { id: 'seal-1', ...data };
+    });
+    advancedSummaryDocumentService.generateAdvancedSummaryPdf.mockImplementation(
+      async () => {
+        orden.push('hoja');
+        return Buffer.from('hoja');
+      },
+    );
+
+    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    expect(orden).toEqual(['sellado', 'hoja']);
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toEqual(
+      expect.objectContaining({
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
+      }),
+    );
+  });
+
+  // El sellado es best-effort: si falla, la firma se completa igual y la hoja se arma sin
+  // constancia, exactamente como antes de que existiera este orden.
+  it('si el sellado falla, la hoja se arma sin constancia y el documento igual queda firmado', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+    mockedAxios.post.mockRejectedValue(new Error('proveedor caído'));
+
+    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toBeNull();
+    expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+  });
+
+  /**
+   * Un intento anterior selló pero falló más adelante y la firma se reintentó: el segundo sellado
+   * choca contra la restricción única. La constancia existe, así que se relee en vez de perderla
+   * y dejar la hoja sin ella.
+   */
+  it('si el documento ya estaba sellado, relee esa constancia para la hoja', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    const uniqueViolation = new QueryFailedError('', [], {
+      code: '23505',
+    } as unknown as Error);
+    sealRepository.save.mockRejectedValue(uniqueViolation);
+    sealRepository.findOne.mockResolvedValue({
+      id: 'seal-previo',
+      documentId: 'doc-1',
+      sealedAt: new Date('2026-08-13T19:00:00.000Z'),
+    });
+
+    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toEqual(
+      expect.objectContaining({
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
+      }),
+    );
   });
 
   it('con varios firmantes FIEL, sella una sola vez y manda las firmas de todos', async () => {
