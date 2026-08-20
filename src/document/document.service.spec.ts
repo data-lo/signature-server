@@ -30,6 +30,7 @@ import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
+import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './services/signature-qr.service';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
@@ -105,6 +106,7 @@ describe('DocumentService', () => {
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
+  let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -232,6 +234,11 @@ describe('DocumentService', () => {
         .fn()
         .mockResolvedValue(Buffer.from('hoja-de-firmas')),
     };
+    advancedSummaryDocumentService = {
+      generateAdvancedSummaryPdf: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
+    };
     signatureQrService = {
       generatePngBuffer: jest.fn().mockResolvedValue(Buffer.from('qr-png')),
     };
@@ -269,6 +276,10 @@ describe('DocumentService', () => {
         {
           provide: SummaryDocumentService,
           useValue: summaryDocumentService,
+        },
+        {
+          provide: AdvancedSummaryDocumentService,
+          useValue: advancedSummaryDocumentService,
         },
         { provide: SignatureQrService, useValue: signatureQrService },
       ],
@@ -1109,6 +1120,89 @@ describe('DocumentService', () => {
         expect(hashService.generateFileHash).toHaveBeenCalledWith(
           Buffer.from('pdf'),
         );
+      });
+
+      /**
+       * Historia "Crear hoja de evidencia específica para firma avanzada": un documento firmado
+       * con e.firma lleva su propia hoja, no la de firma simple.
+       */
+      describe('firma avanzada (e.firma)', () => {
+        async function signAdvancedDocument() {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signer = buildSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+            signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          });
+          collaboratorRepository.find
+            .mockResolvedValueOnce([signer])
+            .mockResolvedValueOnce([signer]);
+
+          const efirmaInput = {
+            password: 'clave-correcta',
+            keyFile: {
+              originalname: 'llave.key',
+              buffer: Buffer.from('llave'),
+            } as Express.Multer.File,
+            cerFile: {
+              originalname: 'certificado.cer',
+              buffer: Buffer.from('cert'),
+            } as Express.Multer.File,
+          };
+          await service.sign('doc-1', 'user-1', efirmaInput, TEST_GEOLOCATION);
+          return document;
+        }
+
+        it('anexa la hoja de evidencia avanzada y no la de firma simple', async () => {
+          await signAdvancedDocument();
+
+          expect(
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf,
+          ).toHaveBeenCalledTimes(1);
+          expect(
+            summaryDocumentService.generateSummaryPdf,
+          ).not.toHaveBeenCalled();
+          expect(documentSigningService.appendPdfPages).toHaveBeenCalledWith(
+            Buffer.from('pdf'),
+            Buffer.from('hoja-de-firmas-avanzada'),
+          );
+        });
+
+        it('toma el número de serie del certificado y la firma electrónica de advancedSignature', async () => {
+          const document = await signAdvancedDocument();
+
+          const [info, signers] =
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock
+              .calls[0];
+          expect(info).toEqual(
+            expect.objectContaining({
+              id: 'doc-1',
+              hash: document.signedHash,
+              totalPages: document.totalPages,
+              createdBy: 'creador@correo.com',
+            }),
+          );
+          expect(signers).toEqual([
+            expect.objectContaining({
+              // El nombre del certificado del SAT gana al del perfil.
+              name: 'Firmante Uno',
+              certificateSerialNumber: '00001000000512345678',
+              electronicSignature: 'firma-base64',
+              signedAt: new Date('2026-01-01T00:00:00.000Z'),
+            }),
+          ]);
+        });
+
+        // La hoja avanzada no imprime "Cifrado": es un campo de la hoja simple.
+        it('no incluye el campo Cifrado', async () => {
+          await signAdvancedDocument();
+
+          const [info] =
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock
+              .calls[0];
+          expect(info).not.toHaveProperty('cipher');
+        });
       });
 
       it('la hoja se genera con el hash firmado, el total de páginas y los datos de cada firmante', async () => {
