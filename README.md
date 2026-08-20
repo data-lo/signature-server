@@ -45,6 +45,18 @@ Cuando firma el último firmante pendiente:
 2. Para **cada firmante en orden**, descarga su imagen de firma y usa `PdfSignatureService.mergeSignatureIntoPdf` (incrusta el PNG en la última página, normaliza tamaño a un rango válido) + `addSignerName` (nombre debajo de la firma). Las firmas se apilan verticalmente.
 3. Aplica conformidad **PDF/A-2B** (metadatos XMP + `OutputIntent` con perfil ICC sRGB) y sube el resultado a `signed_documents` reutilizando el mismo `objectKey`.
 4. Calcula `signedHash`, marca `status = SIGNED`, `signedAt`, y envía el PDF final por correo a todos los participantes.
+5. Anexa la **hoja de evidencia** al documento firmado (`attachSignaturesSheet`) y guarda esa copia —la definitiva, la única que el usuario ve y descarga— en el bucket `finalized_documents`. Se arma después de calcular `signedHash` (la hoja lo imprime) y antes de marcar el documento como `SIGNED`: si falla, el documento no queda firmado y el intento se puede repetir, en vez de dejar una versión final que no existe.
+
+**Hay una hoja de evidencia por tipo de firma**, y son independientes entre sí (módulo `document/summary-document`):
+
+| Hoja | Servicio | Qué acredita |
+|---|---|---|
+| Firma simple | `SummaryDocumentService` | Artículos 89, 89 Bis, 90 y 93 del Código de Comercio; por firmante imprime Nombre/RFC/IP/OTP/fecha/Geo, y el campo "Cifrado" del Audit Trail |
+| Firma avanzada (e.firma) | `AdvancedSummaryDocumentService` | Artículos 89, 90, 93 y **97**; una tabla por firmante con el número de serie del certificado del SAT y su firma electrónica, ambos leídos de `CollaboratorEntity.advancedSignature` |
+
+`isAdvancedSignatureDocument()` elige cuál se anexa: el tipo de firma es una decisión del documento (`DocumentSignaturesService` lo copia igual a todos sus SIGNER), así que basta con mirar a los firmantes. Las dos hojas comparten solo la plomería de render (`sheet-rendering.ts`: fuentes, pdfmake → Buffer, helpers de formato), nunca el contenido — cada tipo de evidencia puede cambiar sin arrastrar al otro.
+
+La tabla "Información de la Constancia de Conservación (NOM-151)" de la hoja avanzada se imprime **vacía** por ahora: el sellado con el PSC ya existe (`SealApiService` guarda el timestamp TSA y la constancia en `document_seals`), pero todavía no se define cómo se refleja en la hoja.
 
 **Qué se estampa por cada firmante** lo decide `resolveStampImage`:
 
