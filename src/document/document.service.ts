@@ -1824,8 +1824,6 @@ export class DocumentService {
       ocspEvidence:{
        status:signature.ocspEvidence.status,
        verifiedAt:signature.ocspEvidence.verifiedAt.toISOString(),
-       thisUpdate:signature.ocspEvidence.thisUpdate.toISOString(),
-       nextUpdate:signature.ocspEvidence.nextUpdate.toISOString(),
        ocspResponse:signature.ocspEvidence.ocspResponse,
        ocspUrl:signature.ocspEvidence.ocspUrl 
       }
