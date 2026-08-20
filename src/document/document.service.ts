@@ -1831,6 +1831,7 @@ export class DocumentService {
       certificate: {
         rfc: signature.certificate.rfc,
         name: signature.certificate.name,
+        issuer: signature.certificate.issuer,
         serialNumber: signature.certificate.serialNumber,
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,

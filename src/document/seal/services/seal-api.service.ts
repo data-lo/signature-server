@@ -51,10 +51,15 @@ export class SealApiService {
     } catch (error) {
       if (axios.isAxiosError(error)) {
         const upstreamStatus = error.response?.status;
+        const upstreamData = error.response?.data;
 
         if (upstreamStatus) {
           this.logger.error(
-            `El proveedor respondió HTTP ${upstreamStatus} para el documento ${dto.documentId}, error: ${error.message}`,
+            `El proveedor respondió HTTP ${upstreamStatus} 
+             para el documento ${dto.documentId}, 
+             error: ${JSON.stringify(upstreamData)}
+             mensaje: ${error.response?.statusText}
+             `,
           );
           throw new SealProviderResponseException();
         }
