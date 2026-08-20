@@ -36,7 +36,7 @@ export class SealApiService {
     dto: SealDocumentDto,
   ): Promise<SealDocumentResponse> {
     const { serviceUrl, apiKey } = this.resolveConfiguration();
-    this.logger.log(`Desde generateDocumentseal ocspEvidence firma 1 ${dto.signatures.at(0).ocspEvidence}`)
+    this.logger.log(`Desde generateDocumentseal ocspEvidence firma 1 ${JSON.stringify(dto.signatures.at(0).ocspEvidence)}`)
     try {
       const httpResponse = await axios.post<SealDocumentResponse>(
         `${serviceUrl}/seal/signature`,
