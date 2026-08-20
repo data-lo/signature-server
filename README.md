@@ -56,6 +56,17 @@ Cuando firma el último firmante pendiente:
 
 `isAdvancedSignatureDocument()` elige cuál se anexa: el tipo de firma es una decisión del documento (`DocumentSignaturesService` lo copia igual a todos sus SIGNER), así que basta con mirar a los firmantes.
 
+**Geolocalización: se registra, no se publica.** Desde la historia "Ocultar geolocalización en hojas
+de firma y vistas públicas", ni las hojas de evidencia ni el QR de la firma avanzada imprimen la
+ubicación del firmante. El dato NO se tocó donde importa: se sigue exigiendo al firmar
+(`GeolocationDto`, un 400 si falta), se sigue guardando en `collaborators.geo_loc` y se sigue
+registrando en la cadena de auditoría — de donde se puede consultar por `GET /audit/decrypted`. Lo
+único que cambió es que dejó de viajar a la presentación: el campo se quitó de
+`SummaryDocumentSigner`, `AdvancedSummaryDocumentSigner` y `AdvancedSignatureQrData` en vez de
+dejarlo entrando sin usarse, que es como vuelve a colarse a una plantilla sin que nadie lo note.
+Los documentos ya firmados conservan sus hojas y sus QR tal como se generaron: son parte del PDF y
+no se regeneran.
+
 **Estructura, idéntica en las dos** (plantillas "Firmalo Hoja de Firmas SIMPLE / AVANZADA"): encabezado con el logo PNG a la izquierda y el tipo de firma a la derecha; banner de guiones; texto legal; tabla **Documento**; tabla **Constancia de Conservación (NOM-151)**; banner `Firmas`; y una tabla **por cada firmante**. El pie lleva el código QR a la vista pública del documento (`/public/documents/:id`, la única consultable sin sesión) más las leyendas legales sobre la descarga de los archivos oficiales. Encabezado y pie se declaran como `header`/`footer` de pdfmake, así que se repiten en todas las páginas — la hoja crece con el número de firmantes.
 
 **Tipografías**: **Lato** para texto corrido (párrafos legales, títulos de sección, pie) y **JetBrains Mono** para el contenido de las tablas y los separadores de guiones, que dependen del ancho fijo por carácter para alinearse. Los `.ttf`, el logo del encabezado y el isotipo del pie viven en `summary-document/fonts/` y `summary-document/assets/`; `nest-cli.json` los copia a `dist/` (`**/*.ttf` y `**/*.png`), y `sheet-rendering.ts` los resuelve por `__dirname` para que funcionen igual en `src/` y en el build.
@@ -73,7 +84,7 @@ De los tres renglones de la plantilla solo se llena **EMITIDO**, desde `SealEnti
 - **Firma simple** — la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar (`signatureSnapshotObjectKey`), no de su perfil en vivo.
 - **Firma avanzada (e.firma)** — un **código QR** (`SignatureQrService`), porque la firma avanzada no produce ninguna imagen: su evidencia es criptográfica y su espacio quedaba vacío. Se genera solo cuando esa firma ya se completó.
 
-El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar contenido del código QR en firma avanzada"), no solo un enlace: nombre del firmante y RFC —los del certificado del SAT, con los del colaborador como respaldo—, fecha y hora **con el desfase de la zona horaria del sistema** (`TZ`, o la que resuelva el sistema operativo), IP y geolocalización registradas al firmar, y como última línea la URL de la constancia pública (`GET /document/:id/signatures/:collaboratorId`, ver `getAdvancedSignaturePublicView`). Así quien escanea con cualquier lector ve los datos ahí mismo, sin depender de tener red, y la verificación en línea sigue disponible.
+El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar contenido del código QR en firma avanzada"), no solo un enlace: nombre del firmante y RFC —los del certificado del SAT, con los del colaborador como respaldo—, fecha y hora **con el desfase de la zona horaria del sistema** (`TZ`, o la que resuelva el sistema operativo), IP registrada al firmar, y como última línea la URL de la constancia pública (`GET /document/:id/signatures/:collaboratorId`, ver `getAdvancedSignaturePublicView`). Así quien escanea con cualquier lector ve los datos ahí mismo, sin depender de tener red, y la verificación en línea sigue disponible.
 
 El QR se estampa con `preserveAspectRatio`: la caja de firma es apaisada (200x80 por defecto, pensada para una rúbrica) y estirar ahí un código cuadrado hace que los lectores dejen de reconocer su patrón, así que se escala al lado menor de la caja y se centra. Las rúbricas siguen ocupando la caja completa.
 
@@ -403,6 +414,33 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 ---
 
 ## 7. Pendientes / trabajo futuro
+
+### Al integrar `feat/signature-67`: quitarle la geolocalización a la vista pública
+
+La historia "Ocultar geolocalización en hojas de firma y vistas públicas" se aplicó a todo lo que
+existía en `development` (las dos hojas de evidencia y el QR de la firma avanzada). La **vista
+pública de verificación** entra por otra rama, `feat/signature-67`, y ahí el dato sí se publica —
+las dos ramas se escribieron en paralelo, así que el conflicto no aparece como conflicto de git:
+el merge entra limpio y la ubicación vuelve a publicarse sin que nadie lo note.
+
+**No hace falta acordarse.** `src/document/geolocation-not-published.spec.ts` lee las superficies de
+presentación del módulo (las dos hojas, el QR y **todos** los contratos de `interfaces/responses/`,
+leídos del directorio para que uno nuevo quede cubierto solo) y falla si alguna vuelve a exponerla,
+señalando el archivo y el renglón. Al integrar esa rama, la prueba se pone en rojo.
+
+Lo que hay que quitar cuando eso pase:
+
+| Repo | Archivo | Qué |
+|---|---|---|
+| `signature-server` | `interfaces/responses/document-public-view-response.ts` | El campo `geoLocation` de `PublicSignerData` |
+| `signature-server` | `document.service.ts` | `geoLocation` en `toCompletedPublicSigner` (y en el objeto del firmante pendiente) |
+| `signature-app` | `_components/SignerEvidenceCard.tsx` | El `<InfoRow label="Geolocalización" …>` |
+| `signature-app` | `_components/../_requests.ts` | El campo `geoLocation` de `PublicSigner` |
+| `signature-app` | `_components/PublicDocumentView.spec.tsx` | El campo en los fixtures |
+
+El criterio es el mismo que se aplicó aquí: se quita el campo del contrato, no solo el renglón de
+la pantalla. Un campo que sigue llegando a la capa de presentación es como vuelve a colarse.
+
 
 ### Resuelto en esta ronda (las solicitudes FIEL sin 2FA no aparecían en "Por firmar") — 2026-08-15
 

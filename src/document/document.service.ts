@@ -1924,8 +1924,9 @@ export class DocumentService {
    *
    * Todo describe a ESA firma y no al perfil del firmante hoy: el nombre y el RFC salen del
    * certificado del SAT con el que firmó —con los datos del colaborador como respaldo, mismo
-   * criterio que `getAdvancedSignaturePublicView`— y la IP, la ubicación y la fecha son las que
-   * quedaron registradas al firmar. El documento se puede leer años después; el QR tiene que
+   * criterio que `getAdvancedSignaturePublicView`— y la IP y la fecha son las que quedaron
+   * registradas al firmar. La ubicación se sigue guardando, pero ya no se publica (ver
+   * `SignatureQrService`). El documento se puede leer años después; el QR tiene que
    * seguir diciendo lo que pasó, no lo que pasa.
    */
   private toAdvancedSignatureQrData(
@@ -1938,7 +1939,6 @@ export class DocumentService {
       signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
       rfc: certificate?.rfc ?? collaborator.rfc,
       ipAddress: collaborator.ipAddress,
-      geoLocation: collaborator.geoLoc,
       signedAt:
         collaborator.advancedSignature?.signedAt ?? collaborator.signedAt,
       verificationUrl: buildAdvancedSignatureUrl(document.id, collaborator.id),
@@ -2308,9 +2308,6 @@ export class DocumentService {
       name: collaboratorDisplayName(collaborator),
       ipAddress: collaborator.ipAddress,
       signedAt: collaborator.signedAt,
-      geoLocation: collaborator.geoLoc
-        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
-        : null,
     };
   }
 
@@ -2344,9 +2341,6 @@ export class DocumentService {
       // `advancedSignature.signedAt` es el momento real del firmado criptográfico; `signedAt` del
       // colaborador es cuando se registró en la base y solo se usa como respaldo.
       signedAt: advancedSignature?.signedAt ?? collaborator.signedAt,
-      geoLocation: collaborator.geoLoc
-        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
-        : null,
     };
   }
 

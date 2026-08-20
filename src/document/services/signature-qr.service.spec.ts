@@ -8,8 +8,8 @@ import {
 /**
  * Decodifica el PNG como lo haría un lector de códigos: lo convierte a píxeles crudos RGBA y lo
  * lee con un decodificador real. Es la única forma de comprobar de verdad el criterio "al
- * escanearlo, muestra correctamente nombre, RFC, geolocalización, IP y fecha/hora" — que el código
- * no solo sea un PNG válido, sino que un escáner obtenga de él exactamente ese contenido.
+ * escanearlo, muestra correctamente nombre, RFC, IP y fecha/hora" — que el código no solo sea un
+ * PNG válido, sino que un escáner obtenga de él exactamente ese contenido.
  */
 async function decodeQr(png: Buffer): Promise<string | null> {
   const { data, info } = await sharp(png)
@@ -20,6 +20,17 @@ async function decodeQr(png: Buffer): Promise<string | null> {
   const decoded = jsQR(new Uint8ClampedArray(data), info.width, info.height);
   return decoded?.data ?? null;
 }
+
+/**
+ * URL de la constancia pública de la firma, con la forma que produce `buildAdvancedSignatureUrl`.
+ *
+ * Bug corregido: la constante se usaba en tres lugares del archivo pero su declaración se perdió
+ * en el merge `39fe940`, así que esta suite no compilaba —ni una sola de sus pruebas corría— desde
+ * entonces. Se restituye aquí porque sin ella no hay forma de ejecutar la comprobación de que el
+ * QR ya no publica la geolocalización.
+ */
+const VERIFICATION_URL =
+  'http://localhost:3001/public/documents/doc-1/signatures/collab-1';
 
 /** Firma de un PNG: los 8 bytes iniciales que todo archivo PNG válido debe tener. */
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -39,20 +50,32 @@ describe('SignatureQrService', () => {
     signerName: 'JUAN ANGEL CEPEDA FERNANDEZ',
     rfc: 'CEFJ800101ABC',
     ipAddress: '189.237.82.225',
-    geoLocation: { latitude: 19.4326, longitude: -99.1332 },
     signedAt: new Date('2026-07-30T15:59:22Z'),
     verificationUrl: VERIFICATION_URL,
   };
 
   describe('contenido del código', () => {
-    it('lleva el nombre, el RFC, la IP, la geolocalización y la fecha de la firma', () => {
+    it('lleva el nombre, el RFC, la IP y la fecha de la firma', () => {
       const content = service.buildContent(signature);
 
       expect(content).toContain('Firmante: JUAN ANGEL CEPEDA FERNANDEZ');
       expect(content).toContain('RFC: CEFJ800101ABC');
       expect(content).toContain('IP: 189.237.82.225');
-      expect(content).toContain('Geolocalización: 19.432600, -99.133200');
       expect(content).toContain('Fecha y hora: ');
+    });
+
+    /**
+     * Historia "Ocultar geolocalización en hojas de firma y vistas públicas": el QR queda
+     * impreso en el documento y es de los pocos lugares donde el dato se publicaba sin que
+     * nadie lo pidiera. Se afirma la AUSENCIA porque volver a agregarlo es un renglón, y este
+     * texto no lo revisa nadie una vez estampado.
+     */
+    it('no publica la geolocalización, aunque la firma la tenga registrada', () => {
+      const content = service.buildContent(signature);
+
+      expect(content).not.toMatch(/geolocaliza/i);
+      expect(content).not.toContain('19.4326');
+      expect(content).not.toContain('-99.1332');
     });
 
     /**
@@ -85,14 +108,12 @@ describe('SignatureQrService', () => {
         signerName: 'SIN DATOS',
         rfc: null,
         ipAddress: null,
-        geoLocation: null,
         signedAt: null,
         verificationUrl: VERIFICATION_URL,
       });
 
       expect(content).toContain('RFC: No disponible');
       expect(content).toContain('IP: No disponible');
-      expect(content).toContain('Geolocalización: No disponible');
       expect(content).toContain('Fecha y hora: No disponible');
       expect(content).not.toContain('undefined');
       expect(content).not.toContain('null');

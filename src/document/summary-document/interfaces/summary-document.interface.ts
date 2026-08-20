@@ -36,6 +36,13 @@ export interface SummaryDocumentInfo {
   verificationUrl?: string;
 }
 
+/**
+ * La geolocalización se dejó de imprimir (historia "Ocultar geolocalización en hojas de firma
+ * y vistas públicas"). El dato SIGUE registrándose y consultándose: vive en
+ * `CollaboratorEntity.geoLoc` y en la cadena de auditoría, intacto. Lo que desapareció es su
+ * camino hacia la presentación — por eso el campo se quitó de este contrato en vez de dejarlo
+ * entrando sin usarse, que es como vuelve a colarse a una plantilla sin que nadie lo note.
+ */
 /** Un renglón de la sección "Firmas" por cada firmante del documento. */
 export interface SummaryDocumentSigner {
   /** Nombre completo del firmante. */
@@ -45,6 +52,4 @@ export interface SummaryDocumentSigner {
   otpCode?: string | null;
   /** Momento en que el firmante completó su firma (CollaboratorEntity.signedAt). */
   signedAt?: Date | string | null;
-  /** Geolocalización capturada al firmar (CollaboratorEntity.geoLoc), ya formateada a texto. */
-  geoLocation?: string | null;
 }
