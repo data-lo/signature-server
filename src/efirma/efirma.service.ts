@@ -236,7 +236,7 @@ export class EfirmaService implements OnModuleInit {
         certificateNumber: infoCertificado.numeroCertificado,
         certificatePem: infoCertificado.certificadoPem,
       },
-      ocspEvidence,
+      ocspEvidence
     };
   }
 

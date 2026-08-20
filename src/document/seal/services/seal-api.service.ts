@@ -54,9 +54,7 @@ export class SealApiService {
 
         if (upstreamStatus) {
           this.logger.error(
-            `El proveedor respondió HTTP ${upstreamStatus} para el documento ${dto.documentId},
-              error: ${error.message}
-            `,
+            `El proveedor respondió HTTP ${upstreamStatus} para el documento ${dto.documentId}, error: ${error.message}`,
           );
           throw new SealProviderResponseException();
         }
