@@ -58,6 +58,21 @@ Cuando firma el último firmante pendiente:
 
 La tabla "Información de la Constancia de Conservación (NOM-151)" de la hoja avanzada se imprime **vacía** por ahora: el sellado con el PSC ya existe (`SealApiService` guarda el timestamp TSA y la constancia en `document_seals`), pero todavía no se define cómo se refleja en la hoja.
 
+**Qué se estampa por cada firmante** lo decide `resolveStampImage`:
+
+- **Firma simple** — la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar (`signatureSnapshotObjectKey`), no de su perfil en vivo.
+- **Firma avanzada (e.firma)** — un **código QR** (`SignatureQrService`), porque la firma avanzada no produce ninguna imagen: su evidencia es criptográfica y su espacio quedaba vacío. Se genera solo cuando esa firma ya se completó.
+
+El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar contenido del código QR en firma avanzada"), no solo un enlace: nombre del firmante y RFC —los del certificado del SAT, con los del colaborador como respaldo—, fecha y hora **con el desfase de la zona horaria del sistema** (`TZ`, o la que resuelva el sistema operativo), IP y geolocalización registradas al firmar, y como última línea la URL de la constancia pública (`GET /document/:id/signatures/:collaboratorId`, ver `getAdvancedSignaturePublicView`). Así quien escanea con cualquier lector ve los datos ahí mismo, sin depender de tener red, y la verificación en línea sigue disponible.
+
+El QR se estampa con `preserveAspectRatio`: la caja de firma es apaisada (200x80 por defecto, pensada para una rúbrica) y estirar ahí un código cuadrado hace que los lectores dejen de reconocer su patrón, así que se escala al lado menor de la caja y se centra. Las rúbricas siguen ocupando la caja completa.
+
+Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt alrededor del código. El PNG se genera sin margen propio a propósito —así los módulos quedan lo más grandes posible dentro de la caja— y el borde se dibuja por fuera. No es cosmético: medido con un decodificador real sobre la página rasterizada, un QR con el texto del documento pegado **no se lee** a 150 DPI, y con la separación sí.
+
+**Tamaño mínimo.** Una caja de firma puede ser tan chica como 60x24pt, y ahí el QR queda en 24pt de lado (~8.5mm, módulos de 0.12mm): no lo lee ningún decodificador a 96, 150 ni 300 DPI. Se estampa igual —quitarlo dejaría la firma avanzada sin representación visual— pero se registra una advertencia (`PdfSignatureService`) en vez de producir en silencio un código ilegible. A partir de ~60pt de lado se lee sin problema en papel.
+
+**Densidad.** Con los seis renglones de datos más la URL de la constancia, el código sale de 69x69 módulos. En la caja por defecto (80pt de lado) eso deja ~1.55 px por módulo a 96 DPI —pantalla estándar al 100%—, que está en el límite: a esa resolución decodifica o no según dónde caigan los bordes de módulo respecto a la rejilla de píxeles. A 150 DPI o más (impresión, pantalla HiDPI, o simplemente acercar el zoom) se lee siempre. Bajar de 53 módulos exigiría quitar la URL de la constancia o acortarla.
+
 ### 1.4 Integridad y auditoría
 
 - `HashService` combina tres mecanismos:
