@@ -41,8 +41,6 @@ export class OscpService{
         return {
             status: result.status as 'good' | 'unknown',
             verifiedAt: new Date(),
-            thisUpdate: result.thisUpdate,
-            nextUpdate: result.nextUpdate,
             ocspResponse: (result as any).rawResponse ?
                 Buffer.from((result as any).rawResponse).toString('base64')
                 : '',

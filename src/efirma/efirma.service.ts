@@ -239,8 +239,6 @@ export class EfirmaService implements OnModuleInit {
       ocspEvidence:{
         status: ocspEvidence.status,
         verifiedAt: ocspEvidence.verifiedAt,
-        thisUpdate: ocspEvidence.thisUpdate,
-        nextUpdate: ocspEvidence.nextUpdate,
         ocspResponse: ocspEvidence.ocspResponse,
         ocspUrl: ocspEvidence.ocspUrl
       }
