@@ -335,6 +335,58 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 ---
 
+### Documentación Swagger: decoradores por endpoint (`docs/`)
+
+Los controladores **no llevan decoradores `@Api*` de Swagger en sus métodos**. La documentación de
+cada endpoint vive en un decorador compuesto con `applyDecorators()`, en la carpeta `docs/` de su
+módulo:
+
+```
+src/document/
+  docs/
+    api-sign-document.docs.ts
+    api-reject-document.docs.ts
+    ...
+  document.controller.ts
+```
+
+```ts
+@Patch(':id/sign')
+@ApiSignDocument()
+sign(...) { ... }
+```
+
+**Qué va en el decorador y qué se queda en el controlador.** Al decorador se mueve *solo* lo que
+describe (`ApiOperation`, `ApiResponse`, `ApiParam`, `ApiQuery`, `ApiBody`, `ApiConsumes`,
+`ApiHeader`, `ApiSecurity`, `ApiExcludeEndpoint`). En el controlador se queda todo lo que *hace*:
+la ruta, `@Public()`/`@SkipJwtAuth()`, guards, `@UseInterceptors` (incluidos los de multipart, que
+son quienes de verdad procesan el archivo) y la delegación al servicio. `ApiSecurity` y
+`ApiConsumes` son la pareja engañosa: solo documentan — quien abre la ruta a la API key es
+`@Public()`, y quien procesa el multipart es el `FileInterceptor`.
+
+`@ApiTags` y `@ApiBearerAuth` a nivel de CLASE se quedan en el controlador: no pertenecen a ningún
+endpoint. La convención no tiene excepciones: incluso los endpoints que se ocultan del Swagger
+publicado tienen su decorador (`ApiGetDocumentFileUrl`, `ApiGetSignatureFile`, `ApiGetHello`), para
+que el motivo de la exclusión quede escrito y todos los endpoints se lean igual.
+
+**Cómo verificar que no se perdió nada.** Al mover decoradores, leer el diff no alcanza: lo que
+importa es que la especificación generada no cambie. La forma de comprobarlo es volcarla a un JSON
+antes y después y comparar. Un script de una sola función basta:
+
+```ts
+const app = await NestFactory.create(AppModule, { preview: true, logger: false });
+const document = SwaggerModule.createDocument(app, config); // el mismo DocumentBuilder de main.ts
+writeFileSync(salida, JSON.stringify(document, null, 2));
+```
+
+Dos detalles que lo hacen práctico: el modo `preview` resuelve el grafo de módulos **sin instanciar
+un solo provider**, así que no abre conexiones a Postgres/Mongo/Redis/MinIO/Kafka y corre sin
+infraestructura levantada; y conviene NO pasar `include` —a diferencia de `main.ts`, que publica
+solo cuatro módulos— para cubrir todos los controladores del proyecto.
+
+Así se comprobó la extracción de los 74 decoradores en los 23 controladores: `diff` vacío, 58 rutas
+y 72 operaciones idénticas byte a byte.
+
 ## 4. Autenticación
 
 Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):

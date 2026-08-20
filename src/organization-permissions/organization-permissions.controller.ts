@@ -7,13 +7,7 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiParam,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
@@ -21,14 +15,12 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { OrganizationPermissionsService } from './organization-permissions.service';
 import { CreateOrganizationPermissionDto } from './dto/create-organization-permission.dto';
 import { UpdateOrganizationPermissionDto } from './dto/update-organization-permission.dto';
-import {
-  OrganizationPermissionListResponse,
-  OrganizationPermissionResponse,
-} from './interfaces/response/organization-permission-response';
-import {
-  BadRequestResponse,
-  BaseResponse,
-} from 'src/interfaces/api-response.dto';
+
+// Docs
+import { ApiGetOrganizationPermissions } from './docs/api-get-organization-permissions.docs';
+import { ApiCreateOrganizationPermission } from './docs/api-create-organization-permission.docs';
+import { ApiUpdateOrganizationPermission } from './docs/api-update-organization-permission.docs';
+import { ApiDeleteOrganizationPermission } from './docs/api-delete-organization-permission.docs';
 
 @ApiTags('Organization Permissions')
 @ApiBearerAuth('access-token')
@@ -39,20 +31,7 @@ export class OrganizationPermissionsController {
   ) {}
 
   @Get()
-  @ApiOperation({
-    summary: 'Listar el catálogo de permisos de una organización',
-    description: 'Solo un ADMIN activo de esa organización puede listarlos.',
-  })
-  @ApiParam({ name: 'organizationId', format: 'uuid' })
-  @ApiResponse({
-    status: 200,
-    description: 'Permisos obtenidos correctamente',
-    type: OrganizationPermissionListResponse,
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta organización',
-  })
+  @ApiGetOrganizationPermissions()
   findAll(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -64,26 +43,7 @@ export class OrganizationPermissionsController {
   }
 
   @Post()
-  @ApiOperation({
-    summary: 'Crear un permiso en el catálogo de la organización',
-    description:
-      'Solo un ADMIN activo de esa organización puede hacerlo. El nombre debe ser único dentro de la organización.',
-  })
-  @ApiParam({ name: 'organizationId', format: 'uuid' })
-  @ApiResponse({
-    status: 201,
-    description: 'Permiso creado correctamente',
-    type: OrganizationPermissionResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Los datos enviados son inválidos o incompletos',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta organización',
-  })
+  @ApiCreateOrganizationPermission()
   create(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -97,22 +57,7 @@ export class OrganizationPermissionsController {
   }
 
   @Patch(':permissionId')
-  @ApiOperation({
-    summary: 'Modificar un permiso del catálogo (nombre y/o estatus)',
-    description: 'Solo un ADMIN activo de esa organización puede hacerlo.',
-  })
-  @ApiParam({ name: 'organizationId', format: 'uuid' })
-  @ApiParam({ name: 'permissionId', format: 'uuid' })
-  @ApiResponse({
-    status: 200,
-    description: 'Permiso actualizado correctamente',
-    type: OrganizationPermissionResponse,
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta organización',
-  })
-  @ApiResponse({ status: 404, description: 'Permiso no encontrado' })
+  @ApiUpdateOrganizationPermission()
   update(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -128,23 +73,7 @@ export class OrganizationPermissionsController {
   }
 
   @Delete(':permissionId')
-  @ApiOperation({
-    summary: 'Eliminar un permiso del catálogo',
-    description:
-      'Solo un ADMIN activo de esa organización puede hacerlo. Elimina también la asignación del permiso en cualquier miembro que lo tuviera.',
-  })
-  @ApiParam({ name: 'organizationId', format: 'uuid' })
-  @ApiParam({ name: 'permissionId', format: 'uuid' })
-  @ApiResponse({
-    status: 200,
-    description: 'Permiso eliminado correctamente',
-    type: BaseResponse,
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta organización',
-  })
-  @ApiResponse({ status: 404, description: 'Permiso no encontrado' })
+  @ApiDeleteOrganizationPermission()
   remove(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
