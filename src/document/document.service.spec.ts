@@ -240,7 +240,9 @@ describe('DocumentService', () => {
         .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
     };
     signatureQrService = {
-      generatePngBuffer: jest.fn().mockResolvedValue(Buffer.from('qr-png')),
+      generateAdvancedSignaturePng: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('qr-png')),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -733,6 +735,93 @@ describe('DocumentService', () => {
         expect.objectContaining({ creatorRfc: null }),
       );
     });
+
+    /**
+     * Historia "Mostrar tipo de firma en las tablas de documentos": el tipo no vive en el
+     * documento sino en cada firmante, y el listado lo resuelve para la columna del frontend.
+     */
+    describe('tipo de firma del documento', () => {
+      function listWithSigners(collaborators: unknown[]) {
+        const qb = createMockQueryBuilder(
+          [
+            {
+              id: 'doc-1',
+              fileName: 'contrato.pdf',
+              fileType: 'application/pdf',
+              totalPages: 1,
+              status: DOCUMENT_STATUS_ENUM.PENDING,
+              createdAt: new Date('2026-03-15T23:55:00.000Z'),
+              collaborators,
+              requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+            },
+          ],
+          1,
+        );
+        documentRepository.createQueryBuilder.mockReturnValue(qb);
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          organizationId: null,
+        });
+
+        return service.findWithFilters('user-1', 'account-1', query);
+      }
+
+      function signer(signatureType: SIGNATURE_TYPE_ENUM | null) {
+        return {
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+          signatureType,
+          signingOrder: 0,
+        };
+      }
+
+      it('devuelve el tipo de firma que comparten los firmantes', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.FIEL }),
+        );
+      });
+
+      it('ignora a los colaboradores que no firman', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.SIMPLE),
+          {
+            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            signatureType: null,
+          },
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({
+            signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+          }),
+        );
+      });
+
+      // Documentos del endpoint antiguo (POST /document), que nunca asignó tipo de firma: null
+      // explícito en vez de suponer uno — el frontend muestra un guion.
+      it('devuelve null si los firmantes no tienen tipo de firma registrado', async () => {
+        const result = await listWithSigners([signer(null)]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: null }),
+        );
+      });
+
+      it('devuelve null si un documento mezclara tipos de firma', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.SIMPLE),
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: null }),
+        );
+      });
+    });
   });
 
   describe('sign', () => {
@@ -847,12 +936,29 @@ describe('DocumentService', () => {
         return { document, signer };
       }
 
-      it('genera el QR con la URL de consulta de esa firma', async () => {
+      /**
+       * Historia "Actualizar contenido del código QR en firma avanzada": el código ya no lleva
+       * solo un enlace, sino los datos del firmante y del evento de firma.
+       */
+      it('genera el QR con los datos del firmante y de esa firma', async () => {
         const { signer } = await signAdvanced();
 
-        expect(signatureQrService.generatePngBuffer).toHaveBeenCalledTimes(1);
-        const url = signatureQrService.generatePngBuffer.mock.calls[0][0];
-        expect(url).toContain(
+        expect(
+          signatureQrService.generateAdvancedSignaturePng,
+        ).toHaveBeenCalledTimes(1);
+        const [data] =
+          signatureQrService.generateAdvancedSignaturePng.mock.calls[0];
+        expect(data).toEqual(
+          expect.objectContaining({
+            // Nombre y RFC del certificado del SAT, no los del perfil.
+            signerName: 'Firmante Uno',
+            rfc: 'XAXX010101000',
+            ipAddress: signer.ipAddress,
+            geoLocation: TEST_GEOLOCATION,
+            signedAt: new Date('2026-01-01T00:00:00.000Z'),
+          }),
+        );
+        expect(data.verificationUrl).toContain(
           `/public/documents/doc-1/signatures/${signer.id}`,
         );
       });
@@ -868,6 +974,18 @@ describe('DocumentService', () => {
         const [, stampedImage] =
           documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
         expect(stampedImage).toEqual(Buffer.from('qr-png'));
+      });
+
+      /**
+       * Criterio "el QR conserva una proporción cuadrada, sin estiramiento": la caja de firma es
+       * apaisada (está pensada para una rúbrica), así que el QR se encaja dentro sin deformarse.
+       */
+      it('lo estampa sin deformarlo dentro de la caja de firma', async () => {
+        await signAdvanced();
+
+        const [, , , , options] =
+          documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
+        expect(options).toEqual({ preserveAspectRatio: true });
       });
 
       // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".
@@ -890,9 +1008,10 @@ describe('DocumentService', () => {
 
         // Firmó uno de dos: se regenera la vista previa con el avance, así que sí se pide el QR
         // del que ya firmó — pero en ninguna de las dos pasadas el del que sigue pendiente.
-        const urls = signatureQrService.generatePngBuffer.mock.calls.map(
-          (call) => call[0] as string,
-        );
+        const urls =
+          signatureQrService.generateAdvancedSignaturePng.mock.calls.map(
+            (call) => (call[0] as { verificationUrl: string }).verificationUrl,
+          );
         expect(urls.some((url) => url.includes('collaborator-2'))).toBe(false);
       });
 
@@ -908,7 +1027,9 @@ describe('DocumentService', () => {
 
         await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
 
-        expect(signatureQrService.generatePngBuffer).not.toHaveBeenCalled();
+        expect(
+          signatureQrService.generateAdvancedSignaturePng,
+        ).not.toHaveBeenCalled();
         expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalled();
       });
     });
@@ -1364,6 +1485,9 @@ describe('DocumentService', () => {
         expect.anything(),
         expect.anything(),
         { x: 50, y: 200, width: 100, height: 80 },
+        undefined,
+        // Una rúbrica sigue llenando su caja completa: el encaje sin deformar es solo del QR.
+        { preserveAspectRatio: false },
       );
     });
 

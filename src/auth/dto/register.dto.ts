@@ -63,6 +63,15 @@ export class RegisterDto {
   confirmPassword: string;
 
   @ApiProperty({
+    example: '0.mF3xk2...token-generado-por-el-widget',
+    description:
+      'Token de un solo uso que genera el widget de Cloudflare Turnstile en /signup. Se verifica contra Siteverify ANTES de crear o actualizar el pre-registro; si falta, expiró o ya se usó, el registro se rechaza y no se toca la base de datos.',
+  })
+  @IsString()
+  @IsNotEmpty({ message: 'Completa el CAPTCHA para continuar' })
+  turnstileToken: string;
+
+  @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
     description:
       'Token de invitación a organización (ver /join) — si viene presente, el registro une automáticamente al usuario recién creado a esa organización',
