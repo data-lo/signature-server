@@ -2048,7 +2048,7 @@ export class DocumentService {
   private toSealSignature(
     signature: SignatureResult,
   ): SealDocumentDto['signatures'][number] {
-    this.logger.log(`Desde document Service, toSealSignature ${signature.ocspEvidence}`)
+    this.logger.log(`Desde document Service, toSealSignature ${JSON.stringify(signature.ocspEvidence)}`)
     return {
       signatureBase64: String(signature.signatureBase64),
       algorithm: signature.algorithm,
@@ -2056,6 +2056,7 @@ export class DocumentService {
       certificate: {
         rfc: signature.certificate.rfc,
         name: signature.certificate.name,
+        issuer: signature.certificate.issuer,
         serialNumber: signature.certificate.serialNumber,
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,
@@ -2063,8 +2064,6 @@ export class DocumentService {
       ocspEvidence:{
        status:signature.ocspEvidence.status,
        verifiedAt:signature.ocspEvidence.verifiedAt.toISOString(),
-       thisUpdate:signature.ocspEvidence.thisUpdate.toISOString(),
-       nextUpdate:signature.ocspEvidence.nextUpdate.toISOString(),
        ocspResponse:signature.ocspEvidence.ocspResponse,
        ocspUrl:signature.ocspEvidence.ocspUrl 
       }

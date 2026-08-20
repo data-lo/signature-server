@@ -25,16 +25,6 @@ export class OcspEvidence {
 
   @IsString()
   @IsNotEmpty()
-  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
-  thisUpdate: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
-  nextUpdate: string;
-
-  @IsString()
-  @IsNotEmpty()
   @ApiProperty({example: 'MIIIQQoBAKCCCDowggg2BgkrBgEFBQcwA...'})
   ocspResponse: string;
 
@@ -54,6 +44,11 @@ export class SatCertificateDto {
   @IsString()
   @IsNotEmpty()
   name: string;
+
+  @ApiProperty({example: 'SERVICIO DE ADMINISTRACION TIRIBUTARIA'})
+  @IsString()
+  @IsNotEmpty()
+  issuer:string;
 
   @ApiProperty({ example: '00001000000512345678' })
   @IsString()

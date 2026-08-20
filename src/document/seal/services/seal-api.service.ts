@@ -36,7 +36,7 @@ export class SealApiService {
     dto: SealDocumentDto,
   ): Promise<SealDocumentResponse> {
     const { serviceUrl, apiKey } = this.resolveConfiguration();
-    this.logger.log(`Desde generateDocumentseal ocspEvidence firma 1 ${dto.signatures.at(0).ocspEvidence}`)
+    this.logger.log(`Desde generateDocumentseal ocspEvidence firma 1 ${JSON.stringify(dto.signatures.at(0).ocspEvidence)}`)
     try {
       const httpResponse = await axios.post<SealDocumentResponse>(
         `${serviceUrl}/seal/signature`,
@@ -51,10 +51,15 @@ export class SealApiService {
     } catch (error) {
       if (axios.isAxiosError(error)) {
         const upstreamStatus = error.response?.status;
+        const upstreamData = error.response?.data;
 
         if (upstreamStatus) {
           this.logger.error(
-            `El proveedor respondió HTTP ${upstreamStatus} para el documento ${dto.documentId}, error: ${error.message}`,
+            `El proveedor respondió HTTP ${upstreamStatus} 
+             para el documento ${dto.documentId}, 
+             error: ${JSON.stringify(upstreamData)}
+             mensaje: ${error.response?.statusText}
+             `,
           );
           throw new SealProviderResponseException();
         }
