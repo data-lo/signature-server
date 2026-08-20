@@ -3,54 +3,223 @@
 // se transpilaría a `.default`, que no existe, y rompe en runtime. `import = require` es la
 // forma segura de consumir un `export =` bajo ese tsconfig.
 import PdfPrinter = require('pdfmake');
-import { TDocumentDefinitions, TFontDictionary } from 'pdfmake/interfaces';
+import {
+  Column,
+  Content,
+  ContentColumns,
+  ContentTable,
+  StyleDictionary,
+  TDocumentDefinitions,
+  TFontDictionary,
+} from 'pdfmake/interfaces';
 import * as path from 'path';
 
 /**
- * Plomería compartida por las hojas de evidencia (firma simple y firma avanzada): fuentes,
- * render a Buffer y los helpers de formato del layout monoespaciado.
+ * Plomería compartida por las dos hojas de evidencia (firma simple y firma avanzada): tipografías,
+ * logo, render a Buffer, y las piezas de layout que ambas plantillas de referencia tienen
+ * idénticas — encabezado, pie de página y tablas informativas.
  *
- * Acá vive solo lo que NO distingue a una hoja de la otra. El contenido —textos legales, tablas,
- * qué campos se imprimen— es propio de cada servicio a propósito: la firma simple y la avanzada
- * se apoyan en artículos distintos del Código de Comercio y su evidencia va a seguir evolucionando
- * por separado, así que compartir el contenido obligaría a coordinar cambios que no tienen por qué
- * estar acoplados.
+ * Acá vive lo que NO distingue a una hoja de la otra. Los textos legales, qué secciones se
+ * imprimen y qué renglones lleva cada firmante son propios de cada servicio a propósito: la firma
+ * simple y la avanzada se apoyan en artículos distintos del Código de Comercio y su evidencia va a
+ * seguir evolucionando por separado.
  *
- * Este archivo vive junto a `fonts/` porque `__dirname` es lo que resuelve la ruta de los .ttf
- * tanto en `src/` como en `dist/` (nest-cli.json los copia al build como asset).
+ * Este archivo vive junto a `fonts/` y `assets/` porque `__dirname` es lo que resuelve sus rutas
+ * tanto en `src/` como en `dist/` (nest-cli.json las copia al build).
  */
 
-export const BRAND_COLOR = '#1a56db';
+const BORDER_COLOR = '#000000';
+const MUTED_TEXT_COLOR = '#333333';
 
 /** Ancho de los banners de guiones (`----Firmas----`) del layout de referencia. */
-export const MONO_BANNER_WIDTH = 70;
+const MONO_BANNER_WIDTH = 70;
+
+/** Ancho de la columna de etiquetas de las tablas informativas. */
+const LABEL_COLUMN_WIDTH = 115;
 
 /**
- * Roboto (proporcional, para el texto legal) viene de node_modules/pdfmake — npm no publica los
- * .ttf de sus ejemplos, así que se copian una sola vez a este módulo (ver fonts/Roboto/*.ttf) y
- * se registran en nest-cli.json como asset (*.ttf) para que el build los incluya en dist/.
- * Courier es una de las 14 fuentes estándar de PDF: PDFKit la resuelve por nombre sin necesitar
- * un archivo .ttf.
+ * Tipografías de las plantillas de referencia:
+ *  - **Lato** para el texto corrido: párrafos legales, títulos de sección y pie de página.
+ *  - **JetBrains Mono** para el contenido de las tablas informativas y los separadores de guiones,
+ *    que dependen del ancho fijo por carácter para alinearse.
+ *
+ * Los .ttf viven en este módulo (no en node_modules) y nest-cli.json los copia a dist/. Se
+ * declaran las cuatro variantes de cada familia porque pdfmake exige el diccionario completo:
+ * pedir `bold: true` sobre una familia que solo declara `normal` revienta en runtime.
  */
 export const SHEET_FONT_DESCRIPTORS: TFontDictionary = {
-  Roboto: {
-    normal: path.join(__dirname, 'fonts', 'Roboto', 'Roboto-Regular.ttf'),
-    bold: path.join(__dirname, 'fonts', 'Roboto', 'Roboto-Medium.ttf'),
-    italics: path.join(__dirname, 'fonts', 'Roboto', 'Roboto-Italic.ttf'),
+  Lato: {
+    normal: path.join(__dirname, 'fonts', 'Lato', 'Lato-Regular.ttf'),
+    bold: path.join(__dirname, 'fonts', 'Lato', 'Lato-Bold.ttf'),
+    italics: path.join(__dirname, 'fonts', 'Lato', 'Lato-Italic.ttf'),
+    bolditalics: path.join(__dirname, 'fonts', 'Lato', 'Lato-BoldItalic.ttf'),
+  },
+  JetBrainsMono: {
+    normal: path.join(
+      __dirname,
+      'fonts',
+      'JetBrainsMono',
+      'JetBrainsMono-Regular.ttf',
+    ),
+    bold: path.join(
+      __dirname,
+      'fonts',
+      'JetBrainsMono',
+      'JetBrainsMono-Bold.ttf',
+    ),
+    italics: path.join(
+      __dirname,
+      'fonts',
+      'JetBrainsMono',
+      'JetBrainsMono-Italic.ttf',
+    ),
     bolditalics: path.join(
       __dirname,
       'fonts',
-      'Roboto',
-      'Roboto-MediumItalic.ttf',
+      'JetBrainsMono',
+      'JetBrainsMono-BoldItalic.ttf',
     ),
   },
-  Courier: {
-    normal: 'Courier',
-    bold: 'Courier-Bold',
-    italics: 'Courier-Oblique',
-    bolditalics: 'Courier-BoldOblique',
+};
+
+/** Logo "Firmalo — by Datalo" del encabezado (PNG, ver `assets/`). */
+const LOGO_PATH = path.join(__dirname, 'assets', 'firmalo-logo.png');
+
+/**
+ * Isotipo (la marca sola, sin el texto) para el pie. Es un archivo aparte y no un recorte del
+ * logo: en el lockup la "C" hace de "o" de "Firmalo", así que recortarla siempre arrastra un
+ * pedazo de la letra anterior.
+ */
+const ISOTYPE_PATH = path.join(__dirname, 'assets', 'firmalo-isotipo.png');
+
+/** Estilos compartidos por las dos hojas. */
+export const SHEET_STYLES: StyleDictionary = {
+  mono: { font: 'JetBrainsMono', fontSize: 8.5 },
+  sectionTitle: { font: 'Lato', fontSize: 10.5, margin: [0, 4, 0, 6] },
+  legal: { font: 'Lato', fontSize: 10, lineHeight: 1.25 },
+  footerText: {
+    font: 'Lato',
+    fontSize: 7,
+    color: MUTED_TEXT_COLOR,
+    lineHeight: 1.15,
   },
 };
+
+export const SHEET_DEFAULT_STYLE = {
+  font: 'Lato',
+  fontSize: 10,
+  lineHeight: 1.2,
+};
+
+/** Márgenes de página que dejan sitio al encabezado y al pie, que se repiten en cada página. */
+export const SHEET_PAGE_MARGINS: [number, number, number, number] = [
+  50, 92, 50, 100,
+];
+
+/**
+ * Encabezado de las dos plantillas: logo a la izquierda y el tipo de firma a la derecha, en
+ * monoespaciada. Se declara como `header` de pdfmake y no como contenido para que se repita en
+ * todas las páginas — la hoja crece con el número de firmantes.
+ */
+export function buildSheetHeader(signatureTypeLabel: string): ContentColumns {
+  return {
+    margin: [50, 28, 50, 0],
+    columns: [
+      brandColumn(LOGO_PATH, [140, 58]),
+      {
+        width: '*',
+        text: signatureTypeLabel,
+        style: 'mono',
+        alignment: 'right',
+        margin: [0, 16, 0, 0],
+      },
+    ],
+  };
+}
+
+const FOOTER_LEGAL_TEXT =
+  'La información presentada en el presente documento no ha sido modificada. Escanea el código ' +
+  'para verificar la integridad del documento y descargar los archivos oficiales que forman ' +
+  'parte de la cadena de trazabilidad e integridad del proceso de firmado necesarios para un ' +
+  'juicio.';
+
+const FOOTER_XML_NOTE = 'Este documento es una representación visual de un XML';
+
+/**
+ * Pie de las dos plantillas: código QR a la pantalla pública de verificación del documento, la
+ * leyenda legal sobre la descarga de los archivos oficiales, y la marca.
+ *
+ * El QR apunta a `verificationUrl` —la vista pública del documento, la única consultable sin
+ * sesión— para que quien tenga la hoja impresa pueda comprobar su integridad y descargar los
+ * archivos de la cadena de trazabilidad.
+ */
+export function buildSheetFooter(verificationUrl: string): ContentColumns {
+  return {
+    margin: [50, 12, 50, 0],
+    columns: [
+      { width: 'auto', qr: verificationUrl, fit: 66, foreground: '#000000' },
+      {
+        width: '*',
+        text: FOOTER_LEGAL_TEXT,
+        style: 'footerText',
+        alignment: 'justify',
+        margin: [10, 2, 10, 0],
+      },
+      {
+        width: 138,
+        columns: [
+          {
+            width: '*',
+            text: FOOTER_XML_NOTE,
+            style: 'footerText',
+            alignment: 'justify',
+            margin: [0, 2, 8, 0],
+          },
+          brandColumn(ISOTYPE_PATH, [40, 40]),
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * Columna con una imagen de marca. pdfmake acepta imágenes como columna, pero su tipo `Column`
+ * publicado no las contempla — de ahí la conversión, acotada a este único lugar en vez de
+ * repartida por cada uso.
+ */
+function brandColumn(image: string, fit: [number, number]): Column {
+  return { width: 'auto', image, fit } as unknown as Column;
+}
+
+/**
+ * Tabla informativa de dos columnas (etiqueta / valor) con el borde fino de las plantillas. Es el
+ * formato de las tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que
+ * les da su separación visual.
+ */
+export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
+  return {
+    margin: [0, marginTop, 0, 0],
+    table: {
+      widths: [LABEL_COLUMN_WIDTH, '*'],
+      // Una fila no se parte entre páginas: si lo hiciera, el valor continuaría en la página
+      // siguiente sin su etiqueta al lado — un dato suelto en un documento legal. Pasa con la
+      // firma en base64 de la hoja avanzada, que ocupa varios renglones.
+      dontBreakRows: true,
+      body: rows.map(([label, value]) => [
+        { text: label, style: 'mono' },
+        { text: value, style: 'mono' },
+      ]) as Content[][],
+    },
+    layout: {
+      hLineWidth: () => 0.5,
+      vLineWidth: () => 0.5,
+      hLineColor: () => BORDER_COLOR,
+      vLineColor: () => BORDER_COLOR,
+      paddingTop: () => 3,
+      paddingBottom: () => 3,
+    },
+  };
+}
 
 /** Ejecuta pdfmake y devuelve el PDF en memoria; no toca disco ni MinIO. */
 export async function renderSheetPdf(
@@ -68,13 +237,7 @@ export async function renderSheetPdf(
   });
 }
 
-/** "label" + espacios hasta `width` + "valor" — replica el layout de columna fija de la plantilla. Si el label ya excede `width`, se agrega un solo espacio en vez de truncar el valor. */
-export function padLabel(label: string, value: string, width: number): string {
-  const padding = ' '.repeat(Math.max(width - label.length, 1));
-  return `${label}${padding}${value ?? ''}`;
-}
-
-/** `-------Firmas-------`: el título centrado entre guiones de la plantilla de referencia. */
+/** `-------Firmas-------`: el título centrado entre guiones de las plantillas de referencia. */
 export function dashBanner(label: string, width = MONO_BANNER_WIDTH): string {
   const dashes = Math.max(width - label.length, 0);
   const left = Math.floor(dashes / 2);
