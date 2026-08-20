@@ -1823,7 +1823,7 @@ export class DocumentService {
   private toSealSignature(
     signature: SignatureResult,
   ): SealDocumentDto['signatures'][number] {
-    this.logger.log(`Desde document Service, toSealSignature ${signature.ocspEvidence}`)
+    this.logger.log(`Desde document Service, toSealSignature ${JSON.stringify(signature.ocspEvidence)}`)
     return {
       signatureBase64: String(signature.signatureBase64),
       algorithm: signature.algorithm,

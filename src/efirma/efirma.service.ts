@@ -223,7 +223,7 @@ export class EfirmaService implements OnModuleInit {
     this.logger.log(
       `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`,
     );
-    this.logger.log(`Desde efirma, OCSPEvidence ${ocspEvidence}`)
+    this.logger.log(`Desde efirma, OCSPEvidence ${JSON.stringify(ocspEvidence)}`)
     return {
       signatureBase64,
       algorithm: 'sha256',
