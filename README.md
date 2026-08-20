@@ -276,7 +276,7 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 
 | Endpoint | Servicio |
 |---|---|
-| `POST /auth/register` | `register()` → `UserService.createFromSignup()` — crea una **pre-cuenta** (`isEmailVerified: false`), envía OTP, no autentica todavía |
+| `POST /auth/register` | `register()` — primero verifica el token de **Cloudflare Turnstile** (`turnstileToken`, obligatorio en el body) contra Siteverify; solo si pasa llama a `UserService.createFromSignup()`, que crea una **pre-cuenta** (`isEmailVerified: false`) y envía OTP. No autentica todavía |
 | `POST /auth/verify-otp` | Confirma el OTP de registro (`EmailVerificationCodeEntity`), marca `isEmailVerified = true` y autentica de inmediato (auto-login) |
 | `POST /auth/resend-otp` | Reenvía el OTP de verificación de registro |
 | `POST /auth/forgot-password` | Inicia recuperación de contraseña, envía OTP (`PasswordResetCodeEntity`) |
@@ -287,6 +287,10 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 | `GET /auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/dashboard/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
 
 Todos los endpoints públicos de este módulo tienen `ThrottlerGuard` explícito (5 intentos/60s) — no solo `register`/`login` como documentaba antes este README.
+
+**CAPTCHA en el registro (Cloudflare Turnstile).** `POST /auth/register` exige además `turnstileToken`: el token de un solo uso que genera el widget en `/signup`. `TurnstileService` (ver `shared/*`) lo canjea contra la API Siteverify de Cloudflare **antes** de cualquier escritura, así que un token ausente, inválido, expirado o ya usado devuelve `400` sin crear ni actualizar el pre-registro y sin enviar OTP. El throttler no sustituía esto: limita la frecuencia, no distingue a una persona de un script.
+
+Falla cerrado: si `TURNSTILE_SECRET_KEY` no está configurada, o Siteverify no responde, el registro se rechaza con `503` en vez de dejarse pasar. Para desarrollo, Cloudflare publica claves de prueba que siempre aprueban (están puestas en `.env.example`).
 
 ### `users` (`/api/v1/users`) — un endpoint público adicional
 
@@ -317,7 +321,7 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 ### `shared/*`
 
-`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService`, `RedisService` (blacklist de JWT), `PasswordService` (bcrypt). El flujo de OTP de registro/recuperación de contraseña (`auth`, arriba) ya está integrado end-to-end vía `EmailVerificationCodeService`/`PasswordResetCodeService` — confirmar si reutilizan `OTPService` internamente o son una implementación paralela antes de asumir cuál es la fuente de verdad del código de generación/expiración.
+`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService`, `RedisService` (blacklist de JWT), `PasswordService` (bcrypt), `TurnstileService` (verificación del CAPTCHA de registro contra Cloudflare Siteverify). El flujo de OTP de registro/recuperación de contraseña (`auth`, arriba) ya está integrado end-to-end vía `EmailVerificationCodeService`/`PasswordResetCodeService` — confirmar si reutilizan `OTPService` internamente o son una implementación paralela antes de asumir cuál es la fuente de verdad del código de generación/expiración.
 
 ---
 
@@ -347,7 +351,7 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 
 ### Variables de entorno relevantes
 
-`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `POSTGRES_DB_URL`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `FRONTEND_URL`, `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_DB_NAME`, `MONGO_DB_URL`, `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_*_BUCKET` (una por bucket), `CIPHER_SECRET`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `API_KEY`.
+`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `POSTGRES_DB_URL`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `FRONTEND_URL`, `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_DB_NAME`, `MONGO_DB_URL`, `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_*_BUCKET` (una por bucket), `CIPHER_SECRET`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `API_KEY`, `TURNSTILE_SECRET_KEY` (clave privada de Cloudflare Turnstile — solo acá, nunca en el frontend; su pareja pública `TURNSTILE_SITE_KEY` vive en el `.env` de `signature-app`).
 
 ## 6. Levantar el proyecto
 
