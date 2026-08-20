@@ -8,6 +8,7 @@ import {
   PDFDocument,
   PDFImage,
   PDFName,
+  PDFPage,
   PDFNumber,
   PDFString,
   StandardFonts,
@@ -31,6 +32,27 @@ const MIN_SIGNATURE_SIZE = { width: 60, height: 24 };
 
 // Umbral máximo: firmas más grandes que esto se consideran demasiado grandes
 const MAX_SIGNATURE_SIZE = { width: 320, height: 128 };
+
+/**
+ * Borde blanco que se dibuja alrededor de un código QR estampado ("zona de silencio").
+ *
+ * La norma QR exige un margen libre alrededor del código; sin él, el texto del documento pegado al
+ * código impide leerlo — medido: con texto a 0pt el código NO se decodifica a 150 DPI, y con 2pt
+ * de separación sí. El PNG se genera sin margen propio a propósito (así el código aprovecha todo
+ * el lado de la caja y sus módulos quedan lo más grandes posible), de modo que el margen se pinta
+ * acá, POR FUERA del código y no a costa de su tamaño.
+ */
+const QR_QUIET_ZONE_PT = 4;
+
+/**
+ * Lado mínimo, en puntos, para que un QR estampado siga siendo escaneable.
+ *
+ * Medido con un decodificador real sobre la página rasterizada: a 80pt el código se lee a 150 y
+ * 300 DPI; a 24pt (el mínimo que admite una caja de firma) no se lee a ninguna resolución, porque
+ * sus módulos quedan en ~0.12mm. Por debajo de este umbral se registra una advertencia en vez de
+ * estampar en silencio un código que nadie va a poder leer.
+ */
+const QR_MIN_SCANNABLE_SIDE_PT = 60;
 
 // Rutas donde puede encontrarse el perfil ICC sRGB (probadas en orden)
 const SRGB_ICC_PATHS = [

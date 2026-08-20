@@ -45,6 +45,33 @@ Cuando firma el último firmante pendiente:
 2. Para **cada firmante en orden**, descarga su imagen de firma y usa `PdfSignatureService.mergeSignatureIntoPdf` (incrusta el PNG en la última página, normaliza tamaño a un rango válido) + `addSignerName` (nombre debajo de la firma). Las firmas se apilan verticalmente.
 3. Aplica conformidad **PDF/A-2B** (metadatos XMP + `OutputIntent` con perfil ICC sRGB) y sube el resultado a `signed_documents` reutilizando el mismo `objectKey`.
 4. Calcula `signedHash`, marca `status = SIGNED`, `signedAt`, y envía el PDF final por correo a todos los participantes.
+5. Anexa la **hoja de evidencia** al documento firmado (`attachSignaturesSheet`) y guarda esa copia —la definitiva, la única que el usuario ve y descarga— en el bucket `finalized_documents`. Se arma después de calcular `signedHash` (la hoja lo imprime) y antes de marcar el documento como `SIGNED`: si falla, el documento no queda firmado y el intento se puede repetir, en vez de dejar una versión final que no existe.
+
+**Hay una hoja de evidencia por tipo de firma**, y son independientes entre sí (módulo `document/summary-document`):
+
+| Hoja | Servicio | Qué acredita |
+|---|---|---|
+| Firma simple | `SummaryDocumentService` | Artículos 89, 89 Bis, 90 y 93 del Código de Comercio; por firmante imprime Nombre/RFC/IP/OTP/fecha/Geo, y el campo "Cifrado" del Audit Trail |
+| Firma avanzada (e.firma) | `AdvancedSummaryDocumentService` | Artículos 89, 90, 93 y **97**; una tabla por firmante con el número de serie del certificado del SAT y su firma electrónica, ambos leídos de `CollaboratorEntity.advancedSignature` |
+
+`isAdvancedSignatureDocument()` elige cuál se anexa: el tipo de firma es una decisión del documento (`DocumentSignaturesService` lo copia igual a todos sus SIGNER), así que basta con mirar a los firmantes. Las dos hojas comparten solo la plomería de render (`sheet-rendering.ts`: fuentes, pdfmake → Buffer, helpers de formato), nunca el contenido — cada tipo de evidencia puede cambiar sin arrastrar al otro.
+
+La tabla "Información de la Constancia de Conservación (NOM-151)" de la hoja avanzada se imprime **vacía** por ahora: el sellado con el PSC ya existe (`SealApiService` guarda el timestamp TSA y la constancia en `document_seals`), pero todavía no se define cómo se refleja en la hoja.
+
+**Qué se estampa por cada firmante** lo decide `resolveStampImage`:
+
+- **Firma simple** — la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar (`signatureSnapshotObjectKey`), no de su perfil en vivo.
+- **Firma avanzada (e.firma)** — un **código QR** (`SignatureQrService`), porque la firma avanzada no produce ninguna imagen: su evidencia es criptográfica y su espacio quedaba vacío. Se genera solo cuando esa firma ya se completó.
+
+El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar contenido del código QR en firma avanzada"), no solo un enlace: nombre del firmante y RFC —los del certificado del SAT, con los del colaborador como respaldo—, fecha y hora **con el desfase de la zona horaria del sistema** (`TZ`, o la que resuelva el sistema operativo), IP y geolocalización registradas al firmar, y como última línea la URL de la constancia pública (`GET /document/:id/signatures/:collaboratorId`, ver `getAdvancedSignaturePublicView`). Así quien escanea con cualquier lector ve los datos ahí mismo, sin depender de tener red, y la verificación en línea sigue disponible.
+
+El QR se estampa con `preserveAspectRatio`: la caja de firma es apaisada (200x80 por defecto, pensada para una rúbrica) y estirar ahí un código cuadrado hace que los lectores dejen de reconocer su patrón, así que se escala al lado menor de la caja y se centra. Las rúbricas siguen ocupando la caja completa.
+
+Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt alrededor del código. El PNG se genera sin margen propio a propósito —así los módulos quedan lo más grandes posible dentro de la caja— y el borde se dibuja por fuera. No es cosmético: medido con un decodificador real sobre la página rasterizada, un QR con el texto del documento pegado **no se lee** a 150 DPI, y con la separación sí.
+
+**Tamaño mínimo.** Una caja de firma puede ser tan chica como 60x24pt, y ahí el QR queda en 24pt de lado (~8.5mm, módulos de 0.12mm): no lo lee ningún decodificador a 96, 150 ni 300 DPI. Se estampa igual —quitarlo dejaría la firma avanzada sin representación visual— pero se registra una advertencia (`PdfSignatureService`) en vez de producir en silencio un código ilegible. A partir de ~60pt de lado se lee sin problema en papel.
+
+**Densidad.** Con los seis renglones de datos más la URL de la constancia, el código sale de 69x69 módulos. En la caja por defecto (80pt de lado) eso deja ~1.55 px por módulo a 96 DPI —pantalla estándar al 100%—, que está en el límite: a esa resolución decodifica o no según dónde caigan los bordes de módulo respecto a la rejilla de píxeles. A 150 DPI o más (impresión, pantalla HiDPI, o simplemente acercar el zoom) se lee siempre. Bajar de 53 módulos exigiría quitar la URL de la constancia o acortarla.
 
 ### 1.4 Integridad y auditoría
 
@@ -142,7 +169,7 @@ Cuando firma el último firmante pendiente:
 | Endpoint | Método de servicio | Qué hace |
 |---|---|---|
 | `POST /document` | `create()` | Sube el PDF, crea documento + participantes. **Requiere el header `X-Account-Id`** (cuenta activa); el documento queda scopeado a esa cuenta (`DocumentEntity.accountId`) |
-| `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros. Cada fila incluye `creator` y `creatorRfc` (el RFC sale de `personal_information` vía `leftJoinAndSelect` sobre `requester`, no de `users`; `null` si el creador aún no lo registró) |
+| `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros. Cada fila incluye `creator` y `creatorRfc` (el RFC sale de `personal_information` vía `leftJoinAndSelect` sobre `requester`, no de `users`; `null` si el creador aún no lo registró) y `signatureType` (`simple`/`fiel`, para la columna "Tipo de firma" del frontend — se resuelve a partir de los SIGNER del documento, que ya vienen en el mismo query, y es `null` si no todos coinciden o si ninguno lo tiene registrado, como en los documentos del endpoint antiguo) |
 | `GET /document/:id` | `findDetailForUser()` | Detalle + permisos del usuario (`canSign`/`canReject`). **Todavía no scopeado por cuenta** (ver Pendientes) |
 | `GET /document/file/:id` | `getDocumentMinioURL()` | URL prefirmada según estado |
 | `GET /document/public/:id` | `getPublicDocument()` | **Nuevo, `@SkipJwtAuth()`** — expone `secureUrl` sin autenticación, solo si `status = SIGNED`. Consumido por `signature-app` en `/public/documents/:id` |
@@ -249,7 +276,7 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 
 | Endpoint | Servicio |
 |---|---|
-| `POST /auth/register` | `register()` → `UserService.createFromSignup()` — crea una **pre-cuenta** (`isEmailVerified: false`), envía OTP, no autentica todavía |
+| `POST /auth/register` | `register()` — primero verifica el token de **Cloudflare Turnstile** (`turnstileToken`, obligatorio en el body) contra Siteverify; solo si pasa llama a `UserService.createFromSignup()`, que crea una **pre-cuenta** (`isEmailVerified: false`) y envía OTP. No autentica todavía |
 | `POST /auth/verify-otp` | Confirma el OTP de registro (`EmailVerificationCodeEntity`), marca `isEmailVerified = true` y autentica de inmediato (auto-login) |
 | `POST /auth/resend-otp` | Reenvía el OTP de verificación de registro |
 | `POST /auth/forgot-password` | Inicia recuperación de contraseña, envía OTP (`PasswordResetCodeEntity`) |
@@ -260,6 +287,10 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 | `GET /auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/dashboard/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
 
 Todos los endpoints públicos de este módulo tienen `ThrottlerGuard` explícito (5 intentos/60s) — no solo `register`/`login` como documentaba antes este README.
+
+**CAPTCHA en el registro (Cloudflare Turnstile).** `POST /auth/register` exige además `turnstileToken`: el token de un solo uso que genera el widget en `/signup`. `TurnstileService` (ver `shared/*`) lo canjea contra la API Siteverify de Cloudflare **antes** de cualquier escritura, así que un token ausente, inválido, expirado o ya usado devuelve `400` sin crear ni actualizar el pre-registro y sin enviar OTP. El throttler no sustituía esto: limita la frecuencia, no distingue a una persona de un script.
+
+Falla cerrado: si `TURNSTILE_SECRET_KEY` no está configurada, o Siteverify no responde, el registro se rechaza con `503` en vez de dejarse pasar. Para desarrollo, Cloudflare publica claves de prueba que siempre aprueban (están puestas en `.env.example`).
 
 ### `users` (`/api/v1/users`) — un endpoint público adicional
 
@@ -290,7 +321,7 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 ### `shared/*`
 
-`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService`, `RedisService` (blacklist de JWT), `PasswordService` (bcrypt). El flujo de OTP de registro/recuperación de contraseña (`auth`, arriba) ya está integrado end-to-end vía `EmailVerificationCodeService`/`PasswordResetCodeService` — confirmar si reutilizan `OTPService` internamente o son una implementación paralela antes de asumir cuál es la fuente de verdad del código de generación/expiración.
+`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService`, `RedisService` (blacklist de JWT), `PasswordService` (bcrypt), `TurnstileService` (verificación del CAPTCHA de registro contra Cloudflare Siteverify). El flujo de OTP de registro/recuperación de contraseña (`auth`, arriba) ya está integrado end-to-end vía `EmailVerificationCodeService`/`PasswordResetCodeService` — confirmar si reutilizan `OTPService` internamente o son una implementación paralela antes de asumir cuál es la fuente de verdad del código de generación/expiración.
 
 ---
 
@@ -320,7 +351,7 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 
 ### Variables de entorno relevantes
 
-`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `POSTGRES_DB_URL`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `FRONTEND_URL`, `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_DB_NAME`, `MONGO_DB_URL`, `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_*_BUCKET` (una por bucket), `CIPHER_SECRET`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `API_KEY`.
+`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `POSTGRES_DB_URL`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `FRONTEND_URL`, `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_DB_NAME`, `MONGO_DB_URL`, `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_*_BUCKET` (una por bucket), `CIPHER_SECRET`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `API_KEY`, `TURNSTILE_SECRET_KEY` (clave privada de Cloudflare Turnstile — solo acá, nunca en el frontend; su pareja pública `TURNSTILE_SITE_KEY` vive en el `.env` de `signature-app`).
 
 ## 6. Levantar el proyecto
 

@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
 import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
+import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
 
 export class DocumentGetData {
   @ApiProperty({
@@ -74,6 +75,14 @@ export class DocumentGetData {
       'RFC de quien creó el documento (personal_information.rfc). Null si el creador todavía no lo registró.',
   })
   creatorRfc: string | null;
+
+  @ApiProperty({
+    enum: SIGNATURE_TYPE_ENUM,
+    nullable: true,
+    description:
+      'Tipo de firma con el que se firma este documento, tomado de sus firmantes (es una decisión del documento, igual para todos ellos). Null en los documentos del endpoint antiguo POST /document, que nunca asignaron tipo.',
+  })
+  signatureType: SIGNATURE_TYPE_ENUM | null;
 }
 
 export class PaginationMeta {
