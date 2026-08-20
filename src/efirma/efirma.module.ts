@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { EfirmaService } from './efirma.service';
+import { OscpService } from './oscp/oscp.service';
 
 /**
  * Sin `EfirmaController`: `EfirmaService` se consume únicamente de forma interna (inyectado en
@@ -9,7 +10,7 @@ import { EfirmaService } from './efirma.service';
  * en vez de solo deshabilitarlo.
  */
 @Module({
-  providers: [EfirmaService],
+  providers: [EfirmaService, OscpService],
   exports: [EfirmaService],
 })
 export class EfirmaModule {}

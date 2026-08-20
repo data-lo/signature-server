@@ -1346,7 +1346,7 @@ export class DocumentService {
       BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     );
 
-    return this.efirmaService.firmar(
+    return await this.efirmaService.firmar(
       documentBuffer,
       cerFile.buffer,
       keyFile.buffer,
@@ -1790,6 +1790,14 @@ export class DocumentService {
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,
       },
+      ocspEvidence:{
+       status:signature.ocspEvidence.status,
+       verifiedAt:signature.ocspEvidence.verifiedAt.toISOString(),
+       thisUpdate:signature.ocspEvidence.thisUpdate.toISOString(),
+       nextUpdate:signature.ocspEvidence.nextUpdate.toISOString(),
+       ocspResponse:signature.ocspEvidence.ocspResponse,
+       ocspUrl:signature.ocspEvidence.ocspUrl 
+      }
     };
   }
 
