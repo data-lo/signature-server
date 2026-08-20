@@ -415,6 +415,29 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 
 ## 7. Pendientes / trabajo futuro
 
+### Formato de `seal/dto/seal-document.dto.ts` (y por qué `npm run lint` no sirve hoy como filtro)
+
+Quedó sin corregir a propósito, al arreglar el sellado: son renglones de la feature de verificación
+OCSP, no del bugfix, y reformatearlos habría metido ruido ajeno en un diff de corrección.
+
+`npx eslint src/document/seal/dto/seal-document.dto.ts` marca tres:
+
+| Línea | Qué |
+|---|---|
+| 34 | `@ApiProperty({example: '"https://cfdi.sat.gob.mx/edofiel"'})` — prettier lo quiere espaciado, y el valor lleva comillas dobles **dentro** de la cadena, que parecen sobrar |
+| 49 | `@ApiProperty({example: 'SERVICIO DE ADMINISTRACION TIRIBUTARIA'})` — mismo espaciado, y dice **TIRIBUTARIA** en vez de TRIBUTARIA |
+| 52 | `issuer:string;` — falta el espacio tras los dos puntos |
+
+Las tres son cosméticas: no afectan la validación ni el payload que se manda a Seal Service, solo
+el ejemplo que se publica en Swagger (el de la línea 49 sí se ve en el portal, con el typo).
+
+**El problema de fondo es que no hay forma de notarlas.** El repo está guardado con CRLF
+(`core.autocrlf`) y la configuración de prettier espera LF, así que `npx eslint src` reporta del
+orden de **14,600 errores** de `Delete ␍` — un archivo que nadie ha tocado da ~470 él solo. Con ese
+volumen, un error de formato real es indistinguible del ruido y el lint no puede usarse como filtro
+en CI ni en pre-commit. Resolver el fin de línea (un `.gitattributes` con `* text eol=lf` y un
+`--fix` de una sola pasada) es lo que haría que estas tres aparezcan solas.
+
 ### Al integrar `feat/signature-67`: quitarle la geolocalización a la vista pública
 
 La historia "Ocultar geolocalización en hojas de firma y vistas públicas" se aplicó a todo lo que

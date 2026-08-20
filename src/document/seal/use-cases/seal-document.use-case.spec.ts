@@ -24,6 +24,7 @@ const DTO: SealDocumentDto = {
       certificate: {
         rfc: 'PEAJ800101XXX',
         name: 'JUAN PEREZ',
+        issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
         serialNumber: '00001000000512345678',
         certificateNumber: '30001000000500003416',
         certificatePem: 'pem',

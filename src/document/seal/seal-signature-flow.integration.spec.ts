@@ -543,6 +543,113 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     ]);
   });
 
+  /**
+   * Regresión del bug que dejaba SIN SELLAR a todo documento FIEL de más de un firmante.
+   *
+   * `advancedSignature` es una columna jsonb, y `sealAdvancedSignatures` relee del repositorio a
+   * todos los firmantes: los anteriores al último llegan siempre deserializados, con las fechas
+   * como string. `toSealSignature` llamaba `signature.ocspEvidence.verifiedAt.toISOString()`
+   * directo, que sobre un string revienta con "toISOString is not a function". Como el sellado es
+   * best-effort, el `try/catch` se tragaba la excepción: no había error visible, simplemente
+   * ningún documento multi-firmante llegaba a sellarse y su hoja salía con la tabla NOM-151 vacía.
+   *
+   * El fixture de arriba no lo detectaba porque no traía `ocspEvidence` en absoluto — se escribió
+   * antes de que existiera la verificación OCSP.
+   */
+  it('normaliza la fecha de la evidencia OCSP releída de jsonb, en vez de romper el sellado', async () => {
+    const document = mockDocument({ totalSigners: 2 });
+    documentRepository.findOne.mockResolvedValue(document);
+    const yaFirmo = buildFielSigner({
+      id: 'p-a',
+      userId: 'user-a',
+      signingOrder: 0,
+      status: SIGNEE_STATUS_ENUM.SIGNED,
+      advancedSignature: {
+        originalHash: 'hash-original',
+        signatureBase64: 'firma-de-user-a',
+        algorithm: 'sha256',
+        signedAt: '2026-08-10T10:00:00.000Z',
+        certificate: {
+          rfc: 'AAAA010101AAA',
+          name: 'FIRMANTE A',
+          issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
+          serialNumber: '1',
+          certificateNumber: '2',
+          certificatePem: 'pem-a',
+        },
+        // Igual que `signedAt`: al releerse de jsonb es un string, no un Date.
+        ocspEvidence: {
+          status: 'good',
+          verifiedAt: '2026-08-10T10:00:01.000Z',
+          ocspResponse: 'respuesta-ocsp-en-base64',
+          ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+        },
+      },
+    } as unknown as Partial<CollaboratorEntity>);
+    const ultimo = buildFielSigner({
+      id: 'p-b',
+      userId: 'user-b',
+      signingOrder: 1,
+    });
+    collaboratorRepository.find.mockResolvedValue([yaFirmo, ultimo]);
+
+    await service.sign('doc-1', 'user-b', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    // Lo que importa: el documento SÍ se selló. Antes del arreglo esto era 0 llamadas.
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+    const body = sentPayload();
+    expect(body.signatures[0].ocspEvidence).toEqual({
+      status: 'good',
+      verifiedAt: '2026-08-10T10:00:01.000Z',
+      ocspResponse: 'respuesta-ocsp-en-base64',
+      ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+    });
+  });
+
+  /**
+   * Las firmas guardadas antes de que existiera la verificación OCSP no tienen esa evidencia, y
+   * el proveedor no la usa para construir el hash. Sellar sin ella es correcto; que un documento
+   * viejo se quede sin constancia por eso, no.
+   */
+  it('sella igual una firma que no trae evidencia OCSP, omitiendo el campo', async () => {
+    const document = mockDocument({ totalSigners: 2 });
+    documentRepository.findOne.mockResolvedValue(document);
+    const sinEvidencia = buildFielSigner({
+      id: 'p-a',
+      userId: 'user-a',
+      signingOrder: 0,
+      status: SIGNEE_STATUS_ENUM.SIGNED,
+      advancedSignature: {
+        originalHash: 'hash-original',
+        signatureBase64: 'firma-de-user-a',
+        algorithm: 'sha256',
+        signedAt: '2026-08-10T10:00:00.000Z',
+        certificate: {
+          rfc: 'AAAA010101AAA',
+          name: 'FIRMANTE A',
+          issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
+          serialNumber: '1',
+          certificateNumber: '2',
+          certificatePem: 'pem-a',
+        },
+      },
+    } as unknown as Partial<CollaboratorEntity>);
+    const ultimo = buildFielSigner({
+      id: 'p-b',
+      userId: 'user-b',
+      signingOrder: 1,
+    });
+    collaboratorRepository.find.mockResolvedValue([sinEvidencia, ultimo]);
+
+    await service.sign('doc-1', 'user-b', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+    const body = sentPayload();
+    // El campo se omite; no se manda `undefined` ni un objeto a medio llenar.
+    expect(body.signatures[0]).not.toHaveProperty('ocspEvidence');
+    expect(body.signatures[0].signatureBase64).toBe('firma-de-user-a');
+  });
+
   it('mientras falte un firmante, no se llama a Seal Service', async () => {
     const document = mockDocument({ totalSigners: 2 });
     documentRepository.findOne.mockResolvedValue(document);
