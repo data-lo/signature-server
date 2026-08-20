@@ -85,6 +85,9 @@ import { AdvancedSummaryDocumentService } from './summary-document/advanced-summ
 import type { SummaryDocumentSigner } from './summary-document/interfaces/summary-document.interface';
 import type { AdvancedSummaryDocumentSigner } from './summary-document/interfaces/advanced-summary-document.interface';
 import type { SealDocumentDto } from './seal/dto/seal-document.dto';
+import { SealEntity } from './seal/entities/seal.entity';
+import { DocumentAlreadySealedException } from './seal/exceptions/seal.exceptions';
+import { toConservationRecord } from './summary-document/conservation-record.util';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
 
@@ -1668,11 +1671,10 @@ export class DocumentService {
     document.completedSignersCount = (document.completedSignersCount ?? 0) + 1;
 
     if (remainingSigners.length === 0) {
-      // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado).
+      // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado) y
+      // sella con Seal Service antes de armar la hoja de evidencia, para que la constancia
+      // NOM-151 alcance a imprimirse en ella.
       await this.finalizeSignedDocument(document, signerCollaborators);
-      // Sellado con Seal Service: recién acá el documento tiene TODAS sus firmas avanzadas, que
-      // es lo que el proveedor necesita para construir un único hash sellado del conjunto.
-      await this.sealAdvancedSignatures(document, signerCollaborators);
       this.documentEventsProducer.emitSigned({
         documentId,
         fileName: document.fileName,
@@ -1761,7 +1763,7 @@ export class DocumentService {
   private async sealAdvancedSignatures(
     document: DocumentEntity,
     signerCollaborators: CollaboratorEntity[],
-  ): Promise<void> {
+  ): Promise<SealEntity | null> {
     const advancedSigners = signerCollaborators.filter(
       (collaborator) =>
         collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
@@ -1770,7 +1772,7 @@ export class DocumentService {
     );
 
     if (advancedSigners.length === 0) {
-      return;
+      return null;
     }
 
     // La traducción del payload va DENTRO del try junto con la llamada: si una firma guardada
@@ -1790,10 +1792,22 @@ export class DocumentService {
       this.logger.log(
         `Sellos generados para el documento ${document.id} (evidencia ${seal.id}, ${advancedSigners.length} firma(s) avanzada(s)).`,
       );
+      return seal;
     } catch (error) {
       this.logger.error(
         `Error sellando el documento ${document.id} con Seal Service: ${error}`,
       );
+
+      // El documento ya estaba sellado: pasa cuando un intento anterior selló pero falló más
+      // adelante y la firma se reintentó. La constancia existe, así que se relee en vez de
+      // perderla y dejar la hoja sin ella.
+      if (error instanceof DocumentAlreadySealedException) {
+        return await this.sealDocumentUseCase
+          .findByDocumentId(document.id)
+          .catch(() => null);
+      }
+
+      return null;
     }
   }
 
@@ -2017,6 +2031,16 @@ export class DocumentService {
         await this.hashService.generateFileHash(documentBuffer);
       document.signedAt = new Date();
 
+      // Sellado con Seal Service ANTES de armar la hoja: el documento ya tiene todas sus firmas
+      // avanzadas (que es lo que el proveedor necesita para un único hash del conjunto) y la hoja
+      // imprime la constancia resultante en su tabla NOM-151. Antes corría después de la hoja, así
+      // que esa tabla salía siempre vacía. Sigue siendo best-effort: si el sellado falla, la firma
+      // no se ve afectada y la hoja se arma sin constancia, como hasta ahora.
+      const seal = await this.sealAdvancedSignatures(
+        document,
+        signerCollaborators,
+      );
+
       // La versión definitiva se arma DESPUÉS de calcular signedHash y ANTES de marcar el
       // documento como SIGNED: la hoja imprime ese hash, y si el anexado falla el documento no
       // queda firmado (el flujo de `sign()` deshace la firma y permite reintentar), en vez de
@@ -2026,6 +2050,7 @@ export class DocumentService {
         signerCollaborators,
         documentBuffer,
         signerNames,
+        seal,
       );
 
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
@@ -2229,6 +2254,7 @@ export class DocumentService {
     signerCollaborators: CollaboratorEntity[],
     signedDocument: Buffer,
     signerNames: string,
+    seal: SealEntity | null = null,
   ): Promise<void> {
     const creator = await this.userService.findOne(document.createdBy);
 
@@ -2243,30 +2269,16 @@ export class DocumentService {
 
     const summarySheet = isAdvancedSignatureDocument(signerCollaborators)
       ? await this.advancedSummaryDocumentService.generateAdvancedSummaryPdf(
-          sheetDocumentInfo,
+          {
+            ...sheetDocumentInfo,
+            conservationRecord: toConservationRecord(seal),
+          },
           signerCollaborators.map((collaborator) =>
             this.toAdvancedSummarySigner(collaborator),
           ),
         )
       : await this.summaryDocumentService.generateSummaryPdf(
-          {
-            ...sheetDocumentInfo,
-            // "Cifrado" en la plantilla de la hoja simple: copia cifrada y reversible (ver
-            // `HashService.reverseCiperHash`) del registro de esta finalización, para poder
-            // reconstruir qué se firmó y quién lo firmó desde la propia hoja. La hoja avanzada no
-            // lo imprime —su integridad la sostienen el certificado y la constancia NOM-151—, así
-            // que solo se calcula en esta rama.
-            cipher: await this.hashService.generateCiperHash({
-              documentId: document.id,
-              signedHash: document.signedHash,
-              signedAt: document.signedAt,
-              signers: signerCollaborators.map((collaborator) => ({
-                id: collaborator.id,
-                name: collaboratorDisplayName(collaborator),
-                signedAt: collaborator.signedAt,
-              })),
-            }),
-          },
+          sheetDocumentInfo,
           signerCollaborators.map((collaborator) =>
             this.toSummarySigner(collaborator),
           ),
@@ -2295,7 +2307,6 @@ export class DocumentService {
   ): SummaryDocumentSigner {
     return {
       name: collaboratorDisplayName(collaborator),
-      rfc: collaborator.rfc,
       ipAddress: collaborator.ipAddress,
       signedAt: collaborator.signedAt,
       geoLocation: collaborator.geoLoc

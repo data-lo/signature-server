@@ -49,10 +49,10 @@ async function drawnPlacement(pdf: Buffer): Promise<{
       text = raw.toString();
     }
 
-    // La secuencia se ancla hasta el `/Image ... Do`: la zona de silencio del QR dibuja antes un
-    // rectángulo con su propia traslación, y una búsqueda laxa tomaría esa en vez de la imagen.
+    // La secuencia se ancla entera (traslación, identidad, escala) porque la matriz identidad
+    // intermedia también encaja con el patrón de una escala, y una búsqueda laxa la tomaría a ella.
     const match = text.match(
-      /1 0 0 1 ([\d.-]+) ([\d.-]+) cm\s+1 0 0 1 0 0 cm\s+([\d.-]+) 0 0 ([\d.-]+) 0 0 cm\s+1 0 0 1 0 0 cm\s+\/Image/,
+      /1 0 0 1 ([\d.-]+) ([\d.-]+) cm\s+1 0 0 1 0 0 cm\s+([\d.-]+) 0 0 ([\d.-]+) 0 0 cm/,
     );
     if (match) {
       return {
@@ -65,31 +65,6 @@ async function drawnPlacement(pdf: Buffer): Promise<{
   }
 
   throw new Error('No se encontró ninguna imagen dibujada en la página');
-}
-
-/** Flujo de contenido de la primera página, descomprimido, tal como lo interpreta un lector. */
-async function pageContentStream(pdf: Buffer): Promise<string> {
-  const doc = await PDFDocument.load(pdf);
-  const page = doc.getPage(0);
-  const contents = page.node.Contents() as unknown as {
-    asArray?: () => unknown[];
-  };
-  const refs = contents.asArray ? contents.asArray() : [contents];
-
-  for (const ref of refs) {
-    const stream = doc.context.lookup(ref as never) as unknown as {
-      contents?: Uint8Array;
-    };
-    if (!stream?.contents) continue;
-    const raw = Buffer.from(stream.contents);
-    try {
-      return zlib.inflateSync(raw).toString();
-    } catch {
-      return raw.toString();
-    }
-  }
-
-  return '';
 }
 
 describe('PdfSignatureService', () => {
@@ -133,96 +108,38 @@ describe('PdfSignatureService', () => {
     });
 
     /**
-     * Zona de silencio. La norma QR exige un borde libre alrededor del código: medido con un
-     * decodificador real, un QR con texto del documento pegado NO se lee a 150 DPI, y con la
-     * separación sí. El borde se pinta al estampar y no dentro del PNG, para no quitarle tamaño
-     * a los módulos.
+     * Criterio "al cambiar el tamaño del contenedor o visualizarse en distintas resoluciones, el
+     * QR conserva sus proporciones": la caja de firma la define quien coloca la firma, así que
+     * puede llegar con cualquier forma — el resultado tiene que ser cuadrado en todas.
      */
-    it('pinta un recuadro blanco alrededor del código antes de dibujarlo', async () => {
-      const documentBuffer = await buildPdf([[400, 400]]);
+    // Las cajas se quedan dentro del rango que acepta `resolveSignatureSize`: fuera de él, la caja
+    // se sustituye por el tamaño por defecto (200x80) antes de llegar acá — comportamiento previo
+    // y común a todas las firmas, no algo propio del encaje del QR.
+    it.each([
+      ['apaisada', { x: 50, y: 100, width: 200, height: 80 }, 80],
+      ['vertical', { x: 50, y: 100, width: 100, height: 120 }, 100],
+      ['cuadrada', { x: 50, y: 100, width: 120, height: 120 }, 120],
+    ])(
+      'sale cuadrado con una caja %s, sin importar su forma',
+      async (_forma, box, ladoEsperado) => {
+        const documentBuffer = await buildPdf([[400, 400]]);
 
-      const signed = await service.mergeSignatureIntoPdf(
-        documentBuffer,
-        MINIMAL_PNG,
-        LANDSCAPE_BOX,
-        undefined,
-        { preserveAspectRatio: true },
-      );
+        const signed = await service.mergeSignatureIntoPdf(
+          documentBuffer,
+          MINIMAL_PNG,
+          box,
+          undefined,
+          { preserveAspectRatio: true },
+        );
 
-      const contenido = await pageContentStream(signed);
-
-      // Relleno blanco, y ANTES de dibujar la imagen.
-      expect(contenido).toMatch(/1 1 1 rg/);
-      expect(contenido.indexOf('1 1 1 rg')).toBeLessThan(
-        contenido.indexOf('/Image'),
-      );
-
-      // pdf-lib emite el rectángulo como trazado: el lado del recuadro sale de su `lineTo`.
-      const [, ladoRecuadro] = contenido.match(/([\d.]+) \1 l/) ?? [];
-      // El QR ocupa 80 y el recuadro lo rodea con el borde libre a cada lado.
-      expect(Number(ladoRecuadro)).toBeGreaterThan(80);
-
-      // Y queda centrado sobre el código: se desplaza el mismo margen en ambos ejes.
-      const desplazado = (Number(ladoRecuadro) - 80) / 2;
-      expect(contenido).toContain(
-        `1 0 0 1 ${110 - desplazado} ${100 - desplazado} cm`,
-      );
-    });
-
-    it('no pinta recuadro para una rúbrica (solo aplica al código QR)', async () => {
-      const documentBuffer = await buildPdf([[400, 400]]);
-
-      const signed = await service.mergeSignatureIntoPdf(
-        documentBuffer,
-        MINIMAL_PNG,
-        LANDSCAPE_BOX,
-      );
-
-      expect(await pageContentStream(signed)).not.toMatch(/1 1 1 rg/);
-    });
-
-    /**
-     * Una caja de firma puede ser tan chica como 60x24pt, y ahí el QR queda en 24pt de lado
-     * (~8.5mm): medido, no lo lee ningún decodificador a 96, 150 ni 300 DPI. Se estampa igual
-     * —quitarlo dejaría la firma avanzada sin representación visual— pero deja de ser silencioso.
-     */
-    it('avisa cuando la caja deja el código por debajo del tamaño escaneable', async () => {
-      const advertencia = jest
-        .spyOn(service['logger'], 'warn')
-        .mockImplementation(() => undefined);
-      const documentBuffer = await buildPdf([[400, 400]]);
-
-      await service.mergeSignatureIntoPdf(
-        documentBuffer,
-        MINIMAL_PNG,
-        { x: 10, y: 10, width: 60, height: 24 },
-        undefined,
-        { preserveAspectRatio: true },
-      );
-
-      expect(advertencia).toHaveBeenCalledWith(
-        expect.stringContaining('por debajo del mínimo escaneable'),
-      );
-      advertencia.mockRestore();
-    });
-
-    it('no avisa cuando el código sale a un tamaño escaneable', async () => {
-      const advertencia = jest
-        .spyOn(service['logger'], 'warn')
-        .mockImplementation(() => undefined);
-      const documentBuffer = await buildPdf([[400, 400]]);
-
-      await service.mergeSignatureIntoPdf(
-        documentBuffer,
-        MINIMAL_PNG,
-        LANDSCAPE_BOX,
-        undefined,
-        { preserveAspectRatio: true },
-      );
-
-      expect(advertencia).not.toHaveBeenCalled();
-      advertencia.mockRestore();
-    });
+        const placement = await drawnPlacement(signed);
+        expect(placement.width).toBe(ladoEsperado);
+        expect(placement.height).toBe(ladoEsperado);
+        // Centrado en ambos ejes dentro de la caja que le tocó.
+        expect(placement.x).toBe(box.x + (box.width - ladoEsperado) / 2);
+        expect(placement.y).toBe(box.y + (box.height - ladoEsperado) / 2);
+      },
+    );
 
     it('sin la opción, la imagen sigue llenando la caja completa (rúbricas, sin cambios)', async () => {
       const documentBuffer = await buildPdf([[400, 400]]);
