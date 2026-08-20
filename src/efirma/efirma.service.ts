@@ -23,7 +23,6 @@ import { ResultadoVerificacion } from './interfaces/verification.interface';
 import { SignatureResult } from './interfaces/signature-result.interface';
 import { OscpService } from './oscp/oscp.service';
 import { OCSPEvidence } from './interfaces/OCSPEvidence.interface';
-import { OcspEvidence } from '../document/seal/dto/seal-document.dto';
 
 @Injectable()
 export class EfirmaService implements OnModuleInit {
