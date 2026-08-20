@@ -8,7 +8,7 @@ import {
   PDFDocument,
   PDFImage,
   PDFName,
-  PDFPage,
+
   PDFNumber,
   PDFString,
   StandardFonts,
@@ -42,7 +42,7 @@ const MAX_SIGNATURE_SIZE = { width: 320, height: 128 };
  * el lado de la caja y sus módulos quedan lo más grandes posible), de modo que el margen se pinta
  * acá, POR FUERA del código y no a costa de su tamaño.
  */
-const QR_QUIET_ZONE_PT = 4;
+
 
 /**
  * Lado mínimo, en puntos, para que un QR estampado siga siendo escaneable.
@@ -52,7 +52,7 @@ const QR_QUIET_ZONE_PT = 4;
  * sus módulos quedan en ~0.12mm. Por debajo de este umbral se registra una advertencia en vez de
  * estampar en silencio un código que nadie va a poder leer.
  */
-const QR_MIN_SCANNABLE_SIDE_PT = 60;
+
 
 // Rutas donde puede encontrarse el perfil ICC sRGB (probadas en orden)
 const SRGB_ICC_PATHS = [
