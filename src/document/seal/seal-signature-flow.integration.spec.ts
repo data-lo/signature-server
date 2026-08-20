@@ -24,6 +24,7 @@ import { VerificationCodeService } from '../verification-code.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SummaryDocumentService } from '../summary-document/summary-document.service';
+import { AdvancedSummaryDocumentService } from '../summary-document/advanced-summary-document.service';
 import { SignatureQrService } from '../services/signature-qr.service';
 
 import { SealDocumentUseCase } from './use-cases/seal-document.use-case';
@@ -252,6 +253,15 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
             generateSummaryPdf: jest
               .fn()
               .mockResolvedValue(Buffer.from('hoja-de-firmas')),
+          },
+        },
+        {
+          // Estos documentos son FIEL, así que la hoja que se anexa es la avanzada.
+          provide: AdvancedSummaryDocumentService,
+          useValue: {
+            generateAdvancedSummaryPdf: jest
+              .fn()
+              .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
           },
         },
         // Servicio real: el QR de cada firma avanzada se genera dentro de la misma finalización

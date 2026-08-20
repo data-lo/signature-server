@@ -5,12 +5,44 @@ import {
   IsDateString,
   IsNotEmpty,
   IsObject,
-  IsOptional,
   IsString,
   IsUUID,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+
+export class OcspEvidence {
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty({example: 'good'})
+  status: 'good' | 'unknown';
+
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
+  verifiedAt: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
+  thisUpdate: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
+  nextUpdate: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty({example: 'MIIIQQoBAKCCCDowggg2BgkrBgEFBQcwA...'})
+  ocspResponse: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty({example: '"https://cfdi.sat.gob.mx/edofiel"'})
+  ocspUrl: string;
+}
 
 export class SatCertificateDto {
   @ApiProperty({ example: 'XAXX010101000' })
@@ -79,9 +111,8 @@ export class SealSignatureDto {
     description:
       'Evidencia OCSP entregada por el proveedor de firma. Su estructura se conserva sin modificar.',
   })
-  @IsOptional()
   @IsObject()
-  ocspEvidence?: Record<string, unknown>;
+  ocspEvidence: OcspEvidence;
 }
 
 export class SealDocumentDto {

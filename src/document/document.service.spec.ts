@@ -30,6 +30,7 @@ import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
+import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './services/signature-qr.service';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
@@ -105,6 +106,7 @@ describe('DocumentService', () => {
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
+  let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -232,8 +234,15 @@ describe('DocumentService', () => {
         .fn()
         .mockResolvedValue(Buffer.from('hoja-de-firmas')),
     };
+    advancedSummaryDocumentService = {
+      generateAdvancedSummaryPdf: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
+    };
     signatureQrService = {
-      generatePngBuffer: jest.fn().mockResolvedValue(Buffer.from('qr-png')),
+      generateAdvancedSignaturePng: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('qr-png')),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -269,6 +278,10 @@ describe('DocumentService', () => {
         {
           provide: SummaryDocumentService,
           useValue: summaryDocumentService,
+        },
+        {
+          provide: AdvancedSummaryDocumentService,
+          useValue: advancedSummaryDocumentService,
         },
         { provide: SignatureQrService, useValue: signatureQrService },
       ],
@@ -923,12 +936,29 @@ describe('DocumentService', () => {
         return { document, signer };
       }
 
-      it('genera el QR con la URL de consulta de esa firma', async () => {
+      /**
+       * Historia "Actualizar contenido del código QR en firma avanzada": el código ya no lleva
+       * solo un enlace, sino los datos del firmante y del evento de firma.
+       */
+      it('genera el QR con los datos del firmante y de esa firma', async () => {
         const { signer } = await signAdvanced();
 
-        expect(signatureQrService.generatePngBuffer).toHaveBeenCalledTimes(1);
-        const url = signatureQrService.generatePngBuffer.mock.calls[0][0];
-        expect(url).toContain(
+        expect(
+          signatureQrService.generateAdvancedSignaturePng,
+        ).toHaveBeenCalledTimes(1);
+        const [data] =
+          signatureQrService.generateAdvancedSignaturePng.mock.calls[0];
+        expect(data).toEqual(
+          expect.objectContaining({
+            // Nombre y RFC del certificado del SAT, no los del perfil.
+            signerName: 'Firmante Uno',
+            rfc: 'XAXX010101000',
+            ipAddress: signer.ipAddress,
+            geoLocation: TEST_GEOLOCATION,
+            signedAt: new Date('2026-01-01T00:00:00.000Z'),
+          }),
+        );
+        expect(data.verificationUrl).toContain(
           `/public/documents/doc-1/signatures/${signer.id}`,
         );
       });
@@ -944,6 +974,18 @@ describe('DocumentService', () => {
         const [, stampedImage] =
           documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
         expect(stampedImage).toEqual(Buffer.from('qr-png'));
+      });
+
+      /**
+       * Criterio "el QR conserva una proporción cuadrada, sin estiramiento": la caja de firma es
+       * apaisada (está pensada para una rúbrica), así que el QR se encaja dentro sin deformarse.
+       */
+      it('lo estampa sin deformarlo dentro de la caja de firma', async () => {
+        await signAdvanced();
+
+        const [, , , , options] =
+          documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
+        expect(options).toEqual({ preserveAspectRatio: true });
       });
 
       // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".
@@ -966,9 +1008,10 @@ describe('DocumentService', () => {
 
         // Firmó uno de dos: se regenera la vista previa con el avance, así que sí se pide el QR
         // del que ya firmó — pero en ninguna de las dos pasadas el del que sigue pendiente.
-        const urls = signatureQrService.generatePngBuffer.mock.calls.map(
-          (call) => call[0] as string,
-        );
+        const urls =
+          signatureQrService.generateAdvancedSignaturePng.mock.calls.map(
+            (call) => (call[0] as { verificationUrl: string }).verificationUrl,
+          );
         expect(urls.some((url) => url.includes('collaborator-2'))).toBe(false);
       });
 
@@ -984,7 +1027,9 @@ describe('DocumentService', () => {
 
         await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
 
-        expect(signatureQrService.generatePngBuffer).not.toHaveBeenCalled();
+        expect(
+          signatureQrService.generateAdvancedSignaturePng,
+        ).not.toHaveBeenCalled();
         expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalled();
       });
     });
@@ -1198,6 +1243,89 @@ describe('DocumentService', () => {
         );
       });
 
+      /**
+       * Historia "Crear hoja de evidencia específica para firma avanzada": un documento firmado
+       * con e.firma lleva su propia hoja, no la de firma simple.
+       */
+      describe('firma avanzada (e.firma)', () => {
+        async function signAdvancedDocument() {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signer = buildSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+            signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          });
+          collaboratorRepository.find
+            .mockResolvedValueOnce([signer])
+            .mockResolvedValueOnce([signer]);
+
+          const efirmaInput = {
+            password: 'clave-correcta',
+            keyFile: {
+              originalname: 'llave.key',
+              buffer: Buffer.from('llave'),
+            } as Express.Multer.File,
+            cerFile: {
+              originalname: 'certificado.cer',
+              buffer: Buffer.from('cert'),
+            } as Express.Multer.File,
+          };
+          await service.sign('doc-1', 'user-1', efirmaInput, TEST_GEOLOCATION);
+          return document;
+        }
+
+        it('anexa la hoja de evidencia avanzada y no la de firma simple', async () => {
+          await signAdvancedDocument();
+
+          expect(
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf,
+          ).toHaveBeenCalledTimes(1);
+          expect(
+            summaryDocumentService.generateSummaryPdf,
+          ).not.toHaveBeenCalled();
+          expect(documentSigningService.appendPdfPages).toHaveBeenCalledWith(
+            Buffer.from('pdf'),
+            Buffer.from('hoja-de-firmas-avanzada'),
+          );
+        });
+
+        it('toma el número de serie del certificado y la firma electrónica de advancedSignature', async () => {
+          const document = await signAdvancedDocument();
+
+          const [info, signers] =
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock
+              .calls[0];
+          expect(info).toEqual(
+            expect.objectContaining({
+              id: 'doc-1',
+              hash: document.signedHash,
+              totalPages: document.totalPages,
+              createdBy: 'creador@correo.com',
+            }),
+          );
+          expect(signers).toEqual([
+            expect.objectContaining({
+              // El nombre del certificado del SAT gana al del perfil.
+              name: 'Firmante Uno',
+              certificateSerialNumber: '00001000000512345678',
+              electronicSignature: 'firma-base64',
+              signedAt: new Date('2026-01-01T00:00:00.000Z'),
+            }),
+          ]);
+        });
+
+        // La hoja avanzada no imprime "Cifrado": es un campo de la hoja simple.
+        it('no incluye el campo Cifrado', async () => {
+          await signAdvancedDocument();
+
+          const [info] =
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock
+              .calls[0];
+          expect(info).not.toHaveProperty('cipher');
+        });
+      });
+
       it('la hoja se genera con el hash firmado, el total de páginas y los datos de cada firmante', async () => {
         const document = await signLastSigner();
 
@@ -1353,6 +1481,9 @@ describe('DocumentService', () => {
         expect.anything(),
         expect.anything(),
         { x: 50, y: 200, width: 100, height: 80 },
+        undefined,
+        // Una rúbrica sigue llenando su caja completa: el encaje sin deformar es solo del QR.
+        { preserveAspectRatio: false },
       );
     });
 

@@ -58,13 +58,17 @@ import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from './utils/collaborator-display.util';
+import { isAdvancedSignatureDocument } from './utils/advanced-signature-document.util';
 import {
   buildAdvancedSignatureUrl,
   buildAllDocumentsUrl,
   buildDocumentAccessUrl,
   buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
-import { SignatureQrService } from './services/signature-qr.service';
+import {
+  SignatureQrService,
+  type AdvancedSignatureQrData,
+} from './services/signature-qr.service';
 import { AdvancedSignaturePublicViewData } from './interfaces/responses/advanced-signature-public-view-response';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
@@ -77,7 +81,9 @@ import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
+import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import type { SummaryDocumentSigner } from './summary-document/interfaces/summary-document.interface';
+import type { AdvancedSummaryDocumentSigner } from './summary-document/interfaces/advanced-summary-document.interface';
 import type { SealDocumentDto } from './seal/dto/seal-document.dto';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
@@ -141,6 +147,7 @@ export class DocumentService {
     private readonly efirmaService: EfirmaService,
     private readonly sealDocumentUseCase: SealDocumentUseCase,
     private readonly summaryDocumentService: SummaryDocumentService,
+    private readonly advancedSummaryDocumentService: AdvancedSummaryDocumentService,
     private readonly signatureQrService: SignatureQrService,
   ) {}
 
@@ -1369,7 +1376,7 @@ export class DocumentService {
       BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     );
 
-    return this.efirmaService.firmar(
+    return await this.efirmaService.firmar(
       documentBuffer,
       cerFile.buffer,
       keyFile.buffer,
@@ -1813,6 +1820,14 @@ export class DocumentService {
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,
       },
+      ocspEvidence:{
+       status:signature.ocspEvidence.status,
+       verifiedAt:signature.ocspEvidence.verifiedAt.toISOString(),
+       thisUpdate:signature.ocspEvidence.thisUpdate.toISOString(),
+       nextUpdate:signature.ocspEvidence.nextUpdate.toISOString(),
+       ocspResponse:signature.ocspEvidence.ocspResponse,
+       ocspUrl:signature.ocspEvidence.ocspUrl 
+      }
     };
   }
 
@@ -1882,12 +1897,40 @@ export class DocumentService {
    *
    *  - Firma simple: la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar
    *    (ver `signatureSnapshotObjectKey`), no de su perfil en vivo.
-   *  - Firma avanzada (e.firma): un código QR que lleva a la constancia de esa firma. Su evidencia
-   *    es criptográfica y no produce ninguna imagen, así que antes su espacio quedaba vacío.
+   *  - Firma avanzada (e.firma): un código QR con los datos del firmante y del evento de firma
+   *    (ver `SignatureQrService`). Su evidencia es criptográfica y no produce ninguna imagen, así
+   *    que antes su espacio quedaba vacío.
    *
    * El QR se genera únicamente cuando la firma avanzada YA se completó: mientras el firmante siga
    * pendiente no hay firma que consultar, así que no se dibuja nada y su espacio sigue libre.
    */
+  /**
+   * Datos que se codifican en el QR de una firma avanzada (historia "Actualizar contenido del
+   * código QR en firma avanzada").
+   *
+   * Todo describe a ESA firma y no al perfil del firmante hoy: el nombre y el RFC salen del
+   * certificado del SAT con el que firmó —con los datos del colaborador como respaldo, mismo
+   * criterio que `getAdvancedSignaturePublicView`— y la IP, la ubicación y la fecha son las que
+   * quedaron registradas al firmar. El documento se puede leer años después; el QR tiene que
+   * seguir diciendo lo que pasó, no lo que pasa.
+   */
+  private toAdvancedSignatureQrData(
+    document: DocumentEntity,
+    collaborator: CollaboratorEntity,
+  ): AdvancedSignatureQrData {
+    const certificate = collaborator.advancedSignature?.certificate;
+
+    return {
+      signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
+      rfc: certificate?.rfc ?? collaborator.rfc,
+      ipAddress: collaborator.ipAddress,
+      geoLocation: collaborator.geoLoc,
+      signedAt:
+        collaborator.advancedSignature?.signedAt ?? collaborator.signedAt,
+      verificationUrl: buildAdvancedSignatureUrl(document.id, collaborator.id),
+    };
+  }
+
   private async resolveStampImage(
     document: DocumentEntity,
     collaborator: CollaboratorEntity,
@@ -1897,8 +1940,8 @@ export class DocumentService {
         return null;
       }
 
-      return this.signatureQrService.generatePngBuffer(
-        buildAdvancedSignatureUrl(document.id, collaborator.id),
+      return this.signatureQrService.generateAdvancedSignaturePng(
+        this.toAdvancedSignatureQrData(document, collaborator),
       );
     }
 
@@ -2045,6 +2088,14 @@ export class DocumentService {
         continue;
       }
 
+      // La caja de firma es apaisada porque está pensada para una rúbrica; un QR estirado ahí
+      // deja de ser cuadrado y los lectores no reconocen su patrón. Se encaja centrado, sin
+      // deformarlo. Las rúbricas siguen ocupando la caja completa, exactamente como antes.
+      const stampOptions = {
+        preserveAspectRatio:
+          collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL,
+      };
+
       if (collaborator.simpleSignature) {
         // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
         // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
@@ -2064,6 +2115,7 @@ export class DocumentService {
                 signatureBuffer,
                 coordinates,
                 pageIndex,
+                stampOptions,
               );
           } else {
             // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
@@ -2081,6 +2133,8 @@ export class DocumentService {
                 documentBuffer,
                 signatureBuffer,
                 legacyCoordinates,
+                undefined,
+                stampOptions,
               );
           }
         }
@@ -2099,6 +2153,8 @@ export class DocumentService {
             documentBuffer,
             signatureBuffer,
             coordinates,
+            undefined,
+            stampOptions,
           );
       }
     }
@@ -2156,11 +2212,12 @@ export class DocumentService {
    * bucket de documentos finalizados (historia "Anexar hoja existente de información de firmas al
    * documento final"). Esa copia es la versión definitiva: la única que el usuario ve y descarga.
    *
-   * No se inventa una hoja nueva — se usa la que ya existía, `SummaryDocumentService`, que replica
-   * la plantilla de referencia "Firmalo Hoja de Firmas". Aplica igual a firma simple y a firma
-   * avanzada: la diferencia entre ambas ya quedó resuelta antes, en el estampado (la simple llega
-   * con las rúbricas dibujadas en el documento, la avanzada sin imagen porque su evidencia es
-   * criptográfica), y acá solo se concatenan páginas.
+   * Cada tipo de firma tiene su propia hoja (historia "Crear hoja de evidencia específica para
+   * firma avanzada"): `SummaryDocumentService` para la firma simple y
+   * `AdvancedSummaryDocumentService` para la avanzada, que acredita cosas distintas —certificado
+   * del SAT, número de serie y la firma electrónica de cada firmante, en vez de OTP y cifrado del
+   * Audit Trail—. La elección es lo único que se decide acá; de ahí en adelante solo se concatenan
+   * páginas, igual para ambas.
    *
    * Nada de lo que entra se modifica: el original sigue intacto en `created_documents` y el
    * documento firmado en `signed_documents` —que es el insumo con el que se calculó `signedHash`,
@@ -2174,34 +2231,45 @@ export class DocumentService {
   ): Promise<void> {
     const creator = await this.userService.findOne(document.createdBy);
 
-    // "Cifrado" en la plantilla: copia cifrada y reversible (ver `HashService.reverseCiperHash`)
-    // del registro de esta finalización, para poder reconstruir qué se firmó y quién lo firmó
-    // desde la propia hoja.
-    const cipher = await this.hashService.generateCiperHash({
-      documentId: document.id,
-      signedHash: document.signedHash,
-      signedAt: document.signedAt,
-      signers: signerCollaborators.map((collaborator) => ({
-        id: collaborator.id,
-        name: collaboratorDisplayName(collaborator),
-        signedAt: collaborator.signedAt,
-      })),
-    });
+    const sheetDocumentInfo = {
+      id: document.id,
+      documentName: document.fileName,
+      hash: document.signedHash,
+      totalPages: document.totalPages,
+      createdBy: creator.email,
+      verificationUrl: buildPublicDocumentUrl(document.id),
+    };
 
-    const summarySheet = await this.summaryDocumentService.generateSummaryPdf(
-      {
-        id: document.id,
-        documentName: document.fileName,
-        hash: document.signedHash,
-        cipher,
-        totalPages: document.totalPages,
-        createdBy: creator.email,
-        verificationUrl: buildPublicDocumentUrl(document.id),
-      },
-      signerCollaborators.map((collaborator) =>
-        this.toSummarySigner(collaborator),
-      ),
-    );
+    const summarySheet = isAdvancedSignatureDocument(signerCollaborators)
+      ? await this.advancedSummaryDocumentService.generateAdvancedSummaryPdf(
+          sheetDocumentInfo,
+          signerCollaborators.map((collaborator) =>
+            this.toAdvancedSummarySigner(collaborator),
+          ),
+        )
+      : await this.summaryDocumentService.generateSummaryPdf(
+          {
+            ...sheetDocumentInfo,
+            // "Cifrado" en la plantilla de la hoja simple: copia cifrada y reversible (ver
+            // `HashService.reverseCiperHash`) del registro de esta finalización, para poder
+            // reconstruir qué se firmó y quién lo firmó desde la propia hoja. La hoja avanzada no
+            // lo imprime —su integridad la sostienen el certificado y la constancia NOM-151—, así
+            // que solo se calcula en esta rama.
+            cipher: await this.hashService.generateCiperHash({
+              documentId: document.id,
+              signedHash: document.signedHash,
+              signedAt: document.signedAt,
+              signers: signerCollaborators.map((collaborator) => ({
+                id: collaborator.id,
+                name: collaboratorDisplayName(collaborator),
+                signedAt: collaborator.signedAt,
+              })),
+            }),
+          },
+          signerCollaborators.map((collaborator) =>
+            this.toSummarySigner(collaborator),
+          ),
+        );
 
     const finalizedDocument = await this.documentSigningSerivice.appendPdfPages(
       signedDocument,
@@ -2229,6 +2297,42 @@ export class DocumentService {
       rfc: collaborator.rfc,
       ipAddress: collaborator.ipAddress,
       signedAt: collaborator.signedAt,
+      geoLocation: collaborator.geoLoc
+        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
+        : null,
+    };
+  }
+
+  /**
+   * Traduce un colaborador que firmó con e.firma a una tabla de la sección "Firmas" de la hoja de
+   * evidencia avanzada.
+   *
+   * Todo lo específico de la firma avanzada sale de `advancedSignature` —el resultado no sensible
+   * que `EfirmaService.firmar` dejó guardado al validar la e.firma—, nunca de algo que se vuelva a
+   * resolver en vivo: la hoja tiene que describir la firma tal como ocurrió.
+   *
+   * El nombre preferido es el del certificado (el que el SAT tiene registrado para ese RFC, el más
+   * fiel a quién firmó), con el del perfil como respaldo — mismo criterio que
+   * `getAdvancedSignaturePublicView`.
+   */
+  private toAdvancedSummarySigner(
+    collaborator: CollaboratorEntity,
+  ): AdvancedSummaryDocumentSigner {
+    const advancedSignature = collaborator.advancedSignature;
+
+    return {
+      name:
+        advancedSignature?.certificate?.name ??
+        collaboratorDisplayName(collaborator),
+      ipAddress: collaborator.ipAddress,
+      certificateSerialNumber:
+        advancedSignature?.certificate?.serialNumber ?? null,
+      electronicSignature: advancedSignature
+        ? String(advancedSignature.signatureBase64)
+        : null,
+      // `advancedSignature.signedAt` es el momento real del firmado criptográfico; `signedAt` del
+      // colaborador es cuando se registró en la base y solo se usa como respaldo.
+      signedAt: advancedSignature?.signedAt ?? collaborator.signedAt,
       geoLocation: collaborator.geoLoc
         ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
         : null,

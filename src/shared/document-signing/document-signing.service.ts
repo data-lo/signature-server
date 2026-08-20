@@ -8,6 +8,7 @@ import {
   PDFDocument,
   PDFImage,
   PDFName,
+  PDFPage,
   PDFNumber,
   PDFString,
   StandardFonts,
@@ -31,6 +32,27 @@ const MIN_SIGNATURE_SIZE = { width: 60, height: 24 };
 
 // Umbral máximo: firmas más grandes que esto se consideran demasiado grandes
 const MAX_SIGNATURE_SIZE = { width: 320, height: 128 };
+
+/**
+ * Borde blanco que se dibuja alrededor de un código QR estampado ("zona de silencio").
+ *
+ * La norma QR exige un margen libre alrededor del código; sin él, el texto del documento pegado al
+ * código impide leerlo — medido: con texto a 0pt el código NO se decodifica a 150 DPI, y con 2pt
+ * de separación sí. El PNG se genera sin margen propio a propósito (así el código aprovecha todo
+ * el lado de la caja y sus módulos quedan lo más grandes posible), de modo que el margen se pinta
+ * acá, POR FUERA del código y no a costa de su tamaño.
+ */
+const QR_QUIET_ZONE_PT = 4;
+
+/**
+ * Lado mínimo, en puntos, para que un QR estampado siga siendo escaneable.
+ *
+ * Medido con un decodificador real sobre la página rasterizada: a 80pt el código se lee a 150 y
+ * 300 DPI; a 24pt (el mínimo que admite una caja de firma) no se lee a ninguna resolución, porque
+ * sus módulos quedan en ~0.12mm. Por debajo de este umbral se registra una advertencia en vez de
+ * estampar en silencio un código que nadie va a poder leer.
+ */
+const QR_MIN_SCANNABLE_SIDE_PT = 60;
 
 // Rutas donde puede encontrarse el perfil ICC sRGB (probadas en orden)
 const SRGB_ICC_PATHS = [
@@ -109,6 +131,9 @@ export class PdfSignatureService {
    *                        usuario"). Por defecto la última página, mismo comportamiento que
    *                        antes de que existiera soporte multipágina — ningún caller que no lo
    *                        pase explícitamente cambia de comportamiento.
+   * @param options         `preserveAspectRatio` encaja la imagen dentro de la caja sin
+   *                        deformarla, centrada. Lo usa el QR de la firma avanzada (ver más
+   *                        abajo); las rúbricas siguen ocupando la caja completa, como siempre.
    * @returns               PDF firmado en formato PDF/A-2B como Buffer.
    */
   async mergeSignatureIntoPdf(
@@ -116,6 +141,7 @@ export class PdfSignatureService {
     signatureBuffer: Buffer,
     coordinates: SignatureCoordinates,
     pageIndex?: number,
+    options?: { preserveAspectRatio?: boolean },
   ): Promise<Buffer> {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
@@ -148,11 +174,16 @@ export class PdfSignatureService {
     const drawSize = this.resolveSignatureSize(coordinates);
 
     // Paso 6: dibujar la firma en la página con las coordenadas, dimensiones y opacidad resueltas
+    const placement = options?.preserveAspectRatio
+      ? this.fitPreservingAspectRatio(signatureImage, coordinates, drawSize)
+      : { x: coordinates.x, y: coordinates.y, ...drawSize };
+
+    if (options?.preserveAspectRatio) {
+      this.drawQuietZone(targetPage, placement);
+    }
+
     targetPage.drawImage(signatureImage, {
-      x: coordinates.x,
-      y: coordinates.y,
-      width: drawSize.width,
-      height: drawSize.height,
+      ...placement,
       opacity: coordinates.opacity ?? 1.0,
     });
 
@@ -378,6 +409,62 @@ export class PdfSignatureService {
     this.applyPdfA2bConformance(pdfDoc);
     const bytes = await pdfDoc.save({ useObjectStreams: false });
     return Buffer.from(bytes);
+  }
+
+  /**
+   * Pinta el borde blanco alrededor del código y avisa si quedó demasiado chico para leerse.
+   *
+   * El rectángulo se dibuja por fuera del código (puede sobresalir unos puntos de la caja de
+   * firma): es lo que garantiza la zona de silencio sin recortarle tamaño a los módulos.
+   */
+  private drawQuietZone(
+    page: PDFPage,
+    placement: { x: number; y: number; width: number; height: number },
+  ): void {
+    page.drawRectangle({
+      x: placement.x - QR_QUIET_ZONE_PT,
+      y: placement.y - QR_QUIET_ZONE_PT,
+      width: placement.width + QR_QUIET_ZONE_PT * 2,
+      height: placement.height + QR_QUIET_ZONE_PT * 2,
+      color: rgb(1, 1, 1),
+    });
+
+    if (placement.width < QR_MIN_SCANNABLE_SIDE_PT) {
+      this.logger.warn(
+        `El código QR se estampó a ${placement.width.toFixed(1)}pt de lado, por debajo del mínimo ` +
+          `escaneable (${QR_MIN_SCANNABLE_SIDE_PT}pt): la caja de firma asignada es demasiado ` +
+          'chica y es probable que ningún lector consiga leerlo.',
+      );
+    }
+  }
+
+  /**
+   * Encaja la imagen dentro de la caja resuelta SIN deformarla, centrada en ella.
+   *
+   * La caja de firma es un rectángulo apaisado (200x80 por defecto), pensado para una rúbrica
+   * manuscrita: estirar ahí una imagen cuadrada la deja el doble de ancha que de alta. Para una
+   * rúbrica eso es un detalle estético, pero el código QR de una firma avanzada deja de ser
+   * cuadrado y los lectores dejan de reconocer su patrón — por eso se escala al lado menor de la
+   * caja y se centra, en vez de rellenarla.
+   */
+  private fitPreservingAspectRatio(
+    image: PDFImage,
+    coordinates: SignatureCoordinates,
+    boxSize: { width: number; height: number },
+  ): { x: number; y: number; width: number; height: number } {
+    const scale = Math.min(
+      boxSize.width / image.width,
+      boxSize.height / image.height,
+    );
+    const width = image.width * scale;
+    const height = image.height * scale;
+
+    return {
+      x: coordinates.x + (boxSize.width - width) / 2,
+      y: coordinates.y + (boxSize.height - height) / 2,
+      width,
+      height,
+    };
   }
 
   /**
