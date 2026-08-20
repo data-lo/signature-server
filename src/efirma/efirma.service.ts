@@ -200,7 +200,7 @@ export class EfirmaService implements OnModuleInit {
     const infoCertificado = this.parsearCertificado(cerBuffer);
     this.validarVigencia(infoCertificado);
     const emisorInmediato = this.validarCadenaConfianza(cerBuffer);
-    let ocspEvidence: OCSPEvidence | undefined;
+    let ocspEvidence: OCSPEvidence;
 
     try {
       ocspEvidence = await this.ocspService.verifyRevokedOCSP(cerBuffer, emisorInmediato);
@@ -223,7 +223,7 @@ export class EfirmaService implements OnModuleInit {
     this.logger.log(
       `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`,
     );
-
+    this.logger.log(`Desde efirma, OCSPEvidence ${ocspEvidence}`)
     return {
       signatureBase64,
       algorithm: 'sha256',
@@ -236,7 +236,14 @@ export class EfirmaService implements OnModuleInit {
         certificateNumber: infoCertificado.numeroCertificado,
         certificatePem: infoCertificado.certificadoPem,
       },
-      ocspEvidence
+      ocspEvidence:{
+        status: ocspEvidence.status,
+        verifiedAt: ocspEvidence.verifiedAt,
+        thisUpdate: ocspEvidence.thisUpdate,
+        nextUpdate: ocspEvidence.nextUpdate,
+        ocspResponse: ocspEvidence.ocspResponse,
+        ocspUrl: ocspEvidence.ocspUrl
+      }
     };
   }
 
