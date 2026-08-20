@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentController } from './document.controller';
 import { DocumentService } from './document.service';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
+import type { Response } from 'express';
 
 describe('DocumentController', () => {
   let controller: DocumentController;
@@ -11,6 +13,7 @@ describe('DocumentController', () => {
     findDetailForUser: jest.Mock;
     getDocumentMinioURL: jest.Mock;
     getPublicDocumentView: jest.Mock;
+    getPublicSealArtifact: jest.Mock;
     assertUserHasAccess: jest.Mock;
     submitForAuthorization: jest.Mock;
     sign: jest.Mock;
@@ -37,6 +40,7 @@ describe('DocumentController', () => {
       findDetailForUser: jest.fn(),
       getDocumentMinioURL: jest.fn(),
       getPublicDocumentView: jest.fn(),
+      getPublicSealArtifact: jest.fn(),
       assertUserHasAccess: jest.fn(),
       submitForAuthorization: jest.fn(),
       sign: jest.fn(),
@@ -98,6 +102,48 @@ describe('DocumentController', () => {
     expect(documentService.getPublicDocumentView).toHaveBeenCalledWith('doc-1');
     expect(documentService.assertUserHasAccess).not.toHaveBeenCalled();
     expect(result).toBe(response);
+  });
+
+  /**
+   * Descarga de un artefacto de la constancia (historia "Actualizar vista pública de verificación
+   * de documentos según estado y tipo de firma"). Es de los pocos endpoints que escriben en la
+   * respuesta a mano en vez de devolver un objeto, así que lo que hay que verificar son las
+   * cabeceras: sin `Content-Disposition: attachment` el navegador intentaría renderizar el token
+   * del PSC en vez de guardarlo.
+   */
+  it('getPublicSealArtifact sirve el archivo como adjunto, sin ningún chequeo de acceso', async () => {
+    const content = Buffer.from('%PDF-1.4 constancia');
+    documentService.getPublicSealArtifact.mockResolvedValue({
+      content,
+      contentType: 'application/pdf',
+      fileName: 'constancia-nom151-doc-1.pdf',
+    });
+    const response = { setHeader: jest.fn(), send: jest.fn() };
+
+    await controller.getPublicSealArtifact(
+      'doc-1',
+      SEAL_ARTIFACT_ENUM.NOM151,
+      response as unknown as Response,
+    );
+
+    expect(documentService.getPublicSealArtifact).toHaveBeenCalledWith(
+      'doc-1',
+      SEAL_ARTIFACT_ENUM.NOM151,
+    );
+    expect(documentService.assertUserHasAccess).not.toHaveBeenCalled();
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'application/pdf',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="constancia-nom151-doc-1.pdf"',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Length',
+      String(content.length),
+    );
+    expect(response.send).toHaveBeenCalledWith(content);
   });
 
   it('findAll delega en documentService.findWithFilters con el userId y el X-Account-Id', () => {
