@@ -51,7 +51,10 @@ import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { GeolocationDto } from './dto/sign-document.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
-import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
+import {
+  DocumentPublicViewResponse,
+  PublicSignerData,
+} from './interfaces/responses/document-public-view-response';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { getNextPendingSigner, isSignerTurn } from './utils/next-signer.util';
 import {
@@ -88,8 +91,34 @@ import type { SealDocumentDto } from './seal/dto/seal-document.dto';
 import { SealEntity } from './seal/entities/seal.entity';
 import { DocumentAlreadySealedException } from './seal/exceptions/seal.exceptions';
 import { toConservationRecord } from './summary-document/conservation-record.util';
+import {
+  ADVANCED_SIGNATURE_BACKING_LABEL,
+  ADVANCED_SIGNATURE_TYPE_LABEL,
+  SIMPLE_SIGNATURE_BACKING_LABEL,
+  SIMPLE_SIGNATURE_TYPE_LABEL,
+} from './summary-document/signature-legal-text';
+import {
+  SEAL_ARTIFACT_DESCRIPTORS,
+  SEAL_ARTIFACT_ENUM,
+  type PublicSealArtifact,
+} from './seal/seal-artifacts';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
+
+/**
+ * Normaliza a ISO 8601 las fechas que la vista pública devuelve. El mismo campo llega como
+ * `Date` cuando viene de una columna de tipo fecha y como `string` cuando se releyó de una
+ * columna jsonb (`advancedSignature.signedAt`), y una fecha inválida no debe romper toda la
+ * respuesta: se prefiere omitir el renglón a devolver "Invalid Date".
+ */
+function toIsoStringOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
 
 /** .key/.cer suben por separado como multipart (no forman parte de SignDocumentDto). */
 interface AdvancedSignatureInput {
@@ -1018,6 +1047,20 @@ export class DocumentService {
   ): Promise<DocumentPublicViewResponse> {
     const document = await this.findOne(documentId);
 
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: {
+        documentId,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { account: { user: true } },
+      order: { signingOrder: 'ASC', createdAt: 'ASC' },
+    });
+
+    // Un documento a medio firmar no expone NADA más que su nombre y quiénes deben firmarlo (ver
+    // historia "Actualizar vista pública de verificación de documentos según estado y tipo de
+    // firma"). No es solo diseño: mientras la firma no se completa no hay evidencia que constatar,
+    // y publicar el estatus individual convertiría esta URL —que no pide sesión— en un tablero de
+    // quién ya firmó y quién no para cualquiera que tenga el id.
     if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
       return {
         success: true,
@@ -1026,8 +1069,17 @@ export class DocumentService {
           id: document.id,
           fileName: document.fileName,
           status: document.status,
+          isCompleted: false,
           secureUrl: null,
           expiresIn: null,
+          hash: null,
+          totalPages: null,
+          createdBy: null,
+          conservationRecord: null,
+          signers: signerCollaborators.map((collaborator) =>
+            this.toPendingPublicSigner(collaborator),
+          ),
+          downloads: { nom151: false, timestamp: false, canonical: false },
         },
       };
     }
@@ -1038,6 +1090,25 @@ export class DocumentService {
       BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
 
+    // Solo se sellan los documentos con firma AVANZADA (ver `sealAdvancedSignatures`) y el sellado
+    // es best-effort: un documento de firma simple, o uno cuyo sellado falló, se completa sin
+    // constancia. La vista pública tiene que poder mostrarse igual en ese caso.
+    const seal = await this.sealDocumentUseCase
+      .findByDocumentId(document.id)
+      .catch(() => null);
+
+    const creator = await this.userService
+      .findOne(document.createdBy)
+      .catch(() => null);
+
+    const signers = await Promise.all(
+      signerCollaborators.map((collaborator) =>
+        this.toCompletedPublicSigner(document.id, collaborator),
+      ),
+    );
+
+    const conservationRecord = toConservationRecord(seal);
+
     return {
       success: true,
       message: 'Documento obtenido correctamente',
@@ -1045,9 +1116,163 @@ export class DocumentService {
         id: document.id,
         fileName: document.fileName,
         status: document.status,
+        isCompleted: true,
         secureUrl,
         expiresIn,
+        hash: document.signedHash ?? document.originalHash,
+        totalPages: document.totalPages,
+        // El mismo dato que imprime la hoja de evidencia anexada al PDF, para que la pantalla y el
+        // documento no digan cosas distintas sobre quién lo creó.
+        createdBy: creator?.email ?? null,
+        conservationRecord: conservationRecord
+          ? {
+              tsaCertificate: conservationRecord.tsaCertificate ?? null,
+              serialNumber: conservationRecord.serialNumber ?? null,
+              issuedAt: toIsoStringOrNull(conservationRecord.issuedAt),
+            }
+          : null,
+        signers,
+        downloads: {
+          nom151: Boolean(seal?.integritySeal?.certificatePdfBase64),
+          timestamp: Boolean(seal?.timestampSeal?.tokenBase64),
+          canonical: Boolean(seal?.canonicalPayload),
+        },
       },
+    };
+  }
+
+  /**
+   * Firmante de un documento TODAVÍA PENDIENTE: solo su nombre. Los demás campos van en null a
+   * propósito y no se omiten del objeto, para que el frontend tenga una sola forma que renderizar
+   * en los dos estados.
+   */
+  private toPendingPublicSigner(
+    collaborator: CollaboratorEntity,
+  ): PublicSignerData {
+    return {
+      id: collaborator.id,
+      name: collaboratorDisplayName(collaborator),
+      signatureType: null,
+      signatureTypeLabel: '',
+      legalBacking: '',
+      ipAddress: '',
+      signedAt: null,
+      geoLocation: null,
+      otpCode: null,
+      certificateSerialNumber: null,
+      electronicSignature: null,
+    };
+  }
+
+  /**
+   * Firmante de un documento COMPLETADO, con la evidencia que corresponde a su tipo de firma.
+   *
+   * Es la misma evidencia que ya imprime la hoja de firmas anexada al PDF (ver `toSummarySigner` /
+   * `toAdvancedSummarySigner`), campo por campo — esta pantalla es la versión consultable de esa
+   * hoja, no una segunda fuente de verdad con criterios propios.
+   *
+   * Los campos exclusivos del otro tipo se devuelven en `null`, nunca en cadena vacía: es lo que
+   * permite al frontend ocultar el renglón entero en vez de pintarlo sin valor.
+   */
+  private async toCompletedPublicSigner(
+    documentId: string,
+    collaborator: CollaboratorEntity,
+  ): Promise<PublicSignerData> {
+    const advancedSignature = collaborator.advancedSignature;
+    const geoLocation = collaborator.geoLoc
+      ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
+      : null;
+
+    if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+      return {
+        id: collaborator.id,
+        // El nombre del certificado es el que el SAT tiene registrado para ese RFC — mismo criterio
+        // que `getAdvancedSignaturePublicView` y que la hoja de evidencia avanzada.
+        name:
+          advancedSignature?.certificate?.name ??
+          collaboratorDisplayName(collaborator),
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        signatureTypeLabel: ADVANCED_SIGNATURE_TYPE_LABEL,
+        legalBacking: ADVANCED_SIGNATURE_BACKING_LABEL,
+        ipAddress: collaborator.ipAddress,
+        // `advancedSignature.signedAt` es el momento real del firmado criptográfico; el del
+        // colaborador es cuándo se registró en la base y solo sirve de respaldo.
+        signedAt: toIsoStringOrNull(
+          advancedSignature?.signedAt ?? collaborator.signedAt,
+        ),
+        geoLocation,
+        otpCode: null,
+        certificateSerialNumber:
+          advancedSignature?.certificate?.serialNumber ?? null,
+        electronicSignature: advancedSignature
+          ? String(advancedSignature.signatureBase64)
+          : null,
+      };
+    }
+
+    return {
+      id: collaborator.id,
+      name: collaboratorDisplayName(collaborator),
+      signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+      signatureTypeLabel: SIMPLE_SIGNATURE_TYPE_LABEL,
+      legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
+      ipAddress: collaborator.ipAddress,
+      signedAt: toIsoStringOrNull(collaborator.signedAt),
+      geoLocation,
+      // Evidencia de con qué código se acreditó su identidad. No siempre existe: la verificación
+      // por OTP depende de `document.requiresVerification`, así que un documento que no la exigió
+      // se completa sin código y el renglón simplemente no se muestra.
+      otpCode: await this.verificationCodeService.findConsumedCode(
+        documentId,
+        collaborator.id,
+        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      ),
+      certificateSerialNumber: null,
+      electronicSignature: null,
+    };
+  }
+
+  /**
+   * Artefacto de la constancia del PSC listo para descargar desde la vista pública.
+   *
+   * Los tres salen del sello ya persistido (`document_seals`) y no se le vuelven a pedir al PSC:
+   * Seal Service no tiene base de datos, así que lo que se guardó al sellar es la única copia que
+   * existe. 404 cuando el documento no está firmado, no tiene sello, o ese artefacto en concreto
+   * no vino en la respuesta del proveedor.
+   */
+  async getPublicSealArtifact(
+    documentId: string,
+    artifact: SEAL_ARTIFACT_ENUM,
+  ): Promise<PublicSealArtifact> {
+    const document = await this.findOne(documentId);
+
+    if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
+      throw new NotFoundException(
+        'El documento todavía no se ha completado de firmar',
+      );
+    }
+
+    const seal = await this.sealDocumentUseCase.findByDocumentId(documentId);
+
+    if (!seal) {
+      throw new NotFoundException(
+        'El documento no tiene constancia de conservación',
+      );
+    }
+
+    const descriptor = SEAL_ARTIFACT_DESCRIPTORS[artifact];
+    const rawValue = descriptor.read(seal);
+
+    if (!rawValue) {
+      throw new NotFoundException(
+        `La constancia del documento no incluye ${descriptor.label}`,
+      );
+    }
+
+    return {
+      content: Buffer.from(rawValue, descriptor.encoding),
+      contentType: descriptor.contentType,
+      fileName: `${descriptor.fileNamePrefix}-${documentId}${descriptor.extension}`,
     };
   }
 
@@ -1831,6 +2056,7 @@ export class DocumentService {
       certificate: {
         rfc: signature.certificate.rfc,
         name: signature.certificate.name,
+        issuer: signature.certificate.issuer,
         serialNumber: signature.certificate.serialNumber,
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,

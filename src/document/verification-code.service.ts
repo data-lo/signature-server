@@ -102,4 +102,28 @@ export class VerificationCodeService {
     });
     return Boolean(record);
   }
+
+  /**
+   * Código que ese firmante efectivamente consumió, o `null` si no consumió ninguno.
+   *
+   * Lo usa la vista pública de verificación para el renglón "OTP Code" de cada firma simple (ver
+   * historia "Actualizar vista pública de verificación de documentos según estado y tipo de
+   * firma"): es la evidencia de con qué código se acreditó su identidad, el mismo dato que la
+   * plantilla de la hoja de firmas contempla.
+   *
+   * Se toma el MÁS RECIENTE (`usedAt` descendente): un firmante puede haber pedido varios códigos
+   * —y consumido más de uno si un intento anterior no completó la firma—, y el que sustenta la
+   * firma registrada es el último.
+   */
+  async findConsumedCode(
+    documentId: string,
+    signerId: string,
+    event: VERIFICATION_EVENT_ENUM,
+  ): Promise<string | null> {
+    const record = await this.verificationCodeRepository.findOne({
+      where: { documentId, signerId, event, isUsed: true },
+      order: { usedAt: 'DESC' },
+    });
+    return record?.code ?? null;
+  }
 }
