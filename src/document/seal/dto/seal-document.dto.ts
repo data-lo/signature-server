@@ -5,7 +5,6 @@ import {
   IsDateString,
   IsNotEmpty,
   IsObject,
-  IsOptional,
   IsString,
   IsUUID,
   ValidateNested,
