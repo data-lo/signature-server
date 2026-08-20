@@ -45,6 +45,11 @@ export class SatCertificateDto {
   @IsNotEmpty()
   name: string;
 
+  @ApiProperty({example: 'SERVICIO DE ADMINISTRACION TIRIBUTARIA'})
+  @IsString()
+  @IsNotEmpty()
+  issuer:string;
+
   @ApiProperty({ example: '00001000000512345678' })
   @IsString()
   @IsNotEmpty()
