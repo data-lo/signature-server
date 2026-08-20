@@ -55,6 +55,12 @@ El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar 
 
 El QR se estampa con `preserveAspectRatio`: la caja de firma es apaisada (200x80 por defecto, pensada para una rúbrica) y estirar ahí un código cuadrado hace que los lectores dejen de reconocer su patrón, así que se escala al lado menor de la caja y se centra. Las rúbricas siguen ocupando la caja completa.
 
+Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt alrededor del código. El PNG se genera sin margen propio a propósito —así los módulos quedan lo más grandes posible dentro de la caja— y el borde se dibuja por fuera. No es cosmético: medido con un decodificador real sobre la página rasterizada, un QR con el texto del documento pegado **no se lee** a 150 DPI, y con la separación sí.
+
+**Tamaño mínimo.** Una caja de firma puede ser tan chica como 60x24pt, y ahí el QR queda en 24pt de lado (~8.5mm, módulos de 0.12mm): no lo lee ningún decodificador a 96, 150 ni 300 DPI. Se estampa igual —quitarlo dejaría la firma avanzada sin representación visual— pero se registra una advertencia (`PdfSignatureService`) en vez de producir en silencio un código ilegible. A partir de ~60pt de lado se lee sin problema en papel.
+
+**Densidad.** Con los seis renglones de datos más la URL de la constancia, el código sale de 69x69 módulos. En la caja por defecto (80pt de lado) eso deja ~1.55 px por módulo a 96 DPI —pantalla estándar al 100%—, que está en el límite: a esa resolución decodifica o no según dónde caigan los bordes de módulo respecto a la rejilla de píxeles. A 150 DPI o más (impresión, pantalla HiDPI, o simplemente acercar el zoom) se lee siempre. Bajar de 53 módulos exigiría quitar la URL de la constancia o acortarla.
+
 ### 1.4 Integridad y auditoría
 
 - `HashService` combina tres mecanismos:
