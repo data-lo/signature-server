@@ -735,6 +735,93 @@ describe('DocumentService', () => {
         expect.objectContaining({ creatorRfc: null }),
       );
     });
+
+    /**
+     * Historia "Mostrar tipo de firma en las tablas de documentos": el tipo no vive en el
+     * documento sino en cada firmante, y el listado lo resuelve para la columna del frontend.
+     */
+    describe('tipo de firma del documento', () => {
+      function listWithSigners(collaborators: unknown[]) {
+        const qb = createMockQueryBuilder(
+          [
+            {
+              id: 'doc-1',
+              fileName: 'contrato.pdf',
+              fileType: 'application/pdf',
+              totalPages: 1,
+              status: DOCUMENT_STATUS_ENUM.PENDING,
+              createdAt: new Date('2026-03-15T23:55:00.000Z'),
+              collaborators,
+              requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+            },
+          ],
+          1,
+        );
+        documentRepository.createQueryBuilder.mockReturnValue(qb);
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          organizationId: null,
+        });
+
+        return service.findWithFilters('user-1', 'account-1', query);
+      }
+
+      function signer(signatureType: SIGNATURE_TYPE_ENUM | null) {
+        return {
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+          signatureType,
+          signingOrder: 0,
+        };
+      }
+
+      it('devuelve el tipo de firma que comparten los firmantes', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.FIEL }),
+        );
+      });
+
+      it('ignora a los colaboradores que no firman', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.SIMPLE),
+          {
+            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            signatureType: null,
+          },
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({
+            signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+          }),
+        );
+      });
+
+      // Documentos del endpoint antiguo (POST /document), que nunca asignó tipo de firma: null
+      // explícito en vez de suponer uno — el frontend muestra un guion.
+      it('devuelve null si los firmantes no tienen tipo de firma registrado', async () => {
+        const result = await listWithSigners([signer(null)]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: null }),
+        );
+      });
+
+      it('devuelve null si un documento mezclara tipos de firma', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.SIMPLE),
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: null }),
+        );
+      });
+    });
   });
 
   describe('sign', () => {
