@@ -43,6 +43,18 @@ export class SealEntity {
   @Column({ name: 'nom151_evidence', type: 'jsonb' })
   integritySeal: IntegritySeal;
 
+  /**
+   * Momento en que el PSC emitió la constancia (`sealedAt` de la respuesta de Seal Service).
+   *
+   * No es lo mismo que `createdAt`: ese es cuándo insertamos la fila. La hoja de evidencia rotula
+   * este valor como "EMITIDO" en la tabla de la Constancia de Conservación (NOM-151), y para un
+   * documento legal la diferencia importa.
+   *
+   * Nullable porque las filas selladas antes de existir esta columna no lo tienen.
+   */
+  @Column({ name: 'sealed_at', type: 'timestamptz', nullable: true })
+  sealedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

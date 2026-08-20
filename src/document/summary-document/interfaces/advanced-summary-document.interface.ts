@@ -1,3 +1,5 @@
+import { ConservationRecordInfo } from '../conservation-record.util';
+
 /**
  * Datos de entrada para generar la hoja de evidencia de FIRMA AVANZADA (ver documento de
  * referencia "Hoja de evidencia de firma avanzada"). Igual que su equivalente de firma simple,
@@ -24,6 +26,11 @@ export interface AdvancedSummaryDocumentInfo {
    * pública del documento). Si se omite, se codifica el `id` del documento.
    */
   verificationUrl?: string;
+  /**
+   * Constancia de conservación (NOM-151) emitida por el PSC para este documento, o `null` si no
+   * llegó a emitirse — el sellado es best-effort. Ver `toConservationRecord`.
+   */
+  conservationRecord?: ConservationRecordInfo | null;
 }
 
 /**
