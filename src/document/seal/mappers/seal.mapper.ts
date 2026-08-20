@@ -27,6 +27,13 @@ export class SealMapper {
        * de este mismo documento, así que la evidencia se puede auditar de punta a punta.
        */
       canonicalPayload: response.canonicalString,
+      /**
+       * Bug corregido: `sealedAt` se descartaba, contradiciendo el criterio de esta misma clase
+       * ("Seal Service no tiene base de datos... esta es la única oportunidad de guardarlo"). Es el
+       * momento de emisión que reporta el PSC, y es lo que la hoja de evidencia imprime como
+       * "EMITIDO"; `created_at` no sirve de sustituto, porque mide cuándo insertamos la fila.
+       */
+      sealedAt: response.sealedAt ? new Date(response.sealedAt) : null,
       timestampSeal: {
         isValid: response.timeStamp.status,
         processedHash: response.timeStamp.hashProcessed,
