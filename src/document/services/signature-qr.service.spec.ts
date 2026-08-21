@@ -36,15 +36,6 @@ const VERIFICATION_URL =
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /**
- * Constancia pública de ESA firma, con la forma que arma `buildAdvancedSignatureUrl`:
- * `/public/documents/:id/signatures/:collaboratorId`. Es una pantalla de la aplicación —nunca la
- * URL prefirmada del archivo en MinIO—, y por eso se escribe aquí tal cual: si el QR dejara de
- * llevar a la vista pública, estas pruebas son las que tienen que fallar.
- */
-const VERIFICATION_URL =
-  'https://app.ejemplo.com/public/documents/doc-1/signatures/collab-1';
-
-/**
  * Generar y decodificar códigos QR de 512px es trabajo de CPU real: sueltas estas pruebas tardan
  * ~3s, pero corriendo la suite completa en paralelo llegan a pasarse de los 5s por defecto de jest
  * y fallaban por timeout de forma intermitente. El límite se sube acá en vez de bajar la

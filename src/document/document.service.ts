@@ -1157,7 +1157,6 @@ export class DocumentService {
       legalBacking: '',
       ipAddress: '',
       signedAt: null,
-      geoLocation: null,
       otpCode: null,
       certificateSerialNumber: null,
       electronicSignature: null,
@@ -1173,15 +1172,17 @@ export class DocumentService {
    *
    * Los campos exclusivos del otro tipo se devuelven en `null`, nunca en cadena vacía: es lo que
    * permite al frontend ocultar el renglón entero en vez de pintarlo sin valor.
+   *
+   * La geolocalización del firmante ya no viaja en esta respuesta (historia "Ocultar
+   * geolocalización en hojas de firma y vistas públicas", ver `PublicSignerData`): la hoja dejó de
+   * imprimirla y esta ruta —que abre cualquiera con el id, sin sesión— era el último lugar donde
+   * seguía publicándose. Se sigue guardando en `collaborator.geoLoc` como evidencia.
    */
   private async toCompletedPublicSigner(
     documentId: string,
     collaborator: CollaboratorEntity,
   ): Promise<PublicSignerData> {
     const advancedSignature = collaborator.advancedSignature;
-    const geoLocation = collaborator.geoLoc
-      ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
-      : null;
 
     if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       return {
@@ -1200,7 +1201,6 @@ export class DocumentService {
         signedAt: toIsoStringOrNull(
           advancedSignature?.signedAt ?? collaborator.signedAt,
         ),
-        geoLocation,
         otpCode: null,
         certificateSerialNumber:
           advancedSignature?.certificate?.serialNumber ?? null,
@@ -1218,7 +1218,6 @@ export class DocumentService {
       legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
       ipAddress: collaborator.ipAddress,
       signedAt: toIsoStringOrNull(collaborator.signedAt),
-      geoLocation,
       // Evidencia de con qué código se acreditó su identidad. No siempre existe: la verificación
       // por OTP depende de `document.requiresVerification`, así que un documento que no la exigió
       // se completa sin código y el renglón simplemente no se muestra.

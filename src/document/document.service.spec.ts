@@ -2755,7 +2755,6 @@ describe('DocumentService', () => {
               legalBacking: '',
               ipAddress: '',
               signedAt: null,
-              geoLocation: null,
               otpCode: null,
               certificateSerialNumber: null,
               electronicSignature: null,
@@ -2768,7 +2767,6 @@ describe('DocumentService', () => {
               legalBacking: '',
               ipAddress: '',
               signedAt: null,
-              geoLocation: null,
               otpCode: null,
               certificateSerialNumber: null,
               electronicSignature: null,
@@ -2937,7 +2935,6 @@ describe('DocumentService', () => {
               legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
               ipAddress: '187.190.12.4',
               signedAt: '2026-08-14T18:24:11.000Z',
-              geoLocation: '19.4326, -99.1332',
               otpCode: '482915',
               certificateSerialNumber: null,
               electronicSignature: null,
@@ -2986,7 +2983,6 @@ describe('DocumentService', () => {
               ipAddress: '187.190.12.4',
               // El momento del firmado criptográfico, no el del registro en base.
               signedAt: '2026-08-14T18:24:11.000Z',
-              geoLocation: '19.4326, -99.1332',
               otpCode: null,
               certificateSerialNumber: '00001000000512345678',
               electronicSignature: 'firma-base64',
@@ -3014,19 +3010,30 @@ describe('DocumentService', () => {
           expect(result.data.signers[0].otpCode).toBeNull();
         });
 
-        it('sin geolocalización capturada, el campo va en null', async () => {
+        /**
+         * La ubicación desde la que firmó una persona NO sale por esta ruta, aunque el
+         * colaborador la tenga registrada y la hoja de firmas del PDF sí la imprima: la hoja
+         * viaja dentro del documento, hacia quienes son parte de él, mientras que esta respuesta
+         * la obtiene cualquiera que tenga el id, sin sesión y sin cuenta.
+         *
+         * Se afirma sobre la AUSENCIA de la propiedad y no sobre un `null`: dejar el campo en la
+         * respuesta invitaba a volver a llenarlo.
+         */
+        it('nunca publica la geolocalización del firmante, aunque esté registrada', async () => {
           documentRepository.findOne.mockResolvedValue(signedDocument());
           collaboratorRepository.find.mockResolvedValue([
             buildSigner({
               id: 'collab-1',
+              status: SIGNEE_STATUS_ENUM.SIGNED,
               signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-              geoLoc: null,
+              geoLoc: { latitude: 19.4326, longitude: -99.1332 },
             }),
           ]);
 
           const result = await service.getPublicDocumentView('doc-1');
 
-          expect(result.data.signers[0].geoLocation).toBeNull();
+          expect(result.data.signers[0]).not.toHaveProperty('geoLocation');
+          expect(JSON.stringify(result.data)).not.toContain('19.4326');
         });
       });
     });
