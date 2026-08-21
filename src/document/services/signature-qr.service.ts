@@ -21,7 +21,6 @@ export interface AdvancedSignatureQrData {
   signerName: string;
   rfc?: string | null;
   ipAddress?: string | null;
-  geoLocation?: { latitude: number; longitude: number } | null;
   /** Momento real de la firma (`advancedSignature.signedAt`, con el del colaborador como respaldo). */
   signedAt?: Date | string | null;
   /** Constancia pública de esta firma — se conserva como última línea para que el QR siga llevando a la verificación en línea. */
@@ -44,9 +43,14 @@ const EMPTY_FIELD_PLACEHOLDER = 'No disponible';
  * una firma simple: dejar constancia visible de quién firmó.
  *
  * El contenido es TEXTO PLANO con los datos del firmante y del evento de firma, no solo un enlace:
- * quien escanea el código con cualquier lector ve ahí mismo quién firmó, cuándo, desde dónde y con
- * qué RFC, sin depender de tener red ni de que la plataforma siga en línea. La URL de la
- * constancia va como última línea para no perder la verificación en línea que ya existía.
+ * quien escanea el código con cualquier lector ve ahí mismo quién firmó, cuándo y con qué RFC,
+ * sin depender de tener red ni de que la plataforma siga en línea. La URL de la constancia va
+ * como última línea para no perder la verificación en línea que ya existía.
+ *
+ * NO incluye la geolocalización (historia "Ocultar geolocalización en hojas de firma y vistas
+ * públicas"): el dato se sigue registrando en `CollaboratorEntity.geoLoc`, solo dejó de
+ * publicarse. Los QR ya estampados conservan el contenido con el que se generaron — son parte
+ * del PDF y no se regeneran.
  *
  * Devuelve un PNG para que el estampado sea exactamente el mismo camino que el de una rúbrica
  * (`DocumentSigningService.mergeSignatureIntoPdf`): el QR no necesita un mecanismo de posicionado
@@ -72,7 +76,6 @@ export class SignatureQrService {
       `RFC: ${data.rfc || EMPTY_FIELD_PLACEHOLDER}`,
       `Fecha y hora: ${this.formatSignedAt(data.signedAt)}`,
       `IP: ${data.ipAddress || EMPTY_FIELD_PLACEHOLDER}`,
-      `Geolocalización: ${this.formatGeoLocation(data.geoLocation)}`,
       `Constancia: ${data.verificationUrl}`,
     ].join('\n');
   }
@@ -120,17 +123,6 @@ export class SignatureQrService {
       hour12: false,
       timeZoneName: 'shortOffset',
     }).format(date);
-  }
-
-  /** Seis decimales: ~11 cm de precisión, más que suficiente para lo que reporta un navegador. */
-  private formatGeoLocation(
-    geoLocation: { latitude: number; longitude: number } | null | undefined,
-  ): string {
-    if (!geoLocation) {
-      return EMPTY_FIELD_PLACEHOLDER;
-    }
-
-    return `${geoLocation.latitude.toFixed(6)}, ${geoLocation.longitude.toFixed(6)}`;
   }
 }
 

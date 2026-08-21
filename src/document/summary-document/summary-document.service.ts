@@ -153,7 +153,6 @@ export class SummaryDocumentService {
         ['Sustentada', SIGNATURE_BACKING_LABEL],
         ['OTP CODE', signer.otpCode ?? ''],
         ['Fecha de Firma', formatSheetDate(signer.signedAt)],
-        ['Geo Loc', signer.geoLocation ?? ''],
       ],
       index === 0 ? 0 : 12,
     );
