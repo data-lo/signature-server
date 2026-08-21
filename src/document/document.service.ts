@@ -2076,16 +2076,22 @@ export class DocumentService {
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,
       },
-      ocspEvidence:{
-       status:signature.ocspEvidence.status,
-       // Mismo motivo que `signedAt`: recién firmada llega como `Date`, releída de la columna
-       // jsonb llega como string. Llamar `.toISOString()` directo reventaba la segunda ruta —y
-       // con ella el sellado completo— en cuanto un documento tenía más de un firmante FIEL: la
-       // evidencia del que ya había firmado siempre viene de jsonb.
-       verifiedAt:new Date(signature.ocspEvidence.verifiedAt).toISOString(),
-       ocspResponse:signature.ocspEvidence.ocspResponse,
-       ocspUrl:signature.ocspEvidence.ocspUrl
-      }
+      // El campo se omite entero cuando la firma no trae evidencia, en vez de mandar un objeto a
+      // medio llenar: `ocspEvidence` es `@IsOptional()` en el DTO del proveedor, pero leer
+      // `.status` sobre `undefined` revienta, y como el sellado es best-effort el `try/catch` se
+      // traga la excepción y el documento se queda sin constancia sin ningún error visible.
+      ...(ocspEvidence && {
+        ocspEvidence: {
+          status: ocspEvidence.status,
+          // Mismo motivo que `signedAt`: recién firmada llega como `Date`, releída de la columna
+          // jsonb llega como string. Llamar `.toISOString()` directo reventaba la segunda ruta —y
+          // con ella el sellado completo— en cuanto un documento tenía más de un firmante FIEL: la
+          // evidencia del que ya había firmado siempre viene de jsonb.
+          verifiedAt: new Date(ocspEvidence.verifiedAt).toISOString(),
+          ocspResponse: ocspEvidence.ocspResponse,
+          ocspUrl: ocspEvidence.ocspUrl,
+        },
+      }),
     };
   }
 
