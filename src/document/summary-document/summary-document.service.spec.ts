@@ -28,14 +28,12 @@ describe('SummaryDocumentService', () => {
       ipAddress: '189.237.82.225',
       otpCode: '482913',
       signedAt: new Date('2026-01-15T10:30:00Z'),
-      geoLocation: null,
     },
     {
       name: 'MARIA GUADALUPE PEREZ LOPEZ',
       ipAddress: '201.100.10.5',
       otpCode: '109233',
       signedAt: new Date('2026-01-15T11:05:00Z'),
-      geoLocation: '19.4326,-99.1332',
     },
   ];
 
@@ -148,8 +146,21 @@ describe('SummaryDocumentService', () => {
         'Sustentada',
         'OTP CODE',
         'Fecha de Firma',
-        'Geo Loc',
       ]);
+    });
+
+    /**
+     * Historia "Ocultar geolocalización en hojas de firma y vistas públicas": la hoja se anexa
+     * al PDF firmado y se conserva por años, así que la ausencia del renglón se afirma en vez
+     * de darse por hecha. El dato sigue guardado en `CollaboratorEntity.geoLoc`.
+     */
+    it('no imprime ningún renglón de geolocalización', () => {
+      const [, , ...signerTables] = tablesOf(buildDefinition());
+
+      for (const table of signerTables) {
+        expect(table.map(([label]) => label)).not.toContain('Geo Loc');
+        expect(table.flat().join(' ')).not.toMatch(/geo/i);
+      }
     });
 
     it('toma los datos de cada firmante', () => {
@@ -172,7 +183,6 @@ describe('SummaryDocumentService', () => {
             ipAddress: '10.0.0.1',
             otpCode: null,
             signedAt: null,
-            geoLocation: null,
           },
         ]),
       );
@@ -181,7 +191,6 @@ describe('SummaryDocumentService', () => {
 
       expect(valueOf('OTP CODE')).toBe('');
       expect(valueOf('Fecha de Firma')).toBe('');
-      expect(valueOf('Geo Loc')).toBe('');
     });
   });
 

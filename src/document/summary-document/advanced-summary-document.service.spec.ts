@@ -29,7 +29,6 @@ describe('AdvancedSummaryDocumentService', () => {
       certificateSerialNumber: '30001000000500003416',
       electronicSignature: 'a'.repeat(344),
       signedAt: new Date('2026-01-15T10:30:00Z'),
-      geoLocation: null,
     },
     {
       name: 'MARIA GUADALUPE PEREZ LOPEZ',
@@ -37,7 +36,6 @@ describe('AdvancedSummaryDocumentService', () => {
       certificateSerialNumber: '30001000000500009999',
       electronicSignature: 'b'.repeat(344),
       signedAt: new Date('2026-01-15T11:05:00Z'),
-      geoLocation: '19.4326,-99.1332',
     },
   ];
 
@@ -184,6 +182,20 @@ describe('AdvancedSummaryDocumentService', () => {
     ]);
   });
 
+  /**
+   * Historia "Ocultar geolocalización en hojas de firma y vistas públicas": la hoja se anexa al
+   * PDF firmado y se conserva por años, así que la ausencia del renglón se afirma en vez de
+   * darse por hecha. El dato sigue guardado en `CollaboratorEntity.geoLoc`.
+   */
+  it('no imprime ningún renglón de geolocalización', () => {
+    const [, , ...signerTables] = tablesOf(buildDefinition());
+
+    for (const table of signerTables) {
+      expect(table.map(([label]) => label)).not.toContain('Geo Loc');
+      expect(table.flat().join(' ')).not.toMatch(/geo/i);
+    }
+  });
+
   it('toma el número de serie del certificado y la firma electrónica del firmante', () => {
     const [, , firstSigner] = tablesOf(buildDefinition());
     const valueOf = (label: string) =>
@@ -194,7 +206,6 @@ describe('AdvancedSummaryDocumentService', () => {
     );
     expect(valueOf('Tipo de Firma')).toBe('Firma Electronica Avanzada');
     expect(valueOf('IP')).toBe('189.237.82.225');
-    expect(valueOf('Geo Loc')).toBe('');
     // La firma llega completa; solo se le agregan cortes de renglón para que quepa en la celda.
     expect(valueOf('Firma Electrónica')?.replace(/\n/g, '')).toBe(
       'a'.repeat(344),
@@ -213,7 +224,6 @@ describe('AdvancedSummaryDocumentService', () => {
           certificateSerialNumber: null,
           electronicSignature: null,
           signedAt: null,
-          geoLocation: null,
         },
       ]),
     );
