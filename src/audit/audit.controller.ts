@@ -1,13 +1,10 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiParam,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuditService } from './audit.service';
 import type { AuditQuery } from './audit.service';
+import { ApiGetDocumentAuditTrail } from './docs/api-get-document-audit-trail.docs';
+import { ApiGetDecryptedAuditRecords } from './docs/api-get-decrypted-audit-records.docs';
+import { ApiGetAuditRecords } from './docs/api-get-audit-records.docs';
 
 @ApiTags('Audit')
 @ApiBearerAuth('access-token')
@@ -16,48 +13,19 @@ export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
   @Get('document/:documentId')
-  @ApiOperation({
-    summary: 'Obtener registros de auditoría de un documento descifrados',
-  })
-  @ApiParam({
-    name: 'documentId',
-    description: 'UUID del documento',
-    format: 'uuid',
-  })
-  @ApiResponse({
-    status: 200,
-    description:
-      'Lista de registros de auditoría descifrados, ordenados por chainIndex ASC',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'No se encontraron registros para el documento',
-  })
+  @ApiGetDocumentAuditTrail()
   findByDocument(@Param('documentId') documentId: string) {
     return this.auditService.findOne(documentId);
   }
 
   @Get('decrypted')
-  @ApiOperation({
-    summary: 'Obtener todos los registros de auditoría descifrados',
-  })
-  @ApiResponse({
-    status: 200,
-    description:
-      'Lista paginada de registros descifrados con sus campos de integridad',
-  })
+  @ApiGetDecryptedAuditRecords()
   findAllDecrypted(@Query() query: AuditQuery) {
     return this.auditService.findAllDecrypted(query);
   }
 
   @Get()
-  @ApiOperation({
-    summary: 'Obtener todos los registros de auditoría (cifrados)',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista paginada de registros de auditoría',
-  })
+  @ApiGetAuditRecords()
   findAll(@Query() query: AuditQuery) {
     return this.auditService.findAll(query);
   }

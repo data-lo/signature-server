@@ -11,14 +11,7 @@ import {
 } from '@nestjs/common';
 
 // Swagger
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiParam,
-  ApiQuery,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 // Auth
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
@@ -30,16 +23,13 @@ import { AccountMemberService } from './account-member.service';
 // DTOs
 import { CreateAccountMemberDto } from './dto/create-account-member.dto';
 import { UpdateAccountMemberDto } from './dto/update-account-member.dto';
-import {
-  AccountMemberListResponse,
-  AccountMemberResponse,
-} from './interfaces/response/account-member-response';
-import {
-  BadRequestResponse,
-  BaseResponse,
-  ConflictResponse,
-  NotFoundResponse,
-} from 'src/interfaces/api-response.dto';
+
+// Docs
+import { ApiGrantAccountAccess } from './docs/api-grant-account-access.docs';
+import { ApiGetOrganizationMembers } from './docs/api-get-organization-members.docs';
+import { ApiGetAccountMember } from './docs/api-get-account-member.docs';
+import { ApiUpdateAccountMember } from './docs/api-update-account-member.docs';
+import { ApiRevokeAccountAccess } from './docs/api-revoke-account-access.docs';
 
 @ApiTags('Account Member')
 @ApiBearerAuth('access-token')
@@ -48,34 +38,7 @@ export class AccountMemberController {
   constructor(private readonly accountMemberService: AccountMemberService) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Otorgar acceso a una cuenta',
-    description:
-      'Asocia un usuario a una cuenta con un rol (ver GET /api/v1/roles). Solo un ADMIN activo de esa cuenta puede otorgar acceso.',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Acceso otorgado correctamente',
-    type: AccountMemberResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Los datos enviados son inválidos o incompletos',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta cuenta',
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'El usuario ya tiene acceso a esta cuenta',
-    type: ConflictResponse,
-  })
+  @ApiGrantAccountAccess()
   create(
     @CurrentUser() user: JwtPayload,
     @Body() createAccountMemberDto: CreateAccountMemberDto,
@@ -84,30 +47,7 @@ export class AccountMemberController {
   }
 
   @Get()
-  @ApiOperation({
-    summary: 'Obtener los miembros de una organización',
-    description:
-      'Solo un ADMIN activo de esa organización puede listar sus miembros.',
-  })
-  @ApiQuery({
-    name: 'organizationId',
-    required: true,
-    type: String,
-    description: 'UUID de la organización',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de miembros obtenida correctamente',
-    type: AccountMemberListResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta organización',
-  })
+  @ApiGetOrganizationMembers()
   findByOrganization(
     @CurrentUser() user: JwtPayload,
     @Query('organizationId') organizationId: string,
@@ -119,69 +59,13 @@ export class AccountMemberController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Obtener una membresía',
-    description:
-      'Solo un ADMIN activo de la cuenta de esa membresía puede consultarla.',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Identificador único de la membresía en formato UUID v4',
-    format: 'uuid',
-    example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Membresía encontrada',
-    type: AccountMemberResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta cuenta',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Membresía no encontrada',
-    type: NotFoundResponse,
-  })
+  @ApiGetAccountMember()
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.accountMemberService.findOne(user.sub, id);
   }
 
   @Patch(':id')
-  @ApiOperation({
-    summary: 'Actualizar una membresía',
-    description:
-      'Actualiza el rol, puesto o vigencia del acceso. Solo un ADMIN activo de la cuenta de esa membresía puede hacerlo.',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Identificador único de la membresía en formato UUID v4',
-    format: 'uuid',
-    example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Membresía actualizada correctamente',
-    type: AccountMemberResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta cuenta',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Membresía no encontrada',
-    type: NotFoundResponse,
-  })
+  @ApiUpdateAccountMember()
   update(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
@@ -195,35 +79,7 @@ export class AccountMemberController {
   }
 
   @Delete(':id')
-  @ApiOperation({
-    summary: 'Revocar acceso',
-    description:
-      'Marca el acceso del usuario a la cuenta como no vigente. Solo un ADMIN activo de esa cuenta puede revocar acceso.',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Identificador único de la membresía en formato UUID v4',
-    format: 'uuid',
-    example: '8c388293-6f5e-4e61-8c96-ae36c2fa6faa',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Acceso revocado correctamente',
-    type: BaseResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El usuario autenticado no es ADMIN de esta cuenta',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Membresía no encontrada',
-    type: NotFoundResponse,
-  })
+  @ApiRevokeAccountAccess()
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.accountMemberService.remove(user.sub, id);
   }
