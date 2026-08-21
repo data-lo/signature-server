@@ -53,6 +53,22 @@ export class UserEntity {
   @Column({ nullable: true, name: 'signature_id' })
   signatureId: string | null;
 
+  /**
+   * Credencial de firma lista para usarse. Derivada, nunca escrita a mano: la calcula
+   * `RefreshSigningCredentialStatusUseCase` y sólo es true cuando se cumplen LAS DOS
+   * condiciones — identidad verificada (APPROVED en `identity_verifications`) y firma PNG
+   * registrada (`signatureId != null`).
+   *
+   * Distinta de `isConfigured`, que marca el fin del onboarding general (datos personales +
+   * firma) y no sabe nada de identidad validada.
+   */
+  @Column({ default: false, name: 'signing_credential_configured' })
+  signingCredentialConfigured: boolean;
+
+  /** Momento en que Didit aprobó la identidad del usuario. Null si nunca se aprobó. */
+  @Column({ type: 'timestamp', nullable: true, name: 'identity_verified_at' })
+  identityVerifiedAt: Date | null;
+
   @Column({ nullable: false, name: 'personal_information_id' })
   personalInformationId: string;
 

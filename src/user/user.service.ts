@@ -776,6 +776,11 @@ export class UserService {
       nationalId: user.nationalId,
       isConfigured: user.isConfigured,
       signatureId: user.signatureId,
+      // La pantalla "Identidad y firma" decide qué mostrar con estos dos campos, y se hidrata
+      // desde este snapshot. `RefreshSigningCredentialStatusUseCase` borra la key de Redis al
+      // cambiarlos, para que la siguiente lectura los reconstruya desde Postgres.
+      signingCredentialConfigured: user.signingCredentialConfigured,
+      identityVerifiedAt: user.identityVerifiedAt,
       personalInformation: {
         rfc: personalInformation?.rfc ?? null,
         phoneNumber: personalInformation?.phoneNumber ?? null,

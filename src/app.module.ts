@@ -29,6 +29,7 @@ import { StripeModule } from './stripe/stripe.module';
 import { RolesModule } from './roles/roles.module';
 import { EventModule } from './event/event.module';
 import { SealModule } from './document/seal/seal.module';
+import { IdentityVerificationModule } from './identity-verification/identity-verification.module';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { SealModule } from './document/seal/seal.module';
     RolesModule,
     EventModule,
     SealModule,
+    IdentityVerificationModule,
   ],
   controllers: [AppController],
   providers: [

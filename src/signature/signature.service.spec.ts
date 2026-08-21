@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -8,6 +9,8 @@ import { SignatureService } from './signature.service';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
+import { AssertIdentityApprovedUseCase } from 'src/identity-verification/applications/assert-identity-approved.use-case';
+import { RefreshSigningCredentialStatusUseCase } from 'src/identity-verification/applications/refresh-signing-credential-status.use-case';
 import {
   MAX_IMAGE_FILE_SIZE_BYTES,
   MAX_PDF_FILE_SIZE_BYTES,
@@ -37,6 +40,8 @@ describe('SignatureService', () => {
   };
   let manager: { findOne: jest.Mock; delete: jest.Mock; update: jest.Mock };
   let dataSource: { transaction: jest.Mock };
+  let assertIdentityApproved: { execute: jest.Mock };
+  let refreshSigningCredentialStatus: { execute: jest.Mock };
 
   beforeEach(async () => {
     signatureRepository = createMockRepository();
@@ -51,6 +56,12 @@ describe('SignatureService', () => {
     manager = { findOne: jest.fn(), delete: jest.fn(), update: jest.fn() };
     dataSource = {
       transaction: jest.fn((callback) => callback(manager)),
+    };
+    // Por defecto la identidad está aprobada: estas pruebas cubren el manejo de archivos, no la
+    // regla de identidad (que tiene sus propias pruebas en `identity-verification`).
+    assertIdentityApproved = { execute: jest.fn().mockResolvedValue(undefined) };
+    refreshSigningCredentialStatus = {
+      execute: jest.fn().mockResolvedValue(true),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -72,6 +83,14 @@ describe('SignatureService', () => {
           provide: getDataSourceToken(),
           useValue: dataSource,
         },
+        {
+          provide: AssertIdentityApprovedUseCase,
+          useValue: assertIdentityApproved,
+        },
+        {
+          provide: RefreshSigningCredentialStatusUseCase,
+          useValue: refreshSigningCredentialStatus,
+        },
       ],
     }).compile();
 
@@ -83,6 +102,50 @@ describe('SignatureService', () => {
   });
 
   describe('create', () => {
+    it('no acepta la firma si la identidad no está aprobada, y no sube nada a Minio', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: null,
+      });
+      assertIdentityApproved.execute.mockRejectedValue(
+        new ForbiddenException('Necesitas validar tu identidad'),
+      );
+
+      await expect(
+        service.create('user-1', {} as any, {
+          signatureImage: [
+            { originalname: 'firma.png' } as Express.Multer.File,
+          ],
+        }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+
+      // La guarda corre ANTES de tocar Minio: un rechazo no puede dejar archivos huérfanos.
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+      expect(signatureRepository.save).not.toHaveBeenCalled();
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('recalcula la credencial de firma después de registrarla', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: null,
+      });
+      minioService.uploadObject.mockResolvedValue({
+        status: 'FILE_CREATED',
+        fileId: 'signature-object-key',
+      });
+      signatureRepository.create.mockImplementation((data) => data);
+      signatureRepository.save.mockResolvedValue({ id: 'signature-1' });
+
+      await service.create('user-1', {} as any, {
+        signatureImage: [{ originalname: 'firma.png' } as Express.Multer.File],
+      });
+
+      expect(refreshSigningCredentialStatus.execute).toHaveBeenCalledWith(
+        'user-1',
+      );
+    });
+
     it('crea la firma solo con la imagen de firma, sin INE', async () => {
       userRepository.findOne.mockResolvedValue({
         id: 'user-1',

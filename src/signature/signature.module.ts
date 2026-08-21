@@ -8,6 +8,7 @@ import { FielSignatureEntity } from './entities/fiel-signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { SharedModule } from 'src/shared/shared.module';
+import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { SharedModule } from 'src/shared/shared.module';
       UserEntity,
     ]),
     SharedModule,
+    IdentityVerificationModule,
   ],
   controllers: [SignatureController],
   providers: [SignatureService, MinioService],
