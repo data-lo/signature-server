@@ -316,10 +316,20 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
               certificate: {
                 rfc: 'PEAJ800101XXX',
                 name: 'JUAN PEREZ',
+                issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
                 serialNumber: '00001000000512345678',
                 certificateNumber: '30001000000500003416',
                 certificatePem:
                   '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
+              },
+              // Evidencia OCSP de la consulta al SAT (`OscpService.verifyRevokedOCSP`): viaja
+              // dentro del payload de sellado, así que sin ella el flujo ni siquiera llega a
+              // Seal Service. Recién firmado, `verifiedAt` es un `Date`.
+              ocspEvidence: {
+                status: 'good',
+                verifiedAt: new Date('2026-08-13T18:45:56.000Z'),
+                ocspResponse: 'respuesta-ocsp-en-base64',
+                ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
               },
             }),
           },
@@ -365,10 +375,19 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
           certificate: {
             rfc: 'PEAJ800101XXX',
             name: 'JUAN PEREZ',
+            issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
             serialNumber: '00001000000512345678',
             certificateNumber: '30001000000500003416',
             certificatePem:
               '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
+          },
+          // La evidencia OCSP sale hacia el proveedor con `verifiedAt` ya en ISO 8601, igual que
+          // `signedAt`: el PSC canonicaliza el payload como texto.
+          ocspEvidence: {
+            status: 'good',
+            verifiedAt: '2026-08-13T18:45:56.000Z',
+            ocspResponse: 'respuesta-ocsp-en-base64',
+            ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
           },
         },
       ],
@@ -514,9 +533,18 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         certificate: {
           rfc: 'AAAA010101AAA',
           name: 'FIRMANTE A',
+          issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
           serialNumber: '1',
           certificateNumber: '2',
           certificatePem: 'pem-a',
+        },
+        ocspEvidence: {
+          status: 'good',
+          // También string, por la misma razón que `signedAt`: se releyó de jsonb, donde no hay
+          // tipo fecha. Es la ruta que rompía el sellado del último firmante.
+          verifiedAt: '2026-08-10T10:00:00.000Z',
+          ocspResponse: 'respuesta-ocsp-de-user-a',
+          ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
         },
       },
     } as unknown as Partial<CollaboratorEntity>);

@@ -2063,9 +2063,13 @@ export class DocumentService {
       },
       ocspEvidence:{
        status:signature.ocspEvidence.status,
-       verifiedAt:signature.ocspEvidence.verifiedAt.toISOString(),
+       // Mismo motivo que `signedAt`: recién firmada llega como `Date`, releída de la columna
+       // jsonb llega como string. Llamar `.toISOString()` directo reventaba la segunda ruta —y
+       // con ella el sellado completo— en cuanto un documento tenía más de un firmante FIEL: la
+       // evidencia del que ya había firmado siempre viene de jsonb.
+       verifiedAt:new Date(signature.ocspEvidence.verifiedAt).toISOString(),
        ocspResponse:signature.ocspEvidence.ocspResponse,
-       ocspUrl:signature.ocspEvidence.ocspUrl 
+       ocspUrl:signature.ocspEvidence.ocspUrl
       }
     };
   }

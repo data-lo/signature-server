@@ -230,9 +230,18 @@ describe('DocumentService', () => {
         certificate: {
           rfc: 'XAXX010101000',
           name: 'Firmante Uno',
+          issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
           serialNumber: '00001000000512345678',
           certificateNumber: '30001000000400002434',
           certificatePem: '-----BEGIN CERTIFICATE-----...',
+        },
+        // Evidencia de la consulta OCSP al SAT (`OscpService`): forma parte del payload de
+        // sellado, así que sin ella la firma se registra pero el sellado nunca sale.
+        ocspEvidence: {
+          status: 'good',
+          verifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+          ocspResponse: 'respuesta-ocsp-en-base64',
+          ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
         },
       }),
     };
@@ -1898,9 +1907,17 @@ describe('DocumentService', () => {
                 certificate: {
                   rfc: 'XAXX010101000',
                   name: 'Firmante Uno',
+                  issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
                   serialNumber: '00001000000512345678',
                   certificateNumber: '30001000000400002434',
                   certificatePem: '-----BEGIN CERTIFICATE-----...',
+                },
+                // También normalizada a ISO 8601, por el mismo motivo que `signedAt`.
+                ocspEvidence: {
+                  status: 'good',
+                  verifiedAt: '2026-01-01T00:00:00.000Z',
+                  ocspResponse: 'respuesta-ocsp-en-base64',
+                  ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
                 },
               },
             ],
@@ -1923,9 +1940,17 @@ describe('DocumentService', () => {
               certificate: {
                 rfc: 'AAAA010101AAA',
                 name: 'Firmante A',
+                issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
                 serialNumber: '1',
                 certificateNumber: '2',
                 certificatePem: 'pem-a',
+              },
+              // Releída de la columna jsonb: fechas como string, sin tipo fecha.
+              ocspEvidence: {
+                status: 'good',
+                verifiedAt: '2026-01-01T00:00:00.000Z',
+                ocspResponse: 'respuesta-ocsp-de-a',
+                ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
               },
             },
           } as any);
