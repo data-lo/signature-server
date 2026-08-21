@@ -965,13 +965,15 @@ describe('DocumentService', () => {
             signerName: 'Firmante Uno',
             rfc: 'XAXX010101000',
             ipAddress: signer.ipAddress,
-            geoLocation: TEST_GEOLOCATION,
             signedAt: new Date('2026-01-01T00:00:00.000Z'),
           }),
         );
         expect(data.verificationUrl).toContain(
           `/public/documents/doc-1/signatures/${signer.id}`,
         );
+        // Historia "Ocultar geolocalización en hojas de firma y vistas públicas": la ubicación se
+        // sigue guardando en el colaborador, pero ya no llega al QR que se estampa en el PDF.
+        expect(data).not.toHaveProperty('geoLocation');
       });
 
       // El QR ocupa el lugar que tenía asignado esa firma, igual que la rúbrica de una simple: es
@@ -1357,11 +1359,13 @@ describe('DocumentService', () => {
         // viviendo en el Audit Trail, que es su fuente de verdad.
         expect(info).not.toHaveProperty('cipher');
         expect(signers[0]).not.toHaveProperty('rfc');
+        // La geolocalización tampoco: se registra al firmar pero dejó de imprimirse (historia
+        // "Ocultar geolocalización en hojas de firma y vistas públicas").
+        expect(signers[0]).not.toHaveProperty('geoLocation');
         expect(signers).toEqual([
           expect.objectContaining({
             name: 'Firmante Uno',
             ipAddress: '127.0.0.1',
-            geoLocation: '19.4326, -99.1332',
           }),
         ]);
       });

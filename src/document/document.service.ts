@@ -2040,15 +2040,30 @@ export class DocumentService {
    * Traduce el resultado de `EfirmaService.firmar` (persistido tal cual en
    * `CollaboratorEntity.advancedSignature`) al contrato que espera Seal Service.
    *
-   * `signedAt` se normaliza a ISO 8601 pasando por `Date` porque el mismo campo llega como `Date`
-   * cuando la firma se acaba de hacer en esta misma petición, y como string cuando se releyó de la
-   * columna jsonb — el proveedor ordena y canonicaliza las firmas por este valor, así que las dos
+   * Toda fecha se normaliza a ISO 8601 pasando por `Date`, y no llamando a `.toISOString()`
+   * directo, porque `advancedSignature` es una columna **jsonb**: el mismo campo llega como `Date`
+   * cuando la firma se acaba de hacer en esta misma petición, y como **string** cuando se releyó
+   * de la base. El proveedor ordena y canonicaliza las firmas por `signedAt`, así que las dos
    * rutas tienen que producir exactamente el mismo texto.
+   *
+   * Bug corregido: `ocspEvidence.verifiedAt` sí llamaba a `.toISOString()` directo. Como
+   * `sealAdvancedSignatures` relee del repositorio a TODOS los firmantes del documento, las firmas
+   * anteriores a la del último llegaban siempre desde jsonb —con `verifiedAt` como string— y
+   * reventaban con "verifiedAt.toISOString is not a function". El `try/catch` de
+   * `sealAdvancedSignatures` se tragaba el error (el sellado es best-effort), así que el síntoma no
+   * era una excepción sino que **ningún documento FIEL de más de un firmante llegaba a sellarse**:
+   * su hoja de evidencia salía con la tabla NOM-151 vacía y sin descargas.
+   *
+   * `ocspEvidence` se omite cuando la firma no la trae, en vez de reventar: las firmas guardadas
+   * antes de que existiera la verificación OCSP no la tienen, y el proveedor no la usa para
+   * construir el hash (ver `buildSignatureHash` en seal-service, que canonicaliza solo el
+   * certificado, el algoritmo, la firma y la fecha). Sellar sin ella es correcto; no sellar, no.
    */
   private toSealSignature(
     signature: SignatureResult,
   ): SealDocumentDto['signatures'][number] {
-    this.logger.log(`Desde document Service, toSealSignature ${JSON.stringify(signature.ocspEvidence)}`)
+    const { ocspEvidence } = signature;
+
     return {
       signatureBase64: String(signature.signatureBase64),
       algorithm: signature.algorithm,
@@ -2061,12 +2076,16 @@ export class DocumentService {
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,
       },
-      ocspEvidence:{
-       status:signature.ocspEvidence.status,
-       verifiedAt:signature.ocspEvidence.verifiedAt.toISOString(),
-       ocspResponse:signature.ocspEvidence.ocspResponse,
-       ocspUrl:signature.ocspEvidence.ocspUrl 
-      }
+      ...(ocspEvidence
+        ? {
+            ocspEvidence: {
+              status: ocspEvidence.status,
+              verifiedAt: new Date(ocspEvidence.verifiedAt).toISOString(),
+              ocspResponse: ocspEvidence.ocspResponse,
+              ocspUrl: ocspEvidence.ocspUrl,
+            },
+          }
+        : {}),
     };
   }
 
@@ -2149,8 +2168,9 @@ export class DocumentService {
    *
    * Todo describe a ESA firma y no al perfil del firmante hoy: el nombre y el RFC salen del
    * certificado del SAT con el que firmó —con los datos del colaborador como respaldo, mismo
-   * criterio que `getAdvancedSignaturePublicView`— y la IP, la ubicación y la fecha son las que
-   * quedaron registradas al firmar. El documento se puede leer años después; el QR tiene que
+   * criterio que `getAdvancedSignaturePublicView`— y la IP y la fecha son las que quedaron
+   * registradas al firmar. La ubicación se sigue guardando, pero ya no se publica (ver
+   * `SignatureQrService`). El documento se puede leer años después; el QR tiene que
    * seguir diciendo lo que pasó, no lo que pasa.
    */
   private toAdvancedSignatureQrData(
@@ -2163,7 +2183,6 @@ export class DocumentService {
       signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
       rfc: certificate?.rfc ?? collaborator.rfc,
       ipAddress: collaborator.ipAddress,
-      geoLocation: collaborator.geoLoc,
       signedAt:
         collaborator.advancedSignature?.signedAt ?? collaborator.signedAt,
       verificationUrl: buildAdvancedSignatureUrl(document.id, collaborator.id),
@@ -2533,9 +2552,6 @@ export class DocumentService {
       name: collaboratorDisplayName(collaborator),
       ipAddress: collaborator.ipAddress,
       signedAt: collaborator.signedAt,
-      geoLocation: collaborator.geoLoc
-        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
-        : null,
     };
   }
 
@@ -2569,9 +2585,6 @@ export class DocumentService {
       // `advancedSignature.signedAt` es el momento real del firmado criptográfico; `signedAt` del
       // colaborador es cuando se registró en la base y solo se usa como respaldo.
       signedAt: advancedSignature?.signedAt ?? collaborator.signedAt,
-      geoLocation: collaborator.geoLoc
-        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
-        : null,
     };
   }
 

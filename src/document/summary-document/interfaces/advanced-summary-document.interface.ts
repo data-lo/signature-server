@@ -50,6 +50,4 @@ export interface AdvancedSummaryDocumentSigner {
   electronicSignature?: string | null;
   /** Momento de la firma (`advancedSignature.signedAt`, con `CollaboratorEntity.signedAt` como respaldo). */
   signedAt?: Date | string | null;
-  /** Geolocalización capturada al firmar (CollaboratorEntity.geoLoc), ya formateada a texto. */
-  geoLocation?: string | null;
 }
