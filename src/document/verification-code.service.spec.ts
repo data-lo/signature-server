@@ -152,4 +152,50 @@ describe('VerificationCodeService', () => {
       expect(result).toBe(false);
     });
   });
+
+  /**
+   * Evidencia del renglón "OTP Code" de la vista pública de verificación (ver historia "Actualizar
+   * vista pública de verificación de documentos según estado y tipo de firma").
+   */
+  describe('findConsumedCode', () => {
+    it('devuelve el código que ese firmante consumió, tomando el más reciente', async () => {
+      repository.findOne.mockResolvedValue({ id: 'code-1', code: '482915' });
+
+      const result = await service.findConsumedCode(
+        'doc-1',
+        'collaborator-1',
+        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      );
+
+      expect(result).toBe('482915');
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: {
+          documentId: 'doc-1',
+          signerId: 'collaborator-1',
+          event: VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+          isUsed: true,
+        },
+        // Un firmante puede haber consumido más de un código si un intento anterior no completó
+        // la firma: el que la sustenta es el último.
+        order: { usedAt: 'DESC' },
+      });
+    });
+
+    /**
+     * La verificación por OTP depende de `document.requiresVerification`: un documento que no la
+     * exigió se completa sin código, y ahí el renglón simplemente no se muestra. Devolver `null`
+     * —y no cadena vacía— es lo que permite al frontend distinguir "no aplica" de "está vacío".
+     */
+    it('devuelve null si ese firmante no consumió ningún código', async () => {
+      repository.findOne.mockResolvedValue(null);
+
+      const result = await service.findConsumedCode(
+        'doc-1',
+        'collaborator-1',
+        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      );
+
+      expect(result).toBeNull();
+    });
+  });
 });

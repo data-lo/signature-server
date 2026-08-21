@@ -20,6 +20,12 @@ import {
   SHEET_PAGE_MARGINS,
   SHEET_STYLES,
 } from './sheet-rendering';
+// Valores fijos de la tabla de cada firmante: describen el mecanismo, no al firmante. Compartidos
+// con la vista pública de verificación, que tiene que decir exactamente lo mismo que esta hoja.
+import {
+  ADVANCED_SIGNATURE_BACKING_LABEL as SIGNATURE_BACKING_LABEL,
+  ADVANCED_SIGNATURE_TYPE_LABEL as SIGNATURE_TYPE_LABEL,
+} from './signature-legal-text';
 
 /** Tipo de firma que rotula el encabezado, en la nomenclatura de la plantilla de referencia. */
 const SIGNATURE_TYPE_HEADING = 'Firma_Electrónica_Avanzada';
@@ -50,10 +56,6 @@ const SIGNATURES_INTRO_TEXT =
   'Conforme a los requisitos del artículo 97 del Código de Comercio, este mecanismo permite ' +
   'acreditar la identidad del firmante.';
 
-/** Valores fijos de la tabla de cada firmante: describen el mecanismo, no al firmante. */
-const SIGNATURE_TYPE_LABEL = 'Firma Electronica Avanzada';
-const SIGNATURE_BACKING_LABEL =
-  'Certificado emitido por el Sistema de Administración Tributaria PSC (Art. 97 del Código de Comercio)';
 
 /**
  * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.

@@ -11,7 +11,10 @@ import {
   UploadedFile,
   UploadedFiles,
   Query,
+  ParseEnumPipe,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   FileInterceptor,
   FileFieldsInterceptor,
@@ -59,6 +62,7 @@ import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { DocumentUpdateResponse } from './interfaces/responses/document-update-response';
 import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
+import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
 import { AdvancedSignaturePublicViewResponse } from './interfaces/responses/advanced-signature-public-view-response';
 import { SubmitForAuthorizationResponse } from './interfaces/responses/submit-for-authorization-response';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
@@ -85,7 +89,7 @@ export class DocumentController {
   @ApiOperation({
     summary: 'Vista pública de un documento (sin autenticación)',
     description:
-      'Público (sin JWT ni x-api-key, ver SkipJwtAuth) — usado por /public/documents/:id en el frontend. Solo devuelve secureUrl cuando el documento está SIGNED; para cualquier otro estatus, secureUrl/expiresIn son null y el frontend muestra el aviso correspondiente según el estatus recibido.',
+      'Público (sin JWT ni x-api-key, ver SkipJwtAuth) — usado por /public/documents/:id en el frontend. El contenido depende de si el documento ya se completó de firmar (`isCompleted`): mientras esté pendiente solo devuelve nombre del documento y nombres de los firmantes, sin evidencia, sin constancia PSC, sin secureUrl y sin descargas; una vez SIGNED devuelve además hash, páginas, creador, la constancia NOM-151, la evidencia de cada firma según su tipo y qué artefactos del sello se pueden descargar (ver historia \"Actualizar vista pública de verificación de documentos según estado y tipo de firma\").',
   })
   @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
   @ApiResponse({
@@ -100,6 +104,47 @@ export class DocumentController {
   })
   async getPublicDocument(@Param('id') id: string) {
     return this.documentService.getPublicDocumentView(id);
+  }
+
+  @Get('public/:id/seal/:artifact')
+  @SkipJwtAuth()
+  @ApiOperation({
+    summary:
+      'Descarga un artefacto de la constancia de conservación (sin autenticación)',
+    description:
+      'Público (sin JWT ni x-api-key, ver SkipJwtAuth) — respalda los botones de descarga de /public/documents/:id. Sirve lo que ya está guardado en document_seals y NO vuelve a llamar al PSC: Seal Service no persiste nada, así que esa fila es la única copia que existe. Responde 404 si el documento no está firmado, si no tiene sello (solo se sellan los documentos con firma avanzada, y el sellado es best-effort) o si ese artefacto en concreto no vino en la respuesta del proveedor.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
+  @ApiParam({
+    name: 'artifact',
+    description:
+      'Artefacto a descargar: nom151 (constancia en PDF), timestamp (token RFC 3161) o canonical (cadena canónica sellada, en texto plano — no es XML pese a como la nombra la historia, ver SEAL_ARTIFACT_ENUM).',
+    enum: SEAL_ARTIFACT_ENUM,
+  })
+  @ApiResponse({ status: 200, description: 'Archivo del artefacto solicitado' })
+  @ApiResponse({
+    status: 404,
+    description: 'Documento, constancia o artefacto no encontrado',
+    type: NotFoundResponse,
+  })
+  async getPublicSealArtifact(
+    @Param('id') id: string,
+    @Param('artifact', new ParseEnumPipe(SEAL_ARTIFACT_ENUM))
+    artifact: SEAL_ARTIFACT_ENUM,
+    @Res() response: Response,
+  ) {
+    const { content, contentType, fileName } =
+      await this.documentService.getPublicSealArtifact(id, artifact);
+
+    response.setHeader('Content-Type', contentType);
+    // `attachment`: son evidencia para guardar y verificar por fuera (openssl ts, un visor de PDF),
+    // no algo que el navegador deba intentar renderizar dentro de la vista pública.
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`,
+    );
+    response.setHeader('Content-Length', String(content.length));
+    response.send(content);
   }
 
   @Get('public/:id/signatures/:collaboratorId')

@@ -19,6 +19,12 @@ import {
   SHEET_PAGE_MARGINS,
   SHEET_STYLES,
 } from './sheet-rendering';
+// Valores fijos de la tabla de cada firmante: describen el mecanismo, no al firmante. Compartidos
+// con la vista pública de verificación, que tiene que decir exactamente lo mismo que esta hoja.
+import {
+  SIMPLE_SIGNATURE_BACKING_LABEL as SIGNATURE_BACKING_LABEL,
+  SIMPLE_SIGNATURE_TYPE_LABEL as SIGNATURE_TYPE_LABEL,
+} from './signature-legal-text';
 
 /** Tipo de firma que rotula el encabezado, en la nomenclatura de la plantilla de referencia. */
 const SIGNATURE_TYPE_HEADING = 'Firma_Digital_Simple';
@@ -45,10 +51,6 @@ const SIGNATURES_INTRO_TEXT =
   'elementos permiten acreditar la identidad de los firmantes y sustentan la atribución del ' +
   'mensaje de datos en términos de los artículos 89, 90 y 93 del Código de Comercio.';
 
-/** Valores fijos de la tabla de cada firmante: describen el mecanismo, no al firmante. */
-const SIGNATURE_TYPE_LABEL = 'Digital Simple';
-const SIGNATURE_BACKING_LABEL =
-  'Firma Electrónica Simple (Arts. 89, 90 y 93 del Código de Comercio)';
 
 /**
  * Renglones de la constancia NOM-151. En esta hoja se imprimen SIEMPRE vacíos: el sellado ante el
