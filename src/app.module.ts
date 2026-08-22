@@ -30,6 +30,7 @@ import { RolesModule } from './roles/roles.module';
 import { EventModule } from './event/event.module';
 import { SealModule } from './document/seal/seal.module';
 import { IdentityVerificationModule } from './identity-verification/identity-verification.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { IdentityVerificationModule } from './identity-verification/identity-ver
     EventModule,
     SealModule,
     IdentityVerificationModule,
+    WebhooksModule,
   ],
   controllers: [AppController],
   providers: [
