@@ -22,6 +22,8 @@ import {
   MAX_PDF_FILE_SIZE_BYTES,
 } from 'src/shared/constants/file-upload.constants';
 import sharp = require('sharp');
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
+import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 
 @Injectable()
 export class SignatureService {
@@ -35,6 +37,7 @@ export class SignatureService {
     private readonly minioService: MinioService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly updateSigningCredentialStatus: UpdateSigningCredentialStatusUseCase,
   ) {}
 
   /**
@@ -302,6 +305,19 @@ export class SignatureService {
       }
     }
 
+    if (files.signatureImage) {
+      /**
+       * Reponer la firma PNG por esta vía también completa la credencial: el usuario que la
+       * borró quedó en SIGNATURE_PENDING y sin esto seguiría ahí pese a tener firma otra vez.
+       * `applyIfAllowed` mantiene el resto de los casos como no-op (ya CONFIGURED, o identidad
+       * no aprobada).
+       */
+      await this.updateSigningCredentialStatus.applyIfAllowed(
+        currentUserId,
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+      );
+    }
+
     return {
       success: true,
       message: message,
@@ -368,7 +384,11 @@ export class SignatureService {
       'Error al eliminar la identificación oficial en el almacenamiento',
     );
 
-    await this.clearFieldOrDeleteRow(id, currentUserId, 'officialCardObjectKey');
+    await this.clearFieldOrDeleteRow(
+      id,
+      currentUserId,
+      'officialCardObjectKey',
+    );
 
     return {
       success: true,

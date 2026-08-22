@@ -15,6 +15,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 // Services
 import { SignatureService } from './signature.service';
 
+// Use cases
+import { DeleteSignatureImageUseCase } from './applications/delete-signature-image.use-case';
+
 // Decorators
 import { Public } from 'src/auth/decorators/public.decorator';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
@@ -38,7 +41,10 @@ import { ApiDeleteOfficialFile } from './docs/api-delete-official-file.docs';
 @ApiBearerAuth('access-token')
 @Controller('signature')
 export class SignatureController {
-  constructor(private readonly signatureService: SignatureService) {}
+  constructor(
+    private readonly signatureService: SignatureService,
+    private readonly deleteSignatureImage: DeleteSignatureImageUseCase,
+  ) {}
 
   @Public()
   @Get('files/:fileId')
@@ -91,13 +97,17 @@ export class SignatureController {
     return this.signatureService.deactivate(id, user.sub);
   }
 
+  /**
+   * Borrar la firma PNG devuelve al usuario a SIGNATURE_PENDING, así que la orquestación vive
+   * en el caso de uso y no en el servicio: el controller sólo traduce HTTP.
+   */
   @Delete(':id/signature-image')
   @ApiDeleteSignatureImage()
-  deleteSignatureImage(
+  deleteSignatureImageEndpoint(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
   ) {
-    return this.signatureService.deleteSignatureImage(id, user.sub);
+    return this.deleteSignatureImage.execute(id, user.sub);
   }
 
   @Delete(':id/official-file')
