@@ -1,3 +1,4 @@
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
 
@@ -20,7 +21,12 @@ export interface CurrentIdentityVerification {
     expiresAt: Date | null;
     createdAt: Date;
   } | null;
-  /** Espejo de `users.signing_credential_configured`: identidad APPROVED + firma PNG registrada. */
+  /**
+   * Estado global del avance de identidad y firma (`users.signing_credential_status`). Es lo
+   * que el frontend usa para habilitar o deshabilitar cada paso de la pantalla.
+   */
+  signingCredentialStatus: SIGNING_CREDENTIAL_STATUS_ENUM;
+  /** Conveniencia derivada: `signingCredentialStatus === CONFIGURED`. */
   signingCredentialConfigured: boolean;
   identityVerifiedAt: Date | null;
   /** `true` cuando ya existe la firma PNG. Junto con el status, explica qué le falta al usuario. */

@@ -6,13 +6,14 @@ import { IdentityVerificationModule } from './identity-verification.module';
 import { IdentityVerificationEntity } from './entities/identity-verification.entity';
 import { IdentityVerificationsController } from './identity-verifications.controller';
 import { ProcessDiditVerificationResultUseCase } from './applications/process-didit-verification-result.use-case';
-import { AssertIdentityApprovedUseCase } from './applications/assert-identity-approved.use-case';
+import { UpdateSigningCredentialStatusUseCase } from './applications/update-signing-credential-status.use-case';
 
 /**
  * Los errores de cableado de Nest sólo aparecen al arrancar la aplicación contra Postgres,
  * Mongo y Redis; sin esta prueba se descubrirían en el despliegue. También fija el contrato
  * hacia afuera: `ProcessDiditVerificationResultUseCase` (que consumirá el módulo de webhooks) y
- * `AssertIdentityApprovedUseCase` (que consume `SignatureModule`) tienen que ser resolubles.
+ * `UpdateSigningCredentialStatusUseCase` (que consume `SignatureModule`) tienen que ser
+ * resolubles.
  */
 describe('IdentityVerificationModule', () => {
   it('resuelve su grafo de dependencias y expone los casos de uso que otros módulos consumen', async () => {
@@ -32,6 +33,6 @@ describe('IdentityVerificationModule', () => {
 
     expect(moduleRef.get(IdentityVerificationsController)).toBeDefined();
     expect(moduleRef.get(ProcessDiditVerificationResultUseCase)).toBeDefined();
-    expect(moduleRef.get(AssertIdentityApprovedUseCase)).toBeDefined();
+    expect(moduleRef.get(UpdateSigningCredentialStatusUseCase)).toBeDefined();
   });
 });

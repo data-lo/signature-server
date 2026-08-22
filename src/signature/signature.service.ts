@@ -22,8 +22,8 @@ import {
   MAX_PDF_FILE_SIZE_BYTES,
 } from 'src/shared/constants/file-upload.constants';
 import sharp = require('sharp');
-import { AssertIdentityApprovedUseCase } from 'src/identity-verification/applications/assert-identity-approved.use-case';
-import { RefreshSigningCredentialStatusUseCase } from 'src/identity-verification/applications/refresh-signing-credential-status.use-case';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
+import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 
 @Injectable()
 export class SignatureService {
@@ -37,8 +37,7 @@ export class SignatureService {
     private readonly minioService: MinioService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
-    private readonly assertIdentityApproved: AssertIdentityApprovedUseCase,
-    private readonly refreshSigningCredentialStatus: RefreshSigningCredentialStatusUseCase,
+    private readonly updateSigningCredentialStatus: UpdateSigningCredentialStatusUseCase,
   ) {}
 
   /**
@@ -140,13 +139,6 @@ export class SignatureService {
       throw new ConflictException('El usuario ya tiene una firma registrada');
     }
 
-    /**
-     * La firma PNG sólo se acepta con la identidad ya verificada por Didit. Se comprueba acá,
-     * en el servicio, y no en el controller ni en el frontend: es el único punto por el que
-     * pasan todas las altas, así que es el único lugar donde la regla no se puede rodear.
-     */
-    await this.assertIdentityApproved.execute(userId);
-
     let signatureObjectKeyResponse = null;
     let officialCardObjectKeyResponse = null;
 
@@ -206,10 +198,6 @@ export class SignatureService {
     const saved = await this.signatureRepository.save(newSignature);
 
     await this.userRepository.update(userId, { signatureId: saved.id });
-
-    // Segunda mitad de la regla: con identidad APPROVED y firma ya registrada, la credencial
-    // de firma queda configurada.
-    await this.refreshSigningCredentialStatus.execute(userId);
 
     return {
       success: true,
@@ -317,6 +305,19 @@ export class SignatureService {
       }
     }
 
+    if (files.signatureImage) {
+      /**
+       * Reponer la firma PNG por esta vía también completa la credencial: el usuario que la
+       * borró quedó en SIGNATURE_PENDING y sin esto seguiría ahí pese a tener firma otra vez.
+       * `applyIfAllowed` mantiene el resto de los casos como no-op (ya CONFIGURED, o identidad
+       * no aprobada).
+       */
+      await this.updateSigningCredentialStatus.applyIfAllowed(
+        currentUserId,
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+      );
+    }
+
     return {
       success: true,
       message: message,
@@ -383,7 +384,11 @@ export class SignatureService {
       'Error al eliminar la identificación oficial en el almacenamiento',
     );
 
-    await this.clearFieldOrDeleteRow(id, currentUserId, 'officialCardObjectKey');
+    await this.clearFieldOrDeleteRow(
+      id,
+      currentUserId,
+      'officialCardObjectKey',
+    );
 
     return {
       success: true,
@@ -412,8 +417,6 @@ export class SignatureService {
     currentUserId: string,
     clearedField: 'signatureObjectKey' | 'officialCardObjectKey',
   ): Promise<void> {
-    let removedSignature = false;
-
     await this.dataSource.transaction(async (manager) => {
       const locked = await manager.findOne(SignatureEntity, {
         where: { id },
@@ -434,17 +437,10 @@ export class SignatureService {
         // en este código, en carrera o no.
         await manager.update(UserEntity, currentUserId, { signatureId: null });
         await manager.delete(SignatureEntity, { id });
-        // El usuario se quedó sin firma: la credencial deja de estar configurada aunque su
-        // identidad siga aprobada. Se recalcula fuera de la transacción, más abajo.
-        removedSignature = true;
       } else {
         await manager.update(SignatureEntity, { id }, { [clearedField]: null });
       }
     });
-
-    if (removedSignature) {
-      await this.refreshSigningCredentialStatus.execute(currentUserId);
-    }
   }
 
   async deactivate(id: string, currentUserId: string): Promise<BaseResponse> {

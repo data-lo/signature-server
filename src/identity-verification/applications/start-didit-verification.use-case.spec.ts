@@ -1,13 +1,23 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { StartDiditVerificationUseCase } from './start-didit-verification.use-case';
 import { DiditApiService } from '../didit/didit-api.service';
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
-import { DiditUnavailableException } from '../exceptions/identity-verification.exceptions';
+import {
+  DiditUnavailableException,
+  MaxIdentityVerificationAttemptsExceededException,
+} from '../exceptions/identity-verification.exceptions';
+import { UpdateSigningCredentialStatusUseCase } from './update-signing-credential-status.use-case';
+import { ValidateVerificationAttemptsUseCase } from './validate-verification-attempts.use-case';
 
 const USER_ID = 'user-1';
 const HOSTED_URL = 'https://verify.didit.me/session/abc';
@@ -31,6 +41,11 @@ describe('StartDiditVerificationUseCase', () => {
   };
   let userRepository: { findOne: jest.Mock };
   let diditApiService: { createSession: jest.Mock };
+  let validateVerificationAttempts: { execute: jest.Mock };
+  let updateSigningCredentialStatus: {
+    execute: jest.Mock;
+    applyIfAllowed: jest.Mock;
+  };
 
   beforeEach(async () => {
     identityVerificationRepository = {
@@ -48,10 +63,21 @@ describe('StartDiditVerificationUseCase', () => {
       update: jest.fn().mockResolvedValue(undefined),
     };
     userRepository = {
-      findOne: jest.fn().mockResolvedValue({ id: USER_ID }),
+      findOne: jest.fn().mockResolvedValue({
+        id: USER_ID,
+        signingCredentialStatus:
+          SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_REQUIRED,
+      }),
     };
     diditApiService = {
       createSession: jest.fn().mockResolvedValue(DIDIT_SESSION),
+    };
+    validateVerificationAttempts = {
+      execute: jest.fn().mockResolvedValue(2),
+    };
+    updateSigningCredentialStatus = {
+      execute: jest.fn().mockResolvedValue(undefined),
+      applyIfAllowed: jest.fn().mockResolvedValue(true),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -63,6 +89,14 @@ describe('StartDiditVerificationUseCase', () => {
         },
         { provide: getRepositoryToken(UserEntity), useValue: userRepository },
         { provide: DiditApiService, useValue: diditApiService },
+        {
+          provide: ValidateVerificationAttemptsUseCase,
+          useValue: validateVerificationAttempts,
+        },
+        {
+          provide: UpdateSigningCredentialStatusUseCase,
+          useValue: updateSigningCredentialStatus,
+        },
       ],
     }).compile();
 
@@ -171,6 +205,77 @@ describe('StartDiditVerificationUseCase', () => {
       await useCase.execute(USER_ID, {});
 
       expect(diditApiService.createSession).toHaveBeenCalled();
+    });
+  });
+
+  describe('estado global de la credencial', () => {
+    it('deja al usuario en IDENTITY_VERIFICATION_PENDING con la sesión ya creada', async () => {
+      await useCase.execute(USER_ID, {});
+
+      expect(updateSigningCredentialStatus.applyIfAllowed).toHaveBeenCalledWith(
+        USER_ID,
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_PENDING,
+      );
+    });
+
+    it('no mueve el estado si Didit no llegó a crear la sesión', async () => {
+      diditApiService.createSession.mockRejectedValue(
+        new DiditUnavailableException(),
+      );
+
+      await expect(useCase.execute(USER_ID, {})).rejects.toBeInstanceOf(
+        DiditUnavailableException,
+      );
+
+      // El usuario se queda donde estaba y puede reintentar; no aparece con una verificación
+      // "pendiente" que nunca existió.
+      expect(
+        updateSigningCredentialStatus.applyIfAllowed,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('comprueba el tope de intentos antes de gastar una sesión nueva', async () => {
+      validateVerificationAttempts.execute.mockRejectedValue(
+        new MaxIdentityVerificationAttemptsExceededException(3),
+      );
+
+      await expect(useCase.execute(USER_ID, {})).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+
+      expect(diditApiService.createSession).not.toHaveBeenCalled();
+      expect(identityVerificationRepository.save).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_FAILED,
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_MAX_ATTEMPTS_EXCEEDED,
+    ])('no abre sesión con la credencial en %s', async (status) => {
+      userRepository.findOne.mockResolvedValue({
+        id: USER_ID,
+        signingCredentialStatus: status,
+      });
+
+      await expect(useCase.execute(USER_ID, {})).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+
+      expect(diditApiService.createSession).not.toHaveBeenCalled();
+    });
+
+    it('no consume un intento al reutilizar una sesión abierta', async () => {
+      identityVerificationRepository.findOne.mockResolvedValue({
+        id: 'attempt-previo',
+        provider: IDENTITY_VERIFICATION_PROVIDER_ENUM.DIDIT,
+        status: IDENTITY_VERIFICATION_STATUS_ENUM.IN_PROGRESS,
+        providerSessionId: 'ses_previa',
+        providerMetadata: { hostedUrl: HOSTED_URL },
+        expiresAt: new Date(Date.now() + 3_600_000),
+      });
+
+      await useCase.execute(USER_ID, {});
+
+      expect(validateVerificationAttempts.execute).not.toHaveBeenCalled();
     });
   });
 

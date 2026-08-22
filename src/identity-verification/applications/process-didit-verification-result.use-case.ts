@@ -2,10 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
-import { RefreshSigningCredentialStatusUseCase } from './refresh-signing-credential-status.use-case';
+import { UpdateSigningCredentialStatusUseCase } from './update-signing-credential-status.use-case';
 
 /**
  * Traducción del vocabulario de Didit al del dominio.
@@ -36,6 +37,38 @@ const TERMINAL_STATUSES = [
 ];
 
 /**
+ * Qué significa cada resultado de Didit para el avance global del usuario.
+ *
+ * Rechazo, abandono, expiración y error del proveedor caen todos en RETRY_REQUIRED: desde el
+ * lado del usuario los cuatro se resuelven igual, volviendo a intentar. El bloqueo definitivo
+ * (`IDENTITY_VERIFICATION_FAILED`) no lo decide un webhook, sino la regla de intentos o una
+ * intervención administrativa.
+ *
+ * APPROVED es el caso especial y se resuelve aparte, en `resolveCredentialTarget`.
+ */
+const CREDENTIAL_STATUS_BY_VERIFICATION_STATUS: Record<
+  IDENTITY_VERIFICATION_STATUS_ENUM,
+  SIGNING_CREDENTIAL_STATUS_ENUM
+> = {
+  [IDENTITY_VERIFICATION_STATUS_ENUM.PENDING]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_PENDING,
+  [IDENTITY_VERIFICATION_STATUS_ENUM.IN_PROGRESS]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_PROGRESS,
+  [IDENTITY_VERIFICATION_STATUS_ENUM.IN_REVIEW]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_REVIEW,
+  [IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING,
+  [IDENTITY_VERIFICATION_STATUS_ENUM.DECLINED]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+  [IDENTITY_VERIFICATION_STATUS_ENUM.ABANDONED]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+  [IDENTITY_VERIFICATION_STATUS_ENUM.EXPIRED]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+  [IDENTITY_VERIFICATION_STATUS_ENUM.FAILED]:
+    SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+};
+
+/**
  * Aplica al intento local el resultado que Didit reportó por webhook.
  *
  * Punto de entrada del módulo `webhooks`, que es donde viven la recepción HTTP y la validación
@@ -59,7 +92,7 @@ export class ProcessDiditVerificationResultUseCase {
     private readonly identityVerificationRepository: Repository<IdentityVerificationEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
-    private readonly refreshSigningCredentialStatus: RefreshSigningCredentialStatusUseCase,
+    private readonly updateSigningCredentialStatus: UpdateSigningCredentialStatusUseCase,
   ) {}
 
   async execute(payload: Record<string, unknown>): Promise<void> {
@@ -116,15 +149,45 @@ export class ProcessDiditVerificationResultUseCase {
     }
 
     /**
-     * Se recalcula siempre, no sólo al aprobar: si un intento aprobado termina en EXPIRED, la
-     * credencial de firma tiene que dejar de estar configurada por la misma vía por la que se
-     * configuró.
+     * El estado global se mueve en todos los resultados, no sólo al aprobar: si un intento
+     * aprobado termina en EXPIRED, la credencial de firma tiene que dejar de valer por la misma
+     * vía por la que se otorgó.
+     *
+     * `applyIfAllowed` y no `execute`: Didit reentrega webhooks y no garantiza el orden, así
+     * que una transición imposible es un evento viejo, no un fallo del servidor. Devolver 500
+     * haría que el proveedor reintentara para siempre.
      */
-    await this.refreshSigningCredentialStatus.execute(attempt.userId);
+    await this.updateSigningCredentialStatus.applyIfAllowed(
+      attempt.userId,
+      await this.resolveCredentialTarget(status, attempt.userId),
+    );
 
     this.logger.log(
       `Verificación ${attempt.id} (sesión ${sessionId}) actualizada a ${status}.`,
     );
+  }
+
+  /**
+   * Traduce el resultado del intento al estado global del usuario.
+   *
+   * La aprobación necesita mirar al usuario: si ya tenía su firma PNG registrada (una
+   * reentrega del webhook sobre un usuario que ya completó todo), el destino correcto es
+   * CONFIGURED. Apuntar siempre a SIGNATURE_PENDING lo haría retroceder y le pediría subir de
+   * nuevo una firma que ya tiene.
+   */
+  private async resolveCredentialTarget(
+    status: IDENTITY_VERIFICATION_STATUS_ENUM,
+    userId: string,
+  ): Promise<SIGNING_CREDENTIAL_STATUS_ENUM> {
+    if (status !== IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED) {
+      return CREDENTIAL_STATUS_BY_VERIFICATION_STATUS[status];
+    }
+
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+
+    return user?.signatureId
+      ? SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED
+      : SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING;
   }
 
   /**

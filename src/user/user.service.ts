@@ -21,6 +21,7 @@ import { PersonalInformationEntity } from './entities/personal-information.entit
 
 // Enums
 import { UserRoles } from './enums/user-roles';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from './enums/signing-credential-status.enum';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
@@ -776,10 +777,15 @@ export class UserService {
       nationalId: user.nationalId,
       isConfigured: user.isConfigured,
       signatureId: user.signatureId,
-      // La pantalla "Identidad y firma" decide qué mostrar con estos dos campos, y se hidrata
-      // desde este snapshot. `RefreshSigningCredentialStatusUseCase` borra la key de Redis al
-      // cambiarlos, para que la siguiente lectura los reconstruya desde Postgres.
-      signingCredentialConfigured: user.signingCredentialConfigured,
+      // La pantalla "Identidad y firma" decide qué mostrar con estos campos, y se hidrata desde
+      // este snapshot. `UpdateSigningCredentialStatusUseCase` borra la key de Redis al cambiar
+      // el estado, para que la siguiente lectura lo reconstruya desde Postgres.
+      signingCredentialStatus: user.signingCredentialStatus,
+      // Derivada del estado, no una columna: el frontend la usa para el caso binario "¿ya puede
+      // firmar?" sin comparar contra el enum.
+      signingCredentialConfigured:
+        user.signingCredentialStatus ===
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
       identityVerifiedAt: user.identityVerifiedAt,
       personalInformation: {
         rfc: personalInformation?.rfc ?? null,

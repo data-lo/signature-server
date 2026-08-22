@@ -14,6 +14,11 @@ export function ApiStartDiditVerification() {
       description: 'Sesión de verificación lista para abrirse.',
     }),
     ApiResponse({
+      status: 403,
+      description:
+        'La verificación está bloqueada o el usuario agotó sus intentos disponibles.',
+    }),
+    ApiResponse({
       status: 409,
       description: 'El usuario ya tiene una identidad verificada.',
     }),

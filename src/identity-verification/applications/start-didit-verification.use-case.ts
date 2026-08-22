@@ -2,14 +2,20 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
 import { DiditApiService } from '../didit/didit-api.service';
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
 import { CreateDiditSessionDto } from '../dto/create-didit-session.dto';
-import { IdentityAlreadyVerifiedException } from '../exceptions/identity-verification.exceptions';
+import {
+  IdentityAlreadyVerifiedException,
+  IdentityVerificationBlockedException,
+} from '../exceptions/identity-verification.exceptions';
 import { StartedVerification } from '../interfaces/started-verification.interface';
+import { UpdateSigningCredentialStatusUseCase } from './update-signing-credential-status.use-case';
+import { ValidateVerificationAttemptsUseCase } from './validate-verification-attempts.use-case';
 
 const DEFAULT_RETURN_PATH = '/dashboard';
 
@@ -17,6 +23,16 @@ const DEFAULT_RETURN_PATH = '/dashboard';
 const REUSABLE_STATUSES = [
   IDENTITY_VERIFICATION_STATUS_ENUM.PENDING,
   IDENTITY_VERIFICATION_STATUS_ENUM.IN_PROGRESS,
+];
+
+/**
+ * Estados de la credencial en los que el usuario no puede abrir una sesión por su cuenta: se
+ * agotaron sus intentos o hay un bloqueo definitivo. Se comprueba antes de gastar una llamada
+ * a Didit.
+ */
+const BLOCKED_CREDENTIAL_STATUSES = [
+  SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_FAILED,
+  SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_MAX_ATTEMPTS_EXCEEDED,
 ];
 
 /**
@@ -35,6 +51,8 @@ export class StartDiditVerificationUseCase {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly diditApiService: DiditApiService,
+    private readonly validateVerificationAttempts: ValidateVerificationAttemptsUseCase,
+    private readonly updateSigningCredentialStatus: UpdateSigningCredentialStatusUseCase,
   ) {}
 
   async execute(
@@ -45,6 +63,10 @@ export class StartDiditVerificationUseCase {
 
     if (!user) {
       throw new NotFoundException(`Usuario con id ${userId} no encontrado`);
+    }
+
+    if (BLOCKED_CREDENTIAL_STATUSES.includes(user.signingCredentialStatus)) {
+      throw new IdentityVerificationBlockedException();
     }
 
     const latest = await this.findLatest(userId);
@@ -63,8 +85,20 @@ export class StartDiditVerificationUseCase {
       this.logger.log(
         `Reutilizando la sesión de Didit ${reusable.providerSessionId} del usuario ${userId}.`,
       );
+
+      // Sólo por si el estado global quedó atrás respecto de la sesión abierta; si el usuario ya
+      // está IN_PROGRESS, `applyIfAllowed` no lo hace retroceder.
+      await this.updateSigningCredentialStatus.applyIfAllowed(
+        userId,
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_PENDING,
+      );
+
       return this.toStartedVerification(reusable, true);
     }
+
+    // Antes de gastar una sesión nueva: si ya agotó el tope, esto lo deja en
+    // MAX_ATTEMPTS_EXCEEDED y corta acá.
+    await this.validateVerificationAttempts.execute(userId);
 
     // El intento se persiste ANTES de llamar a Didit: si el proveedor responde y el proceso se
     // cae justo después, el webhook igual tiene contra qué reconciliar el resultado.
@@ -89,6 +123,19 @@ export class StartDiditVerificationUseCase {
         expiresAt: session.expiresAt,
         startedAt: new Date(),
       });
+
+      /**
+       * El estado global se mueve recién con la sesión ya creada: si Didit falla, el usuario se
+       * queda donde estaba y puede reintentar, en vez de aparecer con una verificación
+       * "pendiente" que nunca existió.
+       *
+       * `applyIfAllowed` y no `execute`: la sesión ya está abierta y cobrada, así que un estado
+       * de origen inesperado se registra pero no tumba la respuesta.
+       */
+      await this.updateSigningCredentialStatus.applyIfAllowed(
+        userId,
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_PENDING,
+      );
 
       return this.toStartedVerification(
         await this.identityVerificationRepository.findOneBy({ id: attempt.id }),

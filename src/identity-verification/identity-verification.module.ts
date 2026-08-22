@@ -7,8 +7,8 @@ import { DiditApiService } from './didit/didit-api.service';
 import { StartDiditVerificationUseCase } from './applications/start-didit-verification.use-case';
 import { GetCurrentIdentityVerificationUseCase } from './applications/get-current-identity-verification.use-case';
 import { ProcessDiditVerificationResultUseCase } from './applications/process-didit-verification-result.use-case';
-import { AssertIdentityApprovedUseCase } from './applications/assert-identity-approved.use-case';
-import { RefreshSigningCredentialStatusUseCase } from './applications/refresh-signing-credential-status.use-case';
+import { UpdateSigningCredentialStatusUseCase } from './applications/update-signing-credential-status.use-case';
+import { ValidateVerificationAttemptsUseCase } from './applications/validate-verification-attempts.use-case';
 import { IdentityVerificationsController } from './identity-verifications.controller';
 
 /**
@@ -27,6 +27,10 @@ import { IdentityVerificationsController } from './identity-verifications.contro
  * el POST de Didit y valida su firma HMAC— lo invoque con el payload ya autenticado. La
  * dependencia irá en un solo sentido: `webhooks` importará este módulo, nunca al revés. Aquí no
  * hay controller de webhooks ni validación de firma, por diseño.
+ *
+ * `UpdateSigningCredentialStatusUseCase` también se exporta: es el único escritor de
+ * `users.signing_credential_status`, y `SignatureModule` lo necesita para mover al usuario a
+ * CONFIGURED o de vuelta a SIGNATURE_PENDING al dar de alta o eliminar su firma PNG.
  */
 @Module({
   imports: [
@@ -39,13 +43,12 @@ import { IdentityVerificationsController } from './identity-verifications.contro
     StartDiditVerificationUseCase,
     GetCurrentIdentityVerificationUseCase,
     ProcessDiditVerificationResultUseCase,
-    AssertIdentityApprovedUseCase,
-    RefreshSigningCredentialStatusUseCase,
+    UpdateSigningCredentialStatusUseCase,
+    ValidateVerificationAttemptsUseCase,
   ],
   exports: [
-    AssertIdentityApprovedUseCase,
-    RefreshSigningCredentialStatusUseCase,
     ProcessDiditVerificationResultUseCase,
+    UpdateSigningCredentialStatusUseCase,
   ],
 })
 export class IdentityVerificationModule {}

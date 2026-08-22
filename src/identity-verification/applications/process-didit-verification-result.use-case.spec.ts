@@ -2,8 +2,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IsNull } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { ProcessDiditVerificationResultUseCase } from './process-didit-verification-result.use-case';
-import { RefreshSigningCredentialStatusUseCase } from './refresh-signing-credential-status.use-case';
+import { UpdateSigningCredentialStatusUseCase } from './update-signing-credential-status.use-case';
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
@@ -15,8 +16,8 @@ const ATTEMPT_ID = 'attempt-1';
 describe('ProcessDiditVerificationResultUseCase', () => {
   let useCase: ProcessDiditVerificationResultUseCase;
   let identityVerificationRepository: { findOne: jest.Mock; update: jest.Mock };
-  let userRepository: { update: jest.Mock };
-  let refreshSigningCredentialStatus: { execute: jest.Mock };
+  let userRepository: { update: jest.Mock; findOne: jest.Mock };
+  let updateSigningCredentialStatus: { applyIfAllowed: jest.Mock };
 
   function givenAttempt(
     status = IDENTITY_VERIFICATION_STATUS_ENUM.IN_PROGRESS,
@@ -32,9 +33,13 @@ describe('ProcessDiditVerificationResultUseCase', () => {
 
   beforeEach(async () => {
     identityVerificationRepository = { findOne: jest.fn(), update: jest.fn() };
-    userRepository = { update: jest.fn() };
-    refreshSigningCredentialStatus = {
-      execute: jest.fn().mockResolvedValue(true),
+    // Por defecto, un usuario aprobado que todavía no subió su firma PNG.
+    userRepository = {
+      update: jest.fn(),
+      findOne: jest.fn().mockResolvedValue({ id: USER_ID, signatureId: null }),
+    };
+    updateSigningCredentialStatus = {
+      applyIfAllowed: jest.fn().mockResolvedValue(true),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -46,8 +51,8 @@ describe('ProcessDiditVerificationResultUseCase', () => {
         },
         { provide: getRepositoryToken(UserEntity), useValue: userRepository },
         {
-          provide: RefreshSigningCredentialStatusUseCase,
-          useValue: refreshSigningCredentialStatus,
+          provide: UpdateSigningCredentialStatusUseCase,
+          useValue: updateSigningCredentialStatus,
         },
       ],
     }).compile();
@@ -86,11 +91,64 @@ describe('ProcessDiditVerificationResultUseCase', () => {
       });
     });
 
-    it('recalcula la credencial de firma', async () => {
+    it('deja al usuario en SIGNATURE_PENDING: sólo le falta subir su firma PNG', async () => {
       await useCase.execute({ session_id: SESSION_ID, status: 'Approved' });
 
-      expect(refreshSigningCredentialStatus.execute).toHaveBeenCalledWith(
+      expect(updateSigningCredentialStatus.applyIfAllowed).toHaveBeenCalledWith(
         USER_ID,
+        SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING,
+      );
+    });
+
+    it('no hace retroceder a quien ya tenía su firma registrada (reentrega del webhook)', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: USER_ID,
+        signatureId: 'sig-1',
+      });
+
+      await useCase.execute({ session_id: SESSION_ID, status: 'Approved' });
+
+      expect(updateSigningCredentialStatus.applyIfAllowed).toHaveBeenCalledWith(
+        USER_ID,
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+      );
+    });
+  });
+
+  describe('el resultado mueve el estado global del usuario', () => {
+    it.each([
+      [
+        'In Progress',
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_PROGRESS,
+      ],
+      [
+        'In Review',
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_REVIEW,
+      ],
+      [
+        'Declined',
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+      ],
+      [
+        'Abandoned',
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+      ],
+      [
+        'Expired',
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+      ],
+      [
+        'Something New',
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+      ],
+    ])('"%s" deja la credencial en %s', async (diditStatus, expected) => {
+      givenAttempt(IDENTITY_VERIFICATION_STATUS_ENUM.PENDING);
+
+      await useCase.execute({ session_id: SESSION_ID, status: diditStatus });
+
+      expect(updateSigningCredentialStatus.applyIfAllowed).toHaveBeenCalledWith(
+        USER_ID,
+        expected,
       );
     });
   });
@@ -139,7 +197,7 @@ describe('ProcessDiditVerificationResultUseCase', () => {
     await useCase.execute({ session_id: SESSION_ID, status: 'In Progress' });
 
     expect(identityVerificationRepository.update).not.toHaveBeenCalled();
-    expect(refreshSigningCredentialStatus.execute).not.toHaveBeenCalled();
+    expect(updateSigningCredentialStatus.applyIfAllowed).not.toHaveBeenCalled();
   });
 
   it('guarda el motivo del rechazo', async () => {

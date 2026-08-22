@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
 import { CurrentIdentityVerification } from '../interfaces/current-verification.interface';
@@ -54,7 +55,15 @@ export class GetCurrentIdentityVerificationUseCase {
             createdAt: latest.createdAt,
           }
         : null,
-      signingCredentialConfigured: user.signingCredentialConfigured,
+      signingCredentialStatus: user.signingCredentialStatus,
+      /**
+       * Bandera derivada, no una segunda fuente de verdad: el frontend la usa para el caso
+       * binario "¿ya puede firmar?" sin tener que comparar contra el enum, pero cualquier
+       * decisión más fina se toma con `signingCredentialStatus`.
+       */
+      signingCredentialConfigured:
+        user.signingCredentialStatus ===
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
       identityVerifiedAt: user.identityVerifiedAt,
       signatureRegistered: user.signatureId !== null,
     };

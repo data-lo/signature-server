@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { SignatureController } from './signature.controller';
 import { SignatureService } from './signature.service';
+import { DeleteSignatureImageUseCase } from './applications/delete-signature-image.use-case';
 
 describe('SignatureController', () => {
   let controller: SignatureController;
@@ -20,6 +21,10 @@ describe('SignatureController', () => {
             deleteOfficialFile: jest.fn(),
             getFile: jest.fn(),
           },
+        },
+        {
+          provide: DeleteSignatureImageUseCase,
+          useValue: { execute: jest.fn() },
         },
       ],
     }).compile();

@@ -2,6 +2,7 @@ import { DocumentEntity } from 'src/document/entities/document.entity';
 import { SignatureEntity } from 'src/signature/entities/signature.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { PersonalInformationEntity } from './personal-information.entity';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from '../enums/signing-credential-status.enum';
 import {
   Column,
   CreateDateColumn,
@@ -54,16 +55,24 @@ export class UserEntity {
   signatureId: string | null;
 
   /**
-   * Credencial de firma lista para usarse. Derivada, nunca escrita a mano: la calcula
-   * `RefreshSigningCredentialStatusUseCase` y sólo es true cuando se cumplen LAS DOS
-   * condiciones — identidad verificada (APPROVED en `identity_verifications`) y firma PNG
-   * registrada (`signatureId != null`).
+   * Estado global del avance de identidad y firma del usuario. Es la variable que los módulos
+   * posteriores consultan antes de permitir una acción (subir la firma PNG, firmar un
+   * documento), y la única fuente de verdad sobre ese avance.
    *
-   * Distinta de `isConfigured`, que marca el fin del onboarding general (datos personales +
-   * firma) y no sabe nada de identidad validada.
+   * Sólo la escribe `UpdateSigningCredentialStatusUseCase`, que valida la transición: ningún
+   * servicio, controller ni el frontend la tocan directamente. Los disparadores son eventos de
+   * Didit (webhook), acciones del usuario sobre su firma y la regla de máximo de intentos.
+   *
+   * Distinta de `isConfigured`, que marca el fin del onboarding general (datos personales) y no
+   * sabe nada de identidad validada.
    */
-  @Column({ default: false, name: 'signing_credential_configured' })
-  signingCredentialConfigured: boolean;
+  @Column({
+    type: 'enum',
+    enum: SIGNING_CREDENTIAL_STATUS_ENUM,
+    default: SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_REQUIRED,
+    name: 'signing_credential_status',
+  })
+  signingCredentialStatus: SIGNING_CREDENTIAL_STATUS_ENUM;
 
   /** Momento en que Didit aprobó la identidad del usuario. Null si nunca se aprobó. */
   @Column({ type: 'timestamp', nullable: true, name: 'identity_verified_at' })

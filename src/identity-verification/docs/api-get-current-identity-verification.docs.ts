@@ -7,7 +7,7 @@ export function ApiGetCurrentIdentityVerification() {
     ApiOperation({
       summary: 'Consultar el estado de verificación de identidad',
       description:
-        'Devuelve el último intento del usuario junto con el estado de su credencial de firma. `verification: null` significa que nunca inició una verificación.',
+        'Devuelve el último intento del usuario junto con `signingCredentialStatus`, el estado global que habilita o bloquea los pasos siguientes, y la bandera derivada `signingCredentialConfigured`. `verification: null` significa que nunca inició una verificación.',
     }),
     ApiResponse({
       status: 200,
