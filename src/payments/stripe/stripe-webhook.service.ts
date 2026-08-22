@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import Stripe = require('stripe');
-import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
-import { SUBSCRIPTION_STATUS_ENUM } from './enums/subscription-status.enum';
-import { PLAN_ID_ENUM } from './enums/plan-id.enum';
+import { AccountSubscriptionEntity } from '../entities/account-subscription.entity';
+import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
+import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 
 /**
  * Cada evento soportado tiene su propio handler privado — para reaccionar a
