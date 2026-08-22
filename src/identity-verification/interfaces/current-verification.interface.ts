@@ -1,6 +1,7 @@
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
+import { IdentityVerificationChecks } from './identity-checks.interface';
 
 /**
  * Estado de identidad del usuario tal como lo consume la pantalla "Identidad y firma".
@@ -16,6 +17,11 @@ export interface CurrentIdentityVerification {
     /** Sólo presente mientras la sesión sigue abierta y vigente. */
     url: string | null;
     failureReason: string | null;
+    /**
+     * Qué comprobó el proveedor y cómo salió cada cosa. `null` cuando el intento todavía no
+     * tiene veredicto o cuando no se pudo leer ninguna comprobación.
+     */
+    checks: IdentityVerificationChecks | null;
     startedAt: Date | null;
     completedAt: Date | null;
     expiresAt: Date | null;

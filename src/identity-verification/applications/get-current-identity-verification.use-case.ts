@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
+import { summarizeDiditDecision } from '../didit/didit-decision.mapper';
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
 import { CurrentIdentityVerification } from '../interfaces/current-verification.interface';
@@ -49,6 +50,11 @@ export class GetCurrentIdentityVerificationUseCase {
             status: latest.status,
             url: this.resumableUrl(latest),
             failureReason: latest.failureReason,
+            /**
+             * Resumen del veredicto, no el veredicto. El crudo se queda en la base para
+             * auditoría; acá salen sólo los tres resultados, sin ningún dato personal.
+             */
+            checks: summarizeDiditDecision(latest.decision),
             startedAt: latest.startedAt,
             completedAt: latest.completedAt,
             expiresAt: latest.expiresAt,
