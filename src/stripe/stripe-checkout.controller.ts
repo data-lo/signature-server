@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
@@ -8,6 +8,9 @@ import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
 import { PlanDetails } from './interfaces/plan-details.interface';
 import { StripeCheckoutResponse } from './interfaces/stripe-checkout-response.interface';
 import { UserSubscriptionState } from './interfaces/user-subscription-state.interface';
+import { ApiGetPlans } from './docs/api-get-plans.docs';
+import { ApiCreateCheckoutSession } from './docs/api-create-checkout-session.docs';
+import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs';
 
 @ApiTags('Stripe')
 @ApiBearerAuth('access-token')
@@ -16,11 +19,7 @@ export class StripeCheckoutController {
   constructor(private readonly stripeService: StripeService) {}
 
   @Get('plans')
-  @ApiOperation({
-    summary: 'Listar planes disponibles',
-    description:
-      'Devuelve el id interno y el price_id de Stripe de cada plan; la copia visual vive en el frontend.',
-  })
+  @ApiGetPlans()
   async getPlans(): Promise<BaseResponse<PlanDetails[]>> {
     return {
       success: true,
@@ -30,11 +29,7 @@ export class StripeCheckoutController {
   }
 
   @Post('checkout/session')
-  @ApiOperation({
-    summary: 'Crear sesión de Checkout',
-    description:
-      'Crea (o reutiliza) el customer de Stripe de la cuenta y genera una Checkout Session en modo suscripción.',
-  })
+  @ApiCreateCheckoutSession()
   async createCheckoutSession(
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreateCheckoutSessionDto,
@@ -54,7 +49,7 @@ export class StripeCheckoutController {
   }
 
   @Get('subscription')
-  @ApiOperation({ summary: 'Estado de suscripción de la cuenta actual' })
+  @ApiGetSubscriptionState()
   async getSubscriptionState(
     @CurrentUser() user: JwtPayload,
   ): Promise<BaseResponse<UserSubscriptionState>> {

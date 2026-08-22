@@ -17,6 +17,7 @@ import { EmailVerificationCodeService } from '../user/email-verification-code.se
 import { EmailService } from '../shared/email/email.service';
 import { PasswordService } from '../shared/password/password.service';
 import { RedisService } from '../shared/redis/redis.service';
+import { TurnstileService } from '../shared/turnstile/turnstile.service';
 import { tokenValidAfterKey } from './utils/token-valid-after.util';
 import { maskEmail } from '../shared/utils/mask-email.util';
 import { RegisterDto } from './dto/register.dto';
@@ -59,9 +60,14 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly passwordService: PasswordService,
     private readonly redisService: RedisService,
+    private readonly turnstileService: TurnstileService,
   ) {}
 
   /**
+   * Registro público. Empieza verificando el CAPTCHA de Cloudflare Turnstile (ver
+   * `TurnstileService`): si el token no es válido, el método lanza y no se crea ni se actualiza
+   * ningún pre-registro, ni se envía OTP.
+   *
    * Camino B de la historia [STORY] Eventos Kafka, Email (SendGrid) y Miembros (/join): cuando
    * el registro viene de /signup?...&token=... (RFC nuevo en /join), `dto.invitationToken`
    * viene presente y el usuario recién creado se une automáticamente a esa organización — sin
@@ -74,6 +80,13 @@ export class AuthService {
    * la organización y puede reintentar el enlace de /join manualmente.
    */
   async register(dto: RegisterDto) {
+    // Primera línea del método y no un guard ni un paso posterior: el CAPTCHA existe para que un
+    // bot no llegue siquiera a crear el pre-registro (ni a disparar el correo del OTP), así que
+    // esta verificación tiene que ocurrir antes de cualquier escritura o envío. `verifyToken`
+    // lanza si el token falta, es inválido, expiró o ya fue canjeado — no devuelve un booleano
+    // que alguien pueda ignorar por descuido.
+    await this.turnstileService.verifyToken(dto.turnstileToken);
+
     const hashedPassword = await this.passwordService.hash(dto.password);
     const result = await this.userService.createFromSignup(dto, hashedPassword);
 

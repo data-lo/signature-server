@@ -51,20 +51,27 @@ import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { GeolocationDto } from './dto/sign-document.dto';
 import { UpdateDocumentData } from './interfaces/responses/document-update-response';
-import { DocumentPublicViewResponse } from './interfaces/responses/document-public-view-response';
+import {
+  DocumentPublicViewResponse,
+  PublicSignerData,
+} from './interfaces/responses/document-public-view-response';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { getNextPendingSigner, isSignerTurn } from './utils/next-signer.util';
 import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from './utils/collaborator-display.util';
+import { isAdvancedSignatureDocument } from './utils/advanced-signature-document.util';
 import {
   buildAdvancedSignatureUrl,
   buildAllDocumentsUrl,
   buildDocumentAccessUrl,
   buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
-import { SignatureQrService } from './services/signature-qr.service';
+import {
+  SignatureQrService,
+  type AdvancedSignatureQrData,
+} from './services/signature-qr.service';
 import { AdvancedSignaturePublicViewData } from './interfaces/responses/advanced-signature-public-view-response';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
@@ -77,10 +84,41 @@ import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
+import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import type { SummaryDocumentSigner } from './summary-document/interfaces/summary-document.interface';
+import type { AdvancedSummaryDocumentSigner } from './summary-document/interfaces/advanced-summary-document.interface';
 import type { SealDocumentDto } from './seal/dto/seal-document.dto';
+import { SealEntity } from './seal/entities/seal.entity';
+import { DocumentAlreadySealedException } from './seal/exceptions/seal.exceptions';
+import { toConservationRecord } from './summary-document/conservation-record.util';
+import {
+  ADVANCED_SIGNATURE_BACKING_LABEL,
+  ADVANCED_SIGNATURE_TYPE_LABEL,
+  SIMPLE_SIGNATURE_BACKING_LABEL,
+  SIMPLE_SIGNATURE_TYPE_LABEL,
+} from './summary-document/signature-legal-text';
+import {
+  SEAL_ARTIFACT_DESCRIPTORS,
+  SEAL_ARTIFACT_ENUM,
+  type PublicSealArtifact,
+} from './seal/seal-artifacts';
 
 const SIGNATURE_STAMP_VERTICAL_GAP = 40;
+
+/**
+ * Normaliza a ISO 8601 las fechas que la vista pública devuelve. El mismo campo llega como
+ * `Date` cuando viene de una columna de tipo fecha y como `string` cuando se releyó de una
+ * columna jsonb (`advancedSignature.signedAt`), y una fecha inválida no debe romper toda la
+ * respuesta: se prefiere omitir el renglón a devolver "Invalid Date".
+ */
+function toIsoStringOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
 
 /** .key/.cer suben por separado como multipart (no forman parte de SignDocumentDto). */
 interface AdvancedSignatureInput {
@@ -141,6 +179,7 @@ export class DocumentService {
     private readonly efirmaService: EfirmaService,
     private readonly sealDocumentUseCase: SealDocumentUseCase,
     private readonly summaryDocumentService: SummaryDocumentService,
+    private readonly advancedSummaryDocumentService: AdvancedSummaryDocumentService,
     private readonly signatureQrService: SignatureQrService,
   ) {}
 
@@ -603,6 +642,7 @@ export class DocumentService {
           creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,
           totalPages: doc.totalPages,
           status: doc.status,
+          signatureType: this.resolveDocumentSignatureType(doc.collaborators),
           createdAt: doc.createdAt,
         };
 
@@ -633,6 +673,32 @@ export class DocumentService {
         hasPrevPage: page > 1,
       },
     };
+  }
+
+  /**
+   * Tipo de firma del documento (`simple` / `fiel`) para el listado, o `null` si no se puede
+   * determinar — lo consume la columna "Tipo de firma" de las tablas del frontend.
+   *
+   * El tipo no vive en `DocumentEntity` sino en cada SIGNER: es una decisión del documento que
+   * `DocumentSignaturesService` copia igual a todos sus firmantes al crearlo, así que basta con
+   * mirarlos. Los colaboradores ya vienen en el mismo query del listado, así que esto no agrega
+   * ninguna consulta.
+   *
+   * Se exige que todos coincidan en vez de tomar el primero: los documentos del endpoint viejo
+   * (`POST /document`) nunca asignaron tipo, y un `null` explícito es información honesta —el
+   * frontend muestra un guion— mientras que el tipo del primer firmante sería una suposición.
+   */
+  private resolveDocumentSignatureType(
+    collaborators: CollaboratorEntity[] | undefined,
+  ): SIGNATURE_TYPE_ENUM | null {
+    const signatureTypes = new Set(
+      (collaborators ?? [])
+        .filter((c) => c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER)
+        .map((c) => c.signatureType)
+        .filter((type): type is SIGNATURE_TYPE_ENUM => Boolean(type)),
+    );
+
+    return signatureTypes.size === 1 ? [...signatureTypes][0] : null;
   }
 
   /**
@@ -981,6 +1047,20 @@ export class DocumentService {
   ): Promise<DocumentPublicViewResponse> {
     const document = await this.findOne(documentId);
 
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: {
+        documentId,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { account: { user: true } },
+      order: { signingOrder: 'ASC', createdAt: 'ASC' },
+    });
+
+    // Un documento a medio firmar no expone NADA más que su nombre y quiénes deben firmarlo (ver
+    // historia "Actualizar vista pública de verificación de documentos según estado y tipo de
+    // firma"). No es solo diseño: mientras la firma no se completa no hay evidencia que constatar,
+    // y publicar el estatus individual convertiría esta URL —que no pide sesión— en un tablero de
+    // quién ya firmó y quién no para cualquiera que tenga el id.
     if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
       return {
         success: true,
@@ -989,8 +1069,17 @@ export class DocumentService {
           id: document.id,
           fileName: document.fileName,
           status: document.status,
+          isCompleted: false,
           secureUrl: null,
           expiresIn: null,
+          hash: null,
+          totalPages: null,
+          createdBy: null,
+          conservationRecord: null,
+          signers: signerCollaborators.map((collaborator) =>
+            this.toPendingPublicSigner(collaborator),
+          ),
+          downloads: { nom151: false, timestamp: false, canonical: false },
         },
       };
     }
@@ -1001,6 +1090,25 @@ export class DocumentService {
       BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
 
+    // Solo se sellan los documentos con firma AVANZADA (ver `sealAdvancedSignatures`) y el sellado
+    // es best-effort: un documento de firma simple, o uno cuyo sellado falló, se completa sin
+    // constancia. La vista pública tiene que poder mostrarse igual en ese caso.
+    const seal = await this.sealDocumentUseCase
+      .findByDocumentId(document.id)
+      .catch(() => null);
+
+    const creator = await this.userService
+      .findOne(document.createdBy)
+      .catch(() => null);
+
+    const signers = await Promise.all(
+      signerCollaborators.map((collaborator) =>
+        this.toCompletedPublicSigner(document.id, collaborator),
+      ),
+    );
+
+    const conservationRecord = toConservationRecord(seal);
+
     return {
       success: true,
       message: 'Documento obtenido correctamente',
@@ -1008,9 +1116,163 @@ export class DocumentService {
         id: document.id,
         fileName: document.fileName,
         status: document.status,
+        isCompleted: true,
         secureUrl,
         expiresIn,
+        hash: document.signedHash ?? document.originalHash,
+        totalPages: document.totalPages,
+        // El mismo dato que imprime la hoja de evidencia anexada al PDF, para que la pantalla y el
+        // documento no digan cosas distintas sobre quién lo creó.
+        createdBy: creator?.email ?? null,
+        conservationRecord: conservationRecord
+          ? {
+              tsaCertificate: conservationRecord.tsaCertificate ?? null,
+              serialNumber: conservationRecord.serialNumber ?? null,
+              issuedAt: toIsoStringOrNull(conservationRecord.issuedAt),
+            }
+          : null,
+        signers,
+        downloads: {
+          nom151: Boolean(seal?.integritySeal?.certificatePdfBase64),
+          timestamp: Boolean(seal?.timestampSeal?.tokenBase64),
+          canonical: Boolean(seal?.canonicalPayload),
+        },
       },
+    };
+  }
+
+  /**
+   * Firmante de un documento TODAVÍA PENDIENTE: solo su nombre. Los demás campos van en null a
+   * propósito y no se omiten del objeto, para que el frontend tenga una sola forma que renderizar
+   * en los dos estados.
+   */
+  private toPendingPublicSigner(
+    collaborator: CollaboratorEntity,
+  ): PublicSignerData {
+    return {
+      id: collaborator.id,
+      name: collaboratorDisplayName(collaborator),
+      signatureType: null,
+      signatureTypeLabel: '',
+      legalBacking: '',
+      ipAddress: '',
+      signedAt: null,
+      geoLocation: null,
+      otpCode: null,
+      certificateSerialNumber: null,
+      electronicSignature: null,
+    };
+  }
+
+  /**
+   * Firmante de un documento COMPLETADO, con la evidencia que corresponde a su tipo de firma.
+   *
+   * Es la misma evidencia que ya imprime la hoja de firmas anexada al PDF (ver `toSummarySigner` /
+   * `toAdvancedSummarySigner`), campo por campo — esta pantalla es la versión consultable de esa
+   * hoja, no una segunda fuente de verdad con criterios propios.
+   *
+   * Los campos exclusivos del otro tipo se devuelven en `null`, nunca en cadena vacía: es lo que
+   * permite al frontend ocultar el renglón entero en vez de pintarlo sin valor.
+   */
+  private async toCompletedPublicSigner(
+    documentId: string,
+    collaborator: CollaboratorEntity,
+  ): Promise<PublicSignerData> {
+    const advancedSignature = collaborator.advancedSignature;
+    const geoLocation = collaborator.geoLoc
+      ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
+      : null;
+
+    if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+      return {
+        id: collaborator.id,
+        // El nombre del certificado es el que el SAT tiene registrado para ese RFC — mismo criterio
+        // que `getAdvancedSignaturePublicView` y que la hoja de evidencia avanzada.
+        name:
+          advancedSignature?.certificate?.name ??
+          collaboratorDisplayName(collaborator),
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        signatureTypeLabel: ADVANCED_SIGNATURE_TYPE_LABEL,
+        legalBacking: ADVANCED_SIGNATURE_BACKING_LABEL,
+        ipAddress: collaborator.ipAddress,
+        // `advancedSignature.signedAt` es el momento real del firmado criptográfico; el del
+        // colaborador es cuándo se registró en la base y solo sirve de respaldo.
+        signedAt: toIsoStringOrNull(
+          advancedSignature?.signedAt ?? collaborator.signedAt,
+        ),
+        geoLocation,
+        otpCode: null,
+        certificateSerialNumber:
+          advancedSignature?.certificate?.serialNumber ?? null,
+        electronicSignature: advancedSignature
+          ? String(advancedSignature.signatureBase64)
+          : null,
+      };
+    }
+
+    return {
+      id: collaborator.id,
+      name: collaboratorDisplayName(collaborator),
+      signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+      signatureTypeLabel: SIMPLE_SIGNATURE_TYPE_LABEL,
+      legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
+      ipAddress: collaborator.ipAddress,
+      signedAt: toIsoStringOrNull(collaborator.signedAt),
+      geoLocation,
+      // Evidencia de con qué código se acreditó su identidad. No siempre existe: la verificación
+      // por OTP depende de `document.requiresVerification`, así que un documento que no la exigió
+      // se completa sin código y el renglón simplemente no se muestra.
+      otpCode: await this.verificationCodeService.findConsumedCode(
+        documentId,
+        collaborator.id,
+        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      ),
+      certificateSerialNumber: null,
+      electronicSignature: null,
+    };
+  }
+
+  /**
+   * Artefacto de la constancia del PSC listo para descargar desde la vista pública.
+   *
+   * Los tres salen del sello ya persistido (`document_seals`) y no se le vuelven a pedir al PSC:
+   * Seal Service no tiene base de datos, así que lo que se guardó al sellar es la única copia que
+   * existe. 404 cuando el documento no está firmado, no tiene sello, o ese artefacto en concreto
+   * no vino en la respuesta del proveedor.
+   */
+  async getPublicSealArtifact(
+    documentId: string,
+    artifact: SEAL_ARTIFACT_ENUM,
+  ): Promise<PublicSealArtifact> {
+    const document = await this.findOne(documentId);
+
+    if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
+      throw new NotFoundException(
+        'El documento todavía no se ha completado de firmar',
+      );
+    }
+
+    const seal = await this.sealDocumentUseCase.findByDocumentId(documentId);
+
+    if (!seal) {
+      throw new NotFoundException(
+        'El documento no tiene constancia de conservación',
+      );
+    }
+
+    const descriptor = SEAL_ARTIFACT_DESCRIPTORS[artifact];
+    const rawValue = descriptor.read(seal);
+
+    if (!rawValue) {
+      throw new NotFoundException(
+        `La constancia del documento no incluye ${descriptor.label}`,
+      );
+    }
+
+    return {
+      content: Buffer.from(rawValue, descriptor.encoding),
+      contentType: descriptor.contentType,
+      fileName: `${descriptor.fileNamePrefix}-${documentId}${descriptor.extension}`,
     };
   }
 
@@ -1634,11 +1896,10 @@ export class DocumentService {
     document.completedSignersCount = (document.completedSignersCount ?? 0) + 1;
 
     if (remainingSigners.length === 0) {
-      // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado).
+      // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado) y
+      // sella con Seal Service antes de armar la hoja de evidencia, para que la constancia
+      // NOM-151 alcance a imprimirse en ella.
       await this.finalizeSignedDocument(document, signerCollaborators);
-      // Sellado con Seal Service: recién acá el documento tiene TODAS sus firmas avanzadas, que
-      // es lo que el proveedor necesita para construir un único hash sellado del conjunto.
-      await this.sealAdvancedSignatures(document, signerCollaborators);
       this.documentEventsProducer.emitSigned({
         documentId,
         fileName: document.fileName,
@@ -1727,7 +1988,7 @@ export class DocumentService {
   private async sealAdvancedSignatures(
     document: DocumentEntity,
     signerCollaborators: CollaboratorEntity[],
-  ): Promise<void> {
+  ): Promise<SealEntity | null> {
     const advancedSigners = signerCollaborators.filter(
       (collaborator) =>
         collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
@@ -1736,7 +1997,7 @@ export class DocumentService {
     );
 
     if (advancedSigners.length === 0) {
-      return;
+      return null;
     }
 
     // La traducción del payload va DENTRO del try junto con la llamada: si una firma guardada
@@ -1756,10 +2017,22 @@ export class DocumentService {
       this.logger.log(
         `Sellos generados para el documento ${document.id} (evidencia ${seal.id}, ${advancedSigners.length} firma(s) avanzada(s)).`,
       );
+      return seal;
     } catch (error) {
       this.logger.error(
         `Error sellando el documento ${document.id} con Seal Service: ${error}`,
       );
+
+      // El documento ya estaba sellado: pasa cuando un intento anterior selló pero falló más
+      // adelante y la firma se reintentó. La constancia existe, así que se relee en vez de
+      // perderla y dejar la hoja sin ella.
+      if (error instanceof DocumentAlreadySealedException) {
+        return await this.sealDocumentUseCase
+          .findByDocumentId(document.id)
+          .catch(() => null);
+      }
+
+      return null;
     }
   }
 
@@ -1767,14 +2040,30 @@ export class DocumentService {
    * Traduce el resultado de `EfirmaService.firmar` (persistido tal cual en
    * `CollaboratorEntity.advancedSignature`) al contrato que espera Seal Service.
    *
-   * `signedAt` se normaliza a ISO 8601 pasando por `Date` porque el mismo campo llega como `Date`
-   * cuando la firma se acaba de hacer en esta misma petición, y como string cuando se releyó de la
-   * columna jsonb — el proveedor ordena y canonicaliza las firmas por este valor, así que las dos
+   * Toda fecha se normaliza a ISO 8601 pasando por `Date`, y no llamando a `.toISOString()`
+   * directo, porque `advancedSignature` es una columna **jsonb**: el mismo campo llega como `Date`
+   * cuando la firma se acaba de hacer en esta misma petición, y como **string** cuando se releyó
+   * de la base. El proveedor ordena y canonicaliza las firmas por `signedAt`, así que las dos
    * rutas tienen que producir exactamente el mismo texto.
+   *
+   * Bug corregido: `ocspEvidence.verifiedAt` sí llamaba a `.toISOString()` directo. Como
+   * `sealAdvancedSignatures` relee del repositorio a TODOS los firmantes del documento, las firmas
+   * anteriores a la del último llegaban siempre desde jsonb —con `verifiedAt` como string— y
+   * reventaban con "verifiedAt.toISOString is not a function". El `try/catch` de
+   * `sealAdvancedSignatures` se tragaba el error (el sellado es best-effort), así que el síntoma no
+   * era una excepción sino que **ningún documento FIEL de más de un firmante llegaba a sellarse**:
+   * su hoja de evidencia salía con la tabla NOM-151 vacía y sin descargas.
+   *
+   * `ocspEvidence` se omite cuando la firma no la trae, en vez de reventar: las firmas guardadas
+   * antes de que existiera la verificación OCSP no la tienen, y el proveedor no la usa para
+   * construir el hash (ver `buildSignatureHash` en seal-service, que canonicaliza solo el
+   * certificado, el algoritmo, la firma y la fecha). Sellar sin ella es correcto; no sellar, no.
    */
   private toSealSignature(
     signature: SignatureResult,
   ): SealDocumentDto['signatures'][number] {
+    const { ocspEvidence } = signature;
+
     return {
       signatureBase64: String(signature.signatureBase64),
       algorithm: signature.algorithm,
@@ -1782,18 +2071,21 @@ export class DocumentService {
       certificate: {
         rfc: signature.certificate.rfc,
         name: signature.certificate.name,
+        issuer: signature.certificate.issuer,
         serialNumber: signature.certificate.serialNumber,
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,
       },
-      ocspEvidence:{
-       status:signature.ocspEvidence.status,
-       verifiedAt:signature.ocspEvidence.verifiedAt.toISOString(),
-       thisUpdate:signature.ocspEvidence.thisUpdate.toISOString(),
-       nextUpdate:signature.ocspEvidence.nextUpdate.toISOString(),
-       ocspResponse:signature.ocspEvidence.ocspResponse,
-       ocspUrl:signature.ocspEvidence.ocspUrl 
-      }
+      ...(ocspEvidence
+        ? {
+            ocspEvidence: {
+              status: ocspEvidence.status,
+              verifiedAt: new Date(ocspEvidence.verifiedAt).toISOString(),
+              ocspResponse: ocspEvidence.ocspResponse,
+              ocspUrl: ocspEvidence.ocspUrl,
+            },
+          }
+        : {}),
     };
   }
 
@@ -1863,12 +2155,40 @@ export class DocumentService {
    *
    *  - Firma simple: la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar
    *    (ver `signatureSnapshotObjectKey`), no de su perfil en vivo.
-   *  - Firma avanzada (e.firma): un código QR que lleva a la constancia de esa firma. Su evidencia
-   *    es criptográfica y no produce ninguna imagen, así que antes su espacio quedaba vacío.
+   *  - Firma avanzada (e.firma): un código QR con los datos del firmante y del evento de firma
+   *    (ver `SignatureQrService`). Su evidencia es criptográfica y no produce ninguna imagen, así
+   *    que antes su espacio quedaba vacío.
    *
    * El QR se genera únicamente cuando la firma avanzada YA se completó: mientras el firmante siga
    * pendiente no hay firma que consultar, así que no se dibuja nada y su espacio sigue libre.
    */
+  /**
+   * Datos que se codifican en el QR de una firma avanzada (historia "Actualizar contenido del
+   * código QR en firma avanzada").
+   *
+   * Todo describe a ESA firma y no al perfil del firmante hoy: el nombre y el RFC salen del
+   * certificado del SAT con el que firmó —con los datos del colaborador como respaldo, mismo
+   * criterio que `getAdvancedSignaturePublicView`— y la IP y la fecha son las que quedaron
+   * registradas al firmar. La ubicación se sigue guardando, pero ya no se publica (ver
+   * `SignatureQrService`). El documento se puede leer años después; el QR tiene que
+   * seguir diciendo lo que pasó, no lo que pasa.
+   */
+  private toAdvancedSignatureQrData(
+    document: DocumentEntity,
+    collaborator: CollaboratorEntity,
+  ): AdvancedSignatureQrData {
+    const certificate = collaborator.advancedSignature?.certificate;
+
+    return {
+      signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
+      rfc: certificate?.rfc ?? collaborator.rfc,
+      ipAddress: collaborator.ipAddress,
+      signedAt:
+        collaborator.advancedSignature?.signedAt ?? collaborator.signedAt,
+      verificationUrl: buildAdvancedSignatureUrl(document.id, collaborator.id),
+    };
+  }
+
   private async resolveStampImage(
     document: DocumentEntity,
     collaborator: CollaboratorEntity,
@@ -1878,8 +2198,8 @@ export class DocumentService {
         return null;
       }
 
-      return this.signatureQrService.generatePngBuffer(
-        buildAdvancedSignatureUrl(document.id, collaborator.id),
+      return this.signatureQrService.generateAdvancedSignaturePng(
+        this.toAdvancedSignatureQrData(document, collaborator),
       );
     }
 
@@ -1954,6 +2274,16 @@ export class DocumentService {
         await this.hashService.generateFileHash(documentBuffer);
       document.signedAt = new Date();
 
+      // Sellado con Seal Service ANTES de armar la hoja: el documento ya tiene todas sus firmas
+      // avanzadas (que es lo que el proveedor necesita para un único hash del conjunto) y la hoja
+      // imprime la constancia resultante en su tabla NOM-151. Antes corría después de la hoja, así
+      // que esa tabla salía siempre vacía. Sigue siendo best-effort: si el sellado falla, la firma
+      // no se ve afectada y la hoja se arma sin constancia, como hasta ahora.
+      const seal = await this.sealAdvancedSignatures(
+        document,
+        signerCollaborators,
+      );
+
       // La versión definitiva se arma DESPUÉS de calcular signedHash y ANTES de marcar el
       // documento como SIGNED: la hoja imprime ese hash, y si el anexado falla el documento no
       // queda firmado (el flujo de `sign()` deshace la firma y permite reintentar), en vez de
@@ -1963,6 +2293,7 @@ export class DocumentService {
         signerCollaborators,
         documentBuffer,
         signerNames,
+        seal,
       );
 
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
@@ -2026,6 +2357,14 @@ export class DocumentService {
         continue;
       }
 
+      // La caja de firma es apaisada porque está pensada para una rúbrica; un QR estirado ahí
+      // deja de ser cuadrado y los lectores no reconocen su patrón. Se encaja centrado, sin
+      // deformarlo. Las rúbricas siguen ocupando la caja completa, exactamente como antes.
+      const stampOptions = {
+        preserveAspectRatio:
+          collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL,
+      };
+
       if (collaborator.simpleSignature) {
         // Firmante creado por el flujo nuevo (ver historia "Ubicación de firmas por
         // usuario"): un arreglo vacío significa que no colocó ninguna posición — se firma
@@ -2045,6 +2384,7 @@ export class DocumentService {
                 signatureBuffer,
                 coordinates,
                 pageIndex,
+                stampOptions,
               );
           } else {
             // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
@@ -2062,6 +2402,8 @@ export class DocumentService {
                 documentBuffer,
                 signatureBuffer,
                 legacyCoordinates,
+                undefined,
+                stampOptions,
               );
           }
         }
@@ -2080,6 +2422,8 @@ export class DocumentService {
             documentBuffer,
             signatureBuffer,
             coordinates,
+            undefined,
+            stampOptions,
           );
       }
     }
@@ -2137,11 +2481,12 @@ export class DocumentService {
    * bucket de documentos finalizados (historia "Anexar hoja existente de información de firmas al
    * documento final"). Esa copia es la versión definitiva: la única que el usuario ve y descarga.
    *
-   * No se inventa una hoja nueva — se usa la que ya existía, `SummaryDocumentService`, que replica
-   * la plantilla de referencia "Firmalo Hoja de Firmas". Aplica igual a firma simple y a firma
-   * avanzada: la diferencia entre ambas ya quedó resuelta antes, en el estampado (la simple llega
-   * con las rúbricas dibujadas en el documento, la avanzada sin imagen porque su evidencia es
-   * criptográfica), y acá solo se concatenan páginas.
+   * Cada tipo de firma tiene su propia hoja (historia "Crear hoja de evidencia específica para
+   * firma avanzada"): `SummaryDocumentService` para la firma simple y
+   * `AdvancedSummaryDocumentService` para la avanzada, que acredita cosas distintas —certificado
+   * del SAT, número de serie y la firma electrónica de cada firmante, en vez de OTP y cifrado del
+   * Audit Trail—. La elección es lo único que se decide acá; de ahí en adelante solo se concatenan
+   * páginas, igual para ambas.
    *
    * Nada de lo que entra se modifica: el original sigue intacto en `created_documents` y el
    * documento firmado en `signed_documents` —que es el insumo con el que se calculó `signedHash`,
@@ -2152,37 +2497,35 @@ export class DocumentService {
     signerCollaborators: CollaboratorEntity[],
     signedDocument: Buffer,
     signerNames: string,
+    seal: SealEntity | null = null,
   ): Promise<void> {
     const creator = await this.userService.findOne(document.createdBy);
 
-    // "Cifrado" en la plantilla: copia cifrada y reversible (ver `HashService.reverseCiperHash`)
-    // del registro de esta finalización, para poder reconstruir qué se firmó y quién lo firmó
-    // desde la propia hoja.
-    const cipher = await this.hashService.generateCiperHash({
-      documentId: document.id,
-      signedHash: document.signedHash,
-      signedAt: document.signedAt,
-      signers: signerCollaborators.map((collaborator) => ({
-        id: collaborator.id,
-        name: collaboratorDisplayName(collaborator),
-        signedAt: collaborator.signedAt,
-      })),
-    });
+    const sheetDocumentInfo = {
+      id: document.id,
+      documentName: document.fileName,
+      hash: document.signedHash,
+      totalPages: document.totalPages,
+      createdBy: creator.email,
+      verificationUrl: buildPublicDocumentUrl(document.id),
+    };
 
-    const summarySheet = await this.summaryDocumentService.generateSummaryPdf(
-      {
-        id: document.id,
-        documentName: document.fileName,
-        hash: document.signedHash,
-        cipher,
-        totalPages: document.totalPages,
-        createdBy: creator.email,
-        verificationUrl: buildPublicDocumentUrl(document.id),
-      },
-      signerCollaborators.map((collaborator) =>
-        this.toSummarySigner(collaborator),
-      ),
-    );
+    const summarySheet = isAdvancedSignatureDocument(signerCollaborators)
+      ? await this.advancedSummaryDocumentService.generateAdvancedSummaryPdf(
+          {
+            ...sheetDocumentInfo,
+            conservationRecord: toConservationRecord(seal),
+          },
+          signerCollaborators.map((collaborator) =>
+            this.toAdvancedSummarySigner(collaborator),
+          ),
+        )
+      : await this.summaryDocumentService.generateSummaryPdf(
+          sheetDocumentInfo,
+          signerCollaborators.map((collaborator) =>
+            this.toSummarySigner(collaborator),
+          ),
+        );
 
     const finalizedDocument = await this.documentSigningSerivice.appendPdfPages(
       signedDocument,
@@ -2207,12 +2550,41 @@ export class DocumentService {
   ): SummaryDocumentSigner {
     return {
       name: collaboratorDisplayName(collaborator),
-      rfc: collaborator.rfc,
       ipAddress: collaborator.ipAddress,
       signedAt: collaborator.signedAt,
-      geoLocation: collaborator.geoLoc
-        ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
+    };
+  }
+
+  /**
+   * Traduce un colaborador que firmó con e.firma a una tabla de la sección "Firmas" de la hoja de
+   * evidencia avanzada.
+   *
+   * Todo lo específico de la firma avanzada sale de `advancedSignature` —el resultado no sensible
+   * que `EfirmaService.firmar` dejó guardado al validar la e.firma—, nunca de algo que se vuelva a
+   * resolver en vivo: la hoja tiene que describir la firma tal como ocurrió.
+   *
+   * El nombre preferido es el del certificado (el que el SAT tiene registrado para ese RFC, el más
+   * fiel a quién firmó), con el del perfil como respaldo — mismo criterio que
+   * `getAdvancedSignaturePublicView`.
+   */
+  private toAdvancedSummarySigner(
+    collaborator: CollaboratorEntity,
+  ): AdvancedSummaryDocumentSigner {
+    const advancedSignature = collaborator.advancedSignature;
+
+    return {
+      name:
+        advancedSignature?.certificate?.name ??
+        collaboratorDisplayName(collaborator),
+      ipAddress: collaborator.ipAddress,
+      certificateSerialNumber:
+        advancedSignature?.certificate?.serialNumber ?? null,
+      electronicSignature: advancedSignature
+        ? String(advancedSignature.signatureBase64)
         : null,
+      // `advancedSignature.signedAt` es el momento real del firmado criptográfico; `signedAt` del
+      // colaborador es cuando se registró en la base y solo se usa como respaldo.
+      signedAt: advancedSignature?.signedAt ?? collaborator.signedAt,
     };
   }
 

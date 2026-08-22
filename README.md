@@ -45,6 +45,54 @@ Cuando firma el último firmante pendiente:
 2. Para **cada firmante en orden**, descarga su imagen de firma y usa `PdfSignatureService.mergeSignatureIntoPdf` (incrusta el PNG en la última página, normaliza tamaño a un rango válido) + `addSignerName` (nombre debajo de la firma). Las firmas se apilan verticalmente.
 3. Aplica conformidad **PDF/A-2B** (metadatos XMP + `OutputIntent` con perfil ICC sRGB) y sube el resultado a `signed_documents` reutilizando el mismo `objectKey`.
 4. Calcula `signedHash`, marca `status = SIGNED`, `signedAt`, y envía el PDF final por correo a todos los participantes.
+5. Anexa la **hoja de evidencia** al documento firmado (`attachSignaturesSheet`) y guarda esa copia —la definitiva, la única que el usuario ve y descarga— en el bucket `finalized_documents`. Se arma después de calcular `signedHash` (la hoja lo imprime) y antes de marcar el documento como `SIGNED`: si falla, el documento no queda firmado y el intento se puede repetir, en vez de dejar una versión final que no existe.
+
+**Hay una hoja de evidencia por tipo de firma**, y son independientes entre sí (módulo `document/summary-document`):
+
+| Hoja | Servicio | Encabezado | Qué acredita |
+|---|---|---|---|
+| Firma simple | `SummaryDocumentService` | `Firma_Digital_Simple` / banner `Firmalo_Grafo` | Artículos 89, 90 y 93 del Código de Comercio; por firmante imprime Nombre/Tipo/IP/Sustentada/OTP/Fecha/Geo |
+| Firma avanzada (e.firma) | `AdvancedSummaryDocumentService` | `Firma_Electrónica_Avanzada` / banner `Firmalo_FIEL` | Artículos 89, 90, 93 y **97**; agrega el número de serie del certificado del SAT y la firma electrónica, leídos de `CollaboratorEntity.advancedSignature` |
+
+`isAdvancedSignatureDocument()` elige cuál se anexa: el tipo de firma es una decisión del documento (`DocumentSignaturesService` lo copia igual a todos sus SIGNER), así que basta con mirar a los firmantes.
+
+**Geolocalización: se registra, no se publica.** Desde la historia "Ocultar geolocalización en hojas
+de firma y vistas públicas", ni las hojas de evidencia ni el QR de la firma avanzada imprimen la
+ubicación del firmante. El dato NO se tocó donde importa: se sigue exigiendo al firmar
+(`GeolocationDto`, un 400 si falta), se sigue guardando en `collaborators.geo_loc` y se sigue
+registrando en la cadena de auditoría — de donde se puede consultar por `GET /audit/decrypted`. Lo
+único que cambió es que dejó de viajar a la presentación: el campo se quitó de
+`SummaryDocumentSigner`, `AdvancedSummaryDocumentSigner` y `AdvancedSignatureQrData` en vez de
+dejarlo entrando sin usarse, que es como vuelve a colarse a una plantilla sin que nadie lo note.
+Los documentos ya firmados conservan sus hojas y sus QR tal como se generaron: son parte del PDF y
+no se regeneran.
+
+**Estructura, idéntica en las dos** (plantillas "Firmalo Hoja de Firmas SIMPLE / AVANZADA"): encabezado con el logo PNG a la izquierda y el tipo de firma a la derecha; banner de guiones; texto legal; tabla **Documento**; tabla **Constancia de Conservación (NOM-151)**; banner `Firmas`; y una tabla **por cada firmante**. El pie lleva el código QR a la vista pública del documento (`/public/documents/:id`, la única consultable sin sesión) más las leyendas legales sobre la descarga de los archivos oficiales. Encabezado y pie se declaran como `header`/`footer` de pdfmake, así que se repiten en todas las páginas — la hoja crece con el número de firmantes.
+
+**Tipografías**: **Lato** para texto corrido (párrafos legales, títulos de sección, pie) y **JetBrains Mono** para el contenido de las tablas y los separadores de guiones, que dependen del ancho fijo por carácter para alinearse. Los `.ttf`, el logo del encabezado y el isotipo del pie viven en `summary-document/fonts/` y `summary-document/assets/`; `nest-cli.json` los copia a `dist/` (`**/*.ttf` y `**/*.png`), y `sheet-rendering.ts` los resuelve por `__dirname` para que funcionen igual en `src/` y en el build.
+
+Lo compartido entre ambas hojas es solo el layout (`sheet-rendering.ts`: tipografías, logo, encabezado, pie, tabla informativa y render a Buffer). Ni un texto legal se comparte: cada tipo de evidencia puede cambiar sin arrastrar al otro.
+
+**Tabla NOM-151.** El sellado ante el PSC corre **antes** de armar la hoja (dentro de `finalizeSignedDocument`, justo antes de `attachSignaturesSheet`); antes era al revés y por eso la tabla salía siempre vacía. Sigue siendo best-effort: si el sellado falla, la firma se completa igual y la hoja se arma sin constancia. Si el documento ya estaba sellado —un intento previo selló y falló más adelante—, la constancia se relee (`SealDocumentUseCase.findByDocumentId`) en vez de perderse.
+
+De los tres renglones de la plantilla solo se llena **EMITIDO**, desde `SealEntity.sealedAt` (columna agregada en `AddSealedAtToDocumentSeals1784300000026`: la respuesta de Seal Service ya traía el dato y el mapper lo descartaba, contradiciendo su propio criterio de "esta es la única oportunidad de guardarlo"). El DN del certificado (TSA) y el número de serie del sello viajan **solo dentro del token RFC 3161** del PSC, y ni PSC CODEX ni Seal Service los exponen por separado (ver `PscCodexResponseHash`: solo `status`, `hashProcessed`, `fileBase64` y `uuid`); sacarlos exige parsear ASN.1 del token, y ese parseo corresponde a Seal Service, que es quien habla con el PSC y ya tiene el token. Los renglones se imprimen vacíos en vez de omitirse: la tabla es parte de la plantilla. En la hoja simple van siempre vacíos, porque un documento de firma simple nunca se sella.
+
+**Dos campos que estas hojas ya no imprimen**, porque las plantillas de referencia no los contemplan: el **"Cifrado"** de la tabla del documento —no se pierde nada, sigue en `AuditChainEntity.chipher`, que es su fuente de verdad; la hoja solo lo mostraba, y se dejó de calcular para no gastar un cifrado que nadie lee— y el **RFC del firmante**, que sigue en `CollaboratorEntity.rfc` y, en la hoja avanzada, dentro del certificado del SAT.
+
+**Qué se estampa por cada firmante** lo decide `resolveStampImage`:
+
+- **Firma simple** — la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar (`signatureSnapshotObjectKey`), no de su perfil en vivo.
+- **Firma avanzada (e.firma)** — un **código QR** (`SignatureQrService`), porque la firma avanzada no produce ninguna imagen: su evidencia es criptográfica y su espacio quedaba vacío. Se genera solo cuando esa firma ya se completó.
+
+El QR codifica **texto plano con los datos de esa firma** (historia "Actualizar contenido del código QR en firma avanzada"), no solo un enlace: nombre del firmante y RFC —los del certificado del SAT, con los del colaborador como respaldo—, fecha y hora **con el desfase de la zona horaria del sistema** (`TZ`, o la que resuelva el sistema operativo), IP registrada al firmar, y como última línea la URL de la constancia pública (`GET /document/:id/signatures/:collaboratorId`, ver `getAdvancedSignaturePublicView`). Así quien escanea con cualquier lector ve los datos ahí mismo, sin depender de tener red, y la verificación en línea sigue disponible.
+
+El QR se estampa con `preserveAspectRatio`: la caja de firma es apaisada (200x80 por defecto, pensada para una rúbrica) y estirar ahí un código cuadrado hace que los lectores dejen de reconocer su patrón, así que se escala al lado menor de la caja y se centra. Las rúbricas siguen ocupando la caja completa.
+
+Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt alrededor del código. El PNG se genera sin margen propio a propósito —así los módulos quedan lo más grandes posible dentro de la caja— y el borde se dibuja por fuera. No es cosmético: medido con un decodificador real sobre la página rasterizada, un QR con el texto del documento pegado **no se lee** a 150 DPI, y con la separación sí.
+
+**Tamaño mínimo.** Una caja de firma puede ser tan chica como 60x24pt, y ahí el QR queda en 24pt de lado (~8.5mm, módulos de 0.12mm): no lo lee ningún decodificador a 96, 150 ni 300 DPI. Se estampa igual —quitarlo dejaría la firma avanzada sin representación visual— pero se registra una advertencia (`PdfSignatureService`) en vez de producir en silencio un código ilegible. A partir de ~60pt de lado se lee sin problema en papel.
+
+**Densidad.** Con los seis renglones de datos más la URL de la constancia, el código sale de 69x69 módulos. En la caja por defecto (80pt de lado) eso deja ~1.55 px por módulo a 96 DPI —pantalla estándar al 100%—, que está en el límite: a esa resolución decodifica o no según dónde caigan los bordes de módulo respecto a la rejilla de píxeles. A 150 DPI o más (impresión, pantalla HiDPI, o simplemente acercar el zoom) se lee siempre. Bajar de 53 módulos exigiría quitar la URL de la constancia o acortarla.
 
 ### 1.4 Integridad y auditoría
 
@@ -142,10 +190,11 @@ Cuando firma el último firmante pendiente:
 | Endpoint | Método de servicio | Qué hace |
 |---|---|---|
 | `POST /document` | `create()` | Sube el PDF, crea documento + participantes. **Requiere el header `X-Account-Id`** (cuenta activa); el documento queda scopeado a esa cuenta (`DocumentEntity.accountId`) |
-| `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros. Cada fila incluye `creator` y `creatorRfc` (el RFC sale de `personal_information` vía `leftJoinAndSelect` sobre `requester`, no de `users`; `null` si el creador aún no lo registró) |
+| `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros. Cada fila incluye `creator` y `creatorRfc` (el RFC sale de `personal_information` vía `leftJoinAndSelect` sobre `requester`, no de `users`; `null` si el creador aún no lo registró) y `signatureType` (`simple`/`fiel`, para la columna "Tipo de firma" del frontend — se resuelve a partir de los SIGNER del documento, que ya vienen en el mismo query, y es `null` si no todos coinciden o si ninguno lo tiene registrado, como en los documentos del endpoint antiguo) |
 | `GET /document/:id` | `findDetailForUser()` | Detalle + permisos del usuario (`canSign`/`canReject`). **Todavía no scopeado por cuenta** (ver Pendientes) |
 | `GET /document/file/:id` | `getDocumentMinioURL()` | URL prefirmada según estado |
-| `GET /document/public/:id` | `getPublicDocument()` | **Nuevo, `@SkipJwtAuth()`** — expone `secureUrl` sin autenticación, solo si `status = SIGNED`. Consumido por `signature-app` en `/public/documents/:id` |
+| `GET /document/public/:id` | `getPublicDocument()` | **`@SkipJwtAuth()`** — vista pública de verificación, sin autenticación. El contenido depende de `isCompleted`: pendiente ⇒ solo nombre del documento y nombres de los firmantes; completado ⇒ además hash, páginas, creador, constancia NOM-151, la evidencia de cada firma **según su tipo** y `secureUrl`. Consumido por `signature-app` en `/public/documents/:id` |
+| `GET /document/public/:id/seal/:artifact` | `getPublicSealArtifact()` | **Nuevo, `@SkipJwtAuth()`** — descarga un artefacto de la constancia ya persistida en `document_seals`: `nom151` (PDF), `timestamp` (token RFC 3161) o `canonical` (cadena canónica en texto plano). Nunca vuelve a llamar al PSC. 404 si el documento no está firmado, no tiene sello, o ese artefacto no vino del proveedor |
 | `PATCH /document/:id/submit-for-authorization` | `submitForAuthorization()` | `CREATED → PENDING`, notifica al primer firmante |
 | `PATCH /document/:id/sign` | `sign()` | Firma en turno; finaliza el documento si es el último firmante |
 | `PATCH /document/:id/link-collaborator` | `linkCollaborator()` | **Nuevo** — vincula al usuario autenticado como colaborador si fue invitado solo por email (sin cuenta todavía); consumido por `/access-document` en el frontend |
@@ -249,7 +298,7 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 
 | Endpoint | Servicio |
 |---|---|
-| `POST /auth/register` | `register()` → `UserService.createFromSignup()` — crea una **pre-cuenta** (`isEmailVerified: false`), envía OTP, no autentica todavía |
+| `POST /auth/register` | `register()` — primero verifica el token de **Cloudflare Turnstile** (`turnstileToken`, obligatorio en el body) contra Siteverify; solo si pasa llama a `UserService.createFromSignup()`, que crea una **pre-cuenta** (`isEmailVerified: false`) y envía OTP. No autentica todavía |
 | `POST /auth/verify-otp` | Confirma el OTP de registro (`EmailVerificationCodeEntity`), marca `isEmailVerified = true` y autentica de inmediato (auto-login) |
 | `POST /auth/resend-otp` | Reenvía el OTP de verificación de registro |
 | `POST /auth/forgot-password` | Inicia recuperación de contraseña, envía OTP (`PasswordResetCodeEntity`) |
@@ -260,6 +309,10 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 | `GET /auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/dashboard/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
 
 Todos los endpoints públicos de este módulo tienen `ThrottlerGuard` explícito (5 intentos/60s) — no solo `register`/`login` como documentaba antes este README.
+
+**CAPTCHA en el registro (Cloudflare Turnstile).** `POST /auth/register` exige además `turnstileToken`: el token de un solo uso que genera el widget en `/signup`. `TurnstileService` (ver `shared/*`) lo canjea contra la API Siteverify de Cloudflare **antes** de cualquier escritura, así que un token ausente, inválido, expirado o ya usado devuelve `400` sin crear ni actualizar el pre-registro y sin enviar OTP. El throttler no sustituía esto: limita la frecuencia, no distingue a una persona de un script.
+
+Falla cerrado: si `TURNSTILE_SECRET_KEY` no está configurada, o Siteverify no responde, el registro se rechaza con `503` en vez de dejarse pasar. Para desarrollo, Cloudflare publica claves de prueba que siempre aprueban (están puestas en `.env.example`).
 
 ### `users` (`/api/v1/users`) — un endpoint público adicional
 
@@ -290,9 +343,61 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 ### `shared/*`
 
-`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService`, `RedisService` (blacklist de JWT), `PasswordService` (bcrypt). El flujo de OTP de registro/recuperación de contraseña (`auth`, arriba) ya está integrado end-to-end vía `EmailVerificationCodeService`/`PasswordResetCodeService` — confirmar si reutilizan `OTPService` internamente o son una implementación paralela antes de asumir cuál es la fuente de verdad del código de generación/expiración.
+`MinioService` (almacenamiento), `HashService` (hashing + cifrado), `PdfSignatureService` (manipulación de PDF), `EmailService` (SendGrid), `OTPService`, `RedisService` (blacklist de JWT), `PasswordService` (bcrypt), `TurnstileService` (verificación del CAPTCHA de registro contra Cloudflare Siteverify). El flujo de OTP de registro/recuperación de contraseña (`auth`, arriba) ya está integrado end-to-end vía `EmailVerificationCodeService`/`PasswordResetCodeService` — confirmar si reutilizan `OTPService` internamente o son una implementación paralela antes de asumir cuál es la fuente de verdad del código de generación/expiración.
 
 ---
+
+### Documentación Swagger: decoradores por endpoint (`docs/`)
+
+Los controladores **no llevan decoradores `@Api*` de Swagger en sus métodos**. La documentación de
+cada endpoint vive en un decorador compuesto con `applyDecorators()`, en la carpeta `docs/` de su
+módulo:
+
+```
+src/document/
+  docs/
+    api-sign-document.docs.ts
+    api-reject-document.docs.ts
+    ...
+  document.controller.ts
+```
+
+```ts
+@Patch(':id/sign')
+@ApiSignDocument()
+sign(...) { ... }
+```
+
+**Qué va en el decorador y qué se queda en el controlador.** Al decorador se mueve *solo* lo que
+describe (`ApiOperation`, `ApiResponse`, `ApiParam`, `ApiQuery`, `ApiBody`, `ApiConsumes`,
+`ApiHeader`, `ApiSecurity`, `ApiExcludeEndpoint`). En el controlador se queda todo lo que *hace*:
+la ruta, `@Public()`/`@SkipJwtAuth()`, guards, `@UseInterceptors` (incluidos los de multipart, que
+son quienes de verdad procesan el archivo) y la delegación al servicio. `ApiSecurity` y
+`ApiConsumes` son la pareja engañosa: solo documentan — quien abre la ruta a la API key es
+`@Public()`, y quien procesa el multipart es el `FileInterceptor`.
+
+`@ApiTags` y `@ApiBearerAuth` a nivel de CLASE se quedan en el controlador: no pertenecen a ningún
+endpoint. La convención no tiene excepciones: incluso los endpoints que se ocultan del Swagger
+publicado tienen su decorador (`ApiGetDocumentFileUrl`, `ApiGetSignatureFile`, `ApiGetHello`), para
+que el motivo de la exclusión quede escrito y todos los endpoints se lean igual.
+
+**Cómo verificar que no se perdió nada.** Al mover decoradores, leer el diff no alcanza: lo que
+importa es que la especificación generada no cambie. La forma de comprobarlo es volcarla a un JSON
+antes y después y comparar. Un script de una sola función basta:
+
+```ts
+const app = await NestFactory.create(AppModule, { preview: true, logger: false });
+const document = SwaggerModule.createDocument(app, config); // el mismo DocumentBuilder de main.ts
+writeFileSync(salida, JSON.stringify(document, null, 2));
+```
+
+Dos detalles que lo hacen práctico: el modo `preview` resuelve el grafo de módulos **sin instanciar
+un solo provider**, así que no abre conexiones a Postgres/Mongo/Redis/MinIO/Kafka y corre sin
+infraestructura levantada; y conviene NO pasar `include` —a diferencia de `main.ts`, que publica
+solo cuatro módulos— para cubrir todos los controladores del proyecto.
+
+Así se comprobó la extracción de los 74 decoradores en los 23 controladores: `diff` vacío, 58 rutas
+y 72 operaciones idénticas byte a byte.
 
 ## 4. Autenticación
 
@@ -320,7 +425,7 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 
 ### Variables de entorno relevantes
 
-`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `POSTGRES_DB_URL`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `FRONTEND_URL`, `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_DB_NAME`, `MONGO_DB_URL`, `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_*_BUCKET` (una por bucket), `CIPHER_SECRET`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `API_KEY`.
+`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `POSTGRES_DB_URL`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `FRONTEND_URL`, `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_DB_NAME`, `MONGO_DB_URL`, `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_*_BUCKET` (una por bucket), `CIPHER_SECRET`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `API_KEY`, `TURNSTILE_SECRET_KEY` (clave privada de Cloudflare Turnstile — solo acá, nunca en el frontend; su pareja pública `TURNSTILE_SITE_KEY` vive en el `.env` de `signature-app`).
 
 ## 6. Levantar el proyecto
 
@@ -362,6 +467,56 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 ---
 
 ## 7. Pendientes / trabajo futuro
+
+### Formato de `seal/dto/seal-document.dto.ts` (y por qué `npm run lint` no sirve hoy como filtro)
+
+Quedó sin corregir a propósito, al arreglar el sellado: son renglones de la feature de verificación
+OCSP, no del bugfix, y reformatearlos habría metido ruido ajeno en un diff de corrección.
+
+`npx eslint src/document/seal/dto/seal-document.dto.ts` marca tres:
+
+| Línea | Qué |
+|---|---|
+| 34 | `@ApiProperty({example: '"https://cfdi.sat.gob.mx/edofiel"'})` — prettier lo quiere espaciado, y el valor lleva comillas dobles **dentro** de la cadena, que parecen sobrar |
+| 49 | `@ApiProperty({example: 'SERVICIO DE ADMINISTRACION TIRIBUTARIA'})` — mismo espaciado, y dice **TIRIBUTARIA** en vez de TRIBUTARIA |
+| 52 | `issuer:string;` — falta el espacio tras los dos puntos |
+
+Las tres son cosméticas: no afectan la validación ni el payload que se manda a Seal Service, solo
+el ejemplo que se publica en Swagger (el de la línea 49 sí se ve en el portal, con el typo).
+
+**El problema de fondo es que no hay forma de notarlas.** El repo está guardado con CRLF
+(`core.autocrlf`) y la configuración de prettier espera LF, así que `npx eslint src` reporta del
+orden de **14,600 errores** de `Delete ␍` — un archivo que nadie ha tocado da ~470 él solo. Con ese
+volumen, un error de formato real es indistinguible del ruido y el lint no puede usarse como filtro
+en CI ni en pre-commit. Resolver el fin de línea (un `.gitattributes` con `* text eol=lf` y un
+`--fix` de una sola pasada) es lo que haría que estas tres aparezcan solas.
+
+### Al integrar `feat/signature-67`: quitarle la geolocalización a la vista pública
+
+La historia "Ocultar geolocalización en hojas de firma y vistas públicas" se aplicó a todo lo que
+existía en `development` (las dos hojas de evidencia y el QR de la firma avanzada). La **vista
+pública de verificación** entra por otra rama, `feat/signature-67`, y ahí el dato sí se publica —
+las dos ramas se escribieron en paralelo, así que el conflicto no aparece como conflicto de git:
+el merge entra limpio y la ubicación vuelve a publicarse sin que nadie lo note.
+
+**No hace falta acordarse.** `src/document/geolocation-not-published.spec.ts` lee las superficies de
+presentación del módulo (las dos hojas, el QR y **todos** los contratos de `interfaces/responses/`,
+leídos del directorio para que uno nuevo quede cubierto solo) y falla si alguna vuelve a exponerla,
+señalando el archivo y el renglón. Al integrar esa rama, la prueba se pone en rojo.
+
+Lo que hay que quitar cuando eso pase:
+
+| Repo | Archivo | Qué |
+|---|---|---|
+| `signature-server` | `interfaces/responses/document-public-view-response.ts` | El campo `geoLocation` de `PublicSignerData` |
+| `signature-server` | `document.service.ts` | `geoLocation` en `toCompletedPublicSigner` (y en el objeto del firmante pendiente) |
+| `signature-app` | `_components/SignerEvidenceCard.tsx` | El `<InfoRow label="Geolocalización" …>` |
+| `signature-app` | `_components/../_requests.ts` | El campo `geoLocation` de `PublicSigner` |
+| `signature-app` | `_components/PublicDocumentView.spec.tsx` | El campo en los fixtures |
+
+El criterio es el mismo que se aplicó aquí: se quita el campo del contrato, no solo el renglón de
+la pantalla. Un campo que sigue llegando a la capa de presentación es como vuelve a colarse.
+
 
 ### Resuelto en esta ronda (las solicitudes FIEL sin 2FA no aparecían en "Por firmar") — 2026-08-15
 

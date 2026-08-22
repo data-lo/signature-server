@@ -29,7 +29,17 @@ import { DocumentTransactionService } from './document-transaction.service';
 import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import { SealEntity } from './seal/entities/seal.entity';
+import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
+import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
+import {
+  ADVANCED_SIGNATURE_BACKING_LABEL,
+  ADVANCED_SIGNATURE_TYPE_LABEL,
+  SIMPLE_SIGNATURE_BACKING_LABEL,
+  SIMPLE_SIGNATURE_TYPE_LABEL,
+} from './summary-document/signature-legal-text';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
+import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './services/signature-qr.service';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 
@@ -105,6 +115,7 @@ describe('DocumentService', () => {
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
+  let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -199,6 +210,7 @@ describe('DocumentService', () => {
       issue: jest.fn(),
       verifyAndConsume: jest.fn(),
       hasConsumedCode: jest.fn().mockResolvedValue(true),
+      findConsumedCode: jest.fn().mockResolvedValue(null),
     };
     documentTransactionService = {
       createInitial: jest.fn(),
@@ -226,14 +238,22 @@ describe('DocumentService', () => {
     };
     sealDocumentUseCase = {
       create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
+      findByDocumentId: jest.fn().mockResolvedValue(null),
     };
     summaryDocumentService = {
       generateSummaryPdf: jest
         .fn()
         .mockResolvedValue(Buffer.from('hoja-de-firmas')),
     };
+    advancedSummaryDocumentService = {
+      generateAdvancedSummaryPdf: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
+    };
     signatureQrService = {
-      generatePngBuffer: jest.fn().mockResolvedValue(Buffer.from('qr-png')),
+      generateAdvancedSignaturePng: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('qr-png')),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -269,6 +289,10 @@ describe('DocumentService', () => {
         {
           provide: SummaryDocumentService,
           useValue: summaryDocumentService,
+        },
+        {
+          provide: AdvancedSummaryDocumentService,
+          useValue: advancedSummaryDocumentService,
         },
         { provide: SignatureQrService, useValue: signatureQrService },
       ],
@@ -722,6 +746,93 @@ describe('DocumentService', () => {
         expect.objectContaining({ creatorRfc: null }),
       );
     });
+
+    /**
+     * Historia "Mostrar tipo de firma en las tablas de documentos": el tipo no vive en el
+     * documento sino en cada firmante, y el listado lo resuelve para la columna del frontend.
+     */
+    describe('tipo de firma del documento', () => {
+      function listWithSigners(collaborators: unknown[]) {
+        const qb = createMockQueryBuilder(
+          [
+            {
+              id: 'doc-1',
+              fileName: 'contrato.pdf',
+              fileType: 'application/pdf',
+              totalPages: 1,
+              status: DOCUMENT_STATUS_ENUM.PENDING,
+              createdAt: new Date('2026-03-15T23:55:00.000Z'),
+              collaborators,
+              requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+            },
+          ],
+          1,
+        );
+        documentRepository.createQueryBuilder.mockReturnValue(qb);
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          organizationId: null,
+        });
+
+        return service.findWithFilters('user-1', 'account-1', query);
+      }
+
+      function signer(signatureType: SIGNATURE_TYPE_ENUM | null) {
+        return {
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+          signatureType,
+          signingOrder: 0,
+        };
+      }
+
+      it('devuelve el tipo de firma que comparten los firmantes', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.FIEL }),
+        );
+      });
+
+      it('ignora a los colaboradores que no firman', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.SIMPLE),
+          {
+            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            signatureType: null,
+          },
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({
+            signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+          }),
+        );
+      });
+
+      // Documentos del endpoint antiguo (POST /document), que nunca asignó tipo de firma: null
+      // explícito en vez de suponer uno — el frontend muestra un guion.
+      it('devuelve null si los firmantes no tienen tipo de firma registrado', async () => {
+        const result = await listWithSigners([signer(null)]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: null }),
+        );
+      });
+
+      it('devuelve null si un documento mezclara tipos de firma', async () => {
+        const result = await listWithSigners([
+          signer(SIGNATURE_TYPE_ENUM.SIMPLE),
+          signer(SIGNATURE_TYPE_ENUM.FIEL),
+        ]);
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signatureType: null }),
+        );
+      });
+    });
   });
 
   describe('sign', () => {
@@ -836,14 +947,33 @@ describe('DocumentService', () => {
         return { document, signer };
       }
 
-      it('genera el QR con la URL de consulta de esa firma', async () => {
+      /**
+       * Historia "Actualizar contenido del código QR en firma avanzada": el código ya no lleva
+       * solo un enlace, sino los datos del firmante y del evento de firma.
+       */
+      it('genera el QR con los datos del firmante y de esa firma', async () => {
         const { signer } = await signAdvanced();
 
-        expect(signatureQrService.generatePngBuffer).toHaveBeenCalledTimes(1);
-        const url = signatureQrService.generatePngBuffer.mock.calls[0][0];
-        expect(url).toContain(
+        expect(
+          signatureQrService.generateAdvancedSignaturePng,
+        ).toHaveBeenCalledTimes(1);
+        const [data] =
+          signatureQrService.generateAdvancedSignaturePng.mock.calls[0];
+        expect(data).toEqual(
+          expect.objectContaining({
+            // Nombre y RFC del certificado del SAT, no los del perfil.
+            signerName: 'Firmante Uno',
+            rfc: 'XAXX010101000',
+            ipAddress: signer.ipAddress,
+            signedAt: new Date('2026-01-01T00:00:00.000Z'),
+          }),
+        );
+        expect(data.verificationUrl).toContain(
           `/public/documents/doc-1/signatures/${signer.id}`,
         );
+        // Historia "Ocultar geolocalización en hojas de firma y vistas públicas": la ubicación se
+        // sigue guardando en el colaborador, pero ya no llega al QR que se estampa en el PDF.
+        expect(data).not.toHaveProperty('geoLocation');
       });
 
       // El QR ocupa el lugar que tenía asignado esa firma, igual que la rúbrica de una simple: es
@@ -857,6 +987,18 @@ describe('DocumentService', () => {
         const [, stampedImage] =
           documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
         expect(stampedImage).toEqual(Buffer.from('qr-png'));
+      });
+
+      /**
+       * Criterio "el QR conserva una proporción cuadrada, sin estiramiento": la caja de firma es
+       * apaisada (está pensada para una rúbrica), así que el QR se encaja dentro sin deformarse.
+       */
+      it('lo estampa sin deformarlo dentro de la caja de firma', async () => {
+        await signAdvanced();
+
+        const [, , , , options] =
+          documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
+        expect(options).toEqual({ preserveAspectRatio: true });
       });
 
       // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".
@@ -879,9 +1021,10 @@ describe('DocumentService', () => {
 
         // Firmó uno de dos: se regenera la vista previa con el avance, así que sí se pide el QR
         // del que ya firmó — pero en ninguna de las dos pasadas el del que sigue pendiente.
-        const urls = signatureQrService.generatePngBuffer.mock.calls.map(
-          (call) => call[0] as string,
-        );
+        const urls =
+          signatureQrService.generateAdvancedSignaturePng.mock.calls.map(
+            (call) => (call[0] as { verificationUrl: string }).verificationUrl,
+          );
         expect(urls.some((url) => url.includes('collaborator-2'))).toBe(false);
       });
 
@@ -897,7 +1040,9 @@ describe('DocumentService', () => {
 
         await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
 
-        expect(signatureQrService.generatePngBuffer).not.toHaveBeenCalled();
+        expect(
+          signatureQrService.generateAdvancedSignaturePng,
+        ).not.toHaveBeenCalled();
         expect(documentSigningService.mergeSignatureIntoPdf).toHaveBeenCalled();
       });
     });
@@ -1111,6 +1256,89 @@ describe('DocumentService', () => {
         );
       });
 
+      /**
+       * Historia "Crear hoja de evidencia específica para firma avanzada": un documento firmado
+       * con e.firma lleva su propia hoja, no la de firma simple.
+       */
+      describe('firma avanzada (e.firma)', () => {
+        async function signAdvancedDocument() {
+          const document = mockDocument();
+          documentRepository.findOne.mockResolvedValue(document);
+          const signer = buildSigner({
+            userId: 'user-1',
+            signingOrder: 0,
+            signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          });
+          collaboratorRepository.find
+            .mockResolvedValueOnce([signer])
+            .mockResolvedValueOnce([signer]);
+
+          const efirmaInput = {
+            password: 'clave-correcta',
+            keyFile: {
+              originalname: 'llave.key',
+              buffer: Buffer.from('llave'),
+            } as Express.Multer.File,
+            cerFile: {
+              originalname: 'certificado.cer',
+              buffer: Buffer.from('cert'),
+            } as Express.Multer.File,
+          };
+          await service.sign('doc-1', 'user-1', efirmaInput, TEST_GEOLOCATION);
+          return document;
+        }
+
+        it('anexa la hoja de evidencia avanzada y no la de firma simple', async () => {
+          await signAdvancedDocument();
+
+          expect(
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf,
+          ).toHaveBeenCalledTimes(1);
+          expect(
+            summaryDocumentService.generateSummaryPdf,
+          ).not.toHaveBeenCalled();
+          expect(documentSigningService.appendPdfPages).toHaveBeenCalledWith(
+            Buffer.from('pdf'),
+            Buffer.from('hoja-de-firmas-avanzada'),
+          );
+        });
+
+        it('toma el número de serie del certificado y la firma electrónica de advancedSignature', async () => {
+          const document = await signAdvancedDocument();
+
+          const [info, signers] =
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock
+              .calls[0];
+          expect(info).toEqual(
+            expect.objectContaining({
+              id: 'doc-1',
+              hash: document.signedHash,
+              totalPages: document.totalPages,
+              createdBy: 'creador@correo.com',
+            }),
+          );
+          expect(signers).toEqual([
+            expect.objectContaining({
+              // El nombre del certificado del SAT gana al del perfil.
+              name: 'Firmante Uno',
+              certificateSerialNumber: '00001000000512345678',
+              electronicSignature: 'firma-base64',
+              signedAt: new Date('2026-01-01T00:00:00.000Z'),
+            }),
+          ]);
+        });
+
+        // La hoja avanzada no imprime "Cifrado": es un campo de la hoja simple.
+        it('no incluye el campo Cifrado', async () => {
+          await signAdvancedDocument();
+
+          const [info] =
+            advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock
+              .calls[0];
+          expect(info).not.toHaveProperty('cipher');
+        });
+      });
+
       it('la hoja se genera con el hash firmado, el total de páginas y los datos de cada firmante', async () => {
         const document = await signLastSigner();
 
@@ -1126,12 +1354,18 @@ describe('DocumentService', () => {
             verificationUrl: expect.stringContaining('/public/documents/doc-1'),
           }),
         );
-        expect(info.cipher).toEqual(expect.any(String));
+        // "Cifrado" y el RFC del firmante ya no se imprimen: la plantilla vigente no los
+        // contempla (historia "Estructura y diseño de las hojas de firma"). El cifrado sigue
+        // viviendo en el Audit Trail, que es su fuente de verdad.
+        expect(info).not.toHaveProperty('cipher');
+        expect(signers[0]).not.toHaveProperty('rfc');
+        // La geolocalización tampoco: se registra al firmar pero dejó de imprimirse (historia
+        // "Ocultar geolocalización en hojas de firma y vistas públicas").
+        expect(signers[0]).not.toHaveProperty('geoLocation');
         expect(signers).toEqual([
           expect.objectContaining({
             name: 'Firmante Uno',
             ipAddress: '127.0.0.1',
-            geoLocation: '19.4326, -99.1332',
           }),
         ]);
       });
@@ -1266,6 +1500,9 @@ describe('DocumentService', () => {
         expect.anything(),
         expect.anything(),
         { x: 50, y: 200, width: 100, height: 80 },
+        undefined,
+        // Una rúbrica sigue llenando su caja completa: el encaje sin deformar es solo del QR.
+        { preserveAspectRatio: false },
       );
     });
 
@@ -2362,6 +2599,54 @@ describe('DocumentService', () => {
   // status === SIGNED es la única defensa contra exponer el archivo de un documento que no
   // debería ser público todavía.
   describe('getPublicDocumentView', () => {
+    /** Sello persistido completo — el que produce un documento de firma avanzada ya sellado. */
+    const SEAL = {
+      id: 'seal-1',
+      documentId: 'doc-1',
+      signatureHash: 'hash-sellado',
+      canonicalPayload: 'v1||12:hola-mundo',
+      sealedAt: new Date('2026-08-14T18:24:11.000Z'),
+      timestampSeal: {
+        isValid: true,
+        processedHash: 'hash-ts',
+        tokenBase64: 'dG9rZW4tdHM=',
+        evidenceId: 'ts-1',
+      },
+      integritySeal: {
+        isValid: true,
+        processedHash: 'hash-nom151',
+        tokenBase64: 'dG9rZW4tbm9tMTUx',
+        evidenceId: 'nom151-1',
+        certificatePdfBase64: 'JVBERi0xLjQK',
+      },
+    } as unknown as SealEntity;
+
+    function signedDocument(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: DOCUMENT_STATUS_ENUM.SIGNED,
+        objectKey: 'object-key-1',
+        signedHash: 'hash-firmado',
+        originalHash: 'hash-original',
+        totalPages: 12,
+        createdBy: 'creator-1',
+        ...overrides,
+      };
+    }
+
+    beforeEach(() => {
+      collaboratorRepository.find.mockResolvedValue([]);
+      minioService.getFile.mockResolvedValue({
+        secureUrl: 'https://minio/finalized-documents/object-key-1',
+        expiresIn: 86400,
+      });
+      userService.findOne.mockResolvedValue({
+        id: 'creator-1',
+        email: 'creador@correo.com',
+      });
+    });
+
     it('lanza NotFoundException si el documento no existe, sin llamar a Minio', async () => {
       documentRepository.findOne.mockResolvedValue(null);
 
@@ -2371,71 +2656,435 @@ describe('DocumentService', () => {
       expect(minioService.getFile).not.toHaveBeenCalled();
     });
 
-    it.each([
-      DOCUMENT_STATUS_ENUM.CREATED,
-      DOCUMENT_STATUS_ENUM.PENDING,
-      DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
-      DOCUMENT_STATUS_ENUM.REJECTED,
-      DOCUMENT_STATUS_ENUM.EXPIRED,
-      DOCUMENT_STATUS_ENUM.CANCELLED,
-    ])(
-      'con status=%s: nunca genera ni devuelve una URL de Minio',
-      async (status) => {
-        documentRepository.findOne.mockResolvedValue({
-          id: 'doc-1',
-          fileName: 'contrato.pdf',
-          status,
-          objectKey: 'object-key-1',
-        });
+    /**
+     * Historia "Visualización pública de documentos firmados mediante MinIO": esta ruta no tiene
+     * ningún control de acceso (cualquiera con el UUID la puede llamar), así que el gate por
+     * status === SIGNED es la única defensa contra exponer el archivo de un documento que no
+     * debería ser público todavía.
+     */
+    describe('documento pendiente de firmas', () => {
+      it.each([
+        DOCUMENT_STATUS_ENUM.CREATED,
+        DOCUMENT_STATUS_ENUM.PENDING,
+        DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
+        DOCUMENT_STATUS_ENUM.REJECTED,
+        DOCUMENT_STATUS_ENUM.EXPIRED,
+        DOCUMENT_STATUS_ENUM.CANCELLED,
+      ])(
+        'con status=%s: nunca genera ni devuelve una URL de Minio',
+        async (status) => {
+          documentRepository.findOne.mockResolvedValue(
+            signedDocument({ status }),
+          );
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(minioService.getFile).not.toHaveBeenCalled();
+          expect(result.data.isCompleted).toBe(false);
+          expect(result.data.secureUrl).toBeNull();
+          expect(result.data.expiresIn).toBeNull();
+        },
+      );
+
+      /**
+       * El corazón de la historia: un documento a medio firmar publica su nombre y a quién le
+       * toca firmar, y NADA más. Ni hash, ni creador, ni constancia, ni descargas — y sobre todo
+       * ningún estatus individual, que en una URL sin sesión sería un tablero de quién ya firmó.
+       */
+      it('solo expone el nombre del documento y los nombres de los firmantes', async () => {
+        documentRepository.findOne.mockResolvedValue(
+          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+        );
+        collaboratorRepository.find.mockResolvedValue([
+          buildSigner({ id: 'collab-1', signingOrder: 0 }),
+          buildSigner({
+            id: 'collab-2',
+            userId: 'user-2',
+            signingOrder: 1,
+            status: SIGNEE_STATUS_ENUM.SIGNED,
+            signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+            signedAt: new Date('2026-08-14T18:24:11.000Z'),
+            ipAddress: '187.190.12.4',
+          }),
+        ]);
 
         const result = await service.getPublicDocumentView('doc-1');
 
-        expect(minioService.getFile).not.toHaveBeenCalled();
-        expect(result).toEqual({
-          success: true,
-          message: 'Documento obtenido correctamente',
-          data: {
-            id: 'doc-1',
-            fileName: 'contrato.pdf',
-            status,
-            secureUrl: null,
-            expiresIn: null,
-          },
-        });
-      },
-    );
-
-    it('con status=SIGNED: genera y devuelve la URL prefirmada de Minio desde el bucket de finalizados', async () => {
-      documentRepository.findOne.mockResolvedValue({
-        id: 'doc-1',
-        fileName: 'contrato.pdf',
-        status: DOCUMENT_STATUS_ENUM.SIGNED,
-        objectKey: 'object-key-1',
-      });
-      minioService.getFile.mockResolvedValue({
-        secureUrl: 'https://minio/finalized-documents/object-key-1',
-        expiresIn: 86400,
-      });
-
-      const result = await service.getPublicDocumentView('doc-1');
-
-      // La vista pública comparte la versión definitiva (documento + hoja de firmas), igual que
-      // el resto de las rutas de lectura.
-      expect(minioService.getFile).toHaveBeenCalledWith(
-        'object-key-1',
-        BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
-      );
-      expect(result).toEqual({
-        success: true,
-        message: 'Documento obtenido correctamente',
-        data: {
+        expect(result.data).toEqual({
           id: 'doc-1',
           fileName: 'contrato.pdf',
-          status: DOCUMENT_STATUS_ENUM.SIGNED,
-          secureUrl: 'https://minio/finalized-documents/object-key-1',
-          expiresIn: 86400,
-        },
+          status: DOCUMENT_STATUS_ENUM.PENDING,
+          isCompleted: false,
+          secureUrl: null,
+          expiresIn: null,
+          hash: null,
+          totalPages: null,
+          createdBy: null,
+          conservationRecord: null,
+          signers: [
+            {
+              id: 'collab-1',
+              name: 'Firmante Uno',
+              signatureType: null,
+              signatureTypeLabel: '',
+              legalBacking: '',
+              ipAddress: '',
+              signedAt: null,
+              geoLocation: null,
+              otpCode: null,
+              certificateSerialNumber: null,
+              electronicSignature: null,
+            },
+            {
+              id: 'collab-2',
+              name: 'Firmante Uno',
+              signatureType: null,
+              signatureTypeLabel: '',
+              legalBacking: '',
+              ipAddress: '',
+              signedAt: null,
+              geoLocation: null,
+              otpCode: null,
+              certificateSerialNumber: null,
+              electronicSignature: null,
+            },
+          ],
+          downloads: { nom151: false, timestamp: false, canonical: false },
+        });
       });
+
+      it('no consulta el sello ni al creador de un documento que sigue pendiente', async () => {
+        documentRepository.findOne.mockResolvedValue(
+          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+        );
+
+        await service.getPublicDocumentView('doc-1');
+
+        expect(sealDocumentUseCase.findByDocumentId).not.toHaveBeenCalled();
+        expect(userService.findOne).not.toHaveBeenCalled();
+      });
+
+      it('solo considera a los SIGNER: watchers y reviewers no salen en la vista pública', async () => {
+        documentRepository.findOne.mockResolvedValue(
+          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+        );
+
+        await service.getPublicDocumentView('doc-1');
+
+        expect(collaboratorRepository.find).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              documentId: 'doc-1',
+              colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+            },
+          }),
+        );
+      });
+    });
+
+    describe('documento completado', () => {
+      it('devuelve la URL prefirmada de Minio desde el bucket de finalizados', async () => {
+        documentRepository.findOne.mockResolvedValue(signedDocument());
+
+        const result = await service.getPublicDocumentView('doc-1');
+
+        // La vista pública comparte la versión definitiva (documento + hoja de firmas), igual que
+        // el resto de las rutas de lectura.
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        );
+        expect(result.data).toEqual(
+          expect.objectContaining({
+            isCompleted: true,
+            secureUrl: 'https://minio/finalized-documents/object-key-1',
+            expiresIn: 86400,
+          }),
+        );
+      });
+
+      it('expone la información del documento: hash, páginas y creador', async () => {
+        documentRepository.findOne.mockResolvedValue(signedDocument());
+
+        const result = await service.getPublicDocumentView('doc-1');
+
+        expect(result.data).toEqual(
+          expect.objectContaining({
+            hash: 'hash-firmado',
+            totalPages: 12,
+            createdBy: 'creador@correo.com',
+          }),
+        );
+      });
+
+      /** Un documento firmado antes de que existiera `signedHash` no debe quedarse sin hash. */
+      it('cae al hash original si el documento no tiene signedHash', async () => {
+        documentRepository.findOne.mockResolvedValue(
+          signedDocument({ signedHash: null }),
+        );
+
+        const result = await service.getPublicDocumentView('doc-1');
+
+        expect(result.data.hash).toBe('hash-original');
+      });
+
+      describe('constancia de conservación (NOM-151)', () => {
+        it('devuelve la fecha de emisión del sello y habilita las tres descargas', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue(SEAL);
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(result.data.conservationRecord).toEqual({
+            // Los otros dos renglones viajan dentro del token RFC 3161 y nadie los expone por
+            // separado (ver `toConservationRecord`): hoy son null por diseño, no por olvido.
+            tsaCertificate: null,
+            serialNumber: null,
+            issuedAt: '2026-08-14T18:24:11.000Z',
+          });
+          expect(result.data.downloads).toEqual({
+            nom151: true,
+            timestamp: true,
+            canonical: true,
+          });
+        });
+
+        /**
+         * Solo se sellan los documentos con firma AVANZADA (`sealAdvancedSignatures`) y el sellado
+         * es best-effort: un documento de firma simple se completa sin constancia, y la vista
+         * pública tiene que poder mostrarse igual.
+         */
+        it('sin sello: constancia en null y ninguna descarga habilitada', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue(null);
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(result.data.conservationRecord).toBeNull();
+          expect(result.data.downloads).toEqual({
+            nom151: false,
+            timestamp: false,
+            canonical: false,
+          });
+        });
+
+        it('habilita solo las descargas cuyo artefacto realmente vino en la respuesta del PSC', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+            ...SEAL,
+            canonicalPayload: '',
+            integritySeal: { ...SEAL.integritySeal, certificatePdfBase64: '' },
+          } as unknown as SealEntity);
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(result.data.downloads).toEqual({
+            nom151: false,
+            timestamp: true,
+            canonical: false,
+          });
+        });
+      });
+
+      describe('evidencia por tipo de firma', () => {
+        it('firma simple: OTP sí, número de serie y firma electrónica no', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          collaboratorRepository.find.mockResolvedValue([
+            buildSigner({
+              id: 'collab-1',
+              status: SIGNEE_STATUS_ENUM.SIGNED,
+              signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+              signedAt: new Date('2026-08-14T18:24:11.000Z'),
+              ipAddress: '187.190.12.4',
+              geoLoc: { latitude: 19.4326, longitude: -99.1332 },
+            }),
+          ]);
+          verificationCodeService.findConsumedCode.mockResolvedValue('482915');
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(result.data.signers).toEqual([
+            {
+              id: 'collab-1',
+              name: 'Firmante Uno',
+              signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+              signatureTypeLabel: SIMPLE_SIGNATURE_TYPE_LABEL,
+              legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
+              ipAddress: '187.190.12.4',
+              signedAt: '2026-08-14T18:24:11.000Z',
+              geoLocation: '19.4326, -99.1332',
+              otpCode: '482915',
+              certificateSerialNumber: null,
+              electronicSignature: null,
+            },
+          ]);
+          expect(verificationCodeService.findConsumedCode).toHaveBeenCalledWith(
+            'doc-1',
+            'collab-1',
+            VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+          );
+        });
+
+        it('firma avanzada: número de serie y firma electrónica sí, OTP no', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          collaboratorRepository.find.mockResolvedValue([
+            buildSigner({
+              id: 'collab-1',
+              status: SIGNEE_STATUS_ENUM.SIGNED,
+              signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+              signedAt: new Date('2026-08-14T18:00:00.000Z'),
+              ipAddress: '187.190.12.4',
+              geoLoc: { latitude: 19.4326, longitude: -99.1332 },
+              advancedSignature: {
+                signatureBase64: 'firma-base64',
+                algorithm: 'sha256',
+                signedAt: '2026-08-14T18:24:11.000Z',
+                certificate: {
+                  rfc: 'XAXX010101000',
+                  name: 'MANUEL BALDERRAMA CHAVEZ',
+                  serialNumber: '00001000000512345678',
+                },
+              },
+            } as unknown as Partial<CollaboratorEntity>),
+          ]);
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(result.data.signers).toEqual([
+            {
+              id: 'collab-1',
+              // El nombre del certificado gana al del perfil: es el que el SAT tiene registrado.
+              name: 'MANUEL BALDERRAMA CHAVEZ',
+              signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+              signatureTypeLabel: ADVANCED_SIGNATURE_TYPE_LABEL,
+              legalBacking: ADVANCED_SIGNATURE_BACKING_LABEL,
+              ipAddress: '187.190.12.4',
+              // El momento del firmado criptográfico, no el del registro en base.
+              signedAt: '2026-08-14T18:24:11.000Z',
+              geoLocation: '19.4326, -99.1332',
+              otpCode: null,
+              certificateSerialNumber: '00001000000512345678',
+              electronicSignature: 'firma-base64',
+            },
+          ]);
+          expect(
+            verificationCodeService.findConsumedCode,
+          ).not.toHaveBeenCalled();
+        });
+
+        /** La verificación por OTP depende de `requiresVerification`: no siempre hay código. */
+        it('firma simple sin código consumido: otpCode en null, no cadena vacía', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          collaboratorRepository.find.mockResolvedValue([
+            buildSigner({
+              id: 'collab-1',
+              signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+              signedAt: new Date('2026-08-14T18:24:11.000Z'),
+            }),
+          ]);
+          verificationCodeService.findConsumedCode.mockResolvedValue(null);
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(result.data.signers[0].otpCode).toBeNull();
+        });
+
+        it('sin geolocalización capturada, el campo va en null', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          collaboratorRepository.find.mockResolvedValue([
+            buildSigner({
+              id: 'collab-1',
+              signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+              geoLoc: null,
+            }),
+          ]);
+
+          const result = await service.getPublicDocumentView('doc-1');
+
+          expect(result.data.signers[0].geoLocation).toBeNull();
+        });
+      });
+    });
+  });
+
+  describe('getPublicSealArtifact', () => {
+    const SEAL = {
+      canonicalPayload: 'v1||12:hola-mundo',
+      timestampSeal: { tokenBase64: 'dG9rZW4tdHM=' },
+      integritySeal: { certificatePdfBase64: 'JVBERi0xLjQK' },
+    } as unknown as SealEntity;
+
+    beforeEach(() => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        status: DOCUMENT_STATUS_ENUM.SIGNED,
+      });
+      sealDocumentUseCase.findByDocumentId.mockResolvedValue(SEAL);
+    });
+
+    it('devuelve la constancia NOM-151 decodificada como PDF', async () => {
+      const result = await service.getPublicSealArtifact(
+        'doc-1',
+        SEAL_ARTIFACT_ENUM.NOM151,
+      );
+
+      expect(result.contentType).toBe('application/pdf');
+      expect(result.fileName).toBe('constancia-nom151-doc-1.pdf');
+      expect(result.content).toEqual(Buffer.from('JVBERi0xLjQK', 'base64'));
+    });
+
+    it('devuelve el sello de tiempo como token RFC 3161', async () => {
+      const result = await service.getPublicSealArtifact(
+        'doc-1',
+        SEAL_ARTIFACT_ENUM.TIMESTAMP,
+      );
+
+      expect(result.contentType).toBe('application/timestamp-reply');
+      expect(result.fileName).toBe('sello-de-tiempo-doc-1.tsr');
+      expect(result.content).toEqual(Buffer.from('dG9rZW4tdHM=', 'base64'));
+    });
+
+    /** La cadena canónica es texto plano (NO xml): se sirve tal cual, sin decodificar base64. */
+    it('devuelve la cadena canónica como texto plano', async () => {
+      const result = await service.getPublicSealArtifact(
+        'doc-1',
+        SEAL_ARTIFACT_ENUM.CANONICAL,
+      );
+
+      expect(result.contentType).toBe('text/plain; charset=utf-8');
+      expect(result.fileName).toBe('cadena-canonica-doc-1.txt');
+      expect(result.content.toString('utf-8')).toBe('v1||12:hola-mundo');
+    });
+
+    it('404 si el documento todavía no se ha completado de firmar', async () => {
+      documentRepository.findOne.mockResolvedValue({
+        id: 'doc-1',
+        status: DOCUMENT_STATUS_ENUM.PENDING,
+      });
+
+      await expect(
+        service.getPublicSealArtifact('doc-1', SEAL_ARTIFACT_ENUM.NOM151),
+      ).rejects.toThrow(NotFoundException);
+      expect(sealDocumentUseCase.findByDocumentId).not.toHaveBeenCalled();
+    });
+
+    it('404 si el documento no tiene sello', async () => {
+      sealDocumentUseCase.findByDocumentId.mockResolvedValue(null);
+
+      await expect(
+        service.getPublicSealArtifact('doc-1', SEAL_ARTIFACT_ENUM.NOM151),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('404 si ese artefacto en concreto no vino en la respuesta del PSC', async () => {
+      sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+        ...SEAL,
+        integritySeal: { certificatePdfBase64: '' },
+      } as unknown as SealEntity);
+
+      await expect(
+        service.getPublicSealArtifact('doc-1', SEAL_ARTIFACT_ENUM.NOM151),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

@@ -8,6 +8,7 @@ import { MinioService } from './minio/minio.service';
 import { RedisService } from './redis/redis.service';
 import { PdfSignatureService } from './document-signing/document-signing.service';
 import { PasswordService } from './password/password.service';
+import { TurnstileService } from './turnstile/turnstile.service';
 
 const services = [
   PdfSignatureService,
@@ -17,6 +18,7 @@ const services = [
   OTPService,
   RedisService,
   PasswordService,
+  TurnstileService,
 ];
 
 @Module({

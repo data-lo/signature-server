@@ -24,6 +24,7 @@ import { VerificationCodeService } from '../verification-code.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SummaryDocumentService } from '../summary-document/summary-document.service';
+import { AdvancedSummaryDocumentService } from '../summary-document/advanced-summary-document.service';
 import { SignatureQrService } from '../services/signature-qr.service';
 
 import { SealDocumentUseCase } from './use-cases/seal-document.use-case';
@@ -168,6 +169,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
   let documentRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let sealRepository: ReturnType<typeof createMockRepository>;
+  let advancedSummaryDocumentService: { generateAdvancedSummaryPdf: jest.Mock };
   let configValues: Record<string, string>;
 
   beforeEach(async () => {
@@ -182,6 +184,11 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     documentRepository = createMockRepository();
     collaboratorRepository = createMockRepository();
     sealRepository = createMockRepository();
+    advancedSummaryDocumentService = {
+      generateAdvancedSummaryPdf: jest
+        .fn()
+        .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -253,6 +260,11 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
               .fn()
               .mockResolvedValue(Buffer.from('hoja-de-firmas')),
           },
+        },
+        {
+          // Estos documentos son FIEL, así que la hoja que se anexa es la avanzada.
+          provide: AdvancedSummaryDocumentService,
+          useValue: advancedSummaryDocumentService,
         },
         // Servicio real: el QR de cada firma avanzada se genera dentro de la misma finalización
         // que dispara el sellado, así que la cadena bajo prueba lo ejercita de verdad.
@@ -377,6 +389,9 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       signatureHash: 'f00dcafe',
       // La preimagen del hash, tal como la devolvió el proveedor.
       canonicalPayload: 'v1||13:hash-original|5:doc-1||...',
+      // El momento de emisión que reporta el PSC: se persiste porque la respuesta es la única
+      // oportunidad de guardarlo, y es lo que la hoja de evidencia imprime como "EMITIDO".
+      sealedAt: new Date('2026-08-13T19:00:00.000Z'),
       timestampSeal: {
         isValid: true,
         processedHash: 'f00dcafe',
@@ -392,6 +407,94 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       },
     });
     expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+  });
+
+  /**
+   * El sellado corre ANTES de armar la hoja de evidencia. Antes era al revés, y por eso la tabla
+   * "Información de la Constancia de Conservación (NOM-151)" salía siempre vacía: al imprimirla
+   * todavía no existía la constancia.
+   */
+  it('sella antes de armar la hoja, y la hoja recibe la constancia emitida', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    const orden: string[] = [];
+    sealRepository.save.mockImplementation(async (data: object) => {
+      orden.push('sellado');
+      return { id: 'seal-1', ...data };
+    });
+    advancedSummaryDocumentService.generateAdvancedSummaryPdf.mockImplementation(
+      async () => {
+        orden.push('hoja');
+        return Buffer.from('hoja');
+      },
+    );
+
+    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    expect(orden).toEqual(['sellado', 'hoja']);
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toEqual(
+      expect.objectContaining({
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
+      }),
+    );
+  });
+
+  // El sellado es best-effort: si falla, la firma se completa igual y la hoja se arma sin
+  // constancia, exactamente como antes de que existiera este orden.
+  it('si el sellado falla, la hoja se arma sin constancia y el documento igual queda firmado', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+    mockedAxios.post.mockRejectedValue(new Error('proveedor caído'));
+
+    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toBeNull();
+    expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+  });
+
+  /**
+   * Un intento anterior selló pero falló más adelante y la firma se reintentó: el segundo sellado
+   * choca contra la restricción única. La constancia existe, así que se relee en vez de perderla
+   * y dejar la hoja sin ella.
+   */
+  it('si el documento ya estaba sellado, relee esa constancia para la hoja', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    const uniqueViolation = new QueryFailedError('', [], {
+      code: '23505',
+    } as unknown as Error);
+    sealRepository.save.mockRejectedValue(uniqueViolation);
+    sealRepository.findOne.mockResolvedValue({
+      id: 'seal-previo',
+      documentId: 'doc-1',
+      sealedAt: new Date('2026-08-13T19:00:00.000Z'),
+    });
+
+    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toEqual(
+      expect.objectContaining({
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
+      }),
+    );
   });
 
   it('con varios firmantes FIEL, sella una sola vez y manda las firmas de todos', async () => {
@@ -438,6 +541,113 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       '2026-08-10T10:00:00.000Z',
       '2026-08-13T18:45:56.000Z',
     ]);
+  });
+
+  /**
+   * Regresión del bug que dejaba SIN SELLAR a todo documento FIEL de más de un firmante.
+   *
+   * `advancedSignature` es una columna jsonb, y `sealAdvancedSignatures` relee del repositorio a
+   * todos los firmantes: los anteriores al último llegan siempre deserializados, con las fechas
+   * como string. `toSealSignature` llamaba `signature.ocspEvidence.verifiedAt.toISOString()`
+   * directo, que sobre un string revienta con "toISOString is not a function". Como el sellado es
+   * best-effort, el `try/catch` se tragaba la excepción: no había error visible, simplemente
+   * ningún documento multi-firmante llegaba a sellarse y su hoja salía con la tabla NOM-151 vacía.
+   *
+   * El fixture de arriba no lo detectaba porque no traía `ocspEvidence` en absoluto — se escribió
+   * antes de que existiera la verificación OCSP.
+   */
+  it('normaliza la fecha de la evidencia OCSP releída de jsonb, en vez de romper el sellado', async () => {
+    const document = mockDocument({ totalSigners: 2 });
+    documentRepository.findOne.mockResolvedValue(document);
+    const yaFirmo = buildFielSigner({
+      id: 'p-a',
+      userId: 'user-a',
+      signingOrder: 0,
+      status: SIGNEE_STATUS_ENUM.SIGNED,
+      advancedSignature: {
+        originalHash: 'hash-original',
+        signatureBase64: 'firma-de-user-a',
+        algorithm: 'sha256',
+        signedAt: '2026-08-10T10:00:00.000Z',
+        certificate: {
+          rfc: 'AAAA010101AAA',
+          name: 'FIRMANTE A',
+          issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
+          serialNumber: '1',
+          certificateNumber: '2',
+          certificatePem: 'pem-a',
+        },
+        // Igual que `signedAt`: al releerse de jsonb es un string, no un Date.
+        ocspEvidence: {
+          status: 'good',
+          verifiedAt: '2026-08-10T10:00:01.000Z',
+          ocspResponse: 'respuesta-ocsp-en-base64',
+          ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+        },
+      },
+    } as unknown as Partial<CollaboratorEntity>);
+    const ultimo = buildFielSigner({
+      id: 'p-b',
+      userId: 'user-b',
+      signingOrder: 1,
+    });
+    collaboratorRepository.find.mockResolvedValue([yaFirmo, ultimo]);
+
+    await service.sign('doc-1', 'user-b', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    // Lo que importa: el documento SÍ se selló. Antes del arreglo esto era 0 llamadas.
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+    const body = sentPayload();
+    expect(body.signatures[0].ocspEvidence).toEqual({
+      status: 'good',
+      verifiedAt: '2026-08-10T10:00:01.000Z',
+      ocspResponse: 'respuesta-ocsp-en-base64',
+      ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+    });
+  });
+
+  /**
+   * Las firmas guardadas antes de que existiera la verificación OCSP no tienen esa evidencia, y
+   * el proveedor no la usa para construir el hash. Sellar sin ella es correcto; que un documento
+   * viejo se quede sin constancia por eso, no.
+   */
+  it('sella igual una firma que no trae evidencia OCSP, omitiendo el campo', async () => {
+    const document = mockDocument({ totalSigners: 2 });
+    documentRepository.findOne.mockResolvedValue(document);
+    const sinEvidencia = buildFielSigner({
+      id: 'p-a',
+      userId: 'user-a',
+      signingOrder: 0,
+      status: SIGNEE_STATUS_ENUM.SIGNED,
+      advancedSignature: {
+        originalHash: 'hash-original',
+        signatureBase64: 'firma-de-user-a',
+        algorithm: 'sha256',
+        signedAt: '2026-08-10T10:00:00.000Z',
+        certificate: {
+          rfc: 'AAAA010101AAA',
+          name: 'FIRMANTE A',
+          issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
+          serialNumber: '1',
+          certificateNumber: '2',
+          certificatePem: 'pem-a',
+        },
+      },
+    } as unknown as Partial<CollaboratorEntity>);
+    const ultimo = buildFielSigner({
+      id: 'p-b',
+      userId: 'user-b',
+      signingOrder: 1,
+    });
+    collaboratorRepository.find.mockResolvedValue([sinEvidencia, ultimo]);
+
+    await service.sign('doc-1', 'user-b', EFIRMA_INPUT, TEST_GEOLOCATION);
+
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+    const body = sentPayload();
+    // El campo se omite; no se manda `undefined` ni un objeto a medio llenar.
+    expect(body.signatures[0]).not.toHaveProperty('ocspEvidence');
+    expect(body.signatures[0].signatureBase64).toBe('firma-de-user-a');
   });
 
   it('mientras falte un firmante, no se llama a Seal Service', async () => {

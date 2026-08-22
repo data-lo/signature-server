@@ -4,16 +4,19 @@ import { AccountSubscriptionEntity } from './entities/account-subscription.entit
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { StripeService } from './stripe.service';
 import { StripeWebhookService } from './stripe-webhook.service';
-import { StripeSignatureGuard } from './guards/stripe-signature.guard';
 import { StripeCheckoutController } from './stripe-checkout.controller';
-import { StripeWebhookController } from './stripe-webhook.controller';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([AccountSubscriptionEntity, AccountEntity]),
   ],
-  controllers: [StripeCheckoutController, StripeWebhookController],
-  providers: [StripeService, StripeWebhookService, StripeSignatureGuard],
-  exports: [StripeService],
+  controllers: [StripeCheckoutController],
+  providers: [StripeService, StripeWebhookService],
+  /**
+   * `StripeWebhookService` se exporta para `WebhooksModule`, que es quien ahora recibe la
+   * entrega HTTP (`POST /api/v1/webhooks/stripe`), verifica la firma y le delega el evento ya
+   * autenticado. Las reglas de suscripción siguen viviendo acá.
+   */
+  exports: [StripeService, StripeWebhookService],
 })
 export class StripeModule {}

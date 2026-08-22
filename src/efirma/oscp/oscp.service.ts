@@ -16,7 +16,7 @@ export class OscpService{
         emisor: X509Certificate,
     ): Promise<OCSPEvidence>{
         let result: Awaited<ReturnType<typeof getCertStatus>>;
-        this.logger.log('verificado la validez del certifficado');
+        this.logger.log('verificado la validez del certificado');
         try{
             result = await getCertStatus(cerBuffer,{
                 ca: emisor.raw,
@@ -37,15 +37,14 @@ export class OscpService{
                 (result as any).revocationReason
             );
         }
+        this.logger.log(`OCSP Response from SAT ${JSON.stringify(result)}`)
         return {
             status: result.status as 'good' | 'unknown',
             verifiedAt: new Date(),
-            thisUpdate: result.thisUpdate,
-            nextUpdate: result.nextUpdate,
             ocspResponse: (result as any).rawResponse ?
                 Buffer.from((result as any).rawResponse).toString('base64')
                 : '',
-                ocspUrl: SAT_OCSP_URL,
+            ocspUrl: SAT_OCSP_URL,
         };
     }
 }

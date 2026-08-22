@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsNotEmpty,
   IsObject,
+  IsOptional,
   IsString,
   IsUUID,
   ValidateNested,
@@ -22,16 +23,6 @@ export class OcspEvidence {
   @IsNotEmpty()
   @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
   verifiedAt: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
-  thisUpdate: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
-  nextUpdate: string;
 
   @IsString()
   @IsNotEmpty()
@@ -54,6 +45,11 @@ export class SatCertificateDto {
   @IsString()
   @IsNotEmpty()
   name: string;
+
+  @ApiProperty({example: 'SERVICIO DE ADMINISTRACION TIRIBUTARIA'})
+  @IsString()
+  @IsNotEmpty()
+  issuer:string;
 
   @ApiProperty({ example: '00001000000512345678' })
   @IsString()
@@ -99,11 +95,14 @@ export class SealSignatureDto {
   certificate: SatCertificateDto;
 
   /**
-   * Opcional: hoy nada la produce. `EfirmaService.firmar` (la única fuente de firmas avanzadas)
-   * no consulta OCSP —valida vigencia y cadena de confianza contra los certificados raíz del
-   * SAT—, y el contrato de Seal Service (`SignatureSealRequest`) ni siquiera declara este campo,
-   * así que exigirla hacía imposible construir un payload válido desde el propio flujo de firma.
-   * Se conserva el campo para cuando exista esa evidencia, sin bloquear el sellado mientras tanto.
+   * Opcional de verdad, no solo en la documentación. `EfirmaService.firmar` sí la produce hoy, pero
+   * las firmas guardadas ANTES de que existiera la verificación OCSP no la tienen, y Seal Service
+   * no la usa para construir el hash (ver `buildSignatureHash`: canonicaliza certificado,
+   * algoritmo, firma y fecha, nada más). Un documento viejo tiene que poder sellarse igual.
+   *
+   * Bug corregido: el docblock ya decía "opcional" y el decorador era `ApiPropertyOptional`, pero
+   * el tipo la declaraba obligatoria y le faltaba `@IsOptional()` — la intención documentada y la
+   * validación real habían divergido.
    */
   @ApiPropertyOptional({
     type: 'object',
@@ -111,8 +110,9 @@ export class SealSignatureDto {
     description:
       'Evidencia OCSP entregada por el proveedor de firma. Su estructura se conserva sin modificar.',
   })
+  @IsOptional()
   @IsObject()
-  ocspEvidence: OcspEvidence;
+  ocspEvidence?: OcspEvidence;
 }
 
 export class SealDocumentDto {
