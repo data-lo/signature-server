@@ -37,6 +37,12 @@ const DTO: SealDocumentDto = {
         certificatePem:
           '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
       },
+      ocspEvidence: {
+        status: 'good',
+        verifiedAt: '2026-08-13T18:45:56.000Z',
+        ocspResponse: 'respuesta-ocsp-en-base64',
+        ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+      },
     },
   ],
 };

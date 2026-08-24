@@ -1157,7 +1157,6 @@ export class DocumentService {
       legalBacking: '',
       ipAddress: '',
       signedAt: null,
-      geoLocation: null,
       otpCode: null,
       certificateSerialNumber: null,
       electronicSignature: null,
@@ -1173,15 +1172,17 @@ export class DocumentService {
    *
    * Los campos exclusivos del otro tipo se devuelven en `null`, nunca en cadena vacía: es lo que
    * permite al frontend ocultar el renglón entero en vez de pintarlo sin valor.
+   *
+   * La geolocalización del firmante ya no viaja en esta respuesta (historia "Ocultar
+   * geolocalización en hojas de firma y vistas públicas", ver `PublicSignerData`): la hoja dejó de
+   * imprimirla y esta ruta —que abre cualquiera con el id, sin sesión— era el último lugar donde
+   * seguía publicándose. Se sigue guardando en `collaborator.geoLoc` como evidencia.
    */
   private async toCompletedPublicSigner(
     documentId: string,
     collaborator: CollaboratorEntity,
   ): Promise<PublicSignerData> {
     const advancedSignature = collaborator.advancedSignature;
-    const geoLocation = collaborator.geoLoc
-      ? `${collaborator.geoLoc.latitude}, ${collaborator.geoLoc.longitude}`
-      : null;
 
     if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       return {
@@ -1200,7 +1201,6 @@ export class DocumentService {
         signedAt: toIsoStringOrNull(
           advancedSignature?.signedAt ?? collaborator.signedAt,
         ),
-        geoLocation,
         otpCode: null,
         certificateSerialNumber:
           advancedSignature?.certificate?.serialNumber ?? null,
@@ -1218,7 +1218,6 @@ export class DocumentService {
       legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
       ipAddress: collaborator.ipAddress,
       signedAt: toIsoStringOrNull(collaborator.signedAt),
-      geoLocation,
       // Evidencia de con qué código se acreditó su identidad. No siempre existe: la verificación
       // por OTP depende de `document.requiresVerification`, así que un documento que no la exigió
       // se completa sin código y el renglón simplemente no se muestra.
@@ -2076,16 +2075,22 @@ export class DocumentService {
         certificateNumber: signature.certificate.certificateNumber,
         certificatePem: signature.certificate.certificatePem,
       },
-      ...(ocspEvidence
-        ? {
-            ocspEvidence: {
-              status: ocspEvidence.status,
-              verifiedAt: new Date(ocspEvidence.verifiedAt).toISOString(),
-              ocspResponse: ocspEvidence.ocspResponse,
-              ocspUrl: ocspEvidence.ocspUrl,
-            },
-          }
-        : {}),
+      // El campo se omite entero cuando la firma no trae evidencia, en vez de mandar un objeto a
+      // medio llenar: `ocspEvidence` es `@IsOptional()` en el DTO del proveedor, pero leer
+      // `.status` sobre `undefined` revienta, y como el sellado es best-effort el `try/catch` se
+      // traga la excepción y el documento se queda sin constancia sin ningún error visible.
+      ...(ocspEvidence && {
+        ocspEvidence: {
+          status: ocspEvidence.status,
+          // Mismo motivo que `signedAt`: recién firmada llega como `Date`, releída de la columna
+          // jsonb llega como string. Llamar `.toISOString()` directo reventaba la segunda ruta —y
+          // con ella el sellado completo— en cuanto un documento tenía más de un firmante FIEL: la
+          // evidencia del que ya había firmado siempre viene de jsonb.
+          verifiedAt: new Date(ocspEvidence.verifiedAt).toISOString(),
+          ocspResponse: ocspEvidence.ocspResponse,
+          ocspUrl: ocspEvidence.ocspUrl,
+        },
+      }),
     };
   }
 

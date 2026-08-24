@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe = require('stripe');
-import { StripeService } from 'src/stripe/stripe.service';
+import { StripePaymentGatewayService } from 'src/payments/stripe/stripe-payment-gateway.service';
 
 /**
  * Verifica la cabecera `stripe-signature` delegando en el SDK oficial.
@@ -18,7 +18,13 @@ export class StripeWebhookSignatureVerifierService {
   );
 
   constructor(
-    private readonly stripeService: StripeService,
+    /**
+     * Se inyecta el gateway del módulo de pagos —no un cliente propio— para verificar con
+     * EXACTAMENTE la misma configuración de Stripe con la que se crean las sesiones: dos
+     * clientes distintos podrían quedar con versiones de API o llaves distintas y hacer que la
+     * verificación fallara sin motivo aparente. `client` está expuesto justo para esto.
+     */
+    private readonly paymentGateway: StripePaymentGatewayService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -46,7 +52,7 @@ export class StripeWebhookSignatureVerifierService {
     }
 
     try {
-      return this.stripeService.client.webhooks.constructEvent(
+      return this.paymentGateway.client.webhooks.constructEvent(
         rawBody,
         signature,
         webhookSecret,

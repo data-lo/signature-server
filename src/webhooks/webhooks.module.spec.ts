@@ -2,7 +2,7 @@ import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
-import { AccountSubscriptionEntity } from 'src/stripe/entities/account-subscription.entity';
+import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { DiditWebhookController } from './didit-webhook.controller';

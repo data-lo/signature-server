@@ -1,6 +1,6 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import Stripe = require('stripe');
-import { StripeWebhookService } from 'src/stripe/stripe-webhook.service';
+import { StripeWebhookService } from 'src/payments/stripe/stripe-webhook.service';
 import { StripeWebhookSignatureVerifierService } from '../stripe/stripe-webhook-signature-verifier.service';
 import { RegisterWebhookEventUseCase } from './register-webhook-event.use-case';
 import { WEBHOOK_PROVIDER_ENUM } from '../enums/webhook-provider.enum';

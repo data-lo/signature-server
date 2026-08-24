@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UnauthorizedException } from '@nestjs/common';
 import Stripe = require('stripe');
-import { StripeWebhookService } from 'src/stripe/stripe-webhook.service';
+import { StripeWebhookService } from 'src/payments/stripe/stripe-webhook.service';
 import { ReceiveStripeWebhookUseCase } from './receive-stripe-webhook.use-case';
 import { RegisterWebhookEventUseCase } from './register-webhook-event.use-case';
 import { StripeWebhookSignatureVerifierService } from '../stripe/stripe-webhook-signature-verifier.service';
