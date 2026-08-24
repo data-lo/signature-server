@@ -25,7 +25,7 @@ import { AccountModule } from './account/account.module';
 import { EfirmaModule } from './efirma/efirma.module';
 
 import { KafkaModule } from './kafka/kafka.module';
-import { StripeModule } from './stripe/stripe.module';
+import { PaymentsModule } from './payments/payments.module';
 import { RolesModule } from './roles/roles.module';
 import { EventModule } from './event/event.module';
 import { SealModule } from './document/seal/seal.module';
@@ -76,7 +76,7 @@ import { SealModule } from './document/seal/seal.module';
     HealthModule,
     EfirmaModule,
     KafkaModule,
-    StripeModule,
+    PaymentsModule,
     RolesModule,
     EventModule,
     SealModule,

@@ -8,12 +8,12 @@ import { ConfigService } from '@nestjs/config';
 import { RawBodyRequest } from '@nestjs/common';
 import { Request } from 'express';
 import Stripe = require('stripe');
-import { StripeService } from '../stripe.service';
+import { StripePaymentGatewayService } from './stripe-payment-gateway.service';
 
 @Injectable()
 export class StripeSignatureGuard implements CanActivate {
   constructor(
-    private readonly stripeService: StripeService,
+    private readonly paymentGateway: StripePaymentGatewayService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -32,7 +32,7 @@ export class StripeSignatureGuard implements CanActivate {
     );
 
     try {
-      const event = this.stripeService.client.webhooks.constructEvent(
+      const event = this.paymentGateway.client.webhooks.constructEvent(
         request.rawBody,
         signature,
         webhookSecret,

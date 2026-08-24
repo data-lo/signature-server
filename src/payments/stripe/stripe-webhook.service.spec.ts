@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { StripeWebhookService } from './stripe-webhook.service';
-import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
-import { SUBSCRIPTION_STATUS_ENUM } from './enums/subscription-status.enum';
-import { PLAN_ID_ENUM } from './enums/plan-id.enum';
+import { AccountSubscriptionEntity } from '../entities/account-subscription.entity';
+import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
+import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import Stripe = require('stripe');
 
 function createMockRepository() {
