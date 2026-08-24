@@ -8,6 +8,8 @@ import { SignatureService } from './signature.service';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
+import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 import {
   MAX_IMAGE_FILE_SIZE_BYTES,
   MAX_PDF_FILE_SIZE_BYTES,
@@ -37,6 +39,10 @@ describe('SignatureService', () => {
   };
   let manager: { findOne: jest.Mock; delete: jest.Mock; update: jest.Mock };
   let dataSource: { transaction: jest.Mock };
+  let updateSigningCredentialStatus: {
+    execute: jest.Mock;
+    applyIfAllowed: jest.Mock;
+  };
 
   beforeEach(async () => {
     signatureRepository = createMockRepository();
@@ -51,6 +57,12 @@ describe('SignatureService', () => {
     manager = { findOne: jest.fn(), delete: jest.fn(), update: jest.fn() };
     dataSource = {
       transaction: jest.fn((callback) => callback(manager)),
+    };
+    // Estas pruebas cubren el manejo de archivos. La regla de estados vive en los casos de uso
+    // (`UploadSignatureImageUseCase`, `DeleteSignatureImageUseCase`) y se prueba allá.
+    updateSigningCredentialStatus = {
+      execute: jest.fn().mockResolvedValue(undefined),
+      applyIfAllowed: jest.fn().mockResolvedValue(true),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -72,6 +84,10 @@ describe('SignatureService', () => {
           provide: getDataSourceToken(),
           useValue: dataSource,
         },
+        {
+          provide: UpdateSigningCredentialStatusUseCase,
+          useValue: updateSigningCredentialStatus,
+        },
       ],
     }).compile();
 
@@ -83,6 +99,28 @@ describe('SignatureService', () => {
   });
 
   describe('create', () => {
+    it('no decide sobre el estado de la credencial: eso es del caso de uso', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: null,
+      });
+      minioService.uploadObject.mockResolvedValue({
+        status: 'FILE_CREATED',
+        fileId: 'signature-object-key',
+      });
+      signatureRepository.create.mockImplementation((data) => data);
+      signatureRepository.save.mockResolvedValue({ id: 'signature-1' });
+
+      await service.create('user-1', {} as any, {
+        signatureImage: [{ originalname: 'firma.png' } as Express.Multer.File],
+      });
+
+      expect(updateSigningCredentialStatus.execute).not.toHaveBeenCalled();
+      expect(
+        updateSigningCredentialStatus.applyIfAllowed,
+      ).not.toHaveBeenCalled();
+    });
+
     it('crea la firma solo con la imagen de firma, sin INE', async () => {
       userRepository.findOne.mockResolvedValue({
         id: 'user-1',
@@ -234,6 +272,41 @@ describe('SignatureService', () => {
         expect.objectContaining({ name: 'nueva-firma.png' }),
         expect.anything(),
       );
+    });
+
+    it('repone la credencial a CONFIGURED al volver a subir la firma PNG', async () => {
+      mockOwnedSignature();
+      minioService.replaceFile.mockResolvedValue({});
+
+      await service.update('signature-1', 'user-1', {
+        signatureImage: {
+          originalname: 'nueva-firma.png',
+          size: 1000,
+        } as Express.Multer.File,
+      });
+
+      // `applyIfAllowed` y no `execute`: si el usuario ya estaba CONFIGURED es un no-op, y si su
+      // identidad dejó de estar aprobada no se le devuelve la credencial por la puerta de atrás.
+      expect(updateSigningCredentialStatus.applyIfAllowed).toHaveBeenCalledWith(
+        'user-1',
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+      );
+    });
+
+    it('no toca la credencial si sólo se actualizó la identificación oficial', async () => {
+      mockOwnedSignature();
+      minioService.replaceFile.mockResolvedValue({});
+
+      await service.update('signature-1', 'user-1', {
+        officialFile: {
+          originalname: 'nueva-ine.pdf',
+          size: 1000,
+        } as Express.Multer.File,
+      });
+
+      expect(
+        updateSigningCredentialStatus.applyIfAllowed,
+      ).not.toHaveBeenCalled();
     });
 
     it('reemplaza la identificación oficial existente pasando el originalname correcto a Minio (bug .fieldname/.filename corregido)', async () => {

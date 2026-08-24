@@ -22,7 +22,9 @@ import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.co
 
 // Services
 import { UserService } from './user.service';
-import { SignatureService } from 'src/signature/signature.service';
+
+// Use cases
+import { UploadSignatureImageUseCase } from 'src/signature/applications/upload-signature-image.use-case';
 
 // DTOs
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
@@ -42,7 +44,7 @@ import { ApiCompleteMyOnboarding } from './docs/api-complete-my-onboarding.docs'
 export class UsersController {
   constructor(
     private readonly userService: UserService,
-    private readonly signatureService: SignatureService,
+    private readonly uploadSignatureImage: UploadSignatureImageUseCase,
   ) {}
 
   @Get('check-rfc')
@@ -67,6 +69,11 @@ export class UsersController {
     return this.userService.updatePersonalInformation(user.sub, dto);
   }
 
+  /**
+   * El caso de uso valida el estado de la credencial, delega el manejo de archivos en
+   * `SignatureService` y deja al usuario en CONFIGURED. Ese cambio de estado ya invalida el
+   * snapshot de perfil en Redis, así que acá no hace falta refrescar el cache.
+   */
   @Put('me/signature')
   @ApiRegisterMySignature()
   @UseInterceptors(
@@ -78,7 +85,7 @@ export class UsersController {
       { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES } },
     ),
   )
-  async updateSignature(
+  updateSignature(
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreateSignatureDto,
     @UploadedFiles()
@@ -87,9 +94,7 @@ export class UsersController {
       officialFile?: Express.Multer.File[];
     },
   ) {
-    const result = await this.signatureService.create(user.sub, dto, files);
-    await this.userService.refreshCurpCacheForUser(user.sub);
-    return result;
+    return this.uploadSignatureImage.execute(user.sub, dto, files);
   }
 
   @Patch('me/status')

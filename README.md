@@ -326,10 +326,20 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 `GET /audit/document/:documentId`, `GET /audit/decrypted`, `GET /audit` (paginado). `AuditService.create()` es interno, invocado desde `DocumentService`.
 
-### `stripe`
+### `payments`
 
-- `StripeCheckoutController`: `GET /stripe/plans`, `POST /stripe/checkout/session`, `GET /stripe/subscription`.
-- `StripeWebhookController` (`POST /stripe/webhook`, verificado por firma): sincroniza `AccountSubscriptionEntity` según `checkout.session.completed`, `invoice.paid`, `customer.subscription.deleted`.
+Antes se llamaba `stripe`; ahora Stripe es un proveedor dentro del módulo (`payments/stripe`) y la orquestación vive en casos de uso (`payments/applications`).
+
+- `PaymentsController`: `GET /api/v1/payments/services` (catálogo leído en vivo de Stripe: productos y precios activos), `POST /api/v1/payments/checkout-sessions` (crea la sesión al pulsar "Comprar" — nunca al listar — y devuelve `checkoutUrl`), `GET /api/v1/payments/subscription`.
+- `StripeWebhookService`: sincroniza `AccountSubscriptionEntity` según `checkout.session.completed`, `invoice.paid`, `customer.subscription.deleted`. **Ya no recibe HTTP**: la entrega entra por el módulo `webhooks` y llega aquí como efecto de dominio, con el evento ya autenticado.
+
+### `webhooks`
+
+Punto de entrada único de los proveedores externos. Recibe el cuerpo crudo, verifica la firma, registra la entrega de forma idempotente en `webhook_events` (`UNIQUE(provider, provider_event_id)`) y delega al dominio.
+
+- `StripeWebhookController`: `POST /api/v1/webhooks/stripe` → `ReceiveStripeWebhookUseCase` → `StripeWebhookService` (módulo `payments`).
+- `DiditWebhookController`: `POST /api/v1/webhooks/didit` → `ReceiveDiditWebhookUseCase`.
+- Una entrega con firma ausente o inválida responde 401 y **también** deja fila de auditoría, con `signature_valid = false` y sin `payload`: nunca ejecuta dominio.
 
 ### `health`, `ip`, `kafka`
 
@@ -419,7 +429,7 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 | Redis (ioredis) | Blacklist de JWT invalidados por logout; también el cache de onboarding por CURP y el catálogo de cuentas (ver sección 3) |
 | Kafka (KRaft) | 3 productores (`DocumentEventsProducer` con 7 tópicos del ciclo de vida del documento, `NotificationEventsProducer`, `OrganizationInvitationEventsProducer`) y 3 consumidores reales — ver sección 3, `kafka` |
 | MinIO | Almacenamiento de archivos (documentos, firmas, INEs), siempre vía URL prefirmada |
-| Stripe | Suscripciones por cuenta, 3 planes (`basic`/`pro`/`enterprise`), Checkout Sessions + webhook verificado |
+| Stripe | Suscripciones por cuenta, catálogo de servicios leído en vivo de Stripe, Checkout Sessions + webhook verificado y registrado en `webhook_events` |
 | SendGrid | Notificaciones transaccionales por correo |
 | pdf-lib / sharp | Manipulación y conformidad PDF/A de documentos / generación de PNG en blanco |
 
