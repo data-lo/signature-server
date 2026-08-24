@@ -230,9 +230,18 @@ describe('DocumentService', () => {
         certificate: {
           rfc: 'XAXX010101000',
           name: 'Firmante Uno',
+          issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
           serialNumber: '00001000000512345678',
           certificateNumber: '30001000000400002434',
           certificatePem: '-----BEGIN CERTIFICATE-----...',
+        },
+        // Evidencia de la consulta OCSP al SAT (`OscpService`): forma parte del payload de
+        // sellado, así que sin ella la firma se registra pero el sellado nunca sale.
+        ocspEvidence: {
+          status: 'good',
+          verifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+          ocspResponse: 'respuesta-ocsp-en-base64',
+          ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
         },
       }),
     };
@@ -1902,9 +1911,17 @@ describe('DocumentService', () => {
                 certificate: {
                   rfc: 'XAXX010101000',
                   name: 'Firmante Uno',
+                  issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
                   serialNumber: '00001000000512345678',
                   certificateNumber: '30001000000400002434',
                   certificatePem: '-----BEGIN CERTIFICATE-----...',
+                },
+                // También normalizada a ISO 8601, por el mismo motivo que `signedAt`.
+                ocspEvidence: {
+                  status: 'good',
+                  verifiedAt: '2026-01-01T00:00:00.000Z',
+                  ocspResponse: 'respuesta-ocsp-en-base64',
+                  ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
                 },
               },
             ],
@@ -1927,9 +1944,17 @@ describe('DocumentService', () => {
               certificate: {
                 rfc: 'AAAA010101AAA',
                 name: 'Firmante A',
+                issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
                 serialNumber: '1',
                 certificateNumber: '2',
                 certificatePem: 'pem-a',
+              },
+              // Releída de la columna jsonb: fechas como string, sin tipo fecha.
+              ocspEvidence: {
+                status: 'good',
+                verifiedAt: '2026-01-01T00:00:00.000Z',
+                ocspResponse: 'respuesta-ocsp-de-a',
+                ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
               },
             },
           } as any);
@@ -2730,7 +2755,6 @@ describe('DocumentService', () => {
               legalBacking: '',
               ipAddress: '',
               signedAt: null,
-              geoLocation: null,
               otpCode: null,
               certificateSerialNumber: null,
               electronicSignature: null,
@@ -2743,7 +2767,6 @@ describe('DocumentService', () => {
               legalBacking: '',
               ipAddress: '',
               signedAt: null,
-              geoLocation: null,
               otpCode: null,
               certificateSerialNumber: null,
               electronicSignature: null,
@@ -2912,7 +2935,6 @@ describe('DocumentService', () => {
               legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
               ipAddress: '187.190.12.4',
               signedAt: '2026-08-14T18:24:11.000Z',
-              geoLocation: '19.4326, -99.1332',
               otpCode: '482915',
               certificateSerialNumber: null,
               electronicSignature: null,
@@ -2961,7 +2983,6 @@ describe('DocumentService', () => {
               ipAddress: '187.190.12.4',
               // El momento del firmado criptográfico, no el del registro en base.
               signedAt: '2026-08-14T18:24:11.000Z',
-              geoLocation: '19.4326, -99.1332',
               otpCode: null,
               certificateSerialNumber: '00001000000512345678',
               electronicSignature: 'firma-base64',
@@ -2989,19 +3010,30 @@ describe('DocumentService', () => {
           expect(result.data.signers[0].otpCode).toBeNull();
         });
 
-        it('sin geolocalización capturada, el campo va en null', async () => {
+        /**
+         * La ubicación desde la que firmó una persona NO sale por esta ruta, aunque el
+         * colaborador la tenga registrada y la hoja de firmas del PDF sí la imprima: la hoja
+         * viaja dentro del documento, hacia quienes son parte de él, mientras que esta respuesta
+         * la obtiene cualquiera que tenga el id, sin sesión y sin cuenta.
+         *
+         * Se afirma sobre la AUSENCIA de la propiedad y no sobre un `null`: dejar el campo en la
+         * respuesta invitaba a volver a llenarlo.
+         */
+        it('nunca publica la geolocalización del firmante, aunque esté registrada', async () => {
           documentRepository.findOne.mockResolvedValue(signedDocument());
           collaboratorRepository.find.mockResolvedValue([
             buildSigner({
               id: 'collab-1',
+              status: SIGNEE_STATUS_ENUM.SIGNED,
               signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-              geoLoc: null,
+              geoLoc: { latitude: 19.4326, longitude: -99.1332 },
             }),
           ]);
 
           const result = await service.getPublicDocumentView('doc-1');
 
-          expect(result.data.signers[0].geoLocation).toBeNull();
+          expect(result.data.signers[0]).not.toHaveProperty('geoLocation');
+          expect(JSON.stringify(result.data)).not.toContain('19.4326');
         });
       });
     });

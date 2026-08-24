@@ -2,6 +2,14 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { EfirmaService } from './efirma.service';
 import { OscpService } from './oscp/oscp.service';
 
+/**
+ * `OscpService` se sustituye por un doble en vez de proveerse de verdad: su única operación
+ * (`verifyRevokedOCSP`) sale a la red contra el respondedor del SAT
+ * (https://cfdi.sat.gob.mx/edofiel), y una prueba unitaria no puede depender de un servicio
+ * externo. Sin él en el módulo, Nest no puede construir `EfirmaService` —lleva `OscpService` en
+ * su constructor desde que la firma avanzada verifica revocación— y la suite fallaba entera al
+ * resolver dependencias.
+ */
 describe('EfirmaService', () => {
   let service: EfirmaService;
 
@@ -9,16 +17,6 @@ describe('EfirmaService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EfirmaService,
-        /**
-         * `OscpService` se sustituye por un doble: el real consulta el endpoint OCSP del SAT
-         * (`https://cfdi.sat.gob.mx/edofiel`) con un certificado de e.firma de verdad, así que
-         * dejarlo entrar ataría esta prueba a la red y al SAT.
-         *
-         * Bug corregido: este módulo de prueba solo declaraba `EfirmaService`, pero desde que se
-         * agregó la verificación OCSP el servicio recibe `OscpService` por constructor. Nest no
-         * podía resolver la dependencia y la suite entera fallaba con "Nest can't resolve
-         * dependencies of the EfirmaService".
-         */
         { provide: OscpService, useValue: { verifyRevokedOCSP: jest.fn() } },
       ],
     }).compile();

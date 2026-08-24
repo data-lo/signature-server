@@ -93,13 +93,16 @@ export class PublicSignerData {
   })
   signedAt: string | null;
 
-  @ApiProperty({
-    example: '19.4326, -99.1332',
-    description:
-      'Geolocalización declarada por el dispositivo al firmar, ya formateada. null si no se capturó.',
-    nullable: true,
-  })
-  geoLocation: string | null;
+  /**
+   * Sin `geoLocation` (historia "Ocultar geolocalización en hojas de firma y vistas públicas"):
+   * era el último lugar que seguía publicando la ubicación desde la que firmó cada participante,
+   * después de que la hoja de firmas y el contenido del QR dejaran de imprimirla. Pesa más acá
+   * que en la hoja: esta URL la abre cualquiera que tenga el id, sin sesión y sin cuenta, así que
+   * el dato quedaba a un `curl` de distancia aunque la pantalla no lo pintara.
+   *
+   * El dato se sigue capturando y guardando en `CollaboratorEntity.geoLoc` y en la cadena de
+   * auditoría, que es donde tiene valor probatorio. Lo que desapareció es su publicación.
+   */
 
   @ApiProperty({
     example: '482915',
