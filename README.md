@@ -326,10 +326,38 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 `GET /audit/document/:documentId`, `GET /audit/decrypted`, `GET /audit` (paginado). `AuditService.create()` es interno, invocado desde `DocumentService`.
 
-### `stripe`
+### `payments` (`/api/v1/payments`, JWT)
 
-- `StripeCheckoutController`: `GET /stripe/plans`, `POST /stripe/checkout/session`, `GET /stripe/subscription`.
-- `StripeWebhookController` (`POST /stripe/webhook`, verificado por firma): sincroniza `AccountSubscriptionEntity` según `checkout.session.completed`, `invoice.paid`, `customer.subscription.deleted`.
+> Esta sección decía `StripeCheckoutController` con `GET /stripe/plans`, `POST /stripe/checkout/session`
+> y `GET /stripe/subscription`. **Esas rutas ya no existen**: el módulo `stripe` pasó a llamarse
+> `payments`, Stripe quedó como un proveedor dentro de él y la orquestación bajó a casos de uso.
+> Se corrige aquí porque la documentación desactualizada fue parte de lo que hizo difícil ubicar
+> el fallo de "no cargan los planes": quien venía a buscar el endpoint no lo encontraba.
+
+| Endpoint | Caso de uso | Qué hace |
+|---|---|---|
+| `GET /api/v1/payments/services` | `GetPaymentServicesUseCase` | Catálogo de servicios comprables, leído **en vivo** de los precios activos de Stripe (`expand: product`). No hay price_id en el `.env` ni tabla local: dar de alta un servicio se hace en el panel del proveedor. **No abre sesiones de pago** — ver la nota del caso de uso. |
+| `POST /api/v1/payments/checkout-sessions` | `CreateStripeCheckoutSessionUseCase` | Valida el `priceId` contra el catálogo activo (sin eso, cualquiera podría mandar un precio archivado o ajeno), resuelve la cuenta y su cliente de Stripe, y devuelve la URL hospedada de Checkout. |
+| `GET /api/v1/payments/subscription` | `GetSubscriptionStateUseCase` | Estado de la suscripción de la cuenta. |
+
+`StripeWebhookController` (`POST /stripe/webhook`, verificado por firma) sincroniza
+`AccountSubscriptionEntity` según `checkout.session.completed`, `invoice.paid` y
+`customer.subscription.deleted`. El único archivo que conoce el SDK es
+`StripePaymentGatewayService`.
+
+**Cómo falla, y cómo distinguirlo** (ver `translateError` en el gateway): un fallo de Stripe ya no
+se reporta siempre igual, porque no siempre significa lo mismo.
+
+| Situación | Respuesta | Qué hay que hacer |
+|---|---|---|
+| Falta `STRIPE_SECRET_KEY` | La aplicación **no arranca** | El error nombra la variable. El SDK ya fallaba solo, pero con "Neither apiKey nor config.authenticator provided", que no dice cuál falta. |
+| Llave inválida, revocada, de otra cuenta, o restringida sin permiso (401/403) | **500** `PaymentGatewayMisconfiguredException` | Revisar la llave del entorno. Reintentar no sirve: es configuración nuestra, no una caída del proveedor. |
+| Stripe no responde o rompe su contrato | **502** `PaymentGatewayUnavailableException` | Esperar y reintentar. |
+| La cuenta no tiene productos/precios activos | **200 con lista vacía** | Se registra un `warn` explícito: es el único caso en que la pantalla se queda sin tarjetas sin que nada falle. |
+
+Al arrancar, el módulo registra en qué modo quedó configurado (`test`/`live`) y si la llave es
+restringida — nunca la llave. Es la línea que permite descartar de un vistazo "el entorno apunta a
+la cuenta equivocada", que desde fuera se ve idéntico a un error del proveedor.
 
 ### `health`, `ip`, `kafka`
 
@@ -467,6 +495,31 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 ---
 
 ## 7. Pendientes / trabajo futuro
+
+### Pendiente de configuración: revisar la llave de Stripe del entorno desplegado — 2026-08-24
+
+El flujo de pagos se reportó como roto en el entorno desplegado ("no cargan los servicios, no se
+puede continuar al Checkout"). **Contra el stack local en `development` funciona de punta a punta**,
+verificado con el backend y el frontend reales: el catálogo responde 200 con los 4 servicios, la
+pantalla de Planes pinta las 4 tarjetas, "Comprar" devuelve 201 y el navegador aterriza en
+`checkout.stripe.com`. Es decir, **no hay un defecto de código en este flujo**; lo que falla es la
+configuración de ese entorno.
+
+Qué revisar en Dokploy, en este orden:
+
+1. **`STRIPE_SECRET_KEY` apunta a la cuenta y el modo correctos.** Si estuviera ausente, la
+   aplicación entera no arrancaría (el proveedor falla al construirse), así que si el resto de la
+   API responde, la variable está puesta — lo que puede estar mal es *cuál* es.
+2. **Si es una `rk_` (restricted key), que tenga LECTURA de Products y Prices.** El `.env.example`
+   listaba los permisos de Checkout, Customers, Subscriptions e Invoices, **pero no éste**, que es
+   justo del que sale el catálogo. Con esa lista incompleta, una llave provisionada "según la
+   documentación" deja Checkout funcionando y la pantalla de Planes vacía o en error — exactamente
+   el síntoma reportado. Ya está corregido en `.env.example`.
+3. **Que esa cuenta tenga productos ACTIVOS con al menos un precio ACTIVO**, y en el mismo modo
+   (test/live) que la llave. Un catálogo vacío responde 200 y no falla: ahora deja un `warn`.
+
+El log de arranque dice ahora en qué modo quedó y si la llave es restringida, así que los tres
+puntos se descartan leyendo las primeras líneas del contenedor.
 
 ### Formato de `seal/dto/seal-document.dto.ts` (y por qué `npm run lint` no sirve hoy como filtro)
 

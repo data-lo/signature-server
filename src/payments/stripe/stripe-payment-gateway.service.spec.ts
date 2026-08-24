@@ -1,6 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { BadGatewayException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { StripePaymentGatewayService } from './stripe-payment-gateway.service';
 
 const mockPricesList = jest.fn();
@@ -169,5 +172,93 @@ describe('StripePaymentGatewayService', () => {
         BadGatewayException,
       );
     });
+  });
+
+  /**
+   * La distinción que faltaba: unas credenciales rechazadas son un problema de configuración
+   * NUESTRO, no una caída del proveedor. Mientras las dos cosas salían como 502, una llave
+   * equivocada en el despliegue se presentaba como "Stripe no está disponible" y mandaba a
+   * buscar el fallo donde no estaba.
+   */
+  describe('clasificación de errores de Stripe', () => {
+    function stripeError(fields: Record<string, unknown>) {
+      return Object.assign(new Error('Invalid API Key provided'), fields);
+    }
+
+    it.each([
+      [
+        'StripeAuthenticationError por tipo',
+        { type: 'StripeAuthenticationError' },
+      ],
+      ['StripePermissionError por tipo', { type: 'StripePermissionError' }],
+      ['un 401 sin tipo', { statusCode: 401 }],
+      ['un 403 sin tipo', { statusCode: 403 }],
+    ])(
+      'reporta %s como configuración nuestra, no como proveedor caído',
+      async (_caso, fields) => {
+        mockPricesList.mockRejectedValue(stripeError(fields));
+
+        await expect(service.listActiveServices()).rejects.toBeInstanceOf(
+          InternalServerErrorException,
+        );
+        await expect(service.listActiveServices()).rejects.not.toBeInstanceOf(
+          BadGatewayException,
+        );
+      },
+    );
+
+    it('mantiene el 502 para un fallo que sí es del proveedor', async () => {
+      mockPricesList.mockRejectedValue(
+        stripeError({ type: 'StripeConnectionError', statusCode: 503 }),
+      );
+
+      await expect(service.listActiveServices()).rejects.toBeInstanceOf(
+        BadGatewayException,
+      );
+    });
+
+    it('aplica la misma clasificación al abrir el Checkout', async () => {
+      mockSessionsCreate.mockRejectedValue(
+        stripeError({ type: 'StripeAuthenticationError' }),
+      );
+
+      await expect(
+        service.createCheckoutSession({
+          priceId: 'price_mensual',
+          mode: 'payment',
+          customerId: 'cus_1',
+          successUrl: 'https://app.test/ok',
+          cancelUrl: 'https://app.test/cancel',
+          metadata: {},
+        }),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+    });
+
+    it('aplica la misma clasificación al crear el cliente', async () => {
+      mockCustomersCreate.mockRejectedValue(stripeError({ statusCode: 401 }));
+
+      await expect(
+        service.createCustomer('account-1', 'quien@paga.com'),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+    });
+  });
+
+  /**
+   * Sin llave el SDK ya fallaba, pero con "Neither apiKey nor config.authenticator provided":
+   * un mensaje que no nombra la variable y que, por ocurrir al construir el proveedor, tumba el
+   * arranque de toda la aplicación. Quien lea ese log tiene que saber qué le falta al entorno.
+   */
+  it('sin STRIPE_SECRET_KEY falla nombrando la variable que falta', async () => {
+    await expect(
+      Test.createTestingModule({
+        providers: [
+          StripePaymentGatewayService,
+          {
+            provide: ConfigService,
+            useValue: { get: jest.fn().mockReturnValue(undefined) },
+          },
+        ],
+      }).compile(),
+    ).rejects.toThrow(/STRIPE_SECRET_KEY/);
   });
 });
