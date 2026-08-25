@@ -8,6 +8,9 @@ import { FielSignatureEntity } from './entities/fiel-signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { SharedModule } from 'src/shared/shared.module';
+import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
+import { UploadSignatureImageUseCase } from './applications/upload-signature-image.use-case';
+import { DeleteSignatureImageUseCase } from './applications/delete-signature-image.use-case';
 
 @Module({
   imports: [
@@ -18,9 +21,17 @@ import { SharedModule } from 'src/shared/shared.module';
       UserEntity,
     ]),
     SharedModule,
+    IdentityVerificationModule,
   ],
   controllers: [SignatureController],
-  providers: [SignatureService, MinioService],
-  exports: [SignatureService],
+  providers: [
+    SignatureService,
+    MinioService,
+    UploadSignatureImageUseCase,
+    DeleteSignatureImageUseCase,
+  ],
+  // `UploadSignatureImageUseCase` se exporta para `UsersController`, dueño de
+  // `PUT /api/v1/users/me/signature`.
+  exports: [SignatureService, UploadSignatureImageUseCase],
 })
 export class SignatureModule {}

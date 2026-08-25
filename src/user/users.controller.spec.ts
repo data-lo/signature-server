@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
 import { UserService } from './user.service';
-import { SignatureService } from 'src/signature/signature.service';
+import { UploadSignatureImageUseCase } from 'src/signature/applications/upload-signature-image.use-case';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
 describe('UsersController', () => {
@@ -13,7 +13,7 @@ describe('UsersController', () => {
     refreshCurpCacheForUser: jest.Mock;
     checkRfcAvailability: jest.Mock;
   };
-  let signatureService: { create: jest.Mock };
+  let uploadSignatureImage: { execute: jest.Mock };
 
   const user: JwtPayload = {
     sub: 'user-1',
@@ -31,13 +31,16 @@ describe('UsersController', () => {
       refreshCurpCacheForUser: jest.fn(),
       checkRfcAvailability: jest.fn(),
     };
-    signatureService = { create: jest.fn() };
+    uploadSignatureImage = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
       providers: [
         { provide: UserService, useValue: userService },
-        { provide: SignatureService, useValue: signatureService },
+        {
+          provide: UploadSignatureImageUseCase,
+          useValue: uploadSignatureImage,
+        },
       ],
     }).compile();
 
@@ -66,21 +69,27 @@ describe('UsersController', () => {
     );
   });
 
-  it('updateSignature delega en signatureService.create y refresca el cache de Redis por CURP', async () => {
+  it('updateSignature delega en el caso de uso con el userId del JWT', async () => {
     const dto = { signatureImage: {} } as any;
     const files = { signatureImage: [{ originalname: 'firma.png' }] } as any;
-    const createResult = {
+    const uploadResult = {
       success: true,
       message: 'ok',
       data: { id: 'sig-1' },
     };
-    signatureService.create.mockResolvedValue(createResult);
+    uploadSignatureImage.execute.mockResolvedValue(uploadResult);
 
     const result = await controller.updateSignature(user, dto, files);
 
-    expect(signatureService.create).toHaveBeenCalledWith('user-1', dto, files);
-    expect(userService.refreshCurpCacheForUser).toHaveBeenCalledWith('user-1');
-    expect(result).toBe(createResult);
+    expect(uploadSignatureImage.execute).toHaveBeenCalledWith(
+      'user-1',
+      dto,
+      files,
+    );
+    // El caso de uso ya invalida el snapshot de perfil al mover el estado de la credencial: el
+    // controller no vuelve a tocar el cache.
+    expect(userService.refreshCurpCacheForUser).not.toHaveBeenCalled();
+    expect(result).toBe(uploadResult);
   });
 
   it('updateStatus delega en userService.updateStatus con el userId del JWT', () => {

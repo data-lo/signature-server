@@ -328,11 +328,12 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 ### `payments` (`/api/v1/payments`, JWT)
 
-> Esta sección decía `StripeCheckoutController` con `GET /stripe/plans`, `POST /stripe/checkout/session`
-> y `GET /stripe/subscription`. **Esas rutas ya no existen**: el módulo `stripe` pasó a llamarse
-> `payments`, Stripe quedó como un proveedor dentro de él y la orquestación bajó a casos de uso.
-> Se corrige aquí porque la documentación desactualizada fue parte de lo que hizo difícil ubicar
-> el fallo de "no cargan los planes": quien venía a buscar el endpoint no lo encontraba.
+Antes se llamaba `stripe`; ahora Stripe es un proveedor dentro del módulo (`payments/stripe`) y la
+orquestación vive en casos de uso (`payments/applications`). **Las rutas `GET /stripe/plans`,
+`POST /stripe/checkout/session` y `GET /stripe/subscription` que esta sección documentaba ya no
+existen**: se deja dicho porque quien llegue siguiendo la documentación vieja para depurar un
+fallo del catálogo no las va a encontrar, y eso fue parte de lo que hizo difícil ubicar el fallo
+de "no cargan los planes".
 
 | Endpoint | Caso de uso | Qué hace |
 |---|---|---|
@@ -340,10 +341,10 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 | `POST /api/v1/payments/checkout-sessions` | `CreateStripeCheckoutSessionUseCase` | Valida el `priceId` contra el catálogo activo (sin eso, cualquiera podría mandar un precio archivado o ajeno), resuelve la cuenta y su cliente de Stripe, y devuelve la URL hospedada de Checkout. |
 | `GET /api/v1/payments/subscription` | `GetSubscriptionStateUseCase` | Estado de la suscripción de la cuenta. |
 
-`StripeWebhookController` (`POST /stripe/webhook`, verificado por firma) sincroniza
-`AccountSubscriptionEntity` según `checkout.session.completed`, `invoice.paid` y
-`customer.subscription.deleted`. El único archivo que conoce el SDK es
-`StripePaymentGatewayService`.
+`StripeWebhookService` sincroniza `AccountSubscriptionEntity` según `checkout.session.completed`,
+`invoice.paid` y `customer.subscription.deleted`. **Ya no recibe HTTP**: la entrega entra por el
+módulo `webhooks` y llega aquí como efecto de dominio, con el evento ya autenticado. El único
+archivo que conoce el SDK del proveedor es `StripePaymentGatewayService`.
 
 **Cómo falla, y cómo distinguirlo** (ver `translateError` en el gateway): un fallo de Stripe ya no
 se reporta siempre igual, porque no siempre significa lo mismo.
@@ -358,6 +359,14 @@ se reporta siempre igual, porque no siempre significa lo mismo.
 Al arrancar, el módulo registra en qué modo quedó configurado (`test`/`live`) y si la llave es
 restringida — nunca la llave. Es la línea que permite descartar de un vistazo "el entorno apunta a
 la cuenta equivocada", que desde fuera se ve idéntico a un error del proveedor.
+
+### `webhooks`
+
+Punto de entrada único de los proveedores externos. Recibe el cuerpo crudo, verifica la firma, registra la entrega de forma idempotente en `webhook_events` (`UNIQUE(provider, provider_event_id)`) y delega al dominio.
+
+- `StripeWebhookController`: `POST /api/v1/webhooks/stripe` → `ReceiveStripeWebhookUseCase` → `StripeWebhookService` (módulo `payments`).
+- `DiditWebhookController`: `POST /api/v1/webhooks/didit` → `ReceiveDiditWebhookUseCase`.
+- Una entrega con firma ausente o inválida responde 401 y **también** deja fila de auditoría, con `signature_valid = false` y sin `payload`: nunca ejecuta dominio.
 
 ### `health`, `ip`, `kafka`
 
@@ -447,7 +456,7 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 | Redis (ioredis) | Blacklist de JWT invalidados por logout; también el cache de onboarding por CURP y el catálogo de cuentas (ver sección 3) |
 | Kafka (KRaft) | 3 productores (`DocumentEventsProducer` con 7 tópicos del ciclo de vida del documento, `NotificationEventsProducer`, `OrganizationInvitationEventsProducer`) y 3 consumidores reales — ver sección 3, `kafka` |
 | MinIO | Almacenamiento de archivos (documentos, firmas, INEs), siempre vía URL prefirmada |
-| Stripe | Suscripciones por cuenta, 3 planes (`basic`/`pro`/`enterprise`), Checkout Sessions + webhook verificado |
+| Stripe | Suscripciones por cuenta, catálogo de servicios leído en vivo de Stripe, Checkout Sessions + webhook verificado y registrado en `webhook_events` |
 | SendGrid | Notificaciones transaccionales por correo |
 | pdf-lib / sharp | Manipulación y conformidad PDF/A de documentos / generación de PNG en blanco |
 

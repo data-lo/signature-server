@@ -19,7 +19,8 @@ export function ApiDeleteSignatureImage() {
     }),
     ApiResponse({
       status: 200,
-      description: 'Imagen de firma eliminada correctamente',
+      description:
+        'Imagen de firma eliminada correctamente. El usuario vuelve a SIGNATURE_PENDING: su identidad sigue aprobada y puede subir otra firma sin repetir la verificacion.',
     }),
     ApiResponse({
       status: 400,

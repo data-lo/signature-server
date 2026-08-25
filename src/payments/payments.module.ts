@@ -4,12 +4,10 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
 import { StripePaymentGatewayService } from './stripe/stripe-payment-gateway.service';
 import { StripeWebhookService } from './stripe/stripe-webhook.service';
-import { StripeSignatureGuard } from './stripe/stripe-signature.guard';
 import { GetPaymentServicesUseCase } from './applications/get-payment-services.use-case';
 import { CreateStripeCheckoutSessionUseCase } from './applications/create-stripe-checkout-session.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { PaymentsController } from './payments.controller';
-import { StripeWebhookController } from './stripe-webhook.controller';
 
 /**
  * Dominio de pagos: catálogo de servicios, compra y estado de la suscripción.
@@ -20,20 +18,21 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * `StripePaymentGatewayService`, así que un segundo proveedor se agrega al lado sin tocar los
  * casos de uso.
  *
- * `StripeWebhookService` y su controller siguen aquí por ahora. Cuando el módulo central
- * `webhooks` esté en esta rama, la recepción y la validación de firma se mudan allá y este
- * módulo se queda sólo con el efecto de dominio —activar o cancelar la suscripción—, invocado
- * como puerto. Ver la nota en `stripe-webhook.controller.ts`.
+ * La recepción del webhook ya NO vive aquí: el módulo central `webhooks` recibe la entrega en
+ * `POST /api/v1/webhooks/stripe`, verifica la firma sobre el cuerpo crudo y registra el evento
+ * de forma idempotente en `webhook_events`. De este módulo sobrevive `StripeWebhookService`
+ * como efecto de dominio —activar o cancelar la suscripción—, que `ReceiveStripeWebhookUseCase`
+ * invoca con el evento ya autenticado; por eso se exporta junto con el gateway, cuyo `client`
+ * usa `webhooks` para verificar la firma con la misma configuración de Stripe.
  */
 @Module({
   imports: [
     TypeOrmModule.forFeature([AccountSubscriptionEntity, AccountEntity]),
   ],
-  controllers: [PaymentsController, StripeWebhookController],
+  controllers: [PaymentsController],
   providers: [
     StripePaymentGatewayService,
     StripeWebhookService,
-    StripeSignatureGuard,
     GetPaymentServicesUseCase,
     CreateStripeCheckoutSessionUseCase,
     GetSubscriptionStateUseCase,

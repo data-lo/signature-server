@@ -20,7 +20,7 @@ export function ApiRegisterMySignature() {
     ApiOperation({
       summary: 'Registrar la firma digital del usuario autenticado',
       description:
-        'Recibe la imagen PNG de la firma (y opcionalmente la identificación oficial), la almacena y vincula el signatureId en el usuario',
+        'Recibe la imagen PNG de la firma (y opcionalmente la identificación oficial), la almacena y vincula el signatureId en el usuario. Sólo se acepta con la credencial en SIGNATURE_PENDING (identidad ya aprobada y sin firma registrada); al completarse, el usuario queda en CONFIGURED.',
     }),
     ApiConsumes('multipart/form-data'),
     ApiBody({ type: CreateSignatureDto }),
@@ -38,6 +38,11 @@ export function ApiRegisterMySignature() {
       status: 401,
       description:
         'Token de autenticación inválido, expirado o no proporcionado',
+    }),
+    ApiResponse({
+      status: 403,
+      description:
+        'La credencial de firma no está en SIGNATURE_PENDING: falta validar la identidad, sigue en curso, está bloqueada o ya hay una firma registrada',
     }),
   );
 }
