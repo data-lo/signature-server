@@ -83,6 +83,7 @@ import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import { SendCompletedSimpleSignatureToSealUseCase } from './seal/use-cases/send-completed-simple-signature-to-seal.use-case';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
 import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import type { SummaryDocumentSigner } from './summary-document/interfaces/summary-document.interface';
@@ -178,6 +179,7 @@ export class DocumentService {
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly efirmaService: EfirmaService,
     private readonly sealDocumentUseCase: SealDocumentUseCase,
+    private readonly sendCompletedSimpleSignatureToSeal: SendCompletedSimpleSignatureToSealUseCase,
     private readonly summaryDocumentService: SummaryDocumentService,
     private readonly advancedSummaryDocumentService: AdvancedSummaryDocumentService,
     private readonly signatureQrService: SignatureQrService,
@@ -1961,11 +1963,45 @@ export class DocumentService {
       };
     }
 
+    // Último firmante: el documento ya está completo y persistido (firma, snapshot de la rúbrica
+    // y hashes), que es justo lo que el envío de firma simple necesita releer.
+    await this.sendSimpleSignaturesToSeal(documentId);
+
     return {
       success: true,
       message: 'Documento firmado exitosamente por todos los firmantes',
       data: { id: documentId },
     };
+  }
+
+  /**
+   * Manda a Seal Service los datos de los firmantes de un documento de FIRMA SIMPLE recién
+   * completado (ver `SendCompletedSimpleSignatureToSealUseCase`, que decide si el documento
+   * califica y arma el DTO).
+   *
+   * Se invoca cuando ya se guardó todo —el claim de la firma, el snapshot de la rúbrica del
+   * último firmante y los hashes que escribió `finalizeSignedDocument`— y no desde dentro de esa
+   * finalización: el caso de uso relee el documento de la base, así que correr antes le mostraría
+   * un documento sin `signed_hash` y sin la rúbrica de quien acaba de firmar.
+   *
+   * Best-effort, con el mismo criterio que el sellado avanzado y los correos de finalización: a
+   * esta altura la firma ya está registrada y el PDF ya está en su bucket. Devolver un 500 al
+   * último firmante por un fallo del proveedor lo dejaría creyendo que su firma no ocurrió, y su
+   * reintento chocaría contra el claim atómico ("ya respondiste") sin poder corregir nada.
+   *
+   * Del error se registra sólo su mensaje, nunca el DTO: lleva CURP, correo y la rúbrica del
+   * firmante.
+   */
+  private async sendSimpleSignaturesToSeal(documentId: string): Promise<void> {
+    try {
+      await this.sendCompletedSimpleSignatureToSeal.execute(documentId);
+    } catch (error) {
+      this.logger.error(
+        `Error enviando las firmas simples del documento ${documentId} a Seal Service: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**

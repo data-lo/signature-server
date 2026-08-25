@@ -29,6 +29,7 @@ import { DocumentTransactionService } from './document-transaction.service';
 import { collaboratorDisplayName } from './utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
+import { SendCompletedSimpleSignatureToSealUseCase } from './seal/use-cases/send-completed-simple-signature-to-seal.use-case';
 import { SealEntity } from './seal/entities/seal.entity';
 import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
@@ -114,6 +115,7 @@ describe('DocumentService', () => {
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
+  let sendCompletedSimpleSignatureToSeal: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
@@ -249,6 +251,10 @@ describe('DocumentService', () => {
       create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
       findByDocumentId: jest.fn().mockResolvedValue(null),
     };
+    // Devuelve `false` —"este documento no es asunto suyo"— salvo en las pruebas que lo miran.
+    sendCompletedSimpleSignatureToSeal = {
+      execute: jest.fn().mockResolvedValue(false),
+    };
     summaryDocumentService = {
       generateSummaryPdf: jest
         .fn()
@@ -295,6 +301,10 @@ describe('DocumentService', () => {
         },
         { provide: EfirmaService, useValue: efirmaService },
         { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
+        {
+          provide: SendCompletedSimpleSignatureToSealUseCase,
+          useValue: sendCompletedSimpleSignatureToSeal,
+        },
         {
           provide: SummaryDocumentService,
           useValue: summaryDocumentService,
@@ -1207,6 +1217,71 @@ describe('DocumentService', () => {
       expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
       expect(emailService.sendDocumentSignedNotification).toHaveBeenCalled();
       expect(document.completedSignersCount).toBe(1);
+    });
+
+    /**
+     * Historia "Enviar información de firmantes simples al Seal Service al completar un
+     * documento": el envío se dispara al firmar el último firmante y NO antes, porque el DTO
+     * describe el documento completo.
+     */
+    describe('envío de las firmas simples a Seal Service', () => {
+      it('se dispara cuando firma el último firmante', async () => {
+        documentRepository.findOne.mockResolvedValue(mockDocument());
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+        expect(sendCompletedSimpleSignatureToSeal.execute).toHaveBeenCalledWith(
+          'doc-1',
+        );
+      });
+
+      it('no se dispara mientras queden firmas pendientes', async () => {
+        documentRepository.findOne.mockResolvedValue(mockDocument());
+        const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        const signerB = buildSigner({
+          id: 'collaborator-2',
+          userId: 'user-2',
+          signingOrder: 1,
+        });
+        collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
+        collaboratorRepository.findOne = jest.fn().mockResolvedValue(signerB);
+
+        await service.sign('doc-1', 'user-1', undefined, TEST_GEOLOCATION);
+
+        expect(
+          sendCompletedSimpleSignatureToSeal.execute,
+        ).not.toHaveBeenCalled();
+      });
+
+      /**
+       * Best-effort, igual que el sellado avanzado: a esta altura la firma ya está registrada y
+       * el PDF ya está en su bucket. Un 500 dejaría al firmante creyendo que su firma no ocurrió,
+       * y su reintento chocaría contra el claim atómico sin poder corregir nada.
+       */
+      it('un fallo del envío no invalida la firma ya registrada', async () => {
+        documentRepository.findOne.mockResolvedValue(mockDocument());
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+        sendCompletedSimpleSignatureToSeal.execute.mockRejectedValue(
+          new Error('Seal Service no disponible'),
+        );
+
+        const result = await service.sign(
+          'doc-1',
+          'user-1',
+          undefined,
+          TEST_GEOLOCATION,
+        );
+
+        expect(result.success).toBe(true);
+        expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
+      });
     });
 
     /**

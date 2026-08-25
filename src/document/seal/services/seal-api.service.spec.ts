@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
 import { SealApiService } from './seal-api.service';
 import { SealDocumentDto } from '../dto/seal-document.dto';
+import { SimpleSignatureDTO } from '../dto/simple-signature.dto';
 import { SealDocumentResponse } from '../interfaces/seal-document-response.interface';
 import {
   SealProviderConfigurationException,
@@ -69,6 +71,28 @@ const RESPONSE: SealDocumentResponse = {
   },
 };
 
+/** Documento de firma simple ya completo, con un firmante. */
+const SIMPLE_DTO: SimpleSignatureDTO = {
+  documentId: '2b3d9c2e-6d4a-4f6f-9f4e-0b9f1d2a3c4d',
+  originalHash: 'hash-original',
+  signedHash: 'hash-firmado',
+  signatures: [
+    {
+      curp: 'RAMJ850101MDFXXX01',
+      email: 'firmante@example.com',
+      name: 'Juana',
+      lastName: 'Ramírez Soto',
+      signedAt: '2026-08-20T15:04:05.000Z',
+      verificationData: {
+        code: '123456',
+        verificationMethod: 'EMAIL_OTP',
+        usedAt: '2026-08-20T15:03:00.000Z',
+      },
+      signatureMedia: { signatureImage: 'iVBORw0KGgo=' },
+    },
+  ],
+};
+
 /** Reproduce la forma que `axios.isAxiosError` reconoce, sin depender de la red. */
 function axiosError(partial: { status?: number; code?: string } = {}): unknown {
   return {
@@ -117,6 +141,85 @@ describe('SealApiService', () => {
       }),
     );
     expect(result).toEqual(RESPONSE);
+  });
+
+  describe('firmas simples', () => {
+    it('manda el DTO a /seal/simple-signature con la API key', async () => {
+      mockedAxios.post.mockResolvedValue({ data: {} });
+
+      await service.sendSimpleSignatures(SIMPLE_DTO);
+
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        'http://seal-service:3002/seal/simple-signature',
+        SIMPLE_DTO,
+        expect.objectContaining({
+          headers: { 'x-api-key': 'api-key-de-prueba' },
+        }),
+      );
+    });
+
+    it('sin configuración, falla sin llegar a llamar al proveedor', async () => {
+      configValues = {};
+
+      await expect(
+        service.sendSimpleSignatures(SIMPLE_DTO),
+      ).rejects.toBeInstanceOf(SealProviderConfigurationException);
+      expect(mockedAxios.post).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'un error HTTP',
+        axiosError({ status: 500 }),
+        SealProviderResponseException,
+      ],
+      [
+        'un timeout',
+        axiosError({ code: 'ETIMEDOUT' }),
+        SealProviderTimeoutException,
+      ],
+      [
+        'un fallo de conexión',
+        axiosError({ code: 'ECONNREFUSED' }),
+        SealProviderUnavailableException,
+      ],
+    ])(
+      'traduce %s a su excepción de dominio',
+      async (_caso, error, expected) => {
+        mockedAxios.post.mockRejectedValue(error);
+
+        await expect(
+          service.sendSimpleSignatures(SIMPLE_DTO),
+        ).rejects.toBeInstanceOf(expected);
+      },
+    );
+
+    it('no registra datos personales ni la rúbrica cuando el proveedor falla', async () => {
+      const logged: string[] = [];
+      const loggerSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation((message: unknown) => {
+          logged.push(String(message));
+        });
+      mockedAxios.post.mockRejectedValue(axiosError({ status: 400 }));
+
+      await expect(service.sendSimpleSignatures(SIMPLE_DTO)).rejects.toThrow();
+
+      const registrado = logged.join(' ');
+      expect(registrado).toContain(SIMPLE_DTO.documentId);
+      for (const dato of [
+        'RAMJ850101MDFXXX01',
+        'firmante@example.com',
+        'Juana',
+        '123456',
+        'iVBORw0KGgo=',
+      ]) {
+        expect(registrado).not.toContain(dato);
+      }
+
+      // Se restaura para no dejar silenciado el logger del resto del archivo.
+      loggerSpy.mockRestore();
+    });
   });
 
   it('normaliza la barra final de SEAL_SERVICE_URL para no armar una ruta con doble slash', async () => {
