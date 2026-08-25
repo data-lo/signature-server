@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsModule } from 'src/payments/payments.module';
+import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { DiditWebhookSignatureVerifierService } from './didit/didit-webhook-signature-verifier.service';
 import { StripeWebhookSignatureVerifierService } from './stripe/stripe-webhook-signature-verifier.service';
@@ -23,11 +24,17 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * `StripeWebhookService` (el destinatario de la delegación). La dependencia va en un solo
  * sentido: `payments` no conoce a `webhooks`.
  *
- * Para Didit la delegación es un puerto opcional — ver
- * `interfaces/didit-verification-processor.interface.ts`.
+ * `IdentityVerificationModule` se importa por `ProcessDiditVerificationResultUseCase`, que es
+ * quien interpreta el resultado de una sesión de Didit y mueve el estado del usuario. La
+ * dependencia va también en un solo sentido: `identity-verification` no conoce a `webhooks` — no
+ * tiene controller de webhooks ni verificación de firma, por diseño.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([WebhookEventEntity]), PaymentsModule],
+  imports: [
+    TypeOrmModule.forFeature([WebhookEventEntity]),
+    PaymentsModule,
+    IdentityVerificationModule,
+  ],
   controllers: [DiditWebhookController, StripeWebhookController],
   providers: [
     DiditWebhookSignatureVerifierService,

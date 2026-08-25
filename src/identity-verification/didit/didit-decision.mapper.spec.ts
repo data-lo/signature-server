@@ -30,6 +30,66 @@ describe('summarizeDiditDecision', () => {
     });
   });
 
+  describe('respuesta V3: cada bloque es un arreglo', () => {
+    it('resume un veredicto V3 completo', () => {
+      expect(
+        summarizeDiditDecision({
+          id_verifications: [{ status: 'Approved', document_type: 'ID Card' }],
+          liveness_checks: [{ status: 'live', score: 91 }],
+          face_matches: [{ status: 'match', score: 97.4 }],
+        }),
+      ).toEqual({
+        documentReading: IDENTITY_CHECK_OUTCOME_ENUM.PASSED,
+        faceMatch: IDENTITY_CHECK_OUTCOME_ENUM.PASSED,
+        liveness: IDENTITY_CHECK_OUTCOME_ENUM.PASSED,
+      });
+    });
+
+    it('con varias comprobaciones del mismo tipo, manda la peor', () => {
+      expect(
+        summarizeDiditDecision({
+          id_verifications: [{ status: 'Approved' }, { status: 'Declined' }],
+          liveness_checks: [{ status: 'live' }, { status: 'In Review' }],
+        }),
+      ).toEqual({
+        documentReading: IDENTITY_CHECK_OUTCOME_ENUM.FAILED,
+        faceMatch: null,
+        liveness: IDENTITY_CHECK_OUTCOME_ENUM.IN_REVIEW,
+      });
+    });
+
+    it('ignora las entradas ilegibles en lugar de dar por perdido el bloque', () => {
+      expect(
+        summarizeDiditDecision({
+          face_matches: [{ status: 'something_new' }, { status: 'match' }],
+        })?.faceMatch,
+      ).toBe(IDENTITY_CHECK_OUTCOME_ENUM.PASSED);
+    });
+
+    it('un arreglo vacío es "no reportado", no una aprobación', () => {
+      expect(
+        summarizeDiditDecision({
+          id_verifications: [],
+          face_matches: [{ status: 'match' }],
+        })?.documentReading,
+      ).toBeNull();
+    });
+
+    it('un veredicto V2 ya guardado se sigue resumiendo igual', () => {
+      expect(
+        summarizeDiditDecision({
+          id_verification: { status: 'Approved' },
+          face_match: { status: 'match' },
+          liveness: { status: 'live' },
+        }),
+      ).toEqual({
+        documentReading: IDENTITY_CHECK_OUTCOME_ENUM.PASSED,
+        faceMatch: IDENTITY_CHECK_OUTCOME_ENUM.PASSED,
+        liveness: IDENTITY_CHECK_OUTCOME_ENUM.PASSED,
+      });
+    });
+  });
+
   describe('vocabulario del proveedor', () => {
     it.each([
       ['Approved', IDENTITY_CHECK_OUTCOME_ENUM.PASSED],
@@ -83,20 +143,22 @@ describe('summarizeDiditDecision', () => {
   });
 
   describe('no expone datos personales', () => {
-    /** Un veredicto con la forma real de Didit: casi todo son datos del titular. */
+    /** Un veredicto con la forma real de Didit V3: casi todo son datos del titular. */
     const decisionConPii = {
-      id_verification: {
-        status: 'Approved',
-        first_name: 'Juan',
-        last_name: 'Pérez López',
-        date_of_birth: '1985-01-01',
-        document_number: 'PELJ850101HDFRNN08',
-        address: 'Calle Falsa 123',
-        portrait_image: 'https://cdn.didit.me/portrait.jpg',
-        front_image: 'https://cdn.didit.me/ine-front.jpg',
-      },
-      face_match: { status: 'match', score: 97.4 },
-      liveness: { status: 'live', score: 91 },
+      id_verifications: [
+        {
+          status: 'Approved',
+          first_name: 'Juan',
+          last_name: 'Pérez López',
+          date_of_birth: '1985-01-01',
+          document_number: 'PELJ850101HDFRNN08',
+          address: 'Calle Falsa 123',
+          portrait_image: 'https://cdn.didit.me/portrait.jpg',
+          front_image: 'https://cdn.didit.me/ine-front.jpg',
+        },
+      ],
+      face_matches: [{ status: 'match', score: 97.4 }],
+      liveness_checks: [{ status: 'live', score: 91 }],
       aml: { status: 'clear', hits: [] },
     };
 
