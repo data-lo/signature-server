@@ -126,6 +126,7 @@ Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt al
 | `EmailVerificationCodeEntity` | `email_verification_codes` (Postgres) | id, code, isUsed, usedAt, expiredAt, userId (FK, `ON DELETE CASCADE`), createdAt — OTP de verificación de correo en el registro |
 | `PasswordResetCodeEntity` | `password_reset_codes` (Postgres) | id, code, isUsed, usedAt, expiredAt, userId (FK, `ON DELETE CASCADE`), createdAt |
 | `SignatureEntity` | `signatures` (Postgres) | id, signatureObjectKey (nullable), officialCardObjectKey (nullable), isActive, createdAt, updatedAt |
+| `SignatureCaptureSessionEntity` | `signature_capture_sessions` (Postgres, módulo `signature`) | id, userId (FK, `ON DELETE CASCADE`), channel (`DESKTOP`\|`MOBILE_QR`), status (`PENDING`\|`CLAIMED`\|`COMPLETED`\|`EXPIRED`\|`CANCELLED`), tokenHash (**sólo el hash SHA-256** del token del QR; el token en claro no se persiste y sólo se devuelve al crear la sesión), expiresAt (10 min), claimedAt, completedAt, signatureFileId (FK a `signatures`, `ON DELETE SET NULL`), createdAt, updatedAt — **historial de intentos de captura de la firma manuscrita**, no guarda la imagen ni gobierna el estado del usuario |
 | `SimpleSignatureEntity` | `simple_signatures` (Postgres, módulo `signature`) | id, verificationCode (FK nullable), signatureCoordinates (jsonb, arreglo — soporta el shape legacy de un solo objeto y el shape nuevo con ratios 0–1 por página) — coordenadas de firma explícitas por colaborador |
 | `FielSignatureEntity` | `fiel_signatures` (Postgres, módulo `signature`) | id, rfc, verificationCodeId (FK nullable), verificationCodeRequired — solo modelo de datos, **sin lógica de firma FIEL/PKI real conectada** (decisión de producto/legal pendiente) |
 | `DocumentEntity` | `documents` (Postgres) | id, objectKey, fileName, fileType, totalPages, documentUrl, ipAddress, originalHash, signedHash, signedAt, cancelledAt, rejectedAt, isNotified, status, signatureCoordinates (jsonb, legacy — convive con las coordenadas por colaborador), createdBy (FK), `accountId` (FK, NOT NULL), `organizationId` (FK, **nullable** — clave real de aislamiento multi-tenant en contexto organización, distinta de `accountId`; ver nota en 2.2), isSequential (default `true`), expirationDate, visibilityLevel, sealKey, totalSigners, completedSignersCount, reviewedBy (reservado, sin gateo real todavía), requiresVerification, requiresApproval (flag guardado, **sin enrutamiento real a un aprobador**, ver Pendientes), indexDocument |
@@ -156,6 +157,8 @@ Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt al
 ### 2.2 Relaciones
 
 - **User 1—1 Signature**: FK `signature_id` en `users`, **opcional**.
+- **User 1—N SignatureCaptureSession**: FK `user_id` en `signature_capture_sessions`, `ON DELETE CASCADE`. Un índice único **parcial** sobre `user_id` (sólo para `PENDING`/`CLAIMED`) garantiza en la base una única sesión activa por usuario; el historial de intentos terminados no tiene límite.
+- **SignatureCaptureSession N—1 Signature**: FK `signature_file_id`, nullable, `ON DELETE SET NULL` — qué archivo produjo ese intento. No se confunde con `users.signature_id`, que dice cuál es la firma **vigente**: si el usuario borra su firma y captura otra, cada intento sigue apuntando al archivo que generó.
 - **User 1—1 PersonalInformation**: FK `personal_information_id` en `users`, **obligatoria**.
 - **User 1—N Account**: FK `user_id` en `accounts` — cada fila es una membresía de ese usuario en un contexto (antes esta relación pasaba por `AccountMemberEntity`).
 - **User 1—N Document** (creador): FK `created_by`.
@@ -226,6 +229,20 @@ Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt al
 Ownership de cada operación se valida contra `User.signatureId` (dueño real de la relación), no contra una FK en `Signature`.
 
 > `POST /signature` (creación inicial) ya no está expuesto aquí — `SignatureService.create()` ahora solo se llama desde `PUT /api/v1/users/me/signature` (onboarding, JWT). El resto de operaciones (`update`/`deactivate`/`delete*`) siguen bajo `/signature` sin cambios.
+
+### `signature-capture-sessions` (`/api/v1/signature-capture-sessions`, JWT) — captura de la firma manuscrita por canvas o QR
+
+Permite al usuario cuya identidad ya aprobó Didit registrar su rúbrica dibujándola: en el canvas de la misma PC, o en el navegador del teléfono tras escanear un código QR.
+
+| Endpoint | Caso de uso | Qué hace |
+|---|---|---|
+| `POST /api/v1/signature-capture-sessions` | `CreateSignatureCaptureSessionUseCase` | Abre el intento. Exige `signingCredentialStatus = SIGNATURE_PENDING`. Con `channel: MOBILE_QR` devuelve el token de un solo uso y la `qrUrl` que el frontend convierte en código — **única vez que el token sale del servidor**. Si ya había una sesión sin reclamar, la sustituye; si un teléfono ya la reclamó, responde 409. |
+| `POST /api/v1/signature-capture-sessions/claim` | `ClaimMobileSignatureSessionUseCase` | El teléfono canjea el token. Exige JWT del **mismo** usuario que generó el QR: tener el código no basta. La sesión pasa a `CLAIMED` y el token deja de servir. |
+| `GET /api/v1/signature-capture-sessions/:id` | `GetSignatureCaptureSessionStatusUseCase` | Estado del intento + `signingCredentialStatus`. Es lo que la PC sondea mientras el usuario firma en el celular, y lo que le permite continuar sin reiniciar el flujo. Consultar también materializa el vencimiento. |
+| `POST /api/v1/signature-capture-sessions/:id/signature` | `SaveHandwrittenSignatureUseCase` | Recibe el PNG (`multipart/form-data`, campo `signature`), delega el alta en `UploadSignatureImageUseCase` —el mismo camino que `PUT /api/v1/users/me/signature`, así que el usuario queda en `CONFIGURED`— y cierra la sesión como `COMPLETED` con el archivo que produjo. El canal `MOBILE_QR` exige haber reclamado antes. |
+| `POST /api/v1/signature-capture-sessions/:id/cancel` | `CancelSignatureCaptureSessionUseCase` | Invalida el intento y el QR en el acto. Idempotente sobre sesiones ya canceladas o vencidas; una completada no se cancela. |
+
+Reglas transversales: el `userId` sale siempre del JWT (nunca del cuerpo, del path ni del QR); el token del QR es aleatorio de 256 bits, opaco, de un solo uso y **en base sólo vive su hash**; una sesión completada, cancelada o vencida no acepta nada; el PNG se valida por sus bytes de cabecera, no por el `Content-Type` que declara el cliente.
 
 ### `user` (`/user`) — CRUD administrativo (API key)
 
