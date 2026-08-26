@@ -38,8 +38,9 @@ const BLOCKED_CREDENTIAL_STATUSES = [
 /**
  * Arranca una verificación de identidad con Didit y devuelve la URL hospedada.
  *
- * Al frontend le llega únicamente esa URL (para abrirla en la misma PC o convertirla en QR y
- * seguir en el celular). La API key y el `session_token` no salen del servidor.
+ * Al frontend le llega únicamente esa URL, y su único uso allá es ser el contenido del código QR
+ * con el que el usuario continúa en su celular: la pantalla ya no la muestra, no la enlaza y no
+ * la copia. La API key y el `session_token` no salen del servidor.
  */
 @Injectable()
 export class StartDiditVerificationUseCase {
