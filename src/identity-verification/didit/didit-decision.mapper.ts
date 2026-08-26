@@ -30,12 +30,36 @@ const OUTCOME_BY_PROVIDER_VALUE: Record<string, IDENTITY_CHECK_OUTCOME_ENUM> = {
  * Nombres con los que Didit ha publicado cada bloque del veredicto. Se prueban en orden y gana
  * el primero que exista: así un renombre del proveedor no rompe la pantalla mientras alguno de
  * los alias siga vivo.
+ *
+ * Los plurales (`id_verifications`, `liveness_checks`, `face_matches`) son la forma de la
+ * respuesta V3, donde cada bloque es un **arreglo**: un workflow puede pedir dos documentos, o
+ * reintentar el liveness, y entonces hay varias comprobaciones del mismo tipo. Van primero
+ * porque son el contrato vigente; los singulares se conservan para los veredictos V2 ya
+ * guardados en `identity_verifications.decision`, que se siguen mostrando en pantalla.
  */
 const DECISION_SECTIONS = {
-  documentReading: ['id_verification', 'document_verification', 'id_document'],
-  faceMatch: ['face_match', 'facematch', 'face_verification'],
-  liveness: ['liveness', 'liveness_detection'],
+  documentReading: [
+    'id_verifications',
+    'id_verification',
+    'document_verification',
+    'id_document',
+  ],
+  faceMatch: ['face_matches', 'face_match', 'facematch', 'face_verification'],
+  liveness: ['liveness_checks', 'liveness', 'liveness_detection'],
 } as const;
+
+/**
+ * Con varias comprobaciones del mismo tipo, manda la peor.
+ *
+ * No es una preferencia estética: si de dos lecturas de documento una falló, el bloque no está
+ * aprobado. Resumir con la mejor —o con la primera— convertiría un rechazo parcial en un visto
+ * bueno, que es precisamente lo que este mapper no puede hacer nunca.
+ */
+const OUTCOME_SEVERITY: Record<IDENTITY_CHECK_OUTCOME_ENUM, number> = {
+  [IDENTITY_CHECK_OUTCOME_ENUM.FAILED]: 2,
+  [IDENTITY_CHECK_OUTCOME_ENUM.IN_REVIEW]: 1,
+  [IDENTITY_CHECK_OUTCOME_ENUM.PASSED]: 0,
+};
 
 /**
  * Reduce el veredicto crudo de Didit al resumen que ve el usuario.
@@ -72,30 +96,56 @@ export function summarizeDiditDecision(
 }
 
 /**
- * Cada bloque puede venir como objeto (`{ status: 'match', score: 97 }`) o directamente como
- * cadena (`face_match: 'match'`). Se aceptan ambas formas y se ignora todo lo demás del bloque
- * —las puntuaciones incluidas—, que no se expone.
+ * Cada bloque puede venir como arreglo de comprobaciones (V3: `id_verifications: [{...}]`), como
+ * objeto (`{ status: 'match', score: 97 }`) o directamente como cadena (`face_match: 'match'`).
+ * Se aceptan las tres formas y se ignora todo lo demás del bloque —las puntuaciones y los
+ * recortes del documento incluidos—, que no se expone.
  */
 function readSection(
   decision: Record<string, unknown>,
   aliases: readonly string[],
 ): IDENTITY_CHECK_OUTCOME_ENUM | null {
   for (const alias of aliases) {
-    const section = decision[alias];
+    const outcome = readEntry(decision[alias]);
 
-    if (typeof section === 'string') {
-      const outcome = toOutcome(section);
-      if (outcome) return outcome;
-      continue;
-    }
-
-    if (isObject(section)) {
-      const outcome = toOutcome(section.status) ?? toOutcome(section.result);
-      if (outcome) return outcome;
+    if (outcome) {
+      return outcome;
     }
   }
 
   return null;
+}
+
+function readEntry(section: unknown): IDENTITY_CHECK_OUTCOME_ENUM | null {
+  if (Array.isArray(section)) {
+    return section
+      .map(readEntry)
+      .reduce(
+        (worst, outcome) => (isWorse(outcome, worst) ? outcome : worst),
+        null as IDENTITY_CHECK_OUTCOME_ENUM | null,
+      );
+  }
+
+  if (typeof section === 'string') {
+    return toOutcome(section);
+  }
+
+  if (isObject(section)) {
+    return toOutcome(section.status) ?? toOutcome(section.result);
+  }
+
+  return null;
+}
+
+function isWorse(
+  candidate: IDENTITY_CHECK_OUTCOME_ENUM | null,
+  current: IDENTITY_CHECK_OUTCOME_ENUM | null,
+): boolean {
+  if (!candidate) {
+    return false;
+  }
+
+  return !current || OUTCOME_SEVERITY[candidate] > OUTCOME_SEVERITY[current];
 }
 
 function toOutcome(value: unknown): IDENTITY_CHECK_OUTCOME_ENUM | null {
