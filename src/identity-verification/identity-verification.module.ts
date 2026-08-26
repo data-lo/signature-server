@@ -24,9 +24,9 @@ import { IdentityVerificationsController } from './identity-verifications.contro
  * en lugar de llamar a `UserService`.
  *
  * `ProcessDiditVerificationResultUseCase` se exporta para que el módulo de webhooks —que recibe
- * el POST de Didit y valida su firma HMAC— lo invoque con el payload ya autenticado. La
- * dependencia irá en un solo sentido: `webhooks` importará este módulo, nunca al revés. Aquí no
- * hay controller de webhooks ni validación de firma, por diseño.
+ * el POST de Didit, valida su firma HMAC y comprueba la forma del payload— lo invoque con el
+ * cuerpo ya autenticado. La dependencia va en un solo sentido: `webhooks` importa este módulo,
+ * nunca al revés. Aquí no hay controller de webhooks ni validación de firma, por diseño.
  *
  * `UpdateSigningCredentialStatusUseCase` también se exporta: es el único escritor de
  * `users.signing_credential_status`, y `SignatureModule` lo necesita para mover al usuario a

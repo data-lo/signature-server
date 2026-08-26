@@ -10,6 +10,11 @@ const UNIQUE_VIOLATION = '23505';
 interface RegisterWebhookEventInput {
   provider: WEBHOOK_PROVIDER_ENUM;
   providerEventId: string | null;
+  /**
+   * Objeto del proveedor al que se refiere la entrega (`session_id` en Didit). Sólo sirve para
+   * consultar después todas las entregas de un mismo recurso: no participa en la idempotencia.
+   */
+  providerResourceId?: string | null;
   eventType: string;
   payload: Record<string, unknown>;
 }
@@ -68,6 +73,7 @@ export class RegisterWebhookEventUseCase {
 
       await this.webhookEventRepository.update(existing.id, {
         eventType: input.eventType,
+        providerResourceId: input.providerResourceId ?? null,
         signatureValid: true,
         processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.RECEIVED,
         payload: input.payload,
@@ -86,6 +92,7 @@ export class RegisterWebhookEventUseCase {
       const created = this.webhookEventRepository.create({
         provider: input.provider,
         providerEventId: input.providerEventId,
+        providerResourceId: input.providerResourceId ?? null,
         eventType: input.eventType,
         signatureValid: true,
         processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.RECEIVED,
@@ -120,23 +127,29 @@ export class RegisterWebhookEventUseCase {
   }
 
   /**
-   * Deja constancia de un intento con firma inválida.
+   * Deja constancia de una entrega que no llegó a ejecutar dominio.
    *
-   * Sin `provider_event_id` ni `payload`: el cuerpo no es confiable, así que no se almacena ni
-   * se lee para extraer identificadores. Queda sólo lo que sí sabemos de primera mano — quién
-   * decía ser, cuándo llegó y que la firma no verificó.
+   * Sin `provider_event_id` ni `payload`: en el caso habitual —firma inválida— el cuerpo no es
+   * confiable, así que no se almacena ni se lee para extraer identificadores. Queda sólo lo que
+   * sí sabemos de primera mano: quién decía ser, cuándo llegó y por qué se rechazó.
+   *
+   * `signatureValid` es parámetro y no una constante porque hay un segundo motivo de rechazo que
+   * no es un impostor: un cuerpo **auténtico** que no cumple el contrato del proveedor. Marcarlo
+   * como firma inválida borraría justo la distinción que hace útil a esta tabla — un ataque y un
+   * cambio de contrato de Didit se investigan de formas opuestas.
    */
   async recordRejectedDelivery(
     provider: WEBHOOK_PROVIDER_ENUM,
     reason: string,
+    options: { signatureValid?: boolean; eventType?: string } = {},
   ): Promise<void> {
     try {
       await this.webhookEventRepository.save(
         this.webhookEventRepository.create({
           provider,
           providerEventId: null,
-          eventType: 'unverified',
-          signatureValid: false,
+          eventType: options.eventType ?? 'unverified',
+          signatureValid: options.signatureValid ?? false,
           processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.FAILED,
           payload: null,
           receivedAt: new Date(),

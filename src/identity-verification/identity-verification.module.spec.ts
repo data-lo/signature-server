@@ -11,7 +11,7 @@ import { UpdateSigningCredentialStatusUseCase } from './applications/update-sign
 /**
  * Los errores de cableado de Nest sólo aparecen al arrancar la aplicación contra Postgres,
  * Mongo y Redis; sin esta prueba se descubrirían en el despliegue. También fija el contrato
- * hacia afuera: `ProcessDiditVerificationResultUseCase` (que consumirá el módulo de webhooks) y
+ * hacia afuera: `ProcessDiditVerificationResultUseCase` (que consume el módulo de webhooks) y
  * `UpdateSigningCredentialStatusUseCase` (que consume `SignatureModule`) tienen que ser
  * resolubles.
  */
