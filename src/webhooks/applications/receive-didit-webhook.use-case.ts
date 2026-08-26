@@ -1,18 +1,14 @@
 import {
   BadRequestException,
-  Inject,
   Injectable,
   Logger,
-  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ProcessDiditVerificationResultUseCase } from 'src/identity-verification/applications/process-didit-verification-result.use-case';
 import { DiditWebhookSignatureVerifierService } from '../didit/didit-webhook-signature-verifier.service';
+import { validateDiditWebhookPayload } from '../didit/didit-webhook-payload.schema';
 import { RegisterWebhookEventUseCase } from './register-webhook-event.use-case';
 import { WEBHOOK_PROVIDER_ENUM } from '../enums/webhook-provider.enum';
-import {
-  DIDIT_VERIFICATION_PROCESSOR,
-  DiditVerificationProcessor,
-} from '../interfaces/didit-verification-processor.interface';
 import { WebhookReceptionResult } from '../interfaces/webhook-reception-result.interface';
 
 interface ReceiveDiditWebhookInput {
@@ -22,10 +18,12 @@ interface ReceiveDiditWebhookInput {
 }
 
 /**
- * Orquesta una entrega de Didit: autenticar → registrar → delegar → cerrar el estado.
+ * Orquesta una entrega de Didit: autenticar → validar la forma → registrar → delegar → cerrar
+ * el estado.
  *
- * No decide nada sobre la identidad de nadie. La única pregunta que responde es si el evento
- * viene realmente de Didit y si ya lo habíamos procesado.
+ * No decide nada sobre la identidad de nadie. Las únicas preguntas que responde son si el evento
+ * viene realmente de Didit, si tiene la forma que el proveedor documenta y si ya lo habíamos
+ * procesado. El significado del resultado vive en `ProcessDiditVerificationResultUseCase`.
  */
 @Injectable()
 export class ReceiveDiditWebhookUseCase {
@@ -35,12 +33,11 @@ export class ReceiveDiditWebhookUseCase {
     private readonly signatureVerifier: DiditWebhookSignatureVerifierService,
     private readonly registerWebhookEvent: RegisterWebhookEventUseCase,
     /**
-     * Opcional a propósito: `identity-verification` todavía no existe en el repositorio.
-     * Ver `DIDIT_VERIFICATION_PROCESSOR` para cómo se ata cuando llegue.
+     * Dependencia directa y obligatoria: todo webhook válido de Didit tiene que llegar al
+     * dominio. La dependencia va en un solo sentido —`webhooks` importa
+     * `IdentityVerificationModule`, nunca al revés—, así que no hace falta un puerto intermedio.
      */
-    @Optional()
-    @Inject(DIDIT_VERIFICATION_PROCESSOR)
-    private readonly processDiditVerificationResult?: DiditVerificationProcessor,
+    private readonly processDiditVerificationResult: ProcessDiditVerificationResultUseCase,
   ) {}
 
   async execute(
@@ -63,35 +60,44 @@ export class ReceiveDiditWebhookUseCase {
     }
 
     const payload = this.parse(input.rawBody);
+    const validation = validateDiditWebhookPayload(payload);
+
+    if (validation.reason) {
+      /**
+       * Auténtico pero deforme. Se audita —con `signature_valid = true`, que es la verdad— y se
+       * corta acá: nada de lo que sigue puede correr sobre un cuerpo que no se entiende, ni la
+       * verificación ni el estado global del usuario.
+       */
+      await this.registerWebhookEvent.recordRejectedDelivery(
+        WEBHOOK_PROVIDER_ENUM.DIDIT,
+        `Payload de Didit inválido: ${validation.reason}`,
+        { signatureValid: true, eventType: 'invalid_payload' },
+      );
+      this.logger.warn(`Payload de Didit inválido: ${validation.reason}`);
+      throw new BadRequestException('Payload de webhook de Didit inválido');
+    }
 
     const { event, alreadyProcessed } =
       await this.registerWebhookEvent.register({
         provider: WEBHOOK_PROVIDER_ENUM.DIDIT,
-        providerEventId: this.resolveEventId(payload),
-        eventType: this.resolveEventType(payload),
-        payload,
+        /**
+         * Clave de idempotencia: `event_id` identifica **la entrega**, mientras que `session_id`
+         * identifica la sesión y se repite en cada cambio de estado. Usar la sesión —sola o
+         * combinada con el estado— haría que una re-entrega con datos corregidos del mismo
+         * estado se descartara como duplicado.
+         */
+        providerEventId: validation.payload.event_id,
+        providerResourceId: validation.payload.session_id,
+        eventType: validation.payload.webhook_type,
+        payload: validation.payload,
       });
 
     if (alreadyProcessed) {
       return { received: true, duplicate: true };
     }
 
-    if (!this.processDiditVerificationResult) {
-      /**
-       * El evento queda guardado y en RECEIVED, no en FAILED, porque no falló nada:
-       * simplemente todavía no hay dominio que lo consuma. Se responde 200 para que Didit no entre en
-       * ciclo de reintentos, y como no está en PROCESSED, una re-entrega futura (ya con
-       * `identity-verification` desplegado) sí ejecutará las reglas.
-       */
-      this.logger.warn(
-        `Webhook de Didit ${event.providerEventId ?? event.id} registrado sin procesar: ` +
-          'no hay ProcessDiditVerificationResultUseCase atado a DIDIT_VERIFICATION_PROCESSOR.',
-      );
-      return { received: true, duplicate: false };
-    }
-
     try {
-      await this.processDiditVerificationResult.execute(payload);
+      await this.processDiditVerificationResult.execute(validation.payload);
     } catch (error) {
       await this.registerWebhookEvent.markFailed(event.id, error);
       this.logger.error(
@@ -107,54 +113,17 @@ export class ReceiveDiditWebhookUseCase {
     return { received: true, duplicate: false };
   }
 
-  private parse(rawBody: Buffer): Record<string, unknown> {
+  /**
+   * Devuelve `unknown` a propósito: lo único que garantiza `JSON.parse` es que el texto era JSON,
+   * no que sea un objeto. Afirmar acá una forma que todavía no se comprobó dejaría al validador
+   * trabajando sobre una mentira del compilador.
+   */
+  private parse(rawBody: Buffer): unknown {
     try {
-      const parsed = JSON.parse(rawBody.toString('utf8')) as unknown;
-
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('El cuerpo del webhook no es un objeto JSON');
-      }
-
-      return parsed as Record<string, unknown>;
+      return JSON.parse(rawBody.toString('utf8')) as unknown;
     } catch {
       // Firmado con nuestro secreto pero ilegible: no es un atacante, es un contrato roto.
       throw new BadRequestException('Cuerpo de webhook de Didit inválido');
     }
-  }
-
-  /**
-   * Clave de idempotencia de Didit.
-   *
-   * Didit no manda un `evt_...` como Stripe: manda `session_id`, que es estable durante toda la
-   * sesión de verificación y se repite en cada cambio de estado (`In Progress` → `Approved`).
-   * Usar sólo `session_id` haría que el segundo cambio de estado — el que de verdad importa —
-   * se descartara como duplicado, así que la clave combina sesión y estado. Si algún día el
-   * proveedor incluye un identificador propio de entrega (`webhook_id`), ese gana.
-   */
-  private resolveEventId(payload: Record<string, unknown>): string | null {
-    const webhookId = this.asString(payload.webhook_id);
-    if (webhookId) {
-      return webhookId;
-    }
-
-    const sessionId = this.asString(payload.session_id);
-    if (!sessionId) {
-      return null;
-    }
-
-    const status = this.asString(payload.status);
-    return status ? `${sessionId}:${status}` : sessionId;
-  }
-
-  private resolveEventType(payload: Record<string, unknown>): string {
-    return (
-      this.asString(payload.webhook_type) ??
-      this.asString(payload.status) ??
-      'unknown'
-    );
-  }
-
-  private asString(value: unknown): string | null {
-    return typeof value === 'string' && value.length > 0 ? value : null;
   }
 }

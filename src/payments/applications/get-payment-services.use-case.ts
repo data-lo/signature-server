@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PaymentService } from '../interfaces/payment-service.interface';
 import { PaymentServiceResponse } from '../interfaces/payment-service-response.interface';
 import { StripePaymentGatewayService } from '../stripe/stripe-payment-gateway.service';
@@ -18,10 +18,27 @@ import { StripePaymentGatewayService } from '../stripe/stripe-payment-gateway.se
  */
 @Injectable()
 export class GetPaymentServicesUseCase {
+  private readonly logger = new Logger(GetPaymentServicesUseCase.name);
+
   constructor(private readonly paymentGateway: StripePaymentGatewayService) {}
 
   async execute(): Promise<PaymentServiceResponse[]> {
     const services = await this.paymentGateway.listActiveServices();
+
+    /**
+     * Un catálogo vacío es la única forma en que esta pantalla se queda sin tarjetas **sin que
+     * nada falle**: la respuesta es 200, el frontend dibuja "todavía no hay servicios" y en los
+     * logs no queda rastro de nada. Visto desde afuera se reporta igual que un error ("no cargan
+     * los planes"), así que se deja constancia explícita para poder distinguir los dos casos sin
+     * tener que reproducirlo.
+     */
+    if (services.length === 0) {
+      this.logger.warn(
+        'El catálogo de Stripe no devolvió ningún servicio vendible. Revisa que la cuenta de ' +
+          'este entorno tenga productos ACTIVOS con al menos un precio ACTIVO, y que la llave ' +
+          'configurada sea la de esa cuenta y del modo correcto (test/live).',
+      );
+    }
 
     return services.map((service) => this.toResponse(service));
   }
