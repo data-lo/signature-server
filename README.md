@@ -343,12 +343,39 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 `GET /audit/document/:documentId`, `GET /audit/decrypted`, `GET /audit` (paginado). `AuditService.create()` es interno, invocado desde `DocumentService`.
 
-### `payments`
+### `payments` (`/api/v1/payments`, JWT)
 
-Antes se llamaba `stripe`; ahora Stripe es un proveedor dentro del módulo (`payments/stripe`) y la orquestación vive en casos de uso (`payments/applications`).
+Antes se llamaba `stripe`; ahora Stripe es un proveedor dentro del módulo (`payments/stripe`) y la
+orquestación vive en casos de uso (`payments/applications`). **Las rutas `GET /stripe/plans`,
+`POST /stripe/checkout/session` y `GET /stripe/subscription` que esta sección documentaba ya no
+existen**: se deja dicho porque quien llegue siguiendo la documentación vieja para depurar un
+fallo del catálogo no las va a encontrar, y eso fue parte de lo que hizo difícil ubicar el fallo
+de "no cargan los planes".
 
-- `PaymentsController`: `GET /api/v1/payments/services` (catálogo leído en vivo de Stripe: productos y precios activos), `POST /api/v1/payments/checkout-sessions` (crea la sesión al pulsar "Comprar" — nunca al listar — y devuelve `checkoutUrl`), `GET /api/v1/payments/subscription`.
-- `StripeWebhookService`: sincroniza `AccountSubscriptionEntity` según `checkout.session.completed`, `invoice.paid`, `customer.subscription.deleted`. **Ya no recibe HTTP**: la entrega entra por el módulo `webhooks` y llega aquí como efecto de dominio, con el evento ya autenticado.
+| Endpoint | Caso de uso | Qué hace |
+|---|---|---|
+| `GET /api/v1/payments/services` | `GetPaymentServicesUseCase` | Catálogo de servicios comprables, leído **en vivo** de los precios activos de Stripe (`expand: product`). No hay price_id en el `.env` ni tabla local: dar de alta un servicio se hace en el panel del proveedor. **No abre sesiones de pago** — ver la nota del caso de uso. |
+| `POST /api/v1/payments/checkout-sessions` | `CreateStripeCheckoutSessionUseCase` | Valida el `priceId` contra el catálogo activo (sin eso, cualquiera podría mandar un precio archivado o ajeno), resuelve la cuenta y su cliente de Stripe, y devuelve la URL hospedada de Checkout. |
+| `GET /api/v1/payments/subscription` | `GetSubscriptionStateUseCase` | Estado de la suscripción de la cuenta. |
+
+`StripeWebhookService` sincroniza `AccountSubscriptionEntity` según `checkout.session.completed`,
+`invoice.paid` y `customer.subscription.deleted`. **Ya no recibe HTTP**: la entrega entra por el
+módulo `webhooks` y llega aquí como efecto de dominio, con el evento ya autenticado. El único
+archivo que conoce el SDK del proveedor es `StripePaymentGatewayService`.
+
+**Cómo falla, y cómo distinguirlo** (ver `translateError` en el gateway): un fallo de Stripe ya no
+se reporta siempre igual, porque no siempre significa lo mismo.
+
+| Situación | Respuesta | Qué hay que hacer |
+|---|---|---|
+| Falta `STRIPE_SECRET_KEY` | La aplicación **no arranca** | El error nombra la variable. El SDK ya fallaba solo, pero con "Neither apiKey nor config.authenticator provided", que no dice cuál falta. |
+| Llave inválida, revocada, de otra cuenta, o restringida sin permiso (401/403) | **500** `PaymentGatewayMisconfiguredException` | Revisar la llave del entorno. Reintentar no sirve: es configuración nuestra, no una caída del proveedor. |
+| Stripe no responde o rompe su contrato | **502** `PaymentGatewayUnavailableException` | Esperar y reintentar. |
+| La cuenta no tiene productos/precios activos | **200 con lista vacía** | Se registra un `warn` explícito: es el único caso en que la pantalla se queda sin tarjetas sin que nada falle. |
+
+Al arrancar, el módulo registra en qué modo quedó configurado (`test`/`live`) y si la llave es
+restringida — nunca la llave. Es la línea que permite descartar de un vistazo "el entorno apunta a
+la cuenta equivocada", que desde fuera se ve idéntico a un error del proveedor.
 
 ### `webhooks`
 
@@ -495,42 +522,30 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 
 ## 7. Pendientes / trabajo futuro
 
-### Captura de firma por canvas y QR: lo que queda abierto — 2026-08-24
+### Pendiente de configuración: revisar la llave de Stripe del entorno desplegado — 2026-08-24
 
-La API del módulo está completa y probada (ver sección 3, `signature-capture-sessions`), pero **hoy
-no tiene ningún consumidor**: la pantalla del canvas, el panel con el QR y la página móvil no
-existen todavía en `signature-app` (ver el pendiente equivalente en su README). Mientras tanto:
+El flujo de pagos se reportó como roto en el entorno desplegado ("no cargan los servicios, no se
+puede continuar al Checkout"). **Contra el stack local en `development` funciona de punta a punta**,
+verificado con el backend y el frontend reales: el catálogo responde 200 con los 4 servicios, la
+pantalla de Planes pinta las 4 tarjetas, "Comprar" devuelve 201 y el navegador aterriza en
+`checkout.stripe.com`. Es decir, **no hay un defecto de código en este flujo**; lo que falla es la
+configuración de ese entorno.
 
-- **El QR apunta a una ruta que no existe.** `CreateSignatureCaptureSessionUseCase` compone la URL
-  con la constante `SIGNATURE_CAPTURE_MOBILE_PATH` (`/signature-capture`), no con una variable de
-  entorno. Si el frontend decide colgar esa página de otra ruta, hay que cambiarla **aquí** — no
-  hay forma de que el backend se entere solo, y el síntoma sería un QR que escanea bien y aterriza
-  en un 404 del frontend.
-- **No hay barrido de sesiones vencidas.** La expiración es perezosa: una fila pasa a `EXPIRED` la
-  primera vez que alguien la mira después de su hora. Es suficiente para el flujo —crear, consultar
-  y reclamar pasan todos por ahí, así que ningún usuario queda bloqueado por una sesión fantasma—
-  pero tiene una consecuencia concreta fuera del flujo: **cualquier reporte que cuente "capturas
-  activas" leyendo la tabla directo contará de más**, porque incluirá filas `PENDING` cuyo
-  `expires_at` ya pasó y nadie ha consultado. Quien construya esas métricas tiene que filtrar
-  también por `expires_at > now()`, o poner el barrido.
-- **`ThrottlerGuard` no está aplicado a estos endpoints.** El repo lo aplica endpoint por endpoint
-  (ver el comentario en `auth.controller.ts`, donde se corrigió que estaba configurado pero nunca
-  usado), y estos quedaron sin él. No es urgente: el token es aleatorio de 256 bits, así que
-  adivinarlo por fuerza bruta no es una amenaza real. El punto donde sí tendría sentido ponerlo es
-  `POST /claim`, por consistencia con el resto de superficies que aceptan un secreto.
-- **El PNG se guarda tal cual sale del canvas**: no se normaliza el tamaño ni se recorta el espacio
-  en blanco alrededor del trazo. Un canvas de teléfono (~320px de ancho) y uno de escritorio
-  (~800px) producen rúbricas de resoluciones muy distintas que después se estampan al mismo tamaño
-  sobre el PDF. El comportamiento no lo introduce esta historia —`PUT /api/v1/users/me/signature`
-  hace lo mismo con un archivo subido— pero **ahora hay dos orígenes con resoluciones
-  sistemáticamente distintas**, que es cuando el problema empieza a verse. El límite de tamaño que
-  se aplica es el genérico de imagen (`MAX_IMAGE_FILE_SIZE_BYTES`, 10MB), muy holgado para una
-  rúbrica.
-- **La sesión no registra desde dónde se reclamó.** `signature_capture_sessions` es una tabla de
-  auditoría, pero hoy responde *cuándo* y *por qué canal*, no *desde qué dispositivo*: no guarda IP
-  ni user-agent del teléfono que canjeó el token. Si alguna vez hay que justificar por qué una firma
-  entró desde un equipo distinto al de la sesión, eso es exactamente lo que faltaría. El
-  `IpInterceptor` del proyecto ya resuelve la IP y podría engancharse en el controller.
+Qué revisar en Dokploy, en este orden:
+
+1. **`STRIPE_SECRET_KEY` apunta a la cuenta y el modo correctos.** Si estuviera ausente, la
+   aplicación entera no arrancaría (el proveedor falla al construirse), así que si el resto de la
+   API responde, la variable está puesta — lo que puede estar mal es *cuál* es.
+2. **Si es una `rk_` (restricted key), que tenga LECTURA de Products y Prices.** El `.env.example`
+   listaba los permisos de Checkout, Customers, Subscriptions e Invoices, **pero no éste**, que es
+   justo del que sale el catálogo. Con esa lista incompleta, una llave provisionada "según la
+   documentación" deja Checkout funcionando y la pantalla de Planes vacía o en error — exactamente
+   el síntoma reportado. Ya está corregido en `.env.example`.
+3. **Que esa cuenta tenga productos ACTIVOS con al menos un precio ACTIVO**, y en el mismo modo
+   (test/live) que la llave. Un catálogo vacío responde 200 y no falla: ahora deja un `warn`.
+
+El log de arranque dice ahora en qué modo quedó y si la llave es restringida, así que los tres
+puntos se descartan leyendo las primeras líneas del contenedor.
 
 ### Formato de `seal/dto/seal-document.dto.ts` (y por qué `npm run lint` no sirve hoy como filtro)
 

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { StripePaymentGatewayService } from '../stripe/stripe-payment-gateway.service';
 import { GetPaymentServicesUseCase } from './get-payment-services.use-case';
@@ -69,5 +70,37 @@ describe('GetPaymentServicesUseCase', () => {
     paymentGateway.listActiveServices.mockResolvedValue([]);
 
     await expect(useCase.execute()).resolves.toEqual([]);
+  });
+
+  /**
+   * Es la única forma en que la pantalla se queda sin tarjetas **sin que nada falle**: 200, lista
+   * vacía y ni una línea en los logs. Desde afuera se reporta igual que un error ("no cargan los
+   * planes"), así que sin este aviso hay que reproducirlo para distinguir los dos casos.
+   */
+  it('deja constancia en el log cuando el catálogo viene vacío', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    paymentGateway.listActiveServices.mockResolvedValue([]);
+
+    await useCase.execute();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('no devolvió ningún servicio vendible'),
+    );
+
+    warn.mockRestore();
+  });
+
+  it('no avisa de nada cuando el catálogo sí trae servicios', async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+
+    await useCase.execute();
+
+    expect(warn).not.toHaveBeenCalled();
+
+    warn.mockRestore();
   });
 });
