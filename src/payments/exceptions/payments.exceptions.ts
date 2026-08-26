@@ -1,4 +1,8 @@
-import { BadGatewayException, NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 
 /**
  * El proveedor de pagos no respondió, o respondió algo que rompe su contrato.
@@ -11,6 +15,27 @@ export class PaymentGatewayUnavailableException extends BadGatewayException {
   constructor() {
     super(
       'El proveedor de pagos no está disponible en este momento. Inténtalo de nuevo en unos minutos.',
+    );
+  }
+}
+
+/**
+ * Stripe rechazó nuestras credenciales: la llave no vale, fue revocada, es de otra cuenta, o es
+ * una *restricted key* sin permiso de lectura sobre productos y precios.
+ *
+ * **500 y no 502, aunque el error lo devuelva Stripe.** La distinción no es cosmética: un 502
+ * dice "el proveedor está caído, reintenta en un rato" y manda a quien lo lea a mirar el estado
+ * de Stripe, cuando lo que pasa es que *nuestro* despliegue está mal configurado y no se va a
+ * arreglar solo por esperar. Confundir las dos cosas fue exactamente lo que hizo que este fallo
+ * se reportara como "no cargan los planes", sin causa, en vez de "falta revisar la llave".
+ *
+ * El mensaje no menciona a Stripe: al usuario final no le sirve saber de quién es la culpa, y el
+ * detalle accionable queda en el log del servidor, que es donde se puede actuar.
+ */
+export class PaymentGatewayMisconfiguredException extends InternalServerErrorException {
+  constructor() {
+    super(
+      'El servicio de pagos no está configurado correctamente. Avísale al equipo de soporte.',
     );
   }
 }
