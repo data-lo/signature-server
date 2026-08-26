@@ -1,26 +1,27 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrganizationInvitationsController } from './organization-invitation.controller';
-import { OrganizationInvitationService } from './organization-invitation.service';
+import { GetOrganizationInvitationPreviewUseCase } from './applications/get-organization-invitation-preview.use-case';
+import { AcceptOrganizationInvitationUseCase } from './applications/accept-organization-invitation.use-case';
 
 describe('OrganizationInvitationsController', () => {
   let controller: OrganizationInvitationsController;
-  let organizationInvitationService: {
-    getPreview: jest.Mock;
-    acceptByRfc: jest.Mock;
-  };
+  let getInvitationPreview: { execute: jest.Mock };
+  let acceptInvitation: { execute: jest.Mock };
 
   beforeEach(async () => {
-    organizationInvitationService = {
-      getPreview: jest.fn(),
-      acceptByRfc: jest.fn(),
-    };
+    getInvitationPreview = { execute: jest.fn() };
+    acceptInvitation = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrganizationInvitationsController],
       providers: [
         {
-          provide: OrganizationInvitationService,
-          useValue: organizationInvitationService,
+          provide: GetOrganizationInvitationPreviewUseCase,
+          useValue: getInvitationPreview,
+        },
+        {
+          provide: AcceptOrganizationInvitationUseCase,
+          useValue: acceptInvitation,
         },
       ],
     }).compile();
@@ -34,18 +35,16 @@ describe('OrganizationInvitationsController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('getPreview delega en organizationInvitationService.getPreview con el token de la ruta', () => {
+  it('getPreview delega en GetOrganizationInvitationPreviewUseCase con el token de la ruta', () => {
     controller.getPreview('token-1');
 
-    expect(organizationInvitationService.getPreview).toHaveBeenCalledWith(
-      'token-1',
-    );
+    expect(getInvitationPreview.execute).toHaveBeenCalledWith('token-1');
   });
 
-  it('accept delega en organizationInvitationService.acceptByRfc con el token de la ruta y el rfc del body', () => {
+  it('accept delega en AcceptOrganizationInvitationUseCase con el token de la ruta y el rfc del body', () => {
     controller.accept('token-1', { rfc: 'RFC123456789' });
 
-    expect(organizationInvitationService.acceptByRfc).toHaveBeenCalledWith(
+    expect(acceptInvitation.execute).toHaveBeenCalledWith(
       'token-1',
       'RFC123456789',
     );

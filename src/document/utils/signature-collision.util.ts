@@ -8,7 +8,10 @@ import { SignaturePositionDto } from '../dto/create-document-signatures.dto';
  * (4 comparaciones) para no justificar la complejidad de sincronizarla entre ambos.
  * Bordes que solo se tocan (`a.xRatio + a.widthRatio === b.xRatio`) NO cuentan como colisión.
  */
-function boxesOverlap(a: SignaturePositionDto, b: SignaturePositionDto): boolean {
+function boxesOverlap(
+  a: SignaturePositionDto,
+  b: SignaturePositionDto,
+): boolean {
   return (
     a.xRatio < b.xRatio + b.widthRatio &&
     a.xRatio + a.widthRatio > b.xRatio &&

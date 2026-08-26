@@ -60,9 +60,7 @@ describe('EmailVerificationCodeService', () => {
   });
 
   describe('verifyAndConsume', () => {
-    function buildRecord(
-      overrides: Partial<EmailVerificationCodeEntity> = {},
-    ) {
+    function buildRecord(overrides: Partial<EmailVerificationCodeEntity> = {}) {
       return {
         id: 'code-1',
         userId: 'user-1',
@@ -107,9 +105,9 @@ describe('EmailVerificationCodeService', () => {
       repository.findOne.mockResolvedValue(buildRecord());
       otpService.verify.mockReturnValue(false);
 
-      await expect(
-        service.verifyAndConsume('user-1', 'wrong'),
-      ).rejects.toThrow('Código de verificación inválido');
+      await expect(service.verifyAndConsume('user-1', 'wrong')).rejects.toThrow(
+        'Código de verificación inválido',
+      );
       expect(repository.save).not.toHaveBeenCalled();
     });
 

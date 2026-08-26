@@ -8,8 +8,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoleEntity } from './entities/role.entity';
 import { RolePermissionEntity } from './entities/role-permission.entity';
-import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { RoleData } from './interfaces/response/role-response';
 import { SYSTEM_ROLE_NAME_ENUM } from './enums/system-role-name.enum';
 import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from './enums/action-key.enum';
@@ -98,20 +96,11 @@ export class RolesService {
     }
   }
 
-  async findAllSystemRoles(): Promise<BaseResponse<RoleData[]>> {
-    const roles = await this.roleRepository.find({
+  /** Roles de sistema (ADMIN/MEMBER) ordenados por nombre, para el catálogo público de roles. */
+  async listSystemRoles(): Promise<RoleEntity[]> {
+    return this.roleRepository.find({
       where: { isSystemRole: true },
       order: { name: 'ASC' },
     });
-
-    return {
-      success: true,
-      message: 'Roles del sistema obtenidos correctamente',
-      data: roles.map((role) => ({
-        id: role.id,
-        name: role.name,
-        isSystemRole: role.isSystemRole,
-      })),
-    };
   }
 }

@@ -75,7 +75,7 @@ describe('DocumentTransactionService', () => {
       expect(result.chainHash).toBe('');
     });
 
-    it('usa el EntityManager transaccional cuando se le pasa uno (ver DocumentSignaturesService)', async () => {
+    it('usa el EntityManager transaccional cuando se le pasa uno (ver CreateDocumentSignatureFlowUseCase)', async () => {
       const transactionalRepository = createMockRepository();
       const manager = {
         getRepository: jest.fn().mockReturnValue(transactionalRepository),

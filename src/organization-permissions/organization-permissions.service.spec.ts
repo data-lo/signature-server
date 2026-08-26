@@ -11,6 +11,7 @@ import { OrganizationPermissionEntity } from './entities/organization-permission
 import { AccountPermissionEntity } from './entities/account-permission.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { RolesService } from 'src/roles/roles.service';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 const ADMIN_ROLE_ID = 'admin-role-1';
 
@@ -109,239 +110,116 @@ describe('OrganizationPermissionsService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('findAllForOrganization', () => {
-    it('retorna el catálogo si el llamador es ADMIN activo de la organización', async () => {
+  describe('assertHasOrganizationPermission', () => {
+    it('pasa si el llamador es miembro activo con rol ADMIN de esa organización', async () => {
       accountRepository.findOne.mockResolvedValue(adminMembership());
-      organizationPermissionRepository.find.mockResolvedValue([
-        {
-          id: 'perm-1',
-          organizationId: 'org-1',
-          name: 'Aprobar',
-          isActive: true,
-        },
-      ]);
 
-      const result = await service.findAllForOrganization('owner-1', 'org-1');
-
-      expect(result.data).toHaveLength(1);
+      await expect(
+        service.assertHasOrganizationPermission(
+          'owner-1',
+          'org-1',
+          ACTION_KEY_ENUM.READ,
+        ),
+      ).resolves.toBeUndefined();
+      expect(accountRepository.findOne).toHaveBeenCalledWith({
+        where: { userId: 'owner-1', organizationId: 'org-1', isActive: true },
+        relations: { role: true },
+      });
     });
 
-    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
+    /** Sin membresía no hay roleId, y sin roleId `assertHasPermission` niega todo. */
+    it('lanza ForbiddenException si no hay membresía activa del llamador', async () => {
       accountRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.findAllForOrganization('intruder', 'org-1'),
+        service.assertHasOrganizationPermission(
+          'intruder',
+          'org-1',
+          ACTION_KEY_ENUM.READ,
+        ),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('findPermissionOrFail', () => {
+    it('exige que el permiso pertenezca a esa organización en la propia consulta', async () => {
+      organizationPermissionRepository.findOne.mockResolvedValue({
+        id: 'perm-1',
+      });
+
+      await service.findPermissionOrFail('org-1', 'perm-1');
+
+      expect(organizationPermissionRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'perm-1', organizationId: 'org-1' },
+      });
+    });
+
+    it('lanza NotFoundException si no existe en esa organización', async () => {
+      organizationPermissionRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.findPermissionOrFail('org-1', 'perm-ajeno'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('findMemberOrFail', () => {
+    it('devuelve la membresía de organización', async () => {
+      const member = { id: 'member-1', organizationId: 'org-1' };
+      accountRepository.findOne.mockResolvedValue(member);
+
+      expect(await service.findMemberOrFail('member-1')).toBe(member);
+    });
+
+    /** Una cuenta personal no tiene permisos de organización que asignar. */
+    it('trata una cuenta sin organizationId como inexistente', async () => {
+      accountRepository.findOne.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await expect(service.findMemberOrFail('account-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('assertPermissionsBelongToOrganization', () => {
+    it('no consulta nada si la lista viene vacía', async () => {
+      await service.assertPermissionsBelongToOrganization([], 'org-1');
+
       expect(organizationPermissionRepository.find).not.toHaveBeenCalled();
     });
-  });
 
-  describe('create', () => {
-    it('crea el permiso si el llamador es ADMIN activo de la organización', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
-
-      const result = await service.create('owner-1', 'org-1', {
-        name: 'Aprobar documentos',
-      });
-
-      expect(organizationPermissionRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          organizationId: 'org-1',
-          name: 'Aprobar documentos',
-        }),
-      );
-      expect(result.success).toBe(true);
-    });
-
-    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
-      accountRepository.findOne.mockResolvedValue(null);
+    it('lanza BadRequestException si algún id no está en el catálogo de la organización', async () => {
+      organizationPermissionRepository.find.mockResolvedValue([
+        { id: 'perm-1' },
+      ]);
 
       await expect(
-        service.create('intruder', 'org-1', { name: 'Aprobar' }),
-      ).rejects.toThrow(ForbiddenException);
-      expect(organizationPermissionRepository.save).not.toHaveBeenCalled();
+        service.assertPermissionsBelongToOrganization(
+          ['perm-1', 'perm-2'],
+          'org-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
     });
+  });
 
-    it('lanza ConflictException si ya existe un permiso con ese nombre en la organización', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
+  describe('assertNameNotTaken', () => {
+    it('lanza ConflictException si ya hay un permiso con ese nombre', async () => {
       organizationPermissionRepository.findOne.mockResolvedValue({
         id: 'perm-existing',
-        organizationId: 'org-1',
-        name: 'Aprobar documentos',
       });
 
       await expect(
-        service.create('owner-1', 'org-1', { name: 'Aprobar documentos' }),
+        service.assertNameNotTaken('org-1', 'Aprobar'),
       ).rejects.toThrow(ConflictException);
-      expect(organizationPermissionRepository.save).not.toHaveBeenCalled();
     });
   });
 
-  describe('update', () => {
-    it('lanza NotFoundException si el permiso no existe en esa organización', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
-      organizationPermissionRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.update('owner-1', 'org-1', 'missing-perm', { isActive: false }),
-      ).rejects.toThrow(NotFoundException);
-      expect(organizationPermissionRepository.update).not.toHaveBeenCalled();
-    });
-
-    it('actualiza nombre y/o estatus cuando el permiso existe', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
-      organizationPermissionRepository.findOne.mockResolvedValue({
-        id: 'perm-1',
-        organizationId: 'org-1',
-        name: 'Aprobar',
-        isActive: true,
-      });
-
-      await service.update('owner-1', 'org-1', 'perm-1', { isActive: false });
-
-      expect(organizationPermissionRepository.update).toHaveBeenCalledWith(
-        'perm-1',
-        { isActive: false },
-      );
-    });
-
-    it('permite guardar sin cambiar el nombre, sin disparar el chequeo de duplicados', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
-      organizationPermissionRepository.findOne.mockResolvedValue({
-        id: 'perm-1',
-        organizationId: 'org-1',
-        name: 'Aprobar',
-        isActive: true,
-      });
-
-      await service.update('owner-1', 'org-1', 'perm-1', {
-        name: 'Aprobar',
-        isActive: false,
-      });
-
-      // Solo se llama findOne para findPermissionOrFail (x2, antes y después del update) —
-      // el chequeo de duplicados no debe ejecutar una consulta extra si el nombre no cambió.
-      expect(organizationPermissionRepository.findOne).toHaveBeenCalledTimes(2);
-      expect(organizationPermissionRepository.update).toHaveBeenCalledWith(
-        'perm-1',
-        { name: 'Aprobar', isActive: false },
-      );
-    });
-
-    it('lanza ConflictException al renombrar a un nombre ya usado por otro permiso de la organización', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
-      organizationPermissionRepository.findOne
-        .mockResolvedValueOnce({
-          id: 'perm-1',
-          organizationId: 'org-1',
-          name: 'Aprobar',
-          isActive: true,
-        }) // findPermissionOrFail
-        .mockResolvedValueOnce({
-          id: 'perm-2',
-          organizationId: 'org-1',
-          name: 'Ver reportes',
-        }); // assertNameNotTaken: ya existe otro permiso con ese nombre
-
-      await expect(
-        service.update('owner-1', 'org-1', 'perm-1', { name: 'Ver reportes' }),
-      ).rejects.toThrow(ConflictException);
-      expect(organizationPermissionRepository.update).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('remove', () => {
-    it('lanza NotFoundException si el permiso no existe en esa organización', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
-      organizationPermissionRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.remove('owner-1', 'org-1', 'missing-perm'),
-      ).rejects.toThrow(NotFoundException);
-      expect(organizationPermissionRepository.delete).not.toHaveBeenCalled();
-    });
-
-    it('elimina el permiso cuando existe (la cascada limpia sus asignaciones)', async () => {
-      accountRepository.findOne.mockResolvedValue(adminMembership());
-      organizationPermissionRepository.findOne.mockResolvedValue({
-        id: 'perm-1',
-        organizationId: 'org-1',
-      });
-
-      const result = await service.remove('owner-1', 'org-1', 'perm-1');
-
-      expect(organizationPermissionRepository.delete).toHaveBeenCalledWith(
-        'perm-1',
-      );
-      expect(result.success).toBe(true);
-    });
-  });
-
-  describe('findMemberPermissions', () => {
-    it('retorna los IDs de permisos actualmente asignados al miembro', async () => {
-      accountRepository.findOne
-        .mockResolvedValueOnce({ id: 'member-1', organizationId: 'org-1' }) // findMemberOrFail
-        .mockResolvedValueOnce(adminMembership()); // ownership check del llamador
-      accountPermissionRepository.find.mockResolvedValue([
-        { organizationPermissionId: 'perm-1' },
-        { organizationPermissionId: 'perm-2' },
-      ]);
-
-      const result = await service.findMemberPermissions('owner-1', 'member-1');
-
-      expect(result.data).toEqual({
-        accountId: 'member-1',
-        permissionIds: ['perm-1', 'perm-2'],
-      });
-    });
-
-    it('lanza NotFoundException si la membresía no existe', async () => {
-      accountRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.findMemberPermissions('owner-1', 'missing-member'),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('lanza ForbiddenException si el llamador no es ADMIN de esa organización', async () => {
-      accountRepository.findOne
-        .mockResolvedValueOnce({ id: 'member-1', organizationId: 'org-1' })
-        .mockResolvedValueOnce(null);
-
-      await expect(
-        service.findMemberPermissions('intruder', 'member-1'),
-      ).rejects.toThrow(ForbiddenException);
-    });
-  });
-
-  describe('assignToMember', () => {
-    it('lanza BadRequestException si algún permiso no pertenece al catálogo de la organización', async () => {
-      accountRepository.findOne
-        .mockResolvedValueOnce({ id: 'member-1', organizationId: 'org-1' })
-        .mockResolvedValueOnce(adminMembership());
-      organizationPermissionRepository.find.mockResolvedValue([
-        { id: 'perm-1' },
-      ]); // solo uno de los dos IDs solicitados existe
-
-      await expect(
-        service.assignToMember('owner-1', 'member-1', ['perm-1', 'perm-2']),
-      ).rejects.toThrow(BadRequestException);
-      expect(dataSource.transaction).not.toHaveBeenCalled();
-    });
-
-    it('reemplaza las asignaciones dentro de una transacción cuando los permisos son válidos', async () => {
-      accountRepository.findOne
-        .mockResolvedValueOnce({ id: 'member-1', organizationId: 'org-1' })
-        .mockResolvedValueOnce(adminMembership());
-      organizationPermissionRepository.find.mockResolvedValue([
-        { id: 'perm-1' },
-        { id: 'perm-2' },
-      ]);
-
-      const result = await service.assignToMember('owner-1', 'member-1', [
-        'perm-1',
-        'perm-2',
-      ]);
+  describe('replaceMemberPermissions', () => {
+    it('borra e inserta dentro de la misma transacción', async () => {
+      await service.replaceMemberPermissions('member-1', ['perm-1']);
 
       expect(dataSource.transaction).toHaveBeenCalled();
       expect(accountPermissionRepository.delete).toHaveBeenCalledWith({
@@ -349,34 +227,14 @@ describe('OrganizationPermissionsService', () => {
       });
       expect(accountPermissionRepository.insert).toHaveBeenCalledWith([
         { accountId: 'member-1', organizationPermissionId: 'perm-1' },
-        { accountId: 'member-1', organizationPermissionId: 'perm-2' },
       ]);
-      expect(result.data.permissionIds).toEqual(['perm-1', 'perm-2']);
     });
 
-    it('permite desasignar todo con un arreglo vacío, sin insertar nada', async () => {
-      accountRepository.findOne
-        .mockResolvedValueOnce({ id: 'member-1', organizationId: 'org-1' })
-        .mockResolvedValueOnce(adminMembership());
+    it('con una lista vacía sólo borra', async () => {
+      await service.replaceMemberPermissions('member-1', []);
 
-      await service.assignToMember('owner-1', 'member-1', []);
-
-      expect(organizationPermissionRepository.find).not.toHaveBeenCalled();
-      expect(accountPermissionRepository.delete).toHaveBeenCalledWith({
-        accountId: 'member-1',
-      });
+      expect(accountPermissionRepository.delete).toHaveBeenCalled();
       expect(accountPermissionRepository.insert).not.toHaveBeenCalled();
-    });
-
-    it('lanza ForbiddenException si el llamador no es ADMIN de esa organización', async () => {
-      accountRepository.findOne
-        .mockResolvedValueOnce({ id: 'member-1', organizationId: 'org-1' })
-        .mockResolvedValueOnce(null);
-
-      await expect(
-        service.assignToMember('intruder', 'member-1', []),
-      ).rejects.toThrow(ForbiddenException);
-      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
   });
 });

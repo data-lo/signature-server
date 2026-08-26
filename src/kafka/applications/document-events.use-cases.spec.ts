@@ -1,6 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DocumentEventsConsumer } from './document-events.controller';
+import { DocumentEventsConsumer } from '../document-events.controller';
+import { DocumentEventNotificationsService } from '../document-event-notifications.service';
+import { DocumentEventAuditService } from '../document-event-audit.service';
+import { ProcessDocumentCreatedEventUseCase } from './process-document-created-event.use-case';
+import { ProcessDocumentSentToSignEventUseCase } from './process-document-sent-to-sign-event.use-case';
+import { ProcessDocumentCollaboratorSignedEventUseCase } from './process-document-collaborator-signed-event.use-case';
+import { ProcessDocumentSignedEventUseCase } from './process-document-signed-event.use-case';
+import { ProcessDocumentRejectedEventUseCase } from './process-document-rejected-event.use-case';
+import { ProcessDocumentCancellationRequestedEventUseCase } from './process-document-cancellation-requested-event.use-case';
+import { ProcessDocumentCancelledEventUseCase } from './process-document-cancelled-event.use-case';
 import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
@@ -14,7 +23,7 @@ import { AUDIT_TYPE_ENUM } from 'src/audit-chain/enums/audit-type.enum';
 import type {
   DocumentEventPayload,
   DocumentCollaboratorSignedPayload,
-} from './document-events.topics';
+} from '../document-events.topics';
 
 function createMockRepository() {
   return {
@@ -39,7 +48,12 @@ function buildCollaborator(overrides: Partial<CollaboratorEntity> = {}) {
   } as CollaboratorEntity;
 }
 
-describe('DocumentEventsConsumer', () => {
+/**
+ * El consumidor se monta con sus casos de uso y capacidades reales, y sólo los repositorios y
+ * los servicios de frontera van simulados: lo que se prueba es qué constancia queda y qué se
+ * encadena por cada evento, y eso vive en los casos de uso.
+ */
+describe('consumidor de eventos de documento', () => {
   let consumer: DocumentEventsConsumer;
   let notificationRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
@@ -75,8 +89,17 @@ describe('DocumentEventsConsumer', () => {
     auditChainService = { recordEvent: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
+      controllers: [DocumentEventsConsumer],
       providers: [
-        DocumentEventsConsumer,
+        DocumentEventNotificationsService,
+        DocumentEventAuditService,
+        ProcessDocumentCreatedEventUseCase,
+        ProcessDocumentSentToSignEventUseCase,
+        ProcessDocumentCollaboratorSignedEventUseCase,
+        ProcessDocumentSignedEventUseCase,
+        ProcessDocumentRejectedEventUseCase,
+        ProcessDocumentCancellationRequestedEventUseCase,
+        ProcessDocumentCancelledEventUseCase,
         {
           provide: getRepositoryToken(NotificationEntity),
           useValue: notificationRepository,

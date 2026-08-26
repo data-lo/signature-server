@@ -7,8 +7,9 @@ import { ApiTags } from '@nestjs/swagger';
 // Auth
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 
-// Service
-import { OrganizationInvitationService } from './organization-invitation.service';
+// Use cases
+import { GetOrganizationInvitationPreviewUseCase } from './applications/get-organization-invitation-preview.use-case';
+import { AcceptOrganizationInvitationUseCase } from './applications/accept-organization-invitation.use-case';
 
 // DTOs
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
@@ -26,20 +27,21 @@ import { ApiAcceptInvitation } from './docs/api-accept-invitation.docs';
 @Controller('api/v1/organizations/invitations')
 export class OrganizationInvitationsController {
   constructor(
-    private readonly organizationInvitationService: OrganizationInvitationService,
+    private readonly getInvitationPreview: GetOrganizationInvitationPreviewUseCase,
+    private readonly acceptInvitation: AcceptOrganizationInvitationUseCase,
   ) {}
 
   @Get(':token')
   @SkipJwtAuth()
   @ApiGetInvitationPreview()
   getPreview(@Param('token') token: string) {
-    return this.organizationInvitationService.getPreview(token);
+    return this.getInvitationPreview.execute(token);
   }
 
   @Post(':token/accept')
   @SkipJwtAuth()
   @ApiAcceptInvitation()
   accept(@Param('token') token: string, @Body() dto: AcceptInvitationDto) {
-    return this.organizationInvitationService.acceptByRfc(token, dto.rfc);
+    return this.acceptInvitation.execute(token, dto.rfc);
   }
 }

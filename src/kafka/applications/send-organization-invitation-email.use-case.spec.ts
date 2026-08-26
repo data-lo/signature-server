@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { OrganizationInvitationEventsConsumer } from './organization-invitation-events.controller';
+import { OrganizationInvitationEventsConsumer } from '../organization-invitation-events.controller';
+import { SendOrganizationInvitationEmailUseCase } from './send-organization-invitation-email.use-case';
 import { EmailService } from 'src/shared/email/email.service';
-import type { OrganizationInvitationEventPayload } from './organization-invitation.topics';
+import type { OrganizationInvitationEventPayload } from '../organization-invitation.topics';
 
 describe('OrganizationInvitationEventsConsumer', () => {
   let consumer: OrganizationInvitationEventsConsumer;
@@ -29,8 +30,9 @@ describe('OrganizationInvitationEventsConsumer', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
+      controllers: [OrganizationInvitationEventsConsumer],
       providers: [
-        OrganizationInvitationEventsConsumer,
+        SendOrganizationInvitationEmailUseCase,
         { provide: EmailService, useValue: emailService },
       ],
     }).compile();

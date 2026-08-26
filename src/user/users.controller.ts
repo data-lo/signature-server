@@ -20,11 +20,12 @@ import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
-// Services
-import { UserService } from './user.service';
-
 // Use cases
 import { UploadSignatureImageUseCase } from 'src/signature/applications/upload-signature-image.use-case';
+import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availability.use-case';
+import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
+import { UpdateMyPersonalInformationUseCase } from './applications/update-my-personal-information.use-case';
+import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
 
 // DTOs
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
@@ -43,21 +44,24 @@ import { ApiCompleteMyOnboarding } from './docs/api-complete-my-onboarding.docs'
 @Controller('api/v1/users')
 export class UsersController {
   constructor(
-    private readonly userService: UserService,
+    private readonly checkRfcAvailability: CheckRfcAvailabilityUseCase,
+    private readonly getMyProfile: GetMyProfileUseCase,
+    private readonly updateMyPersonalInformation: UpdateMyPersonalInformationUseCase,
     private readonly uploadSignatureImage: UploadSignatureImageUseCase,
+    private readonly completeMyOnboarding: CompleteMyOnboardingUseCase,
   ) {}
 
   @Get('check-rfc')
   @SkipJwtAuth()
   @ApiCheckRfcAvailability()
   checkRfc(@Query('rfc') rfc: string) {
-    return this.userService.checkRfcAvailability(rfc);
+    return this.checkRfcAvailability.execute(rfc);
   }
 
   @Get('me')
   @ApiGetMyProfile()
   getMe(@CurrentUser() user: JwtPayload) {
-    return this.userService.getMeFromCache(user.nationalId);
+    return this.getMyProfile.execute(user.nationalId);
   }
 
   @Put('me/personal-information')
@@ -66,7 +70,7 @@ export class UsersController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdatePersonalInformationDto,
   ) {
-    return this.userService.updatePersonalInformation(user.sub, dto);
+    return this.updateMyPersonalInformation.execute(user.sub, dto);
   }
 
   /**
@@ -103,6 +107,6 @@ export class UsersController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateUserStatusDto,
   ) {
-    return this.userService.updateStatus(user.sub, dto);
+    return this.completeMyOnboarding.execute(user.sub, dto);
   }
 }

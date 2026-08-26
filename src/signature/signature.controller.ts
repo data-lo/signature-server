@@ -12,11 +12,13 @@ import {
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Services
-import { SignatureService } from './signature.service';
-
 // Use cases
+import { GetSignatureFileUseCase } from './applications/get-signature-file.use-case';
+import { GetSignatureUseCase } from './applications/get-signature.use-case';
+import { UpdateSignatureUseCase } from './applications/update-signature.use-case';
+import { DeactivateSignatureUseCase } from './applications/deactivate-signature.use-case';
 import { DeleteSignatureImageUseCase } from './applications/delete-signature-image.use-case';
+import { DeleteOfficialFileUseCase } from './applications/delete-official-file.use-case';
 
 // Decorators
 import { Public } from 'src/auth/decorators/public.decorator';
@@ -37,13 +39,20 @@ import { ApiDeactivateSignature } from './docs/api-deactivate-signature.docs';
 import { ApiDeleteSignatureImage } from './docs/api-delete-signature-image.docs';
 import { ApiDeleteOfficialFile } from './docs/api-delete-official-file.docs';
 
+/**
+ * El controller sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
+ */
 @ApiTags('Signature')
 @ApiBearerAuth('access-token')
 @Controller('signature')
 export class SignatureController {
   constructor(
-    private readonly signatureService: SignatureService,
+    private readonly getSignatureFile: GetSignatureFileUseCase,
+    private readonly getSignature: GetSignatureUseCase,
+    private readonly updateSignature: UpdateSignatureUseCase,
+    private readonly deactivateSignature: DeactivateSignatureUseCase,
     private readonly deleteSignatureImage: DeleteSignatureImageUseCase,
+    private readonly deleteOfficialFile: DeleteOfficialFileUseCase,
   ) {}
 
   @Public()
@@ -53,14 +62,14 @@ export class SignatureController {
     @Param('fileId') objectKey: string,
     @Body('bucketType') bucketType: BUCKET_TYPES_ENUM,
   ) {
-    return await this.signatureService.getFile(objectKey, bucketType);
+    return await this.getSignatureFile.execute(objectKey, bucketType);
   }
 
   @Public()
   @Get(':id')
   @ApiGetSignature()
   findOne(@Param('id') id: string) {
-    return this.signatureService.findOne(id);
+    return this.getSignature.execute(id);
   }
 
   @Patch(':id')
@@ -83,24 +92,18 @@ export class SignatureController {
       officialFile?: Express.Multer.File[];
     },
   ) {
-    const fileFirma = files?.signatureImage?.[0];
-    const fileIne = files?.officialFile?.[0];
-    return this.signatureService.update(id, user.sub, {
-      signatureImage: fileFirma,
-      officialFile: fileIne,
+    return this.updateSignature.execute(id, user.sub, {
+      signatureImage: files?.signatureImage?.[0],
+      officialFile: files?.officialFile?.[0],
     });
   }
 
   @Patch(':id/deactivate')
   @ApiDeactivateSignature()
   deactivate(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.signatureService.deactivate(id, user.sub);
+    return this.deactivateSignature.execute(id, user.sub);
   }
 
-  /**
-   * Borrar la firma PNG devuelve al usuario a SIGNATURE_PENDING, así que la orquestación vive
-   * en el caso de uso y no en el servicio: el controller sólo traduce HTTP.
-   */
   @Delete(':id/signature-image')
   @ApiDeleteSignatureImage()
   deleteSignatureImageEndpoint(
@@ -112,7 +115,10 @@ export class SignatureController {
 
   @Delete(':id/official-file')
   @ApiDeleteOfficialFile()
-  deleteOfficialFile(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.signatureService.deleteOfficialFile(id, user.sub);
+  deleteOfficialFileEndpoint(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.deleteOfficialFile.execute(id, user.sub);
   }
 }

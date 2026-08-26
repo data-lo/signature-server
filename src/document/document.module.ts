@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { DocumentService } from './document.service';
 import { DocumentController } from './document.controller';
-import { DocumentSignaturesService } from './document-signatures.service';
 import { DocumentSignaturesController } from './document-signatures.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DocumentEntity } from './entities/document.entity';
@@ -20,13 +19,50 @@ import { SealModule } from './seal/seal.module';
 import { SummaryDocumentModule } from './summary-document/summary-document.module';
 import { SignatureQrService } from './services/signature-qr.service';
 
+// Use cases
+import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
+import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
+import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
+import { CreateDocumentUseCase } from './applications/create-document.use-case';
+import { GetDocumentsUseCase } from './applications/get-documents.use-case';
+import { GetDocumentUseCase } from './applications/get-document.use-case';
+import { SubmitDocumentForAuthorizationUseCase } from './applications/submit-document-for-authorization.use-case';
+import { SignDocumentUseCase } from './applications/sign-document.use-case';
+import { LinkDocumentCollaboratorUseCase } from './applications/link-document-collaborator.use-case';
+import { RequestDocumentVerificationCodeUseCase } from './applications/request-document-verification-code.use-case';
+import { VerifyDocumentCodeUseCase } from './applications/verify-document-code.use-case';
+import { RejectDocumentUseCase } from './applications/reject-document.use-case';
+import { SubmitDocumentForCancellationUseCase } from './applications/submit-document-for-cancellation.use-case';
+import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
+import { UpdateDocumentUseCase } from './applications/update-document.use-case';
+import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
+import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
+
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
   providers: [
     DocumentService,
     VerificationCodeService,
-    DocumentSignaturesService,
     SignatureQrService,
+    GetDocumentFileUrlUseCase,
+    GetPublicDocumentUseCase,
+    GetPublicSealArtifactUseCase,
+    GetPublicAdvancedSignatureUseCase,
+    CreateDocumentUseCase,
+    GetDocumentsUseCase,
+    GetDocumentUseCase,
+    SubmitDocumentForAuthorizationUseCase,
+    SignDocumentUseCase,
+    LinkDocumentCollaboratorUseCase,
+    RequestDocumentVerificationCodeUseCase,
+    VerifyDocumentCodeUseCase,
+    RejectDocumentUseCase,
+    SubmitDocumentForCancellationUseCase,
+    ConfirmDocumentCancellationUseCase,
+    UpdateDocumentUseCase,
+    DeleteDocumentUseCase,
+    CreateDocumentSignatureFlowUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([

@@ -8,8 +8,11 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
-// Service
-import { AccountService } from './account.service';
+// Use cases
+import { CreateAccountUseCase } from './applications/create-account.use-case';
+import { ListAccountsUseCase } from './applications/list-accounts.use-case';
+import { GetAccountUseCase } from './applications/get-account.use-case';
+import { UpdateAccountUseCase } from './applications/update-account.use-case';
 
 // DTOs
 import { CreateAccountDto } from './dto/create-account.dto';
@@ -25,7 +28,12 @@ import { ApiUpdateAccount } from './docs/api-update-account.docs';
 @ApiBearerAuth('access-token')
 @Controller('account')
 export class AccountController {
-  constructor(private readonly accountService: AccountService) {}
+  constructor(
+    private readonly createAccount: CreateAccountUseCase,
+    private readonly listAccounts: ListAccountsUseCase,
+    private readonly getAccount: GetAccountUseCase,
+    private readonly updateAccount: UpdateAccountUseCase,
+  ) {}
 
   @Post()
   @ApiCreateAccount()
@@ -33,19 +41,19 @@ export class AccountController {
     @CurrentUser() user: JwtPayload,
     @Body() createAccountDto: CreateAccountDto,
   ) {
-    return this.accountService.create(user.sub, createAccountDto);
+    return this.createAccount.execute(user.sub, createAccountDto);
   }
 
   @Get()
   @ApiGetAccounts()
   findAll() {
-    return this.accountService.findAll();
+    return this.listAccounts.execute();
   }
 
   @Get(':id')
   @ApiGetAccount()
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.accountService.findOne(user.sub, id);
+    return this.getAccount.execute(user.sub, id);
   }
 
   @Patch(':id')
@@ -55,6 +63,6 @@ export class AccountController {
     @Param('id') id: string,
     @Body() updateAccountDto: UpdateAccountDto,
   ) {
-    return this.accountService.update(user.sub, id, updateAccountDto);
+    return this.updateAccount.execute(user.sub, id, updateAccountDto);
   }
 }

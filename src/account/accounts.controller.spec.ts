@@ -1,11 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AccountsController } from './accounts.controller';
-import { AccountService } from './account.service';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { GetMyAccountsUseCase } from './applications/get-my-accounts.use-case';
 
 describe('AccountsController', () => {
   let controller: AccountsController;
-  let accountService: { getAccountsCatalog: jest.Mock };
+  let getMyAccounts: { execute: jest.Mock };
 
   const user: JwtPayload = {
     sub: 'user-1',
@@ -16,11 +16,11 @@ describe('AccountsController', () => {
   };
 
   beforeEach(async () => {
-    accountService = { getAccountsCatalog: jest.fn() };
+    getMyAccounts = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AccountsController],
-      providers: [{ provide: AccountService, useValue: accountService }],
+      providers: [{ provide: GetMyAccountsUseCase, useValue: getMyAccounts }],
     }).compile();
 
     controller = module.get<AccountsController>(AccountsController);
@@ -30,9 +30,10 @@ describe('AccountsController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('getMe delega en accountService.getAccountsCatalog con el userId del JWT', () => {
+  /** El catálogo es el del usuario del token: no hay parámetro con el que pedir el de otro. */
+  it('getMe delega en GetMyAccountsUseCase con el userId del JWT', () => {
     controller.getMe(user);
 
-    expect(accountService.getAccountsCatalog).toHaveBeenCalledWith('user-1');
+    expect(getMyAccounts.execute).toHaveBeenCalledWith('user-1');
   });
 });
