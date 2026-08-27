@@ -9,8 +9,8 @@ export interface ConservationRecordInfo {
    * Identidad del certificado de la Autoridad de Sellado de Tiempo (el DN del PSC).
    *
    * Hoy NO se puede llenar: ni Seal Service ni el PSC devuelven este dato por separado — vive
-   * dentro del token RFC 3161 (`timestampSeal.tokenBase64`), en su estructura ASN.1. Ver la nota
-   * de `toConservationRecord`.
+   * dentro del token RFC 3161 (`timestampEvidence.fileBase64`), en su estructura ASN.1. Ver la
+   * nota de `toConservationRecord`.
    */
   tsaCertificate?: string | null;
   /** Número de serie del sello de tiempo. Mismo caso que `tsaCertificate`. */

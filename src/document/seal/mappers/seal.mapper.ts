@@ -34,17 +34,19 @@ export class SealMapper {
        * "EMITIDO"; `created_at` no sirve de sustituto, porque mide cuándo insertamos la fila.
        */
       sealedAt: response.sealedAt ? new Date(response.sealedAt) : null,
-      timestampSeal: {
+      timestampEvidence: {
         isValid: response.timeStamp.status,
         processedHash: response.timeStamp.hashProcessed,
-        tokenBase64: response.timeStamp.fileBase64,
+        fileBase64: response.timeStamp.fileBase64,
         evidenceId: response.timeStamp.uuid,
+        issuedAt: response.sealedAt ? new Date(response.sealedAt) : null,
       },
-      integritySeal: {
+      integrityEvidence: {
         isValid: response.nom151.status,
         processedHash: response.nom151.hashProcessed,
-        tokenBase64: response.nom151.file,
+        fileBase64: response.nom151.file,
         evidenceId: response.nom151.uuid,
+        issuedAt: response.sealedAt ? new Date(response.sealedAt) : null,
         certificatePdfBase64: response.nom151.pdfFile,
       },
     };

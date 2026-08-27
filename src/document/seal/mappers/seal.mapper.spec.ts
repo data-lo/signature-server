@@ -78,17 +78,19 @@ describe('SealMapper', () => {
   it('separa el sello de tiempo (TSA) de la constancia de integridad (NOM-151)', () => {
     const entity = SealMapper.toEntity(DTO, RESPONSE);
 
-    expect(entity.timestampSeal).toEqual({
+    expect(entity.timestampEvidence).toEqual({
       isValid: true,
       processedHash: 'abc123',
-      tokenBase64: 'tsr-en-base64',
+      fileBase64: 'tsr-en-base64',
       evidenceId: 'ts-uuid',
+      issuedAt: new Date('2026-08-13T19:00:00.000Z'),
     });
-    expect(entity.integritySeal).toEqual({
+    expect(entity.integrityEvidence).toEqual({
       isValid: true,
       processedHash: 'abc123',
-      tokenBase64: 'nom151-en-base64',
+      fileBase64: 'nom151-en-base64',
       evidenceId: 'nom-uuid',
+      issuedAt: new Date('2026-08-13T19:00:00.000Z'),
       certificatePdfBase64: 'pdf-en-base64',
     });
   });
