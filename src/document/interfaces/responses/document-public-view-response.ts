@@ -156,6 +156,30 @@ export class PublicSealDownloadsData {
   canonical: boolean;
 }
 
+/**
+ * Evidencia cruda del sellado, en Base64: el DER/ASN.1 tal cual lo emitió el PSC, no el PDF de la
+ * constancia. La vista pública la decodifica en el navegador para descargarla — a diferencia de
+ * `PublicSealDownloadsData`, que solo confirma si el artefacto existe para los enlaces que sirve
+ * el propio backend.
+ */
+export class PublicSealEvidenceData {
+  @ApiProperty({
+    example: 'MIIC...',
+    description:
+      'Token de sello de tiempo RFC 3161 (DER/ASN.1) en Base64. null si el documento no tiene esa evidencia.',
+    nullable: true,
+  })
+  timestampFileBase64: string | null;
+
+  @ApiProperty({
+    example: 'MIIC...',
+    description:
+      'Evidencia de integridad NOM-151 (DER/ASN.1) en Base64, tal cual la emitió el PSC — no el PDF de la constancia. null si el documento no tiene esa evidencia.',
+    nullable: true,
+  })
+  integrityFileBase64: string | null;
+}
+
 export class DocumentPublicViewData {
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
@@ -246,6 +270,13 @@ export class DocumentPublicViewData {
       'Qué artefactos de la constancia están disponibles para descargar. Todos en false si el documento no está completado o no tiene sello.',
   })
   downloads: PublicSealDownloadsData;
+
+  @ApiProperty({
+    type: PublicSealEvidenceData,
+    description:
+      'Evidencia cruda (DER/ASN.1 en Base64) del sello de tiempo y la constancia NOM-151, para descargarla decodificándola en el navegador. Ambos campos en null si el documento no está completado o no tiene sello.',
+  })
+  sealEvidence: PublicSealEvidenceData;
 }
 
 export class DocumentPublicViewResponse extends BaseResponse {
