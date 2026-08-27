@@ -104,7 +104,7 @@ export class SignDocumentUseCase {
     // correspondencia llave/certificado — todo vía EfirmaService) corre ANTES del claim atómico
     // a propósito: si falla (contraseña incorrecta es el caso más común, se espera que el
     // firmante reintente), no debe dejar al colaborador marcado como SIGNED sin una firma válida
-    // detrás. Para firma simple, el equivalente es `assertUserHasSignatureOnFile`.
+    // detrás. Para firma simple, el equivalente es `assertCanSignWithSimpleSignature`.
     let advancedSignatureResult: SignatureResult | null = null;
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       advancedSignatureResult =
@@ -113,7 +113,7 @@ export class SignDocumentUseCase {
           advancedSignatureInput,
         );
     } else {
-      await this.documentService.assertUserHasSignatureOnFile(
+      this.documentService.assertCanSignWithSimpleSignature(
         myParticipant.account!.user,
       );
     }

@@ -15,6 +15,7 @@ import { FindOptionsRelations, ILike, IsNull, Repository } from 'typeorm';
 import { DocumentEntity } from './entities/document.entity';
 import { CollaboratorEntity } from './entities/collaborator.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 
 // DTOs
 
@@ -574,29 +575,28 @@ export class DocumentService {
   }
 
   /**
-   * Verifica que el usuario tenga registrada y activa su firma manuscrita e identificación
-   * oficial (INE) antes de permitirle firmar o rechazar un documento.
+   * Puerta de la firma Simple: sólo se puede firmar con `signingCredentialStatus` en CONFIGURED.
+   *
+   * Antes se comprobaba a mano que el usuario tuviera `signatureId` y que su fila de `signatures`
+   * tuviera la rúbrica y la identificación cargadas. Eso reconstruía, mal y por separado, lo que
+   * `signingCredentialStatus` ya sabe: una firma PNG subida no dice nada sobre si la identidad
+   * del firmante quedó validada, así que un usuario con la rúbrica puesta pero con la
+   * verificación rechazada pasaba este control. La credencial es una sola variable y ésta es la
+   * única pregunta que hay que hacerle.
+   *
+   * No aplica a la firma avanzada: quien firma con e.firma acredita su identidad con el
+   * certificado del SAT, y su equivalente es `validateAndSignWithEfirma`.
    */
-  async assertUserHasSignatureOnFile(user: UserEntity): Promise<void> {
-    const missingSignatureMessage =
-      'Necesitas registrar tu firma y tu identificación oficial (INE) en tu perfil antes de poder firmar o rechazar documentos';
-
-    if (!user.signatureId) {
-      throw new BadRequestException(missingSignatureMessage);
-    }
-
-    const signature = await this.signatureService
-      .findOne(user.signatureId)
-      .catch(() => null);
-
+  assertCanSignWithSimpleSignature(user: UserEntity): void {
     if (
-      !signature ||
-      !signature.isActive ||
-      !signature.signatureObjectKey ||
-      !signature.officialCardObjectKey
+      user.signingCredentialStatus === SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED
     ) {
-      throw new BadRequestException(missingSignatureMessage);
+      return;
     }
+
+    throw new BadRequestException(
+      'Es necesario configurar tu identidad y firma para poder firmar con firma Simple.',
+    );
   }
 
   /**
@@ -659,8 +659,9 @@ export class DocumentService {
   }
 
   /**
-   * Copia la imagen de firma activa del usuario (ya validada por `assertUserHasSignatureOnFile`)
-   * a un object key nuevo e inmutable en MinIO, y retorna esa clave. Ver docblock de
+   * Copia la imagen de firma activa del usuario a un object key nuevo e inmutable en MinIO, y
+   * retorna esa clave. Sólo se llama después de `assertCanSignWithSimpleSignature`, así que la
+   * credencial ya está en CONFIGURED y la rúbrica existe. Ver docblock de
    * `CollaboratorEntity.signatureSnapshotObjectKey` para el porqué: sin este snapshot, el PDF
    * final quedaría vinculado a lo que sea que el usuario tenga en su perfil al momento en que
    * el ÚLTIMO firmante termine, no a lo que realmente firmó.

@@ -43,6 +43,7 @@ import { SummaryDocumentService } from '../summary-document/summary-document.ser
 import { AdvancedSummaryDocumentService } from '../summary-document/advanced-summary-document.service';
 import { SignatureQrService } from '../services/signature-qr.service';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 
 // Use cases
 import { CreateDocumentUseCase } from './create-document.use-case';
@@ -78,11 +79,23 @@ function createMockRepository() {
   };
 }
 
+/**
+ * Firmante que sí puede firmar: su credencial está en CONFIGURED, que es lo único que la firma
+ * Simple exige (ver `assertCanSignWithSimpleSignature`). Las pruebas que quieren el caso
+ * contrario pasan `signingCredentialStatus` en `overrides`.
+ */
 function buildSigner(
-  overrides: Partial<CollaboratorEntity> & { userId?: string } = {},
+  overrides: Partial<CollaboratorEntity> & {
+    userId?: string;
+    signingCredentialStatus?: SIGNING_CREDENTIAL_STATUS_ENUM;
+  } = {},
 ) {
   const userId = overrides.userId ?? 'user-1';
-  const { userId: _omit, ...entityOverrides } = overrides;
+  const {
+    userId: _omit,
+    signingCredentialStatus = SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+    ...entityOverrides
+  } = overrides;
   return {
     id: overrides.id ?? 'collaborator-1',
     documentId: 'doc-1',
@@ -101,6 +114,7 @@ function buildSigner(
         lastName: 'Uno',
         email: 'firmante@correo.com',
         signatureId: 'signature-1',
+        signingCredentialStatus,
       },
     },
     ...entityOverrides,
@@ -1937,20 +1951,85 @@ describe('casos de uso de documentos', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('rechaza si el firmante no tiene credencial de firma activa', async () => {
-      documentRepository.findOne.mockResolvedValue(mockDocument());
-      collaboratorRepository.find.mockResolvedValue([
-        buildSigner({ userId: 'user-1' }),
-      ]);
-      signatureService.findOne.mockResolvedValue({
-        isActive: false,
-        signatureObjectKey: null,
-        officialCardObjectKey: null,
+    /**
+     * La firma Simple se decide con una sola variable. Antes se cruzaban `signatureId`, la fila
+     * de `signatures` y sus dos object keys, lo que dejaba pasar a un usuario con la rúbrica
+     * subida pero con la verificación de identidad rechazada.
+     */
+    describe.each([
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_REQUIRED,
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_PENDING,
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_PROGRESS,
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_REVIEW,
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_FAILED,
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_MAX_ATTEMPTS_EXCEEDED,
+      SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING,
+    ])('credencial en %s', (signingCredentialStatus) => {
+      it('no deja firmar con firma Simple', async () => {
+        documentRepository.findOne.mockResolvedValue(mockDocument());
+        collaboratorRepository.find.mockResolvedValue([
+          buildSigner({ userId: 'user-1', signingCredentialStatus }),
+        ]);
+
+        await expect(
+          signDocument.execute('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+        ).rejects.toThrow(
+          'Es necesario configurar tu identidad y firma para poder firmar con firma Simple.',
+        );
       });
 
-      await expect(
-        signDocument.execute('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
-      ).rejects.toThrow(BadRequestException);
+      /**
+       * El rechazo se comprueba antes del claim atómico: si se hiciera después, el colaborador
+       * quedaría marcado como SIGNED sin firma detrás y sin poder reintentar.
+       */
+      it('no reclama el turno ni toca el documento', async () => {
+        documentRepository.findOne.mockResolvedValue(mockDocument());
+        collaboratorRepository.find.mockResolvedValue([
+          buildSigner({ userId: 'user-1', signingCredentialStatus }),
+        ]);
+
+        await expect(
+          signDocument.execute('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
+        ).rejects.toThrow(BadRequestException);
+        expect(collaboratorRepository.update).not.toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * Firmar con e.firma acredita la identidad con el certificado del SAT, así que no depende de
+     * la credencial de firma Simple: exigirla dejaría sin firmar a quien tiene su e.firma al día
+     * pero nunca pasó por Didit.
+     */
+    it('la firma avanzada no exige la credencial de firma Simple', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({
+          userId: 'user-1',
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          signingCredentialStatus:
+            SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_REQUIRED,
+        } as never),
+      ]);
+
+      const result = await signDocument.execute(
+        'doc-1',
+        'user-1',
+        {
+          password: 'clave-correcta',
+          keyFile: {
+            originalname: 'llave.key',
+            buffer: Buffer.from('llave'),
+          } as Express.Multer.File,
+          cerFile: {
+            originalname: 'certificado.cer',
+            buffer: Buffer.from('cert'),
+          } as Express.Multer.File,
+        },
+        TEST_GEOLOCATION,
+      );
+
+      expect(result.success).toBe(true);
     });
 
     it('rechaza si el documento requiere verificación y el firmante no ha validado su código (Fase 7)', async () => {
@@ -2478,6 +2557,31 @@ describe('casos de uso de documentos', () => {
         ...overrides,
       } as DocumentEntity;
     }
+
+    /**
+     * Rechazar no produce ninguna firma, así que no exige la credencial. Cuando sí la exigía,
+     * un firmante sin identidad validada no podía firmar —correcto— pero tampoco declinar, y el
+     * documento se quedaba esperando para siempre una respuesta que esa persona no podía dar.
+     */
+    it('deja rechazar aunque la credencial de firma no este configurada', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({
+          userId: 'user-1',
+          signingCredentialStatus:
+            SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_REQUIRED,
+        }),
+      ]);
+
+      const result = await rejectDocument.execute(
+        'doc-1',
+        'user-1',
+        'No estoy de acuerdo',
+      );
+
+      expect(result.success).toBe(true);
+      expect(collaboratorRepository.update).toHaveBeenCalled();
+    });
 
     it('rechaza el documento, estampa marca de agua y notifica al creador', async () => {
       documentRepository.findOne.mockResolvedValue(mockDocument());
