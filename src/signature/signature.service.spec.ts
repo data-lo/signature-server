@@ -8,7 +8,6 @@ import { SignatureService } from './signature.service';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
-import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 import {
   MAX_IMAGE_FILE_SIZE_BYTES,
@@ -240,124 +239,7 @@ describe('SignatureService', () => {
     });
   });
 
-  describe('update', () => {
-    function mockOwnedSignature(overrides: Partial<SignatureEntity> = {}) {
-      signatureRepository.findOne.mockResolvedValue({
-        id: 'signature-1',
-        signatureObjectKey: 'existing-signature-key',
-        officialCardObjectKey: 'existing-ine-key',
-        isActive: true,
-        ...overrides,
-      });
-      userRepository.findOne.mockResolvedValue({
-        id: 'user-1',
-        signatureId: 'signature-1',
-      });
-    }
-
-    it('reemplaza la imagen de firma existente pasando el originalname correcto a Minio (bug .fieldname/.filename corregido)', async () => {
-      mockOwnedSignature();
-      minioService.replaceFile.mockResolvedValue({});
-
-      await service.update('signature-1', 'user-1', {
-        signatureImage: {
-          fieldname: 'signatureImage',
-          originalname: 'nueva-firma.png',
-          size: 1000,
-        } as Express.Multer.File,
-      });
-
-      expect(minioService.replaceFile).toHaveBeenCalledWith(
-        'existing-signature-key',
-        expect.objectContaining({ name: 'nueva-firma.png' }),
-        expect.anything(),
-      );
-    });
-
-    it('repone la credencial a CONFIGURED al volver a subir la firma PNG', async () => {
-      mockOwnedSignature();
-      minioService.replaceFile.mockResolvedValue({});
-
-      await service.update('signature-1', 'user-1', {
-        signatureImage: {
-          originalname: 'nueva-firma.png',
-          size: 1000,
-        } as Express.Multer.File,
-      });
-
-      // `applyIfAllowed` y no `execute`: si el usuario ya estaba CONFIGURED es un no-op, y si su
-      // identidad dejó de estar aprobada no se le devuelve la credencial por la puerta de atrás.
-      expect(updateSigningCredentialStatus.applyIfAllowed).toHaveBeenCalledWith(
-        'user-1',
-        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
-      );
-    });
-
-    it('no toca la credencial si sólo se actualizó la identificación oficial', async () => {
-      mockOwnedSignature();
-      minioService.replaceFile.mockResolvedValue({});
-
-      await service.update('signature-1', 'user-1', {
-        officialFile: {
-          originalname: 'nueva-ine.pdf',
-          size: 1000,
-        } as Express.Multer.File,
-      });
-
-      expect(
-        updateSigningCredentialStatus.applyIfAllowed,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('reemplaza la identificación oficial existente pasando el originalname correcto a Minio (bug .fieldname/.filename corregido)', async () => {
-      mockOwnedSignature();
-      minioService.replaceFile.mockResolvedValue({});
-
-      await service.update('signature-1', 'user-1', {
-        officialFile: {
-          fieldname: 'officialFile',
-          originalname: 'nueva-ine.pdf',
-          size: 1000,
-        } as Express.Multer.File,
-      });
-
-      expect(minioService.replaceFile).toHaveBeenCalledWith(
-        'existing-ine-key',
-        expect.objectContaining({ name: 'nueva-ine.pdf' }),
-        expect.anything(),
-      );
-    });
-
-    it('lanza BadRequestException si la nueva imagen de firma excede el límite de tamaño', async () => {
-      mockOwnedSignature();
-
-      await expect(
-        service.update('signature-1', 'user-1', {
-          signatureImage: {
-            originalname: 'firma.png',
-            size: MAX_IMAGE_FILE_SIZE_BYTES + 1,
-          } as Express.Multer.File,
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(minioService.replaceFile).not.toHaveBeenCalled();
-    });
-
-    it('lanza BadRequestException si la nueva identificación oficial excede el límite de tamaño', async () => {
-      mockOwnedSignature();
-
-      await expect(
-        service.update('signature-1', 'user-1', {
-          officialFile: {
-            originalname: 'ine.pdf',
-            size: MAX_PDF_FILE_SIZE_BYTES + 1,
-          } as Express.Multer.File,
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(minioService.replaceFile).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('deleteSignatureImage / deleteOfficialFile', () => {
+  describe('deleteSignatureImage', () => {
     function mockOwnedSignature(overrides: Partial<SignatureEntity> = {}) {
       const signature = {
         id: 'signature-1',
@@ -439,42 +321,11 @@ describe('SignatureService', () => {
       });
     });
 
-    it('deleteOfficialFile: si la firma todavía existe, solo limpia officialCardObjectKey', async () => {
-      mockOwnedSignature();
-      manager.findOne.mockResolvedValue({
-        id: 'signature-1',
-        signatureObjectKey: 'sig-key',
-        officialCardObjectKey: 'ine-key',
-      });
-
-      await service.deleteOfficialFile('signature-1', 'user-1');
-
-      expect(minioService.deleteFile).toHaveBeenCalledWith(
-        'ine-key',
-        expect.anything(),
-      );
-      expect(manager.update).toHaveBeenCalledWith(
-        SignatureEntity,
-        { id: 'signature-1' },
-        { officialCardObjectKey: null },
-      );
-      expect(manager.delete).not.toHaveBeenCalled();
-    });
-
     it('deleteSignatureImage lanza BadRequestException si no hay imagen de firma que eliminar', async () => {
       mockOwnedSignature({ signatureObjectKey: null });
 
       await expect(
         service.deleteSignatureImage('signature-1', 'user-1'),
-      ).rejects.toThrow(BadRequestException);
-      expect(minioService.deleteFile).not.toHaveBeenCalled();
-    });
-
-    it('deleteOfficialFile lanza BadRequestException si no hay identificación que eliminar', async () => {
-      mockOwnedSignature({ officialCardObjectKey: null });
-
-      await expect(
-        service.deleteOfficialFile('signature-1', 'user-1'),
       ).rejects.toThrow(BadRequestException);
       expect(minioService.deleteFile).not.toHaveBeenCalled();
     });

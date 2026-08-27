@@ -1,17 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RolesController } from './roles.controller';
-import { RolesService } from './roles.service';
+import { GetSystemRolesUseCase } from './applications/get-system-roles.use-case';
 
 describe('RolesController', () => {
   let controller: RolesController;
-  let rolesService: { findAllSystemRoles: jest.Mock };
+  let getSystemRoles: { execute: jest.Mock };
 
   beforeEach(async () => {
-    rolesService = { findAllSystemRoles: jest.fn() };
+    getSystemRoles = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [RolesController],
-      providers: [{ provide: RolesService, useValue: rolesService }],
+      providers: [{ provide: GetSystemRolesUseCase, useValue: getSystemRoles }],
     }).compile();
 
     controller = module.get<RolesController>(RolesController);
@@ -21,17 +21,17 @@ describe('RolesController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('findAllSystemRoles delega en rolesService.findAllSystemRoles', () => {
+  it('findAllSystemRoles delega en GetSystemRolesUseCase', () => {
     const response = {
       success: true,
       message: 'ok',
       data: [{ id: 'role-1', name: 'ADMIN', isSystemRole: true }],
     };
-    rolesService.findAllSystemRoles.mockReturnValue(response);
+    getSystemRoles.execute.mockReturnValue(response);
 
     const result = controller.findAllSystemRoles();
 
-    expect(rolesService.findAllSystemRoles).toHaveBeenCalledWith();
+    expect(getSystemRoles.execute).toHaveBeenCalledWith();
     expect(result).toBe(response);
   });
 });

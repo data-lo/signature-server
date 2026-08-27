@@ -14,6 +14,11 @@ import axios from 'axios';
 
 import { DocumentController } from './../src/document/document.controller';
 import { DocumentService } from './../src/document/document.service';
+import { SignDocumentUseCase } from './../src/document/applications/sign-document.use-case';
+import { SendCompletedSimpleSignatureToSealUseCase } from './../src/document/seal/use-cases/send-completed-simple-signature-to-seal.use-case';
+import { AdvancedSummaryDocumentService } from './../src/document/summary-document/advanced-summary-document.service';
+import { SignatureQrService } from './../src/document/services/signature-qr.service';
+import { DOCUMENT_CONTROLLER_USE_CASE_STUBS } from './document-controller-use-case-stubs';
 import { DocumentEntity } from './../src/document/entities/document.entity';
 import { CollaboratorEntity } from './../src/document/entities/collaborator.entity';
 import { DOCUMENT_STATUS_ENUM } from './../src/document/enum/document-status.enum';
@@ -190,9 +195,34 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [DocumentController],
       providers: [
+        // El endpoint bajo prueba entra por su caso de uso real; los otros 16 del controller se
+        // sustituyen por dobles inertes, porque Nest exige resolver todo el constructor aunque
+        // esta prueba sólo ejercite `PATCH /document/:id/sign`.
+        SignDocumentUseCase,
+        ...DOCUMENT_CONTROLLER_USE_CASE_STUBS,
         DocumentService,
         SealDocumentUseCase,
         SealApiService,
+        {
+          provide: SendCompletedSimpleSignatureToSealUseCase,
+          useValue: { execute: jest.fn().mockResolvedValue(false) },
+        },
+        {
+          provide: AdvancedSummaryDocumentService,
+          useValue: {
+            generateAdvancedSummaryPdf: jest
+              .fn()
+              .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
+          },
+        },
+        {
+          provide: SignatureQrService,
+          useValue: {
+            generateAdvancedSignaturePng: jest
+              .fn()
+              .mockResolvedValue(Buffer.from('qr-png')),
+          },
+        },
         { provide: APP_GUARD, useClass: FakeAuthGuard },
         {
           provide: getRepositoryToken(DocumentEntity),
@@ -305,7 +335,9 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     app = moduleFixture.createNestApplication();
     // Mismo pipe global que monta main.ts: es lo que transforma el `geolocation` serializado del
     // multipart en una instancia de GeolocationDto y valida sus rangos.
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({ whitelist: true, transform: true }),
+    );
     await app.init();
   });
 
@@ -372,6 +404,9 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         documentId: DOCUMENT_ID,
         signatureHash: SEAL_RESPONSE.hashHex,
         canonicalPayload: SEAL_RESPONSE.canonicalString,
+        // El momento de emisión que reporta el PSC, no cuándo insertamos la fila: es lo que la
+        // hoja de evidencia imprime como "EMITIDO" (ver SealMapper).
+        sealedAt: new Date(SEAL_RESPONSE.sealedAt),
         timestampSeal: {
           isValid: true,
           processedHash: SEAL_RESPONSE.hashHex,

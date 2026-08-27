@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { UserService } from './user.service';
@@ -109,7 +105,7 @@ describe('UserService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('create', () => {
+  describe('saveNewUser', () => {
     const dto: CreateUserDto = {
       firstName: 'Juan',
       lastName: 'Pérez',
@@ -119,63 +115,73 @@ describe('UserService', () => {
       rfc: 'PELJ850101ABC',
     };
 
-    it('crea el usuario dentro de una transacción cuando todo es válido', async () => {
-      userRepository.findOne.mockResolvedValue(null);
-      personalInformationRepository.findOne.mockResolvedValue(null);
-
-      const result = await service.create(dto);
+    it('guarda usuario e información personal en una sola transacción, normalizados', async () => {
+      const result = await service.saveNewUser(dto);
 
       expect(dataSource.createQueryRunner).toHaveBeenCalled();
       expect(queryRunner.startTransaction).toHaveBeenCalled();
       expect(queryRunner.commitTransaction).toHaveBeenCalled();
       expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
       expect(queryRunner.release).toHaveBeenCalled();
-      expect(result.success).toBe(true);
-      expect(result.data.email).toBe('juan.perez@empresa.com');
-      expect(result.data.nationalId).toBe('PELJ850101HDFRNN08');
-      // removeSensitiveData no debe filtrar la contraseña
-      expect((result.data as any).password).toBeUndefined();
+      expect(result.email).toBe('juan.perez@empresa.com');
+      expect(result.nationalId).toBe('PELJ850101HDFRNN08');
     });
 
-    it('rechaza con ConflictException si el correo ya está registrado', async () => {
+    /**
+     * `users.personal_information_id` es obligatorio: si el save del usuario falla con el de
+     * información personal ya confirmado, queda una fila huérfana que nadie referencia.
+     */
+    it('hace rollback y no deja fila huérfana si falla el save del usuario', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'personal-info-id' })
+        .mockRejectedValueOnce(new Error('duplicate key value'));
+
+      await expect(service.saveNewUser(dto)).rejects.toThrow(
+        'duplicate key value',
+      );
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalled();
+    });
+  });
+
+  describe('comprobaciones de unicidad', () => {
+    it('assertEmailNotTaken rechaza si ya hay un usuario con ese correo', async () => {
       userRepository.findOne.mockResolvedValue({ id: 'existing-user' });
 
-      await expect(service.create(dto)).rejects.toThrow(ConflictException);
-      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      await expect(
+        service.assertEmailNotTaken('Juan.Perez@Empresa.com'),
+      ).rejects.toThrow(ConflictException);
+      expect(userRepository.findOne).toHaveBeenCalledWith({
+        where: { email: 'juan.perez@empresa.com' },
+      });
     });
 
-    it('rechaza con ConflictException si el CURP ya está en uso por otro usuario activo', async () => {
-      userRepository.findOne
-        .mockResolvedValueOnce(null) // email check
-        .mockResolvedValueOnce({ id: 'other-user' }); // assertCurpNotTaken
-
-      await expect(service.create(dto)).rejects.toThrow(ConflictException);
-      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
-    });
-
-    it('rechaza con ConflictException si el RFC ya está en uso', async () => {
+    it('assertEmailNotTaken pasa si el correo está libre', async () => {
       userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.assertEmailNotTaken('nuevo@empresa.com'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('assertCurpNotTaken rechaza si otro usuario activo ya tiene ese CURP', async () => {
+      userRepository.findOne.mockResolvedValue({ id: 'other-user' });
+
+      await expect(
+        service.assertCurpNotTaken('PELJ850101HDFRNN08'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('assertRfcNotTaken rechaza si ya existe información personal con ese RFC', async () => {
       personalInformationRepository.findOne.mockResolvedValue({
         id: 'other-personal-info',
       });
 
-      await expect(service.create(dto)).rejects.toThrow(ConflictException);
-      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
-    });
-
-    it('hace rollback y no deja fila huérfana si falla el save del usuario', async () => {
-      userRepository.findOne.mockResolvedValue(null);
-      personalInformationRepository.findOne.mockResolvedValue(null);
-
-      queryRunner.manager.save = jest
-        .fn()
-        .mockResolvedValueOnce({ id: 'personal-info-id' }) // guarda PersonalInformation OK
-        .mockRejectedValueOnce(new Error('duplicate key value')); // falla al guardar User
-
-      await expect(service.create(dto)).rejects.toThrow('duplicate key value');
-      expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
-      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
-      expect(queryRunner.release).toHaveBeenCalled();
+      await expect(service.assertRfcNotTaken('PELJ850101ABC')).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 
@@ -187,6 +193,75 @@ describe('UserService', () => {
       nationalId: 'GOMA900101MDFRNN01',
       rfc: 'GOMA900101XYZ',
     };
+
+    /**
+     * Antes de esta historia el alta guardaba los nombres con `toUpperCase()`, así que se veían
+     * gritados en todos lados —listados, correos, la hoja de firmas del PDF— y la
+     * capitalización original se perdía en la escritura, sin forma de recuperarla.
+     */
+    describe('capitalización del nombre y el apellido', () => {
+      function givenFreeCurp() {
+        userRepository.findOne
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(null);
+        personalInformationRepository.findOne.mockResolvedValue(null);
+      }
+
+      /** El alta escribe el nombre en las dos tablas: tienen que quedar iguales. */
+      function savedNames() {
+        const [personalInformation, user] =
+          queryRunner.manager.create.mock.calls.map(([, data]) => data);
+
+        return {
+          personalInformation: {
+            name: personalInformation.name,
+            lastName: personalInformation.lastName,
+          },
+          user: { firstName: user.firstName, lastName: user.lastName },
+        };
+      }
+
+      it.each([
+        ['juan', 'pérez', 'Juan', 'Pérez'],
+        ['MARÍA DEL CARMEN', 'DE LA CRUZ', 'María Del Carmen', 'De La Cruz'],
+        ['  ana   maria  ', '  lopez   soto ', 'Ana Maria', 'Lopez Soto'],
+      ])(
+        'guarda %s %s como %s %s',
+        async (firstName, lastName, expectedFirst, expectedLast) => {
+          givenFreeCurp();
+
+          await service.createFromSignup(
+            { ...dto, firstName, lastName },
+            'hashed-password',
+          );
+
+          expect(savedNames()).toEqual({
+            personalInformation: {
+              name: expectedFirst,
+              lastName: expectedLast,
+            },
+            user: { firstName: expectedFirst, lastName: expectedLast },
+          });
+        },
+      );
+
+      /** CURP y RFC conservan su forma canónica: se consultan en mayúsculas. */
+      it('no toca la capitalización del CURP ni del RFC', async () => {
+        givenFreeCurp();
+
+        await service.createFromSignup(
+          { ...dto, firstName: 'ana', lastName: 'lopez' },
+          'hashed-password',
+        );
+
+        const [personalInformation, user] =
+          queryRunner.manager.create.mock.calls.map(([, data]) => data);
+
+        expect(personalInformation.curp).toBe('GOMA900101MDFRNN01');
+        expect(personalInformation.rfc).toBe('GOMA900101XYZ');
+        expect(user.nationalId).toBe('GOMA900101MDFRNN01');
+      });
+    });
 
     it('CURP libre: registra la pre-cuenta (isEmailVerified:false), cachea el perfil en Redis, crea la cuenta personal y envía el primer OTP', async () => {
       userRepository.findOne
@@ -378,6 +453,52 @@ describe('UserService', () => {
       expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
     });
 
+    /**
+     * Es la única pantalla donde el usuario corrige su nombre después de registrarse, así que
+     * tiene que normalizar con el mismo criterio que el alta: si no, un mismo usuario terminaría
+     * guardado de dos formas distintas según por dónde pasó.
+     */
+    describe('capitalización del nombre y el apellido', () => {
+      /** El nombre corregido se escribe en las dos tablas: tienen que quedar iguales. */
+      function savedNames() {
+        const [userChanges, personalInformationChanges] =
+          queryRunner.manager.update.mock.calls.map(([, , changes]) => changes);
+
+        return { userChanges, personalInformationChanges };
+      }
+
+      it.each([
+        ['juan', 'pérez', 'Juan', 'Pérez'],
+        ['MARÍA DEL CARMEN', 'DE LA CRUZ', 'María Del Carmen', 'De La Cruz'],
+        ['  ana   maria  ', '  lopez   soto ', 'Ana Maria', 'Lopez Soto'],
+      ])(
+        'guarda %s %s como %s %s',
+        async (firstName, lastName, expectedFirst, expectedLast) => {
+          mockReloadedUser({ email: 'ana@empresa.con' });
+
+          await service.updatePreRegistration(pendingUser, {
+            firstName,
+            lastName,
+          });
+
+          const { userChanges, personalInformationChanges } = savedNames();
+
+          expect(userChanges).toEqual(
+            expect.objectContaining({
+              firstName: expectedFirst,
+              lastName: expectedLast,
+            }),
+          );
+          expect(personalInformationChanges).toEqual(
+            expect.objectContaining({
+              name: expectedFirst,
+              lastName: expectedLast,
+            }),
+          );
+        },
+      );
+    });
+
     it('corregir solo los datos personales no dispara un código nuevo: el correo sigue siendo el mismo', async () => {
       mockReloadedUser({ email: 'ana@empresa.con' });
 
@@ -389,7 +510,7 @@ describe('UserService', () => {
       expect(queryRunner.manager.update).toHaveBeenCalledWith(
         PersonalInformationEntity,
         'pi-1',
-        expect.objectContaining({ name: 'ANA', lastName: 'GÓMEZ' }),
+        expect.objectContaining({ name: 'Ana', lastName: 'Gómez' }),
       );
       expect(accountService.updateEmailForUser).not.toHaveBeenCalled();
       expect(emailVerificationCodeService.issue).not.toHaveBeenCalled();
@@ -488,67 +609,50 @@ describe('UserService', () => {
     });
   });
 
-  describe('updatePersonalInformation', () => {
-    it('actualiza phoneNumber y secondaryEmail, y refresca el cache de Redis por CURP', async () => {
-      userRepository.findOne.mockResolvedValue({
-        id: 'user-1',
-        nationalId: 'CURP1',
-        personalInformationId: 'pi-1',
-      });
-      personalInformationRepository.findOne.mockResolvedValue({
+  describe('savePersonalInformation', () => {
+    it('escribe los campos y devuelve la fila releída', async () => {
+      const updated = {
         id: 'pi-1',
         phoneNumber: '5512345678',
         secondaryEmail: 'secundario@correo.com',
-      });
+      };
+      personalInformationRepository.findOne.mockResolvedValue(updated);
 
-      const result = await service.updatePersonalInformation('user-1', {
+      const result = await service.savePersonalInformation('pi-1', {
         phoneNumber: '5512345678',
         secondaryEmail: 'secundario@correo.com',
       });
 
       expect(personalInformationRepository.update).toHaveBeenCalledWith(
         'pi-1',
-        { phoneNumber: '5512345678', secondaryEmail: 'secundario@correo.com' },
-      );
-      expect(result.data.phoneNumber).toBe('5512345678');
-      expect(redisService.set).toHaveBeenCalledWith(
-        'CURP1',
-        expect.any(String),
-      );
-    });
-
-    it('lanza NotFoundException si el usuario no existe', async () => {
-      userRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.updatePersonalInformation('missing-user', {
+        {
           phoneNumber: '5512345678',
-        }),
-      ).rejects.toThrow(NotFoundException);
+          secondaryEmail: 'secundario@correo.com',
+        },
+      );
+      expect(result).toBe(updated);
     });
   });
 
-  describe('checkRfcAvailability', () => {
-    it('retorna exists:true si ya existe un registro de información personal con ese RFC', async () => {
+  describe('isRfcRegistered', () => {
+    it('normaliza el RFC a mayúsculas antes de consultarlo', async () => {
       personalInformationRepository.findOne.mockResolvedValue({
         id: 'pi-1',
         rfc: 'PELJ850101ABC',
       });
 
-      const result = await service.checkRfcAvailability('pelj850101abc');
+      const result = await service.isRfcRegistered('pelj850101abc');
 
       expect(personalInformationRepository.findOne).toHaveBeenCalledWith({
         where: { rfc: 'PELJ850101ABC' },
       });
-      expect(result.data).toEqual({ exists: true });
+      expect(result).toBe(true);
     });
 
-    it('retorna exists:false si no existe ningún registro con ese RFC', async () => {
+    it('retorna false si no existe ningún registro con ese RFC', async () => {
       personalInformationRepository.findOne.mockResolvedValue(null);
 
-      const result = await service.checkRfcAvailability('XAXX010101000');
-
-      expect(result.data).toEqual({ exists: false });
+      expect(await service.isRfcRegistered('XAXX010101000')).toBe(false);
     });
   });
 
@@ -587,150 +691,90 @@ describe('UserService', () => {
     });
   });
 
-  describe('getMeFromCache', () => {
-    it('retorna el snapshot cacheado en Redis sin consultar PostgreSQL', async () => {
-      const cached = {
-        id: 'user-1',
-        nationalId: 'CURP1',
-        isConfigured: false,
-        signatureId: null,
-        personalInformation: {
-          rfc: 'RFC1',
-          phoneNumber: null,
-          secondaryEmail: null,
-        },
-      };
-      redisService.get.mockResolvedValue(JSON.stringify(cached));
+  describe('readCachedProfile', () => {
+    it('devuelve el snapshot parseado si la key existe en Redis', async () => {
+      redisService.get.mockResolvedValue(
+        JSON.stringify({ id: 'user-1', isConfigured: true }),
+      );
 
-      const result = await service.getMeFromCache('CURP1');
+      const result = await service.readCachedProfile('CURP1');
 
       expect(redisService.get).toHaveBeenCalledWith('CURP1');
-      expect(userRepository.findOne).not.toHaveBeenCalled();
-      expect(result.data).toEqual(cached);
+      expect(result).toEqual({ id: 'user-1', isConfigured: true });
     });
 
-    it('reconstruye y recachea el snapshot desde PostgreSQL si la key no existe en Redis', async () => {
+    /** Devolver null y no reconstruir es lo que deja al caso de uso decidir qué hacer. */
+    it('devuelve null si la key no existe', async () => {
       redisService.get.mockResolvedValue(null);
-      userRepository.findOne.mockResolvedValue({
-        id: 'user-1',
-        firstName: 'Juan',
-        lastName: 'Pérez',
-        email: 'juan@empresa.com',
-        roles: ['signer'],
-        nationalId: 'CURP1',
-        isConfigured: false,
-        signatureId: null,
-        personalInformation: {
-          rfc: 'RFC1',
-          phoneNumber: null,
-          secondaryEmail: null,
-        },
-      });
 
-      const result = await service.getMeFromCache('CURP1');
+      expect(await service.readCachedProfile('CURP1')).toBeNull();
+    });
+  });
+
+  describe('markConfigured', () => {
+    it('fija isConfigured=true sin comprobar nada más', async () => {
+      await service.markConfigured('user-1');
+
+      expect(userRepository.update).toHaveBeenCalledWith('user-1', {
+        isConfigured: true,
+      });
+    });
+  });
+
+  describe('findOneWithPersonalInformation', () => {
+    it('carga la relación de información personal', async () => {
+      const user = { id: 'user-1' };
+      userRepository.findOne.mockResolvedValue(user);
+
+      const result = await service.findOneWithPersonalInformation('user-1');
+
+      expect(userRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        relations: { personalInformation: true },
+      });
+      expect(result).toBe(user);
+    });
+
+    it('devuelve null si el usuario no existe', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      expect(
+        await service.findOneWithPersonalInformation('missing-user'),
+      ).toBeNull();
+    });
+  });
+
+  describe('findActiveByNationalId', () => {
+    it('filtra por CURP y por usuario activo', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await service.findActiveByNationalId('CURP1');
 
       expect(userRepository.findOne).toHaveBeenCalledWith({
         where: { nationalId: 'CURP1', isActive: true },
         relations: { personalInformation: true },
       });
-      expect(redisService.set).toHaveBeenCalledWith(
-        'CURP1',
-        expect.any(String),
-      );
-      expect(result.data).toMatchObject({ id: 'user-1', nationalId: 'CURP1' });
-    });
-
-    it('lanza NotFoundException si no hay cache ni usuario en PostgreSQL con ese CURP', async () => {
-      redisService.get.mockResolvedValue(null);
-      userRepository.findOne.mockResolvedValue(null);
-
-      await expect(service.getMeFromCache('CURP-INEXISTENTE')).rejects.toThrow(
-        NotFoundException,
-      );
     });
   });
 
-  describe('updateStatus', () => {
-    it('fija isConfigured=true y refresca el cache de Redis por CURP', async () => {
-      userRepository.findOne
-        .mockResolvedValueOnce({
-          id: 'user-1',
-          nationalId: 'CURP1',
-          signatureId: 'sig-1',
-          personalInformation: {
-            rfc: 'RFC1',
-            phoneNumber: '123',
-            secondaryEmail: 'a@a.com',
-          },
-        }) // existencia + validación
-        .mockResolvedValueOnce({
-          id: 'user-1',
-          nationalId: 'CURP1',
-          isConfigured: true,
-          signatureId: 'sig-1',
-          personalInformation: {
-            rfc: 'RFC1',
-            phoneNumber: '123',
-            secondaryEmail: 'a@a.com',
-          },
-        }); // refetch
+  describe('softDelete', () => {
+    it('desactiva sin borrar la fila, para no perder la trazabilidad de firmas pasadas', async () => {
+      userRepository.update.mockResolvedValue({ affected: 1 });
 
-      const result = await service.updateStatus('user-1', {
-        isConfigured: true,
-      });
+      await service.softDelete('user-1');
 
-      expect(userRepository.update).toHaveBeenCalledWith('user-1', {
-        isConfigured: true,
-      });
-      expect(redisService.set).toHaveBeenCalledWith(
-        'CURP1',
-        expect.any(String),
+      expect(userRepository.update).toHaveBeenCalledWith(
+        { id: 'user-1', isActive: true },
+        { isDeleted: true, isActive: false },
       );
-      expect(result.data.isConfigured).toBe(true);
     });
 
-    it('lanza NotFoundException si el usuario no existe', async () => {
-      userRepository.findOne.mockResolvedValue(null);
+    it('lanza NotFoundException si no había un usuario activo con ese id', async () => {
+      userRepository.update.mockResolvedValue({ affected: 0 });
 
-      await expect(
-        service.updateStatus('missing-user', { isConfigured: true }),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('bug corregido: lanza BadRequestException si falta información personal, sin importar lo que mande el DTO', async () => {
-      userRepository.findOne.mockResolvedValueOnce({
-        id: 'user-1',
-        nationalId: 'CURP1',
-        signatureId: 'sig-1',
-        personalInformation: {
-          rfc: 'RFC1',
-          phoneNumber: null,
-          secondaryEmail: null,
-        },
-      });
-
-      await expect(
-        service.updateStatus('user-1', { isConfigured: true }),
-      ).rejects.toThrow(BadRequestException);
-      expect(userRepository.update).not.toHaveBeenCalled();
-    });
-
-    it('bug corregido: lanza BadRequestException si falta la firma digital (signatureId nulo)', async () => {
-      userRepository.findOne.mockResolvedValueOnce({
-        id: 'user-1',
-        nationalId: 'CURP1',
-        signatureId: null,
-        personalInformation: {
-          rfc: 'RFC1',
-          phoneNumber: '123',
-          secondaryEmail: 'a@a.com',
-        },
-      });
-
-      await expect(
-        service.updateStatus('user-1', { isConfigured: true }),
-      ).rejects.toThrow(BadRequestException);
-      expect(userRepository.update).not.toHaveBeenCalled();
+      await expect(service.softDelete('missing-user')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

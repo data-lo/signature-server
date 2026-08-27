@@ -17,6 +17,23 @@ import { RolesModule } from 'src/roles/roles.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
 import { OrganizationPermissionsModule } from 'src/organization-permissions/organization-permissions.module';
 
+// Use cases
+import { CreateAccountUseCase } from './applications/create-account.use-case';
+import { ListAccountsUseCase } from './applications/list-accounts.use-case';
+import { GetAccountUseCase } from './applications/get-account.use-case';
+import { UpdateAccountUseCase } from './applications/update-account.use-case';
+import { GetMyAccountsUseCase } from './applications/get-my-accounts.use-case';
+import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
+import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
+import { GetOrganizationInvitationPreviewUseCase } from './applications/get-organization-invitation-preview.use-case';
+import { AcceptOrganizationInvitationUseCase } from './applications/accept-organization-invitation.use-case';
+import { GrantAccountAccessUseCase } from './applications/grant-account-access.use-case';
+import { GetOrganizationMembersUseCase } from './applications/get-organization-members.use-case';
+import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
+import { GetAccountMemberUseCase } from './applications/get-account-member.use-case';
+import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
+import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -41,6 +58,21 @@ import { OrganizationPermissionsModule } from 'src/organization-permissions/orga
     AccountService,
     AccountMemberService,
     OrganizationInvitationService,
+    CreateAccountUseCase,
+    ListAccountsUseCase,
+    GetAccountUseCase,
+    UpdateAccountUseCase,
+    GetMyAccountsUseCase,
+    CreateOrganizationUseCase,
+    InviteOrganizationMemberUseCase,
+    GetOrganizationInvitationPreviewUseCase,
+    AcceptOrganizationInvitationUseCase,
+    GrantAccountAccessUseCase,
+    GetOrganizationMembersUseCase,
+    GetOrganizationMemberListUseCase,
+    GetAccountMemberUseCase,
+    UpdateAccountMemberUseCase,
+    RevokeAccountAccessUseCase,
   ],
   exports: [
     AccountService,

@@ -29,8 +29,24 @@ import { SignDocumentDto } from './dto/sign-document.dto';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 
-// Services
-import { DocumentService } from './document.service';
+// Use cases
+import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
+import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
+import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
+import { CreateDocumentUseCase } from './applications/create-document.use-case';
+import { GetDocumentsUseCase } from './applications/get-documents.use-case';
+import { GetDocumentUseCase } from './applications/get-document.use-case';
+import { SubmitDocumentForAuthorizationUseCase } from './applications/submit-document-for-authorization.use-case';
+import { SignDocumentUseCase } from './applications/sign-document.use-case';
+import { LinkDocumentCollaboratorUseCase } from './applications/link-document-collaborator.use-case';
+import { RequestDocumentVerificationCodeUseCase } from './applications/request-document-verification-code.use-case';
+import { VerifyDocumentCodeUseCase } from './applications/verify-document-code.use-case';
+import { RejectDocumentUseCase } from './applications/reject-document.use-case';
+import { SubmitDocumentForCancellationUseCase } from './applications/submit-document-for-cancellation.use-case';
+import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
+import { UpdateDocumentUseCase } from './applications/update-document.use-case';
+import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 
 // Enums
 import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
@@ -65,11 +81,32 @@ import { ApiUpdateDocument } from './docs/api-update-document.docs';
 import { ApiDeleteDocument } from './docs/api-delete-document.docs';
 import { ApiGetPublicSealArtifact } from './docs/api-get-public-seal-artifact.docs';
 
+/**
+ * El controller sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
+ */
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
 @Controller('document')
 export class DocumentController {
-  constructor(private readonly documentService: DocumentService) {}
+  constructor(
+    private readonly getDocumentFileUrl: GetDocumentFileUrlUseCase,
+    private readonly getPublicDocument: GetPublicDocumentUseCase,
+    private readonly getPublicSealArtifactUseCase: GetPublicSealArtifactUseCase,
+    private readonly getPublicAdvancedSignature: GetPublicAdvancedSignatureUseCase,
+    private readonly createDocument: CreateDocumentUseCase,
+    private readonly getDocuments: GetDocumentsUseCase,
+    private readonly getDocument: GetDocumentUseCase,
+    private readonly submitForAuthorizationUseCase: SubmitDocumentForAuthorizationUseCase,
+    private readonly signDocument: SignDocumentUseCase,
+    private readonly linkDocumentCollaborator: LinkDocumentCollaboratorUseCase,
+    private readonly requestDocumentVerificationCode: RequestDocumentVerificationCodeUseCase,
+    private readonly verifyDocumentCode: VerifyDocumentCodeUseCase,
+    private readonly rejectDocument: RejectDocumentUseCase,
+    private readonly submitForCancellationUseCase: SubmitDocumentForCancellationUseCase,
+    private readonly confirmCancellationUseCase: ConfirmDocumentCancellationUseCase,
+    private readonly updateDocument: UpdateDocumentUseCase,
+    private readonly deleteDocument: DeleteDocumentUseCase,
+  ) {}
 
   @Get('file/:id')
   @ApiGetDocumentFileUrl()
@@ -77,15 +114,14 @@ export class DocumentController {
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
   ) {
-    await this.documentService.assertUserHasAccess(id, user.sub);
-    return this.documentService.getDocumentMinioURL(id);
+    return this.getDocumentFileUrl.execute(id, user.sub);
   }
 
   @Get('public/:id')
   @SkipJwtAuth()
   @ApiGetPublicDocument()
-  async getPublicDocument(@Param('id') id: string) {
-    return this.documentService.getPublicDocumentView(id);
+  async getPublicDocumentView(@Param('id') id: string) {
+    return this.getPublicDocument.execute(id);
   }
 
   @Get('public/:id/seal/:artifact')
@@ -98,7 +134,7 @@ export class DocumentController {
     @Res() response: Response,
   ) {
     const { content, contentType, fileName } =
-      await this.documentService.getPublicSealArtifact(id, artifact);
+      await this.getPublicSealArtifactUseCase.execute(id, artifact);
 
     response.setHeader('Content-Type', contentType);
     // `attachment`: son evidencia para guardar y verificar por fuera (openssl ts, un visor de PDF),
@@ -118,10 +154,7 @@ export class DocumentController {
     @Param('id') id: string,
     @Param('collaboratorId') collaboratorId: string,
   ) {
-    return this.documentService.getAdvancedSignaturePublicView(
-      id,
-      collaboratorId,
-    );
+    return this.getPublicAdvancedSignature.execute(id, collaboratorId);
   }
 
   @Post()
@@ -139,7 +172,7 @@ export class DocumentController {
     @UploadedFile() file: Express.Multer.File,
     @ClientIp() ip: string,
   ) {
-    return await this.documentService.create(
+    return await this.createDocument.execute(
       user.sub,
       accountId,
       createDocumentDto,
@@ -155,13 +188,13 @@ export class DocumentController {
     @ActiveAccountId() accountId: string,
     @Query() query: GetDocumentsQueryDto,
   ) {
-    return this.documentService.findWithFilters(user.sub, accountId, query);
+    return this.getDocuments.execute(user.sub, accountId, query);
   }
 
   @Get(':id')
   @ApiGetDocument()
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.findDetailForUser(id, user.sub);
+    return this.getDocument.execute(id, user.sub);
   }
 
   @Patch(':id/submit-for-authorization')
@@ -170,7 +203,7 @@ export class DocumentController {
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
   ) {
-    return this.documentService.submitForAuthorization(id, user.sub);
+    return this.submitForAuthorizationUseCase.execute(id, user.sub);
   }
 
   @Patch(':id/sign')
@@ -191,7 +224,7 @@ export class DocumentController {
     @UploadedFiles()
     files: { key?: Express.Multer.File[]; cer?: Express.Multer.File[] },
   ) {
-    return this.documentService.sign(
+    return this.signDocument.execute(
       id,
       user.sub,
       {
@@ -206,7 +239,7 @@ export class DocumentController {
   @Patch(':id/link-collaborator')
   @ApiLinkDocumentCollaborator()
   linkCollaborator(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.linkPendingCollaboratorAccount(id, user.sub);
+    return this.linkDocumentCollaborator.execute(id, user.sub);
   }
 
   @Post(':id/verification-codes')
@@ -217,7 +250,7 @@ export class DocumentController {
     @Param('id') id: string,
     @ClientIp() ip: string,
   ) {
-    return this.documentService.requestVerificationCode(id, user.sub, ip);
+    return this.requestDocumentVerificationCode.execute(id, user.sub, ip);
   }
 
   @Post(':id/verification-codes/verify')
@@ -227,7 +260,7 @@ export class DocumentController {
     @Param('id') id: string,
     @Body() dto: VerifyCodeDto,
   ) {
-    return this.documentService.verifyCode(id, user.sub, dto.code);
+    return this.verifyDocumentCode.execute(id, user.sub, dto.code);
   }
 
   @Patch(':id/reject')
@@ -237,7 +270,7 @@ export class DocumentController {
     @Param('id') id: string,
     @Body() dto: RejectDocumentDto,
   ) {
-    return this.documentService.reject(id, user.sub, dto.reason);
+    return this.rejectDocument.execute(id, user.sub, dto.reason);
   }
 
   @Patch(':id/submit-for-cancellation')
@@ -246,7 +279,7 @@ export class DocumentController {
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
   ) {
-    return this.documentService.requestCancellation(id, user.sub);
+    return this.submitForCancellationUseCase.execute(id, user.sub);
   }
 
   @Patch(':id/confirm-cancellation')
@@ -255,7 +288,7 @@ export class DocumentController {
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
   ) {
-    return this.documentService.confirmCancellation(id, user.sub);
+    return this.confirmCancellationUseCase.execute(id, user.sub);
   }
 
   @Patch(':id')
@@ -265,12 +298,12 @@ export class DocumentController {
     @Param('id') id: string,
     @Body() signatureCoordinatesDto: SignatureCoordinatesDto,
   ) {
-    return this.documentService.update(id, user.sub, signatureCoordinatesDto);
+    return this.updateDocument.execute(id, user.sub, signatureCoordinatesDto);
   }
 
   @Delete(':id')
   @ApiDeleteDocument()
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.remove(id, user.sub);
+    return this.deleteDocument.execute(id, user.sub);
   }
 }

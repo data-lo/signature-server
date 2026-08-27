@@ -7,7 +7,7 @@ export function ApiStartDiditVerification() {
     ApiOperation({
       summary: 'Iniciar verificación de identidad con Didit',
       description:
-        'Crea un intento local en PENDING, abre una sesión con el workflow de Didit y devuelve la URL hospedada para abrirla en la misma PC o convertirla en QR. Si ya existe una sesión abierta y vigente, se devuelve esa misma en lugar de crear otra. Nunca devuelve credenciales del proveedor.',
+        'Crea un intento local en PENDING, abre una sesión con el workflow de Didit y devuelve la URL hospedada, que el frontend usa como contenido del código QR. Si ya existe una sesión abierta y vigente, se devuelve esa misma en lugar de crear otra. Nunca devuelve credenciales del proveedor.',
     }),
     ApiResponse({
       status: 201,

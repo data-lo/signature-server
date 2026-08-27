@@ -16,8 +16,12 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 // Auth
 import { Public } from 'src/auth/decorators/public.decorator';
 
-// Service
-import { UserService } from './user.service';
+// Use cases
+import { CreateUserUseCase } from './applications/create-user.use-case';
+import { ListUsersUseCase } from './applications/list-users.use-case';
+import { GetUserUseCase } from './applications/get-user.use-case';
+import { UpdateUserUseCase } from './applications/update-user.use-case';
+import { DeleteUserUseCase } from './applications/delete-user.use-case';
 
 // DTOs
 import { CreateUserDto } from './dto/create-user.dto';
@@ -34,20 +38,26 @@ import { ApiDeleteUser } from './docs/api-delete-user.docs';
 @ApiBearerAuth('access-token')
 @Controller('user')
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly createUser: CreateUserUseCase,
+    private readonly listUsers: ListUsersUseCase,
+    private readonly getUser: GetUserUseCase,
+    private readonly updateUser: UpdateUserUseCase,
+    private readonly deleteUser: DeleteUserUseCase,
+  ) {}
 
   //EXPUESTOS AL API
   @Public()
   @Post()
   @ApiCreateUser()
   create(@Body() createUserDto: CreateUserDto) {
-    return this.userService.create(createUserDto);
+    return this.createUser.execute(createUserDto);
   }
 
   @Get()
   @ApiGetUsers()
   findAll(@Query('withSignature') withSignature?: string) {
-    return this.userService.findAllActiveUsers(withSignature === 'true');
+    return this.listUsers.execute(withSignature === 'true');
   }
 
   @Public()
@@ -57,20 +67,20 @@ export class UserController {
     @Param('id') id: string,
     @Query('withSignature') withSignature?: string,
   ) {
-    return this.userService.findOneActiveUser(id, withSignature === 'true');
+    return this.getUser.execute(id, withSignature === 'true');
   }
 
   @Public()
   @Patch(':id')
   @ApiUpdateUser()
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.userService.update(id, updateUserDto);
+    return this.updateUser.execute(id, updateUserDto);
   }
 
   @Public()
   @Delete(':id')
   @ApiDeleteUser()
   remove(@Param('id') id: string) {
-    return this.userService.remove(id);
+    return this.deleteUser.execute(id);
   }
 }

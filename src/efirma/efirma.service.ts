@@ -29,13 +29,13 @@ export class EfirmaService implements OnModuleInit {
   private readonly logger = new Logger(EfirmaService.name);
   private cadenaConfianza: X509Certificate[] = [];
 
-  constructor(
-    private readonly ocspService: OscpService
-  ) {}
+  constructor(private readonly ocspService: OscpService) {}
 
   onModuleInit() {
     this.cadenaConfianza = this.cargarCertificadosDeConfianza();
-    this.logger.log(`Cargados ${this.cadenaConfianza.length} certificados de confianza`);
+    this.logger.log(
+      `Cargados ${this.cadenaConfianza.length} certificados de confianza`,
+    );
   }
 
   private cargarCertificadosDeConfianza(): X509Certificate[] {
@@ -47,7 +47,9 @@ export class EfirmaService implements OnModuleInit {
       try {
         return new X509Certificate(buffer);
       } catch (error) {
-        this.logger.error(`Unable to load ${fileName}: ${(error as Error).message}`);
+        this.logger.error(
+          `Unable to load ${fileName}: ${(error as Error).message}`,
+        );
         throw error;
       }
     });
@@ -85,19 +87,30 @@ export class EfirmaService implements OnModuleInit {
       this.extraerCampoSubject(subject, 'serialNumber');
 
     if (!rfc) {
-      throw new CertificadoInvalidoException('No se pudo extraer el RFC del certificado');
+      throw new CertificadoInvalidoException(
+        'No se pudo extraer el RFC del certificado',
+      );
     }
 
     return rfc.split(' ')[0].trim();
   }
 
-  private extraerCampoSubject(subject: string, campo: string): string | undefined {
+  private extraerCampoSubject(
+    subject: string,
+    campo: string,
+  ): string | undefined {
     const linea = subject.split('\n').find((l) => l.startsWith(`${campo}=`));
     return linea?.substring(campo.length + 1);
   }
 
-  validarVigencia(info: CertificateInfo, fechaReferencia: Date = new Date()): void {
-    if (fechaReferencia < info.vigenciaDesde || fechaReferencia > info.vigenciaHasta) {
+  validarVigencia(
+    info: CertificateInfo,
+    fechaReferencia: Date = new Date(),
+  ): void {
+    if (
+      fechaReferencia < info.vigenciaDesde ||
+      fechaReferencia > info.vigenciaHasta
+    ) {
       throw new CertificadoExpiradoException(info.vigenciaHasta);
     }
   }
@@ -131,7 +144,8 @@ export class EfirmaService implements OnModuleInit {
       }
 
       const emisor = this.cadenaConfianza.find(
-        (candidato) => actual.checkIssued(candidato) && actual.verify(candidato.publicKey),
+        (candidato) =>
+          actual.checkIssued(candidato) && actual.verify(candidato.publicKey),
       );
 
       if (!emisor) {
@@ -145,7 +159,9 @@ export class EfirmaService implements OnModuleInit {
       }
 
       if (vistos.has(emisor.fingerprint256)) {
-        throw new CadenaConfianzaInvalidaException('Ciclo detectado al validar la cadena de confianza');
+        throw new CadenaConfianzaInvalidaException(
+          'Ciclo detectado al validar la cadena de confianza',
+        );
       }
       vistos.add(emisor.fingerprint256);
       actual = emisor;
@@ -168,9 +184,13 @@ export class EfirmaService implements OnModuleInit {
 
   validarParCertificadoLlave(cerBuffer: Buffer, privateKey: KeyObject): void {
     const cert = new X509Certificate(cerBuffer);
-    const reto = createHash('sha256').update(`reto-${Date.now()}-${Math.random()}`).digest();
+    const reto = createHash('sha256')
+      .update(`reto-${Date.now()}-${Math.random()}`)
+      .digest();
     const firmaReto = createSign('RSA-SHA256').update(reto).sign(privateKey);
-    const esValida = createVerify('RSA-SHA256').update(reto).verify(cert.publicKey, firmaReto);
+    const esValida = createVerify('RSA-SHA256')
+      .update(reto)
+      .verify(cert.publicKey, firmaReto);
     if (!esValida) {
       throw new LLaveNoCorrespondeCertificadoException();
     }
@@ -181,7 +201,10 @@ export class EfirmaService implements OnModuleInit {
   }
 
   firmarDocumento(documento: Buffer, privateKey: KeyObject): string {
-    return createSign('RSA-SHA256').update(documento).sign(privateKey).toString('base64');
+    return createSign('RSA-SHA256')
+      .update(documento)
+      .sign(privateKey)
+      .toString('base64');
   }
 
   /**
@@ -203,10 +226,13 @@ export class EfirmaService implements OnModuleInit {
     let ocspEvidence: OCSPEvidence;
 
     try {
-      ocspEvidence = await this.ocspService.verifyRevokedOCSP(cerBuffer, emisorInmediato);
+      ocspEvidence = await this.ocspService.verifyRevokedOCSP(
+        cerBuffer,
+        emisorInmediato,
+      );
     } catch (err) {
       if (err instanceof CertificadoRevocadoException) {
-        throw err; 
+        throw err;
       }
       if (err instanceof OCSPNotAvilableException) {
         this.logger.warn(
@@ -223,7 +249,9 @@ export class EfirmaService implements OnModuleInit {
     this.logger.log(
       `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`,
     );
-    this.logger.log(`Desde efirma, OCSPEvidence ${JSON.stringify(ocspEvidence)}`)
+    this.logger.log(
+      `Desde efirma, OCSPEvidence ${JSON.stringify(ocspEvidence)}`,
+    );
     return {
       signatureBase64,
       algorithm: 'sha256',
@@ -236,12 +264,12 @@ export class EfirmaService implements OnModuleInit {
         certificateNumber: infoCertificado.numeroCertificado,
         certificatePem: infoCertificado.certificadoPem,
       },
-      ocspEvidence:{
+      ocspEvidence: {
         status: ocspEvidence.status,
         verifiedAt: ocspEvidence.verifiedAt,
         ocspResponse: ocspEvidence.ocspResponse,
-        ocspUrl: ocspEvidence.ocspUrl
-      }
+        ocspUrl: ocspEvidence.ocspUrl,
+      },
     };
   }
 
@@ -258,7 +286,9 @@ export class EfirmaService implements OnModuleInit {
     const hashActual = this.calcularHashDocumento(documento);
     const hashCoincide = hashActual === hashDocumentoOriginal;
     if (!hashCoincide) {
-      errores.push('El hash del documento no coincide: el archivo fue modificado o no es el original');
+      errores.push(
+        'El hash del documento no coincide: el archivo fue modificado o no es el original',
+      );
     }
 
     let cadenaConfianzaValida = true;
@@ -275,7 +305,9 @@ export class EfirmaService implements OnModuleInit {
       this.validarVigencia(infoCertificado, firmadoEn);
     } catch (err) {
       vigenteAlFirmar = false;
-      errores.push(`El certificado no estaba vigente al momento de firmar: ${(err as Error).message}`);
+      errores.push(
+        `El certificado no estaba vigente al momento de firmar: ${(err as Error).message}`,
+      );
     }
 
     const cert = new X509Certificate(cerBuffer);
@@ -291,7 +323,8 @@ export class EfirmaService implements OnModuleInit {
       errores.push('La firma no corresponde a este documento y certificado');
     }
 
-    const esValida = hashCoincide && firmaValida && cadenaConfianzaValida && vigenteAlFirmar;
+    const esValida =
+      hashCoincide && firmaValida && cadenaConfianzaValida && vigenteAlFirmar;
 
     return {
       esValida,

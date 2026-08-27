@@ -113,6 +113,27 @@ describe('RegisterWebhookEventUseCase', () => {
     expect(event.id).toBe('row-ganadora');
   });
 
+  it('guarda el recurso del proveedor junto a la entrega', async () => {
+    const { event } = await useCase.register({
+      ...INPUT,
+      provider: WEBHOOK_PROVIDER_ENUM.DIDIT,
+      providerEventId: 'evt_1',
+      providerResourceId: 'ses_1',
+    });
+
+    expect(event).toEqual(
+      expect.objectContaining({ providerResourceId: 'ses_1' }),
+    );
+  });
+
+  it('deja el recurso en null cuando el proveedor no tiene uno equivalente', async () => {
+    const { event } = await useCase.register(INPUT);
+
+    expect(event).toEqual(
+      expect.objectContaining({ providerResourceId: null }),
+    );
+  });
+
   it('no busca duplicados cuando el proveedor no dio identificador', async () => {
     const { alreadyProcessed } = await useCase.register({
       ...INPUT,
@@ -135,6 +156,23 @@ describe('RegisterWebhookEventUseCase', () => {
         providerEventId: null,
         payload: null,
         signatureValid: false,
+        processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.FAILED,
+      }),
+    );
+  });
+
+  it('distingue un cuerpo auténtico pero deforme de una firma falsificada', async () => {
+    await useCase.recordRejectedDelivery(
+      WEBHOOK_PROVIDER_ENUM.DIDIT,
+      'Payload de Didit inválido: faltan campos obligatorios',
+      { signatureValid: true, eventType: 'invalid_payload' },
+    );
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureValid: true,
+        eventType: 'invalid_payload',
+        payload: null,
         processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.FAILED,
       }),
     );
