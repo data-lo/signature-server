@@ -22,7 +22,7 @@ export class VerificationCodeService {
 
   /**
    * `manager` opcional: cuando se emite dentro de una transacción más grande (ver
-   * DocumentSignaturesService), pasar el `EntityManager` transaccional para que el INSERT
+   * CreateDocumentSignatureFlowUseCase), pasar el `EntityManager` transaccional para que el INSERT
    * corra en la misma transacción y participe del rollback si algo más falla después. Sin
    * `manager`, usa el repositorio inyectado normal (comportamiento previo, sin cambios).
    */

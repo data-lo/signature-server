@@ -1,18 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
-import { UserService } from './user.service';
 import { UploadSignatureImageUseCase } from 'src/signature/applications/upload-signature-image.use-case';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availability.use-case';
+import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
+import { UpdateMyPersonalInformationUseCase } from './applications/update-my-personal-information.use-case';
+import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
 
 describe('UsersController', () => {
   let controller: UsersController;
-  let userService: {
-    getMeFromCache: jest.Mock;
-    updatePersonalInformation: jest.Mock;
-    updateStatus: jest.Mock;
-    refreshCurpCacheForUser: jest.Mock;
-    checkRfcAvailability: jest.Mock;
-  };
+  let checkRfcAvailability: { execute: jest.Mock };
+  let getMyProfile: { execute: jest.Mock };
+  let updateMyPersonalInformation: { execute: jest.Mock };
+  let completeMyOnboarding: { execute: jest.Mock };
   let uploadSignatureImage: { execute: jest.Mock };
 
   const user: JwtPayload = {
@@ -24,19 +24,28 @@ describe('UsersController', () => {
   };
 
   beforeEach(async () => {
-    userService = {
-      getMeFromCache: jest.fn(),
-      updatePersonalInformation: jest.fn(),
-      updateStatus: jest.fn(),
-      refreshCurpCacheForUser: jest.fn(),
-      checkRfcAvailability: jest.fn(),
-    };
+    checkRfcAvailability = { execute: jest.fn() };
+    getMyProfile = { execute: jest.fn() };
+    updateMyPersonalInformation = { execute: jest.fn() };
+    completeMyOnboarding = { execute: jest.fn() };
     uploadSignatureImage = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
       providers: [
-        { provide: UserService, useValue: userService },
+        {
+          provide: CheckRfcAvailabilityUseCase,
+          useValue: checkRfcAvailability,
+        },
+        { provide: GetMyProfileUseCase, useValue: getMyProfile },
+        {
+          provide: UpdateMyPersonalInformationUseCase,
+          useValue: updateMyPersonalInformation,
+        },
+        {
+          provide: CompleteMyOnboardingUseCase,
+          useValue: completeMyOnboarding,
+        },
         {
           provide: UploadSignatureImageUseCase,
           useValue: uploadSignatureImage,
@@ -51,19 +60,17 @@ describe('UsersController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('getMe delega en userService.getMeFromCache con el CURP del JWT', () => {
+  it('getMe delega en GetMyProfileUseCase con el CURP del JWT', () => {
     controller.getMe(user);
 
-    expect(userService.getMeFromCache).toHaveBeenCalledWith(
-      'PELJ850101HDFRNN08',
-    );
+    expect(getMyProfile.execute).toHaveBeenCalledWith('PELJ850101HDFRNN08');
   });
 
-  it('updatePersonalInformation delega en userService.updatePersonalInformation con el userId del JWT', () => {
+  it('updatePersonalInformation delega en el caso de uso con el userId del JWT', () => {
     const dto = { phoneNumber: '5512345678' };
     controller.updatePersonalInformation(user, dto);
 
-    expect(userService.updatePersonalInformation).toHaveBeenCalledWith(
+    expect(updateMyPersonalInformation.execute).toHaveBeenCalledWith(
       'user-1',
       dto,
     );
@@ -86,24 +93,19 @@ describe('UsersController', () => {
       dto,
       files,
     );
-    // El caso de uso ya invalida el snapshot de perfil al mover el estado de la credencial: el
-    // controller no vuelve a tocar el cache.
-    expect(userService.refreshCurpCacheForUser).not.toHaveBeenCalled();
     expect(result).toBe(uploadResult);
   });
 
-  it('updateStatus delega en userService.updateStatus con el userId del JWT', () => {
+  it('updateStatus delega en CompleteMyOnboardingUseCase con el userId del JWT', () => {
     const dto = { isConfigured: true };
     controller.updateStatus(user, dto);
 
-    expect(userService.updateStatus).toHaveBeenCalledWith('user-1', dto);
+    expect(completeMyOnboarding.execute).toHaveBeenCalledWith('user-1', dto);
   });
 
-  it('checkRfc delega en userService.checkRfcAvailability con el rfc del query param', () => {
+  it('checkRfc delega en CheckRfcAvailabilityUseCase con el rfc del query param', () => {
     controller.checkRfc('PELJ850101ABC');
 
-    expect(userService.checkRfcAvailability).toHaveBeenCalledWith(
-      'PELJ850101ABC',
-    );
+    expect(checkRfcAvailability.execute).toHaveBeenCalledWith('PELJ850101ABC');
   });
 });

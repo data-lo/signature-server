@@ -19,6 +19,11 @@ import { ClaimMobileSignatureSessionUseCase } from './applications/claim-mobile-
 import { SaveHandwrittenSignatureUseCase } from './applications/save-handwritten-signature.use-case';
 import { GetSignatureCaptureSessionStatusUseCase } from './applications/get-signature-capture-session-status.use-case';
 import { CancelSignatureCaptureSessionUseCase } from './applications/cancel-signature-capture-session.use-case';
+import { GetSignatureFileUseCase } from './applications/get-signature-file.use-case';
+import { GetSignatureUseCase } from './applications/get-signature.use-case';
+import { UpdateSignatureUseCase } from './applications/update-signature.use-case';
+import { DeactivateSignatureUseCase } from './applications/deactivate-signature.use-case';
+import { DeleteOfficialFileUseCase } from './applications/delete-official-file.use-case';
 
 /**
  * Dominio de la firma del usuario: el archivo vigente y los intentos de capturarlo.
@@ -52,6 +57,11 @@ import { CancelSignatureCaptureSessionUseCase } from './applications/cancel-sign
     SaveHandwrittenSignatureUseCase,
     GetSignatureCaptureSessionStatusUseCase,
     CancelSignatureCaptureSessionUseCase,
+    GetSignatureFileUseCase,
+    GetSignatureUseCase,
+    UpdateSignatureUseCase,
+    DeactivateSignatureUseCase,
+    DeleteOfficialFileUseCase,
   ],
   // `UploadSignatureImageUseCase` se exporta para `UsersController`, dueño de
   // `PUT /api/v1/users/me/signature`.

@@ -41,8 +41,8 @@ describe('RolesService', () => {
     expect(service).toBeDefined();
   });
 
-  it('findAllSystemRoles consulta solo roles con isSystemRole=true y mapea id/name/isSystemRole', async () => {
-    roleRepository.find.mockResolvedValue([
+  it('listSystemRoles consulta solo roles con isSystemRole=true, ordenados por nombre', async () => {
+    const roles = [
       { id: 'role-1', name: 'ADMIN', isSystemRole: true, organizationId: null },
       {
         id: 'role-2',
@@ -50,30 +50,16 @@ describe('RolesService', () => {
         isSystemRole: true,
         organizationId: null,
       },
-    ]);
+    ];
+    roleRepository.find.mockResolvedValue(roles);
 
-    const result = await service.findAllSystemRoles();
+    const result = await service.listSystemRoles();
 
     expect(roleRepository.find).toHaveBeenCalledWith({
       where: { isSystemRole: true },
       order: { name: 'ASC' },
     });
-    expect(result).toEqual({
-      success: true,
-      message: 'Roles del sistema obtenidos correctamente',
-      data: [
-        { id: 'role-1', name: 'ADMIN', isSystemRole: true },
-        { id: 'role-2', name: 'MEMBER', isSystemRole: true },
-      ],
-    });
-  });
-
-  it('findAllSystemRoles retorna data vacía si no hay roles del sistema', async () => {
-    roleRepository.find.mockResolvedValue([]);
-
-    const result = await service.findAllSystemRoles();
-
-    expect(result.data).toEqual([]);
+    expect(result).toBe(roles);
   });
 
   describe('hasPermission', () => {

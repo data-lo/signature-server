@@ -16,8 +16,6 @@ import { INVITATION_STATUS_ENUM } from './enums/invitation-status.enum';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { OrganizationInvitationEventsProducer } from 'src/kafka/organization-invitation.producer';
-import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { OrganizationInvitationPreviewData } from './interfaces/response/organization-invitation-response';
 
 const INVITATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 días — sin precedente en el repo, valor razonable para un enlace de invitación por correo.
 
@@ -94,45 +92,20 @@ export class OrganizationInvitationService {
     });
   }
 
-  async getPreview(
-    token: string,
-  ): Promise<BaseResponse<OrganizationInvitationPreviewData>> {
-    const invitation = await this.resolveInvitation(token);
-
-    return {
-      success: true,
-      message: 'Invitación obtenida correctamente',
-      data: {
-        organizationId: invitation.organizationId,
-        organizationName: invitation.organization.name,
-        email: invitation.email,
-        status: invitation.status,
-      },
-    };
-  }
-
-  /** Camino A de la historia (RFC ya registrado) — sin JWT, resuelve al usuario por RFC. */
-  async acceptByRfc(token: string, rfc: string): Promise<BaseResponse<null>> {
-    const invitation = await this.resolveInvitation(token);
-    this.assertPending(invitation);
-
+  /** Usuario dueño de ese RFC, exigiendo que exista. El RFC se guarda en mayúsculas. */
+  async findUserByRfcOrFail(rfc: string): Promise<UserEntity> {
     const user = await this.userRepository.findOne({
       where: { personalInformation: { rfc: rfc.toUpperCase() } },
       relations: { personalInformation: true },
     });
+
     if (!user) {
       throw new NotFoundException(
         'No existe ningún usuario registrado con ese RFC',
       );
     }
 
-    await this.finalizeAcceptance(invitation, user);
-
-    return {
-      success: true,
-      message: 'Te uniste a la organización correctamente',
-      data: null,
-    };
+    return user;
   }
 
   /**
@@ -152,7 +125,7 @@ export class OrganizationInvitationService {
     await this.finalizeAcceptance(invitation, user);
   }
 
-  private async finalizeAcceptance(
+  async finalizeAcceptance(
     invitation: OrganizationInvitationEntity,
     user: UserEntity,
   ): Promise<void> {
@@ -189,7 +162,7 @@ export class OrganizationInvitationService {
   }
 
   /** Expiración perezosa: se marca EXPIRED en el primer acceso posterior a expiresAt, no vía job programado (sin infraestructura de cron en este repo). */
-  private async resolveInvitation(
+  async resolveInvitation(
     token: string,
   ): Promise<OrganizationInvitationEntity> {
     const invitation = await this.invitationRepository.findOne({
@@ -211,7 +184,7 @@ export class OrganizationInvitationService {
     return invitation;
   }
 
-  private assertPending(invitation: OrganizationInvitationEntity): void {
+  assertPending(invitation: OrganizationInvitationEntity): void {
     if (invitation.status === INVITATION_STATUS_ENUM.ACCEPTED) {
       throw new ConflictException('Esta invitación ya fue utilizada');
     }

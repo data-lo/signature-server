@@ -1,16 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AccountController } from './account.controller';
-import { AccountService } from './account.service';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { CreateAccountUseCase } from './applications/create-account.use-case';
+import { ListAccountsUseCase } from './applications/list-accounts.use-case';
+import { GetAccountUseCase } from './applications/get-account.use-case';
+import { UpdateAccountUseCase } from './applications/update-account.use-case';
 
 describe('AccountController', () => {
   let controller: AccountController;
-  let accountService: {
-    create: jest.Mock;
-    findAll: jest.Mock;
-    findOne: jest.Mock;
-    update: jest.Mock;
-  };
+  let createAccount: { execute: jest.Mock };
+  let listAccounts: { execute: jest.Mock };
+  let getAccount: { execute: jest.Mock };
+  let updateAccount: { execute: jest.Mock };
 
   const user: JwtPayload = {
     sub: 'user-1',
@@ -21,16 +22,19 @@ describe('AccountController', () => {
   };
 
   beforeEach(async () => {
-    accountService = {
-      create: jest.fn(),
-      findAll: jest.fn(),
-      findOne: jest.fn(),
-      update: jest.fn(),
-    };
+    createAccount = { execute: jest.fn() };
+    listAccounts = { execute: jest.fn() };
+    getAccount = { execute: jest.fn() };
+    updateAccount = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AccountController],
-      providers: [{ provide: AccountService, useValue: accountService }],
+      providers: [
+        { provide: CreateAccountUseCase, useValue: createAccount },
+        { provide: ListAccountsUseCase, useValue: listAccounts },
+        { provide: GetAccountUseCase, useValue: getAccount },
+        { provide: UpdateAccountUseCase, useValue: updateAccount },
+      ],
     }).compile();
 
     controller = module.get<AccountController>(AccountController);
@@ -40,17 +44,30 @@ describe('AccountController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('findOne delega en accountService.findOne con el userId del JWT', () => {
-    controller.findOne(user, 'account-1');
+  it('create delega en CreateAccountUseCase con el userId del JWT', () => {
+    const dto = { name: 'Acme' };
+    controller.create(user, dto as never);
 
-    expect(accountService.findOne).toHaveBeenCalledWith('user-1', 'account-1');
+    expect(createAccount.execute).toHaveBeenCalledWith('user-1', dto);
   });
 
-  it('update delega en accountService.update con el userId del JWT', () => {
+  it('findAll delega en ListAccountsUseCase', () => {
+    controller.findAll();
+
+    expect(listAccounts.execute).toHaveBeenCalledWith();
+  });
+
+  it('findOne delega en GetAccountUseCase con el userId del JWT', () => {
+    controller.findOne(user, 'account-1');
+
+    expect(getAccount.execute).toHaveBeenCalledWith('user-1', 'account-1');
+  });
+
+  it('update delega en UpdateAccountUseCase con el userId del JWT', () => {
     const dto = { name: 'Acme Renombrada' };
     controller.update(user, 'account-1', dto);
 
-    expect(accountService.update).toHaveBeenCalledWith(
+    expect(updateAccount.execute).toHaveBeenCalledWith(
       'user-1',
       'account-1',
       dto,

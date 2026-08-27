@@ -68,5 +68,8 @@ export class SimpleSignatureEntity {
   verificationCodeEntity: VerificationCodeEntity | null;
 
   @Column({ name: 'signature_coordinates', type: 'jsonb' })
-  signatureCoordinates: (SignaturePositionRecord | LegacySignatureCoordinates)[];
+  signatureCoordinates: (
+    | SignaturePositionRecord
+    | LegacySignatureCoordinates
+  )[];
 }

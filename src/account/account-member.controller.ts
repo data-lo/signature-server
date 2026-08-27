@@ -17,8 +17,12 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
-// Service
-import { AccountMemberService } from './account-member.service';
+// Use cases
+import { GrantAccountAccessUseCase } from './applications/grant-account-access.use-case';
+import { GetOrganizationMembersUseCase } from './applications/get-organization-members.use-case';
+import { GetAccountMemberUseCase } from './applications/get-account-member.use-case';
+import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
+import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
 
 // DTOs
 import { CreateAccountMemberDto } from './dto/create-account-member.dto';
@@ -35,7 +39,13 @@ import { ApiRevokeAccountAccess } from './docs/api-revoke-account-access.docs';
 @ApiBearerAuth('access-token')
 @Controller('account-member')
 export class AccountMemberController {
-  constructor(private readonly accountMemberService: AccountMemberService) {}
+  constructor(
+    private readonly grantAccountAccess: GrantAccountAccessUseCase,
+    private readonly getOrganizationMembers: GetOrganizationMembersUseCase,
+    private readonly getAccountMember: GetAccountMemberUseCase,
+    private readonly updateAccountMember: UpdateAccountMemberUseCase,
+    private readonly revokeAccountAccess: RevokeAccountAccessUseCase,
+  ) {}
 
   @Post()
   @ApiGrantAccountAccess()
@@ -43,7 +53,7 @@ export class AccountMemberController {
     @CurrentUser() user: JwtPayload,
     @Body() createAccountMemberDto: CreateAccountMemberDto,
   ) {
-    return this.accountMemberService.create(user.sub, createAccountMemberDto);
+    return this.grantAccountAccess.execute(user.sub, createAccountMemberDto);
   }
 
   @Get()
@@ -52,16 +62,13 @@ export class AccountMemberController {
     @CurrentUser() user: JwtPayload,
     @Query('organizationId') organizationId: string,
   ) {
-    return this.accountMemberService.findByOrganization(
-      user.sub,
-      organizationId,
-    );
+    return this.getOrganizationMembers.execute(user.sub, organizationId);
   }
 
   @Get(':id')
   @ApiGetAccountMember()
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.accountMemberService.findOne(user.sub, id);
+    return this.getAccountMember.execute(user.sub, id);
   }
 
   @Patch(':id')
@@ -71,7 +78,7 @@ export class AccountMemberController {
     @Param('id') id: string,
     @Body() updateAccountMemberDto: UpdateAccountMemberDto,
   ) {
-    return this.accountMemberService.update(
+    return this.updateAccountMember.execute(
       user.sub,
       id,
       updateAccountMemberDto,
@@ -81,6 +88,6 @@ export class AccountMemberController {
   @Delete(':id')
   @ApiRevokeAccountAccess()
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.accountMemberService.remove(user.sub, id);
+    return this.revokeAccountAccess.execute(user.sub, id);
   }
 }

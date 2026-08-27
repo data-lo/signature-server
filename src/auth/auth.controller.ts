@@ -12,7 +12,6 @@ import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import { SkipJwtAuth } from './decorators/skip-jwt-auth.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
-import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -22,6 +21,18 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UpdatePreRegistrationDto } from './dto/update-pre-registration.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
+
+// Use cases
+import { RegisterUseCase } from './applications/register.use-case';
+import { LoginUseCase } from './applications/login.use-case';
+import { VerifyRegistrationOtpUseCase } from './applications/verify-registration-otp.use-case';
+import { UpdatePreRegistrationUseCase } from './applications/update-pre-registration.use-case';
+import { ResendRegistrationOtpUseCase } from './applications/resend-registration-otp.use-case';
+import { RequestPasswordResetUseCase } from './applications/request-password-reset.use-case';
+import { VerifyPasswordResetCodeUseCase } from './applications/verify-password-reset-code.use-case';
+import { ResetPasswordUseCase } from './applications/reset-password.use-case';
+import { LogoutUseCase } from './applications/logout.use-case';
+import { GetAuthenticatedUserUseCase } from './applications/get-authenticated-user.use-case';
 
 // Docs
 import { ApiRegister } from './docs/api-register.docs';
@@ -38,7 +49,18 @@ import { ApiGetAuthenticatedUser } from './docs/api-get-authenticated-user.docs'
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly registerUser: RegisterUseCase,
+    private readonly loginUser: LoginUseCase,
+    private readonly verifyRegistrationOtp: VerifyRegistrationOtpUseCase,
+    private readonly updatePreRegistrationData: UpdatePreRegistrationUseCase,
+    private readonly resendRegistrationOtp: ResendRegistrationOtpUseCase,
+    private readonly requestPasswordReset: RequestPasswordResetUseCase,
+    private readonly verifyPasswordResetCode: VerifyPasswordResetCodeUseCase,
+    private readonly resetPasswordUseCase: ResetPasswordUseCase,
+    private readonly logoutUser: LogoutUseCase,
+    private readonly getAuthenticatedUser: GetAuthenticatedUserUseCase,
+  ) {}
 
   // Bug corregido: ThrottlerModule ya estaba configurado en app.module.ts (10 req/60s) pero
   // ThrottlerGuard nunca se aplicaba en ningún lado — la configuración daba una falsa
@@ -51,7 +73,7 @@ export class AuthController {
   @Post('register')
   @ApiRegister()
   register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+    return this.registerUser.execute(dto);
   }
 
   @SkipJwtAuth()
@@ -61,7 +83,7 @@ export class AuthController {
   @Post('login')
   @ApiLogin()
   login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+    return this.loginUser.execute(dto);
   }
 
   @SkipJwtAuth()
@@ -71,7 +93,7 @@ export class AuthController {
   @Post('verify-otp')
   @ApiVerifyOtp()
   verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyOtp(dto);
+    return this.verifyRegistrationOtp.execute(dto);
   }
 
   // Mismo límite que login: la contraseña del pre-registro es lo único que autoriza el cambio,
@@ -83,7 +105,7 @@ export class AuthController {
   @Patch('pre-registration')
   @ApiUpdatePreRegistration()
   updatePreRegistration(@Body() dto: UpdatePreRegistrationDto) {
-    return this.authService.updatePreRegistration(dto);
+    return this.updatePreRegistrationData.execute(dto);
   }
 
   @SkipJwtAuth()
@@ -93,7 +115,7 @@ export class AuthController {
   @Post('resend-otp')
   @ApiResendOtp()
   resendOtp(@Body() dto: ResendOtpDto) {
-    return this.authService.resendOtp(dto);
+    return this.resendRegistrationOtp.execute(dto);
   }
 
   @SkipJwtAuth()
@@ -103,7 +125,7 @@ export class AuthController {
   @Post('forgot-password')
   @ApiForgotPassword()
   forgotPassword(@Body() dto: ForgotPasswordDto) {
-    return this.authService.forgotPassword(dto);
+    return this.requestPasswordReset.execute(dto);
   }
 
   @SkipJwtAuth()
@@ -113,7 +135,7 @@ export class AuthController {
   @Post('verify-reset-code')
   @ApiVerifyResetCode()
   verifyResetCode(@Body() dto: VerifyResetCodeDto) {
-    return this.authService.verifyResetCode(dto);
+    return this.verifyPasswordResetCode.execute(dto);
   }
 
   @SkipJwtAuth()
@@ -123,19 +145,19 @@ export class AuthController {
   @Post('reset-password')
   @ApiResetPassword()
   resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+    return this.resetPasswordUseCase.execute(dto);
   }
 
   @HttpCode(HttpStatus.OK)
   @Post('logout')
   @ApiLogout()
   logout(@CurrentUser() user: JwtPayload) {
-    return this.authService.logout(user);
+    return this.logoutUser.execute(user);
   }
 
   @Get('me')
   @ApiGetAuthenticatedUser()
   me(@CurrentUser() user: JwtPayload) {
-    return this.authService.me(user);
+    return this.getAuthenticatedUser.execute(user);
   }
 }

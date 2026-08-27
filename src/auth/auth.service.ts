@@ -1,167 +1,46 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
-import { UserService } from '../user/user.service';
-import { AccountService } from '../account/account.service';
-import { OrganizationInvitationService } from '../account/organization-invitation.service';
-import { PasswordResetCodeService } from './password-reset-code.service';
-import { EmailVerificationCodeService } from '../user/email-verification-code.service';
-import { EmailService } from '../shared/email/email.service';
-import { PasswordService } from '../shared/password/password.service';
+
 import { RedisService } from '../shared/redis/redis.service';
-import { TurnstileService } from '../shared/turnstile/turnstile.service';
-import { tokenValidAfterKey } from './utils/token-valid-after.util';
-import { maskEmail } from '../shared/utils/mask-email.util';
-import { RegisterDto } from './dto/register.dto';
-import { LoginDto } from './dto/login.dto';
-import { ForgotPasswordDto } from './dto/forgot-password.dto';
-import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
-import { ResetPasswordDto } from './dto/reset-password.dto';
-import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { ResendOtpDto } from './dto/resend-otp.dto';
-import { UpdatePreRegistrationDto } from './dto/update-pre-registration.dto';
-import { SignupPendingVerificationData } from '../user/interfaces/response/signup-pending-verification-response';
-import { JwtPayload } from './interfaces/jwt-payload.interface';
-import { BaseResponse } from '../interfaces/api-response.dto';
 import { UserEntity } from '../user/entities/user.entity';
+import { JwtPayload } from './interfaces/jwt-payload.interface';
+import { PasswordResetTokenPayload } from './interfaces/password-reset-token-payload.interface';
+import { tokenValidAfterKey } from './utils/token-valid-after.util';
 
-const PASSWORD_RESET_GENERIC_MESSAGE =
-  'Si el correo está registrado, recibirás un código de verificación';
-
-/** TTL de la marca de invalidación de sesiones — solo necesita sobrevivir cualquier JWT vivo, no depende de parsear JWT_EXPIRES_IN. */
+/**
+ * TTL de la marca de invalidación de sesiones — solo necesita sobrevivir cualquier JWT vivo, no
+ * depende de parsear JWT_EXPIRES_IN.
+ */
 const TOKEN_VALID_AFTER_TTL_SECONDS = 60 * 60 * 24 * 30;
 
-interface PasswordResetTokenPayload {
-  sub: string;
-  purpose: 'password_reset';
-  iat?: number;
-  exp?: number;
-}
+/** Cuánto dura un `resetToken` desde que se canjea el OTP hasta que hay que volver a pedirlo. */
+const PASSWORD_RESET_TOKEN_EXPIRES_IN = '10m';
 
+/**
+ * Capacidades de sesión reutilizables: emitir y verificar los tokens que maneja la autenticación
+ * y llevar el registro en Redis de qué tokens dejaron de servir.
+ *
+ * Acá no vive ningún flujo de endpoint —eso está en `applications/`—: son las piezas que varios
+ * casos de uso comparten. `signJwtForUser`, por ejemplo, lo usan tanto el login como la
+ * verificación del OTP de registro, porque en ambos el resultado es el mismo: una sesión nueva.
+ */
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
-
   constructor(
-    private readonly userService: UserService,
-    private readonly accountService: AccountService,
-    private readonly organizationInvitationService: OrganizationInvitationService,
-    private readonly passwordResetCodeService: PasswordResetCodeService,
-    private readonly emailVerificationCodeService: EmailVerificationCodeService,
-    private readonly emailService: EmailService,
     private readonly jwtService: JwtService,
-    private readonly passwordService: PasswordService,
     private readonly redisService: RedisService,
-    private readonly turnstileService: TurnstileService,
   ) {}
 
   /**
-   * Registro público. Empieza verificando el CAPTCHA de Cloudflare Turnstile (ver
-   * `TurnstileService`): si el token no es válido, el método lanza y no se crea ni se actualiza
-   * ningún pre-registro, ni se envía OTP.
+   * JWT de sesión. `sub`/`roles`/`nationalId` salen de `UserEntity` y no de `AccountEntity`:
+   * la cuenta es sólo una copia sincronizada de la credencial (decisión D6 del plan ER-V2), y
+   * quien firma documentos es la persona.
    *
-   * Camino B de la historia [STORY] Eventos Kafka, Email (SendGrid) y Miembros (/join): cuando
-   * el registro viene de /signup?...&token=... (RFC nuevo en /join), `dto.invitationToken`
-   * viene presente y el usuario recién creado se une automáticamente a esa organización — sin
-   * esto, "completar el registro y unirse a la organización" (Escenario 4 de la historia)
-   * quedaría a medias: el usuario tendría cuenta, pero nunca la membresía.
-   *
-   * Best-effort a propósito, igual que el refresco del catálogo de Redis en
-   * UserService.createFromSignup: un fallo aquí (token ya usado, expirado, o inválido) no debe
-   * tumbar un registro que por lo demás fue exitoso — el usuario simplemente no queda unido a
-   * la organización y puede reintentar el enlace de /join manualmente.
+   * El `jti` es lo que hace posible cerrar una sesión concreta: sin identificador por token,
+   * `logout` no tendría qué poner en la lista negra.
    */
-  async register(dto: RegisterDto) {
-    // Primera línea del método y no un guard ni un paso posterior: el CAPTCHA existe para que un
-    // bot no llegue siquiera a crear el pre-registro (ni a disparar el correo del OTP), así que
-    // esta verificación tiene que ocurrir antes de cualquier escritura o envío. `verifyToken`
-    // lanza si el token falta, es inválido, expiró o ya fue canjeado — no devuelve un booleano
-    // que alguien pueda ignorar por descuido.
-    await this.turnstileService.verifyToken(dto.turnstileToken);
-
-    const hashedPassword = await this.passwordService.hash(dto.password);
-    const result = await this.userService.createFromSignup(dto, hashedPassword);
-
-    if (dto.invitationToken) {
-      try {
-        await this.organizationInvitationService.acceptForUser(
-          dto.invitationToken,
-          result.data.userId,
-        );
-      } catch (error) {
-        this.logger.warn(
-          `No se pudo unir al usuario recién registrado ${result.data.userId} a la organización de la invitación: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Resuelve la credencial contra `Account.email`/`Account.password` (ver plan de migración
-   * ER-V2, Fase 5) en vez de `User.email`/`.password` directamente. `Account.email`/`.password`
-   * son una copia sincronizada de la credencial única del usuario (decisión D6) — un usuario
-   * con varias cuentas (personal + organizaciones) tiene el mismo email/password en cada fila,
-   * así que cualquiera de ellas resuelve el mismo `userId`. `sub`/`roles`/`nationalId` del JWT
-   * siguen viniendo de `UserEntity`, que sigue siendo la identidad de la persona.
-   */
-  async login(
-    dto: LoginDto,
-  ): Promise<BaseResponse<{ user: UserEntity; token: string }>> {
-    const account = await this.accountService.findActiveAccountByEmail(
-      dto.email.toLowerCase(),
-    );
-    if (!account) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    const matches = await this.passwordService.compare(
-      dto.password,
-      account.password,
-    );
-    if (!matches) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    const user = await this.userService
-      .findOne(account.userId)
-      .catch(() => null);
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    // Una pre-cuenta (isEmailVerified=false) tiene contraseña real desde que se registró, pero
-    // no debe poder iniciar sesión saltándose la verificación de correo (ver historia "Auth:
-    // Flujo de Pre-registro, Verificación OTP y Control por CURP") — 403 en vez de 401 para que
-    // el frontend pueda distinguir "credenciales inválidas" de "falta verificar tu correo" y
-    // mandar al usuario a la pantalla de OTP en vez de un error genérico.
-    if (!user.isEmailVerified) {
-      throw new ForbiddenException(
-        'Debes verificar tu correo antes de iniciar sesión',
-      );
-    }
-
-    const token = this.signJwtForUser(user);
-
-    return {
-      success: true,
-      message: 'Inicio de sesión exitoso',
-      data: { user: this.userService.sanitize(user), token },
-    };
-  }
-
-  private signJwtForUser(user: UserEntity): string {
+  signJwtForUser(user: UserEntity): string {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
@@ -169,256 +48,35 @@ export class AuthService {
       nationalId: user.nationalId,
       jti: randomUUID(),
     };
+
     return this.jwtService.sign(payload);
   }
 
   /**
-   * Valida el OTP de verificación de correo (ver EmailVerificationCodeService) y, si es
-   * correcto, activa la cuenta (isEmailVerified=true) y autentica al usuario de inmediato —
-   * ya completó todo el formulario de registro, no tiene sentido pedirle que inicie sesión
-   * de nuevo manualmente.
+   * Token de un solo paso para el cambio de contraseña. Lleva `purpose` porque va firmado con
+   * el mismo secreto que los JWT de sesión: sin esa marca, un token de sesión cualquiera
+   * serviría para cambiar la contraseña de su dueño sin conocerla.
    */
-  async verifyOtp(
-    dto: VerifyOtpDto,
-  ): Promise<BaseResponse<{ user: UserEntity; token: string }>> {
-    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
-    if (!user) {
-      throw new NotFoundException(
-        'No hay una solicitud de registro pendiente para este correo',
-      );
-    }
-    if (user.isEmailVerified) {
-      throw new ConflictException(
-        'Este correo ya fue verificado. Inicia sesión.',
-      );
-    }
-
-    await this.emailVerificationCodeService.verifyAndConsume(user.id, dto.code);
-
-    const verifiedUser = await this.userService.markEmailVerified(user.id);
-    const token = this.signJwtForUser(verifiedUser);
-
-    return {
-      success: true,
-      message: 'Correo verificado correctamente',
-      data: { user: this.userService.sanitize(verifiedUser), token },
-    };
+  signPasswordResetToken(userId: string): string {
+    return this.jwtService.sign(
+      { sub: userId, purpose: 'password_reset' } as PasswordResetTokenPayload,
+      { expiresIn: PASSWORD_RESET_TOKEN_EXPIRES_IN },
+    );
   }
 
   /**
-   * Corrige los datos de un registro que aún no verifica su correo (ver historia "Permitir
-   * corregir datos antes de verificar el correo").
-   *
-   * La autorización es la contraseña del propio pre-registro, no el OTP: cuando el error está
-   * justamente en el correo, el código nunca llega y no habría forma de demostrar nada. Se
-   * responde con los mismos mensajes que `login()` ante credenciales incorrectas, para no
-   * convertir este endpoint en un oráculo que confirme qué correos tienen un registro pendiente.
+   * Verifica firma, vigencia y propósito de un `resetToken`. Un token malformado, expirado o
+   * emitido para otra cosa dan el mismo 401: distinguirlos sólo le serviría a quien está
+   * probando tokens.
    */
-  async updatePreRegistration(
-    dto: UpdatePreRegistrationDto,
-  ): Promise<BaseResponse<SignupPendingVerificationData>> {
-    const user = await this.userService.findOneByEmail(
-      dto.currentEmail.toLowerCase(),
-    );
-    if (!user) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    const matches = await this.passwordService.compare(
-      dto.password,
-      user.password,
-    );
-    if (!matches) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
-
-    // Una cuenta ya verificada se corrige desde la sesión iniciada, no por esta vía pública.
-    if (user.isEmailVerified) {
-      throw new ConflictException(
-        'Este correo ya fue verificado. Inicia sesión para editar tus datos.',
-      );
-    }
-
-    return this.userService.updatePreRegistration(user, {
-      email: dto.email,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-      nationalId: dto.nationalId,
-      rfc: dto.rfc,
-    });
-  }
-
-  /** Reenvía un OTP nuevo para un pre-registro pendiente (ver botón "Reenviar código" en /signup/verify). */
-  async resendOtp(
-    dto: ResendOtpDto,
-  ): Promise<BaseResponse<{ email: string; maskedEmail: string }>> {
-    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
-    if (!user) {
-      throw new NotFoundException(
-        'No hay una solicitud de registro pendiente para este correo',
-      );
-    }
-    if (user.isEmailVerified) {
-      throw new ConflictException(
-        'Este correo ya fue verificado. Inicia sesión.',
-      );
-    }
-
-    const verificationCode = await this.emailVerificationCodeService.issue(
-      user.id,
-    );
-    try {
-      await this.emailService.sendRegistrationOtpNotification(
-        user.email,
-        verificationCode.code,
-      );
-    } catch (error) {
-      // Best-effort, igual que en UserService.createFromSignup: un fallo de SendGrid no debe
-      // tumbar el endpoint — el código ya quedó persistido y el usuario puede reintentar el
-      // reenvío si de verdad nunca le llegó.
-      this.logger.warn(
-        `No se pudo enviar el correo de reenvío de verificación a ${user.email}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-
-    return {
-      success: true,
-      message: 'Reenviamos un nuevo código de verificación a tu correo',
-      data: { email: user.email, maskedEmail: maskEmail(user.email) },
-    };
-  }
-
-  async logout(payload: JwtPayload): Promise<BaseResponse<null>> {
-    const ttl = payload.exp ? payload.exp - Math.floor(Date.now() / 1000) : 0;
-    if (ttl > 0) {
-      await this.redisService.set(`blacklist:${payload.jti}`, '1', ttl);
-    }
-    return {
-      success: true,
-      message: 'Sesión cerrada correctamente',
-      data: null,
-    };
-  }
-
-  async me(payload: JwtPayload) {
-    return this.userService.findOneActiveUser(payload.sub, true);
-  }
-
-  /**
-   * "Verificado" se traduce como isActive:true (el único flag de legitimidad que existe hoy en
-   * UserEntity) — ver historia "Recuperación de Contraseña mediante Código de Verificación
-   * OTP". Siempre regresa el mismo mensaje genérico, exista o no el correo (o esté inactivo),
-   * para no permitir enumerar usuarios registrados.
-   */
-  async forgotPassword(dto: ForgotPasswordDto): Promise<BaseResponse<null>> {
-    const email = dto.email.toLowerCase();
-    const user = await this.userService.findOneByEmail(email);
-
-    // Cada motivo de "no se mandó el correo" se registra por separado. La respuesta al cliente
-    // NO cambia (sigue siendo el mismo mensaje genérico anti-enumeración): estos logs son solo
-    // del servidor. Antes, "el usuario no existe", "está inactivo" y "falló el envío" eran
-    // indistinguibles —los dos primeros ni siquiera dejaban rastro—, y por eso este flujo pudo
-    // estar caído en producción sin que nadie lo notara.
-    if (!user) {
-      this.logger.warn(
-        `Recuperación de contraseña solicitada para un correo sin usuario registrado (${email}). No se envía correo.`,
-      );
-      return this.genericPasswordResetResponse();
-    }
-
-    if (!user.isActive) {
-      this.logger.warn(
-        `Recuperación de contraseña solicitada para el usuario inactivo ${user.id}. No se envía correo.`,
-      );
-      return this.genericPasswordResetResponse();
-    }
-
-    // La emisión del código (base de datos) se separa del envío (SendGrid): antes ambos
-    // compartían el mismo catch y un fallo al escribir en `password_reset_codes` se reportaba
-    // como "no se pudo enviar el correo", apuntando al proveedor equivocado.
-    let resetCode: { code: string };
-    try {
-      resetCode = await this.passwordResetCodeService.issue(user.id);
-    } catch (error) {
-      this.logger.error(
-        `No se pudo EMITIR el código de recuperación para el usuario ${user.id} (fallo al escribir en base de datos, no del proveedor de correo): ${
-          error instanceof Error ? error.stack : String(error)
-        }`,
-      );
-      return this.genericPasswordResetResponse();
-    }
-
-    try {
-      await this.emailService.sendPasswordResetOtpNotification(
-        user.email,
-        resetCode.code,
-      );
-    } catch (error) {
-      // Best-effort, igual que el resto del código (ver UserService.createFromSignup): un
-      // fallo de SendGrid no debe delatar nada distinto al mensaje genérico ni tumbar la
-      // respuesta — el usuario puede volver a pedir el código.
-      this.logger.error(
-        `No se pudo ENVIAR el correo de recuperación de contraseña a ${user.email} (el código sí quedó emitido): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-
-    return this.genericPasswordResetResponse();
-  }
-
-  /** Respuesta única del flujo de recuperación: idéntica en todos los casos (anti-enumeración). */
-  private genericPasswordResetResponse(): BaseResponse<null> {
-    return {
-      success: true,
-      message: PASSWORD_RESET_GENERIC_MESSAGE,
-      data: null,
-    };
-  }
-
-  /**
-   * No distingue "no existe el usuario" de "código inválido/expirado" — mismo error en ambos
-   * casos, para no filtrar existencia de cuentas en este paso tampoco.
-   */
-  async verifyResetCode(
-    dto: VerifyResetCodeDto,
-  ): Promise<BaseResponse<{ resetToken: string }>> {
-    const user = await this.userService.findOneByEmail(dto.email.toLowerCase());
-    if (!user) {
-      throw new BadRequestException(
-        'Código de verificación inválido o expirado',
-      );
-    }
-
-    await this.passwordResetCodeService.verifyAndConsume(user.id, dto.code);
-
-    const resetToken = this.jwtService.sign(
-      { sub: user.id, purpose: 'password_reset' } as PasswordResetTokenPayload,
-      { expiresIn: '10m' },
-    );
-
-    return {
-      success: true,
-      message: 'Código verificado correctamente',
-      data: { resetToken },
-    };
-  }
-
-  /**
-   * `resetToken` se verifica manualmente (este endpoint es @SkipJwtAuth, no pasa por
-   * JwtAuthGuard) en vez de pedir de nuevo email+código. El chequeo de tokenValidAfter aquí
-   * hace que el propio resetToken sea de un solo uso: tras un reset exitoso se fija la marca a
-   * "ahora", así que reintentar con el mismo resetToken (su `iat` quedó antes de esa marca)
-   * queda rechazado igual que cualquier sesión de login anterior.
-   */
-  async resetPassword(dto: ResetPasswordDto): Promise<BaseResponse<null>> {
+  async verifyPasswordResetToken(
+    token: string,
+  ): Promise<PasswordResetTokenPayload> {
     let payload: PasswordResetTokenPayload;
+
     try {
-      payload = await this.jwtService.verifyAsync<PasswordResetTokenPayload>(
-        dto.resetToken,
-      );
+      payload =
+        await this.jwtService.verifyAsync<PasswordResetTokenPayload>(token);
     } catch {
       throw new UnauthorizedException('Token inválido o expirado');
     }
@@ -427,30 +85,42 @@ export class AuthService {
       throw new UnauthorizedException('Token inválido o expirado');
     }
 
-    const validAfterRaw = await this.redisService.get(
-      tokenValidAfterKey(payload.sub),
-    );
-    if (validAfterRaw && payload.iat && payload.iat < Number(validAfterRaw)) {
-      throw new UnauthorizedException('Este enlace ya fue utilizado');
+    return payload;
+  }
+
+  /**
+   * Cierra una sesión concreta anotando su `jti` hasta que el propio token expire. El TTL sale
+   * del `exp` del token: guardarlo más tiempo sería ocupar Redis con entradas que ya no puede
+   * consultar nadie, porque el JWT vencido lo rechaza antes la verificación de firma.
+   */
+  async blacklistJwt(payload: JwtPayload): Promise<void> {
+    const ttl = payload.exp ? payload.exp - Math.floor(Date.now() / 1000) : 0;
+
+    if (ttl > 0) {
+      await this.redisService.set(`blacklist:${payload.jti}`, '1', ttl);
     }
+  }
 
-    const hashedPassword = await this.passwordService.hash(dto.newPassword);
-    await this.userService.updatePassword(payload.sub, hashedPassword);
-    await this.accountService.updatePasswordForUser(
-      payload.sub,
-      hashedPassword,
-    );
+  /**
+   * Momento (epoch en segundos) a partir del cual son válidos los tokens de un usuario, o
+   * `null` si nunca se invalidaron en bloque sus sesiones.
+   */
+  async getSessionsValidAfter(userId: string): Promise<number | null> {
+    const raw = await this.redisService.get(tokenValidAfterKey(userId));
 
+    return raw ? Number(raw) : null;
+  }
+
+  /**
+   * Invalida de golpe todos los tokens ya emitidos para un usuario. No hay un registro de jtis
+   * por usuario que permita listarlos y anotarlos uno a uno, así que se fija la marca a "ahora"
+   * y `JwtAuthGuard` rechaza todo lo que tenga un `iat` anterior.
+   */
+  async invalidateSessionsFor(userId: string): Promise<void> {
     await this.redisService.set(
-      tokenValidAfterKey(payload.sub),
+      tokenValidAfterKey(userId),
       String(Math.floor(Date.now() / 1000)),
       TOKEN_VALID_AFTER_TTL_SECONDS,
     );
-
-    return {
-      success: true,
-      message: 'Contraseña actualizada correctamente',
-      data: null,
-    };
   }
 }

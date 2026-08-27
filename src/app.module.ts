@@ -38,8 +38,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
       name: 'default',
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => (
-        {
+      useFactory: (config: ConfigService) => ({
         url: config.get('POSTGRES_DB_URL'),
         type: 'postgres',
         autoLoadEntities: true,
@@ -58,7 +57,6 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     ThrottlerModule.forRoot({
       throttlers: [
         {
-
           ttl: 60000, // Unidad: ms
           limit: 10,
         },

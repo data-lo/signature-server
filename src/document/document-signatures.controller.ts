@@ -8,7 +8,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-import { DocumentSignaturesService } from './document-signatures.service';
+import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
 import { CreateDocumentSignaturesDto } from './dto/create-document-signatures.dto';
 
 import { IpInterceptor } from 'src/ip/ip.interceptor';
@@ -26,7 +26,7 @@ import { ApiCreateDocumentSignatureFlow } from './docs/api-create-document-signa
 @Controller('api/v1/documents')
 export class DocumentSignaturesController {
   constructor(
-    private readonly documentSignaturesService: DocumentSignaturesService,
+    private readonly createDocumentSignatureFlow: CreateDocumentSignatureFlowUseCase,
   ) {}
 
   @Post('signatures')
@@ -52,7 +52,7 @@ export class DocumentSignaturesController {
     @UploadedFile() file: Express.Multer.File,
     @ClientIp() ip: string,
   ) {
-    return this.documentSignaturesService.create(
+    return this.createDocumentSignatureFlow.execute(
       user.sub,
       accountId,
       dto,

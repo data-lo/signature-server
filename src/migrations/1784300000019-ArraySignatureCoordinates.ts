@@ -14,9 +14,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * intentar una conversión con pérdida de píxeles a ratios (no hay forma de saber, solo con lo
  * persistido, el tamaño de la página contra la que se calcularían esos ratios).
  */
-export class ArraySignatureCoordinates1784300000019
-  implements MigrationInterface
-{
+export class ArraySignatureCoordinates1784300000019 implements MigrationInterface {
   name = 'ArraySignatureCoordinates1784300000019';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

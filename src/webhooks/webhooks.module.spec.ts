@@ -1,3 +1,4 @@
+import { setTestModuleGraphEnv } from 'src/shared/testing/module-graph-env';
 import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -19,6 +20,10 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * resuelve `ProcessDiditVerificationResultUseCase` de verdad: si `IdentityVerificationModule`
  * dejara de importarse o de exportarlo, el grafo no compilaría acá y no en producción.
  */
+beforeAll(() => {
+  setTestModuleGraphEnv();
+});
+
 describe('WebhooksModule', () => {
   it('resuelve el grafo de dependencias, incluido el procesador de Didit', async () => {
     const repositoryStub = {};

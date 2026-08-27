@@ -10,9 +10,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * agrega aquí un índice explícito adicional para dejar constancia — la tarea técnica de la
  * historia pide asegurar explícitamente que el CURP esté indexado.
  */
-export class AddIsEmailVerifiedToUsers1784300000020
-  implements MigrationInterface
-{
+export class AddIsEmailVerifiedToUsers1784300000020 implements MigrationInterface {
   name = 'AddIsEmailVerifiedToUsers1784300000020';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

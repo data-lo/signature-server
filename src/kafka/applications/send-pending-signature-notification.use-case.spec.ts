@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { NotificationEventsConsumer } from './notification-events.controller';
+import { NotificationEventsConsumer } from '../notification-events.controller';
+import { SendPendingSignatureNotificationUseCase } from './send-pending-signature-notification.use-case';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
@@ -8,7 +9,7 @@ import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 import { EmailService } from 'src/shared/email/email.service';
-import type { NotificationEventPayload } from './notification-events.topics';
+import type { NotificationEventPayload } from '../notification-events.topics';
 
 function createMockRepository() {
   return {
@@ -74,8 +75,9 @@ describe('NotificationEventsConsumer', () => {
     });
 
     const module: TestingModule = await Test.createTestingModule({
+      controllers: [NotificationEventsConsumer],
       providers: [
-        NotificationEventsConsumer,
+        SendPendingSignatureNotificationUseCase,
         {
           provide: getRepositoryToken(CollaboratorEntity),
           useValue: collaboratorRepository,
