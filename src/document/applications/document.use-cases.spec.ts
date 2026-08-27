@@ -3135,6 +3135,7 @@ describe('casos de uso de documentos', () => {
             },
           ],
           downloads: { nom151: false, timestamp: false, canonical: false },
+          sealEvidence: { timestampFileBase64: null, integrityFileBase64: null },
         });
       });
 
@@ -3232,6 +3233,10 @@ describe('casos de uso de documentos', () => {
             timestamp: true,
             canonical: true,
           });
+          expect(result.data.sealEvidence).toEqual({
+            timestampFileBase64: 'dG9rZW4tdHM=',
+            integrityFileBase64: 'dG9rZW4tbm9tMTUx',
+          });
         });
 
         /**
@@ -3251,6 +3256,10 @@ describe('casos de uso de documentos', () => {
             timestamp: false,
             canonical: false,
           });
+          expect(result.data.sealEvidence).toEqual({
+            timestampFileBase64: null,
+            integrityFileBase64: null,
+          });
         });
 
         it('habilita solo las descargas cuyo artefacto realmente vino en la respuesta del PSC', async () => {
@@ -3268,6 +3277,24 @@ describe('casos de uso de documentos', () => {
             timestamp: true,
             canonical: false,
           });
+        });
+
+        it('la evidencia cruda para descarga viene de fileBase64, no de certificatePdfBase64', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+            ...SEAL,
+            integrityEvidence: { ...SEAL.integrityEvidence, certificatePdfBase64: '' },
+          } as unknown as SealEntity);
+
+          const result = await getPublicDocument.execute('doc-1');
+
+          // `downloads.nom151` sigue en false (mide `certificatePdfBase64`, la ruta de descarga del
+          // backend), pero `sealEvidence.integrityFileBase64` sigue viniendo: son artefactos
+          // distintos de la misma evidencia.
+          expect(result.data.downloads.nom151).toBe(false);
+          expect(result.data.sealEvidence.integrityFileBase64).toBe(
+            'dG9rZW4tbm9tMTUx',
+          );
         });
       });
 

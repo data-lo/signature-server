@@ -73,6 +73,7 @@ export class GetPublicDocumentUseCase {
             this.documentService.toPendingPublicSigner(collaborator),
           ),
           downloads: { nom151: false, timestamp: false, canonical: false },
+          sealEvidence: { timestampFileBase64: null, integrityFileBase64: null },
         },
       };
     }
@@ -129,6 +130,13 @@ export class GetPublicDocumentUseCase {
           nom151: Boolean(seal?.integrityEvidence?.certificatePdfBase64),
           timestamp: Boolean(seal?.timestampEvidence?.fileBase64),
           canonical: Boolean(seal?.canonicalPayload),
+        },
+        // Evidencia cruda (DER/ASN.1 en Base64) para que la vista pública la decodifique en el
+        // navegador y la descargue — a diferencia de `downloads`, que solo confirma si el artefacto
+        // existe para los enlaces que sirve el propio backend (ver `seal-artifacts.ts`).
+        sealEvidence: {
+          timestampFileBase64: seal?.timestampEvidence?.fileBase64 ?? null,
+          integrityFileBase64: seal?.integrityEvidence?.fileBase64 ?? null,
         },
       },
     };
