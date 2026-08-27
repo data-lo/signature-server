@@ -188,6 +188,75 @@ describe('UserService', () => {
       rfc: 'GOMA900101XYZ',
     };
 
+    /**
+     * Antes de esta historia el alta guardaba los nombres con `toUpperCase()`, así que se veían
+     * gritados en todos lados —listados, correos, la hoja de firmas del PDF— y la
+     * capitalización original se perdía en la escritura, sin forma de recuperarla.
+     */
+    describe('capitalización del nombre y el apellido', () => {
+      function givenFreeCurp() {
+        userRepository.findOne
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(null);
+        personalInformationRepository.findOne.mockResolvedValue(null);
+      }
+
+      /** El alta escribe el nombre en las dos tablas: tienen que quedar iguales. */
+      function savedNames() {
+        const [personalInformation, user] =
+          queryRunner.manager.create.mock.calls.map(([, data]) => data);
+
+        return {
+          personalInformation: {
+            name: personalInformation.name,
+            lastName: personalInformation.lastName,
+          },
+          user: { firstName: user.firstName, lastName: user.lastName },
+        };
+      }
+
+      it.each([
+        ['juan', 'pérez', 'Juan', 'Pérez'],
+        ['MARÍA DEL CARMEN', 'DE LA CRUZ', 'María Del Carmen', 'De La Cruz'],
+        ['  ana   maria  ', '  lopez   soto ', 'Ana Maria', 'Lopez Soto'],
+      ])(
+        'guarda %s %s como %s %s',
+        async (firstName, lastName, expectedFirst, expectedLast) => {
+          givenFreeCurp();
+
+          await service.createFromSignup(
+            { ...dto, firstName, lastName },
+            'hashed-password',
+          );
+
+          expect(savedNames()).toEqual({
+            personalInformation: {
+              name: expectedFirst,
+              lastName: expectedLast,
+            },
+            user: { firstName: expectedFirst, lastName: expectedLast },
+          });
+        },
+      );
+
+      /** CURP y RFC conservan su forma canónica: se consultan en mayúsculas. */
+      it('no toca la capitalización del CURP ni del RFC', async () => {
+        givenFreeCurp();
+
+        await service.createFromSignup(
+          { ...dto, firstName: 'ana', lastName: 'lopez' },
+          'hashed-password',
+        );
+
+        const [personalInformation, user] =
+          queryRunner.manager.create.mock.calls.map(([, data]) => data);
+
+        expect(personalInformation.curp).toBe('GOMA900101MDFRNN01');
+        expect(personalInformation.rfc).toBe('GOMA900101XYZ');
+        expect(user.nationalId).toBe('GOMA900101MDFRNN01');
+      });
+    });
+
     it('CURP libre: registra la pre-cuenta (isEmailVerified:false), cachea el perfil en Redis, crea la cuenta personal y envía el primer OTP', async () => {
       userRepository.findOne
         .mockResolvedValueOnce(null) // búsqueda por CURP
@@ -378,6 +447,52 @@ describe('UserService', () => {
       expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
     });
 
+    /**
+     * Es la única pantalla donde el usuario corrige su nombre después de registrarse, así que
+     * tiene que normalizar con el mismo criterio que el alta: si no, un mismo usuario terminaría
+     * guardado de dos formas distintas según por dónde pasó.
+     */
+    describe('capitalización del nombre y el apellido', () => {
+      /** El nombre corregido se escribe en las dos tablas: tienen que quedar iguales. */
+      function savedNames() {
+        const [userChanges, personalInformationChanges] =
+          queryRunner.manager.update.mock.calls.map(([, , changes]) => changes);
+
+        return { userChanges, personalInformationChanges };
+      }
+
+      it.each([
+        ['juan', 'pérez', 'Juan', 'Pérez'],
+        ['MARÍA DEL CARMEN', 'DE LA CRUZ', 'María Del Carmen', 'De La Cruz'],
+        ['  ana   maria  ', '  lopez   soto ', 'Ana Maria', 'Lopez Soto'],
+      ])(
+        'guarda %s %s como %s %s',
+        async (firstName, lastName, expectedFirst, expectedLast) => {
+          mockReloadedUser({ email: 'ana@empresa.con' });
+
+          await service.updatePreRegistration(pendingUser, {
+            firstName,
+            lastName,
+          });
+
+          const { userChanges, personalInformationChanges } = savedNames();
+
+          expect(userChanges).toEqual(
+            expect.objectContaining({
+              firstName: expectedFirst,
+              lastName: expectedLast,
+            }),
+          );
+          expect(personalInformationChanges).toEqual(
+            expect.objectContaining({
+              name: expectedFirst,
+              lastName: expectedLast,
+            }),
+          );
+        },
+      );
+    });
+
     it('corregir solo los datos personales no dispara un código nuevo: el correo sigue siendo el mismo', async () => {
       mockReloadedUser({ email: 'ana@empresa.con' });
 
@@ -389,7 +504,7 @@ describe('UserService', () => {
       expect(queryRunner.manager.update).toHaveBeenCalledWith(
         PersonalInformationEntity,
         'pi-1',
-        expect.objectContaining({ name: 'ANA', lastName: 'GÓMEZ' }),
+        expect.objectContaining({ name: 'Ana', lastName: 'Gómez' }),
       );
       expect(accountService.updateEmailForUser).not.toHaveBeenCalled();
       expect(emailVerificationCodeService.issue).not.toHaveBeenCalled();

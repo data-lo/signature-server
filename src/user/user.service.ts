@@ -31,6 +31,10 @@ import { RedisService } from 'src/shared/redis/redis.service';
 import { AccountService } from 'src/account/account.service';
 import { EmailService } from 'src/shared/email/email.service';
 import { maskEmail } from 'src/shared/utils/mask-email.util';
+import {
+  formatOptionalPersonName,
+  formatPersonName,
+} from 'src/shared/utils/format-person-name.util';
 import { EmailVerificationCodeService } from './email-verification-code.service';
 import { SignupPendingVerificationData } from './interfaces/response/signup-pending-verification-response';
 
@@ -79,8 +83,8 @@ export class UserService {
     try {
       const personalInformation = await queryRunner.manager.save(
         queryRunner.manager.create(PersonalInformationEntity, {
-          name: createUserDto.firstName?.toUpperCase(),
-          lastName: createUserDto.lastName?.toUpperCase(),
+          name: formatOptionalPersonName(createUserDto.firstName),
+          lastName: formatOptionalPersonName(createUserDto.lastName),
           curp: createUserDto.nationalId?.toUpperCase(),
           rfc: createUserDto.rfc?.toUpperCase(),
         }),
@@ -88,10 +92,10 @@ export class UserService {
 
       const user = queryRunner.manager.create(UserEntity, {
         ...(createUserDto.firstName && {
-          firstName: createUserDto.firstName.toUpperCase(),
+          firstName: formatPersonName(createUserDto.firstName),
         }),
         ...(createUserDto.lastName && {
-          lastName: createUserDto.lastName.toUpperCase(),
+          lastName: formatPersonName(createUserDto.lastName),
         }),
         ...(createUserDto.email && {
           email: createUserDto.email.toLowerCase(),
@@ -275,10 +279,10 @@ export class UserService {
   ): Promise<BaseResponse<any>> {
     await this.userRepository.update(id, {
       ...(updateUserDto.firstName && {
-        firstName: updateUserDto.firstName.toUpperCase(),
+        firstName: formatPersonName(updateUserDto.firstName),
       }),
       ...(updateUserDto.lastName && {
-        lastName: updateUserDto.lastName.toUpperCase(),
+        lastName: formatPersonName(updateUserDto.lastName),
       }),
       ...(updateUserDto.email && { email: updateUserDto.email.toLowerCase() }),
       ...(updateUserDto.roles && { roles: updateUserDto.roles }),
@@ -445,16 +449,16 @@ export class UserService {
     try {
       const personalInformation = await queryRunner.manager.save(
         queryRunner.manager.create(PersonalInformationEntity, {
-          name: dto.firstName.toUpperCase(),
-          lastName: dto.lastName.toUpperCase(),
+          name: formatPersonName(dto.firstName),
+          lastName: formatPersonName(dto.lastName),
           curp,
           rfc: dto.rfc.toUpperCase(),
         }),
       );
 
       const user = queryRunner.manager.create(UserEntity, {
-        firstName: dto.firstName.toUpperCase(),
-        lastName: dto.lastName.toUpperCase(),
+        firstName: formatPersonName(dto.firstName),
+        lastName: formatPersonName(dto.lastName),
         email: dto.email.toLowerCase(),
         roles: [UserRoles.SIGNER],
         nationalId: curp,
@@ -581,16 +585,16 @@ export class UserService {
     // Cada tabla se toca únicamente si de verdad tiene algo que cambiar.
     const userChanges = {
       ...(changes.firstName && {
-        firstName: changes.firstName.toUpperCase(),
+        firstName: formatPersonName(changes.firstName),
       }),
-      ...(changes.lastName && { lastName: changes.lastName.toUpperCase() }),
+      ...(changes.lastName && { lastName: formatPersonName(changes.lastName) }),
       ...(emailChanged && { email: nextEmail }),
       ...(curpChanged && { nationalId: nextCurp }),
     };
     const personalInformationChanges = {
-      ...(changes.firstName && { name: changes.firstName.toUpperCase() }),
+      ...(changes.firstName && { name: formatPersonName(changes.firstName) }),
       ...(changes.lastName && {
-        lastName: changes.lastName.toUpperCase(),
+        lastName: formatPersonName(changes.lastName),
       }),
       ...(curpChanged && { curp: nextCurp }),
       ...(nextRfc && { rfc: nextRfc }),
