@@ -2991,17 +2991,19 @@ describe('casos de uso de documentos', () => {
       signatureHash: 'hash-sellado',
       canonicalPayload: 'v1||12:hola-mundo',
       sealedAt: new Date('2026-08-14T18:24:11.000Z'),
-      timestampSeal: {
+      timestampEvidence: {
         isValid: true,
         processedHash: 'hash-ts',
-        tokenBase64: 'dG9rZW4tdHM=',
+        fileBase64: 'dG9rZW4tdHM=',
         evidenceId: 'ts-1',
+        issuedAt: new Date('2026-08-14T18:24:11.000Z'),
       },
-      integritySeal: {
+      integrityEvidence: {
         isValid: true,
         processedHash: 'hash-nom151',
-        tokenBase64: 'dG9rZW4tbm9tMTUx',
+        fileBase64: 'dG9rZW4tbm9tMTUx',
         evidenceId: 'nom151-1',
+        issuedAt: new Date('2026-08-14T18:24:11.000Z'),
         certificatePdfBase64: 'JVBERi0xLjQK',
       },
     } as unknown as SealEntity;
@@ -3256,7 +3258,7 @@ describe('casos de uso de documentos', () => {
           sealDocumentUseCase.findByDocumentId.mockResolvedValue({
             ...SEAL,
             canonicalPayload: '',
-            integritySeal: { ...SEAL.integritySeal, certificatePdfBase64: '' },
+            integrityEvidence: { ...SEAL.integrityEvidence, certificatePdfBase64: '' },
           } as unknown as SealEntity);
 
           const result = await getPublicDocument.execute('doc-1');
@@ -3402,8 +3404,8 @@ describe('casos de uso de documentos', () => {
   describe('getPublicSealArtifact', () => {
     const SEAL = {
       canonicalPayload: 'v1||12:hola-mundo',
-      timestampSeal: { tokenBase64: 'dG9rZW4tdHM=' },
-      integritySeal: { certificatePdfBase64: 'JVBERi0xLjQK' },
+      timestampEvidence: { fileBase64: 'dG9rZW4tdHM=' },
+      integrityEvidence: { certificatePdfBase64: 'JVBERi0xLjQK' },
     } as unknown as SealEntity;
 
     beforeEach(() => {
@@ -3471,7 +3473,7 @@ describe('casos de uso de documentos', () => {
     it('404 si ese artefacto en concreto no vino en la respuesta del PSC', async () => {
       sealDocumentUseCase.findByDocumentId.mockResolvedValue({
         ...SEAL,
-        integritySeal: { certificatePdfBase64: '' },
+        integrityEvidence: { certificatePdfBase64: '' },
       } as unknown as SealEntity);
 
       await expect(

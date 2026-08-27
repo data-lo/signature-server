@@ -126,8 +126,8 @@ export class GetPublicDocumentUseCase {
           : null,
         signers,
         downloads: {
-          nom151: Boolean(seal?.integritySeal?.certificatePdfBase64),
-          timestamp: Boolean(seal?.timestampSeal?.tokenBase64),
+          nom151: Boolean(seal?.integrityEvidence?.certificatePdfBase64),
+          timestamp: Boolean(seal?.timestampEvidence?.fileBase64),
           canonical: Boolean(seal?.canonicalPayload),
         },
       },

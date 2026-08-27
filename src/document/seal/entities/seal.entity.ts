@@ -1,6 +1,6 @@
 import { DocumentEntity } from 'src/document/entities/document.entity';
-import type { IntegritySeal } from '../interfaces/integrity-seal.interface';
-import type { TimestampSeal } from '../interfaces/timestamp-seal.interface';
+import type { IntegrityEvidence } from '../interfaces/integrity-evidence.interface';
+import type { TimestampEvidence } from '../interfaces/timestamp-evidence.interface';
 
 import {
   Column,
@@ -30,18 +30,11 @@ export class SealEntity {
   @Column({ name: 'canonical_payload', type: 'text' })
   canonicalPayload: string;
 
-  /**
-   * Bug corregido: estas dos columnas se declaraban como `timestamp_seal`/`integrity_seal`, pero
-   * la migración que crea la tabla (`CreateDocumentSeals1784300000025`) las llama
-   * `timestamp_evidence`/`nom151_evidence` — con los nombres viejos, el primer INSERT de un sello
-   * fallaba contra la base real ("column does not exist"). Se alinean con la migración, que es la
-   * que gobierna el esquema desplegado; los nombres de las propiedades TS no cambian.
-   */
   @Column({ name: 'timestamp_evidence', type: 'jsonb' })
-  timestampSeal: TimestampSeal;
+  timestampEvidence: TimestampEvidence;
 
-  @Column({ name: 'nom151_evidence', type: 'jsonb' })
-  integritySeal: IntegritySeal;
+  @Column({ name: 'integrity_evidence', type: 'jsonb' })
+  integrityEvidence: IntegrityEvidence;
 
   /**
    * Momento en que el PSC emitió la constancia (`sealedAt` de la respuesta de Seal Service).
