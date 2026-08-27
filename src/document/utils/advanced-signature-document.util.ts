@@ -5,7 +5,7 @@ import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
  * ¿Este documento se firmó con firma avanzada (e.firma)? Es lo que decide cuál de las dos hojas de
  * evidencia se anexa al documento final (ver `attachSignaturesSheet`).
  *
- * El tipo de firma es una decisión del documento, no de cada firmante: `DocumentSignaturesService`
+ * El tipo de firma es una decisión del documento, no de cada firmante: `CreateDocumentSignatureFlowUseCase`
  * lo resuelve una sola vez al crearlo y lo copia igual a todos sus SIGNER, así que en la práctica
  * todos los firmantes comparten tipo. Aun así se exige `every` y no `some`: si alguna fila vieja o
  * inconsistente mezclara tipos, la hoja simple —que sí imprime a todos los firmantes— es el

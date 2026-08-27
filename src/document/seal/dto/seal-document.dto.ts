@@ -12,26 +12,25 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-
 export class OcspEvidence {
   @IsString()
   @IsNotEmpty()
-  @ApiProperty({example: 'good'})
+  @ApiProperty({ example: 'good' })
   status: 'good' | 'unknown';
 
   @IsString()
   @IsNotEmpty()
-  @ApiProperty({example: '2026-08-19T23:57:42.371Z'})
+  @ApiProperty({ example: '2026-08-19T23:57:42.371Z' })
   verifiedAt: string;
 
   @IsString()
   @IsNotEmpty()
-  @ApiProperty({example: 'MIIIQQoBAKCCCDowggg2BgkrBgEFBQcwA...'})
+  @ApiProperty({ example: 'MIIIQQoBAKCCCDowggg2BgkrBgEFBQcwA...' })
   ocspResponse: string;
 
   @IsString()
   @IsNotEmpty()
-  @ApiProperty({example: '"https://cfdi.sat.gob.mx/edofiel"'})
+  @ApiProperty({ example: '"https://cfdi.sat.gob.mx/edofiel"' })
   ocspUrl: string;
 }
 
@@ -46,10 +45,10 @@ export class SatCertificateDto {
   @IsNotEmpty()
   name: string;
 
-  @ApiProperty({example: 'SERVICIO DE ADMINISTRACION TIRIBUTARIA'})
+  @ApiProperty({ example: 'SERVICIO DE ADMINISTRACION TIRIBUTARIA' })
   @IsString()
   @IsNotEmpty()
-  issuer:string;
+  issuer: string;
 
   @ApiProperty({ example: '00001000000512345678' })
   @IsString()

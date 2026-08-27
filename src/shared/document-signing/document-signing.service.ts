@@ -8,7 +8,6 @@ import {
   PDFDocument,
   PDFImage,
   PDFName,
-
   PDFNumber,
   PDFString,
   StandardFonts,
@@ -43,7 +42,6 @@ const MAX_SIGNATURE_SIZE = { width: 320, height: 128 };
  * acá, POR FUERA del código y no a costa de su tamaño.
  */
 
-
 /**
  * Lado mínimo, en puntos, para que un QR estampado siga siendo escaneable.
  *
@@ -52,7 +50,6 @@ const MAX_SIGNATURE_SIZE = { width: 320, height: 128 };
  * sus módulos quedan en ~0.12mm. Por debajo de este umbral se registra una advertencia en vez de
  * estampar en silencio un código que nadie va a poder leer.
  */
-
 
 // Rutas donde puede encontrarse el perfil ICC sRGB (probadas en orden)
 const SRGB_ICC_PATHS = [
@@ -168,7 +165,8 @@ export class PdfSignatureService {
 
     // Paso 4: seleccionar la página destino (por defecto la última, ver doc del parámetro)
     const pages = pdfDoc.getPages();
-    const targetPage = pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
+    const targetPage =
+      pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
 
     // Paso 5: resolver el tamaño final de la firma aplicando el resize automático si corresponde
     const drawSize = this.resolveSignatureSize(coordinates);
@@ -275,7 +273,10 @@ export class PdfSignatureService {
   ): Promise<{ coordinates: SignatureCoordinates; pageIndex: number }> {
     const pdfDoc = await PDFDocument.load(documentBuffer);
     const pages = pdfDoc.getPages();
-    const pageIndex = Math.min(Math.max(position.page - 1, 0), pages.length - 1);
+    const pageIndex = Math.min(
+      Math.max(position.page - 1, 0),
+      pages.length - 1,
+    );
     const { width: pageWidth, height: pageHeight } = pages[pageIndex].getSize();
 
     return {

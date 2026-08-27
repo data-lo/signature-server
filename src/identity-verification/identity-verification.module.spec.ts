@@ -1,3 +1,4 @@
+import { setTestModuleGraphEnv } from 'src/shared/testing/module-graph-env';
 import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -15,6 +16,10 @@ import { UpdateSigningCredentialStatusUseCase } from './applications/update-sign
  * `UpdateSigningCredentialStatusUseCase` (que consume `SignatureModule`) tienen que ser
  * resolubles.
  */
+beforeAll(() => {
+  setTestModuleGraphEnv();
+});
+
 describe('IdentityVerificationModule', () => {
   it('resuelve su grafo de dependencias y expone los casos de uso que otros módulos consumen', async () => {
     const repositoryStub = {};

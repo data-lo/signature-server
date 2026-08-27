@@ -5,6 +5,7 @@ import { QueryFailedError } from 'typeorm';
 import axios from 'axios';
 
 import { DocumentService } from '../document.service';
+import { SignDocumentUseCase } from '../applications/sign-document.use-case';
 import { DocumentEntity } from '../entities/document.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { VerificationCodeEntity } from '../entities/verification-code.entity';
@@ -167,7 +168,7 @@ function createMockRepository() {
 }
 
 describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => {
-  let service: DocumentService;
+  let signDocument: SignDocumentUseCase;
   let documentRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let sealRepository: ReturnType<typeof createMockRepository>;
@@ -222,6 +223,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         // Cadena real bajo prueba.
+        SignDocumentUseCase,
         DocumentService,
         SealDocumentUseCase,
         SealApiService,
@@ -371,7 +373,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       ],
     }).compile();
 
-    service = module.get(DocumentService);
+    signDocument = module.get(SignDocumentUseCase);
   });
 
   it('el último firmante FIEL dispara UNA petición a Seal Service con el documentId, el arreglo de firmas y la API key', async () => {
@@ -381,7 +383,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       buildFielSigner({ userId: 'user-1' }),
     ]);
 
-    const result = await service.sign(
+    const result = await signDocument.execute(
       'doc-1',
       'user-1',
       EFIRMA_INPUT,
@@ -434,7 +436,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       buildFielSigner({ userId: 'user-1' }),
     ]);
 
-    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     const rutas = mockedAxios.post.mock.calls.map(([url]) => url);
     expect(rutas).toEqual(['http://seal-service:3000/seal/signature']);
@@ -447,7 +454,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       buildFielSigner({ userId: 'user-1' }),
     ]);
 
-    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     expect(sealRepository.save).toHaveBeenCalledWith({
       documentId: 'doc-1',
@@ -498,7 +510,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       },
     );
 
-    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     expect(orden).toEqual(['sellado', 'hoja']);
 
@@ -521,7 +538,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     ]);
     mockedAxios.post.mockRejectedValue(new Error('proveedor caído'));
 
-    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     const [info] =
       advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
@@ -551,7 +573,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       sealedAt: new Date('2026-08-13T19:00:00.000Z'),
     });
 
-    await service.sign('doc-1', 'user-1', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     const [info] =
       advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
@@ -601,7 +628,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     });
     collaboratorRepository.find.mockResolvedValue([yaFirmo, ultimo]);
 
-    await service.sign('doc-1', 'user-b', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-b',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     expect(mockedAxios.post).toHaveBeenCalledTimes(1);
     const body = sentPayload();
@@ -667,7 +699,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     });
     collaboratorRepository.find.mockResolvedValue([yaFirmo, ultimo]);
 
-    await service.sign('doc-1', 'user-b', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-b',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     // Lo que importa: el documento SÍ se selló. Antes del arreglo esto era 0 llamadas.
     expect(mockedAxios.post).toHaveBeenCalledTimes(1);
@@ -715,7 +752,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     });
     collaboratorRepository.find.mockResolvedValue([sinEvidencia, ultimo]);
 
-    await service.sign('doc-1', 'user-b', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-b',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     expect(mockedAxios.post).toHaveBeenCalledTimes(1);
     const body = sentPayload();
@@ -732,7 +774,12 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       buildFielSigner({ id: 'p-b', userId: 'user-b', signingOrder: 1 }),
     ]);
 
-    await service.sign('doc-1', 'user-a', EFIRMA_INPUT, TEST_GEOLOCATION);
+    await signDocument.execute(
+      'doc-1',
+      'user-a',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
 
     expect(mockedAxios.post).not.toHaveBeenCalled();
     expect(sealRepository.save).not.toHaveBeenCalled();
@@ -752,7 +799,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         buildFielSigner({ userId: 'user-1' }),
       ]);
 
-      const result = await service.sign(
+      const result = await signDocument.execute(
         'doc-1',
         'user-1',
         EFIRMA_INPUT,
@@ -775,7 +822,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         buildFielSigner({ userId: 'user-1' }),
       ]);
 
-      const result = await service.sign(
+      const result = await signDocument.execute(
         'doc-1',
         'user-1',
         EFIRMA_INPUT,
@@ -795,7 +842,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         buildFielSigner({ userId: 'user-1' }),
       ]);
 
-      const result = await service.sign(
+      const result = await signDocument.execute(
         'doc-1',
         'user-1',
         EFIRMA_INPUT,
@@ -818,7 +865,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         buildFielSigner({ userId: 'user-1' }),
       ]);
 
-      const result = await service.sign(
+      const result = await signDocument.execute(
         'doc-1',
         'user-1',
         EFIRMA_INPUT,
@@ -837,7 +884,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         buildFielSigner({ userId: 'user-1' }),
       ]);
 
-      const result = await service.sign(
+      const result = await signDocument.execute(
         'doc-1',
         'user-1',
         EFIRMA_INPUT,

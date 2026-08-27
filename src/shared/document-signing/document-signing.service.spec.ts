@@ -214,7 +214,13 @@ describe('PdfSignatureService', () => {
 
       const { coordinates, pageIndex } = await service.resolveRatioPosition(
         documentBuffer,
-        { page: 1, xRatio: 0.1, yRatio: 0.2, widthRatio: 0.2, heightRatio: 0.1 },
+        {
+          page: 1,
+          xRatio: 0.1,
+          yRatio: 0.2,
+          widthRatio: 0.2,
+          heightRatio: 0.1,
+        },
       );
 
       expect(pageIndex).toBe(0);

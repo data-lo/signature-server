@@ -1,6 +1,5 @@
 // External dependencies
 import {
-  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -10,10 +9,8 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 
 // DTOs
-import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
-import { InviteMemberDto } from './dto/invite-member.dto';
 
 // Entities
 import { AccountEntity } from './entities/account.entity';
@@ -66,155 +63,96 @@ export class AccountService {
   ) {}
 
   /**
-   * Creación genérica de cuenta — sin consumidor real en el frontend hoy (que usa
-   * `POST /api/v1/organizations` para organizaciones y el registro para la cuenta personal).
-   * Se mantiene funcional y correcta contra el modelo fusionado, sin pulir más allá de eso.
+   * Alta directa de una fila de `accounts`, con su organización si hace falta. Quién puede
+   * crearla y con qué rol lo decide el caso de uso; acá sólo se escribe.
+   *
+   * `email`/`password` se copian del usuario porque son la credencial única sincronizada
+   * (decisión D6 del plan ER-V2): el login resuelve contra `accounts`, así que una fila sin
+   * esos campos sería una cuenta con la que su dueño no podría entrar.
    */
-  async create(
-    currentUserId: string,
-    createAccountDto: CreateAccountDto,
-  ): Promise<BaseResponse<AccountData>> {
-    const currentUser = await this.userRepository.findOne({
-      where: { id: currentUserId },
-    });
-    if (!currentUser) {
-      throw new NotFoundException(
-        `Usuario con ID ${currentUserId} no encontrado`,
-      );
-    }
-
-    const adminRole = await this.rolesService.findSystemRoleByName(
-      SYSTEM_ROLE_NAME_ENUM.ADMIN,
-    );
-
-    let organizationId: string | null = null;
-    if (createAccountDto.type === ACCOUNT_TYPE_ENUM.ORGANIZATION) {
-      const organization = await this.organizationRepository.save(
-        this.organizationRepository.create({
-          name: createAccountDto.organizationName ?? createAccountDto.name,
-          address: createAccountDto.address ?? null,
-          rfc: createAccountDto.rfc ?? null,
-          domainAllowed: createAccountDto.domainAllowed ?? null,
-          phoneNumber: createAccountDto.phoneNumber ?? null,
-          indexDocuments: createAccountDto.indexDocuments ?? false,
-        }),
-      );
-      organizationId = organization.id;
-    }
-
-    const account = await this.accountRepository.save(
+  async saveAccount(params: {
+    userId: string;
+    accountType: ACCOUNT_TYPE_ENUM;
+    organizationId: string | null;
+    roleId: string;
+    user: UserEntity;
+  }): Promise<AccountEntity> {
+    return this.accountRepository.save(
       this.accountRepository.create({
-        userId: currentUserId,
-        accountType: createAccountDto.type,
-        organizationId,
-        roleId: adminRole.id,
+        userId: params.userId,
+        accountType: params.accountType,
+        organizationId: params.organizationId,
+        roleId: params.roleId,
         status: ACCOUNT_STATUS_ENUM.ACTIVE,
-        email: currentUser.email,
-        password: currentUser.password,
+        email: params.user.email,
+        password: params.user.password,
         isActive: true,
         joinedAt: new Date(),
       }),
     );
-
-    const fullAccount = await this.findEntityById(account.id);
-    return {
-      success: true,
-      message: 'Cuenta creada correctamente',
-      data: this.toCatalogEntry(fullAccount),
-    };
   }
 
-  async findAll(): Promise<BaseResponse<AccountEntity[]>> {
-    const accounts = await this.accountRepository.find({
-      relations: { organization: true },
+  /** Alta de la fila `organizations` con el perfil que llega del formulario. */
+  async saveOrganization(profile: {
+    name: string;
+    address?: string | null;
+    rfc?: string | null;
+    domainAllowed?: string | null;
+    phoneNumber?: string | null;
+    indexDocuments?: boolean;
+  }): Promise<OrganizationEntity> {
+    return this.organizationRepository.save(
+      this.organizationRepository.create({
+        name: profile.name,
+        address: profile.address ?? null,
+        rfc: profile.rfc ?? null,
+        domainAllowed: profile.domainAllowed ?? null,
+        phoneNumber: profile.phoneNumber ?? null,
+        indexDocuments: profile.indexDocuments ?? false,
+      }),
+    );
+  }
+
+  /** Usuario por id, exigiendo que exista. */
+  async findUserOrFail(userId: string): Promise<UserEntity> {
+    const currentUser = await this.userRepository.findOne({
+      where: { id: userId },
     });
 
-    return {
-      success: true,
-      message: 'Cuentas obtenidas correctamente',
-      data: accounts,
-    };
-  }
-
-  async findOne(
-    callerId: string,
-    id: string,
-  ): Promise<BaseResponse<AccountData>> {
-    const account = await this.assertHasOrganizationPermission(
-      callerId,
-      id,
-      ACTION_KEY_ENUM.READ,
-    );
-
-    return {
-      success: true,
-      message: 'Cuenta obtenida correctamente',
-      data: this.toCatalogEntry(account),
-    };
-  }
-
-  async update(
-    callerId: string,
-    id: string,
-    updateAccountDto: UpdateAccountDto,
-  ): Promise<BaseResponse<AccountData>> {
-    const account = await this.assertHasOrganizationPermission(
-      callerId,
-      id,
-      ACTION_KEY_ENUM.UPDATE,
-    );
-
-    const hasOrganizationDetailChanges =
-      updateAccountDto.organizationName !== undefined ||
-      updateAccountDto.address !== undefined ||
-      updateAccountDto.rfc !== undefined ||
-      updateAccountDto.domainAllowed !== undefined ||
-      updateAccountDto.phoneNumber !== undefined ||
-      updateAccountDto.indexDocuments !== undefined;
-
-    if (
-      account.accountType === ACCOUNT_TYPE_ENUM.ORGANIZATION &&
-      account.organizationId &&
-      hasOrganizationDetailChanges
-    ) {
-      await this.organizationRepository.update(account.organizationId, {
-        ...(updateAccountDto.organizationName !== undefined && {
-          name: updateAccountDto.organizationName,
-        }),
-        ...(updateAccountDto.address !== undefined && {
-          address: updateAccountDto.address,
-        }),
-        ...(updateAccountDto.rfc !== undefined && {
-          rfc: updateAccountDto.rfc,
-        }),
-        ...(updateAccountDto.domainAllowed !== undefined && {
-          domainAllowed: updateAccountDto.domainAllowed,
-        }),
-        ...(updateAccountDto.phoneNumber !== undefined && {
-          phoneNumber: updateAccountDto.phoneNumber,
-        }),
-        ...(updateAccountDto.indexDocuments !== undefined && {
-          indexDocuments: updateAccountDto.indexDocuments,
-        }),
-      });
+    if (!currentUser) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
     }
 
-    const updatedAccount = await this.findEntityById(id);
-
-    if (hasOrganizationDetailChanges && updatedAccount.organizationId) {
-      await this.refreshCatalogForOrganizationMembers(
-        updatedAccount.organizationId,
-      );
-    }
-
-    return {
-      success: true,
-      message: 'Cuenta actualizada correctamente',
-      data: this.toCatalogEntry(updatedAccount),
-    };
+    return currentUser;
   }
 
-  private async findEntityById(id: string): Promise<AccountEntity> {
+  /** Escribe sólo los campos del perfil de organización que vinieron en el DTO. */
+  async updateOrganizationDetails(
+    organizationId: string,
+    dto: UpdateAccountDto,
+  ): Promise<void> {
+    await this.organizationRepository.update(organizationId, {
+      ...(dto.organizationName !== undefined && {
+        name: dto.organizationName,
+      }),
+      ...(dto.address !== undefined && { address: dto.address }),
+      ...(dto.rfc !== undefined && { rfc: dto.rfc }),
+      ...(dto.domainAllowed !== undefined && {
+        domainAllowed: dto.domainAllowed,
+      }),
+      ...(dto.phoneNumber !== undefined && { phoneNumber: dto.phoneNumber }),
+      ...(dto.indexDocuments !== undefined && {
+        indexDocuments: dto.indexDocuments,
+      }),
+    });
+  }
+
+  /** Todas las cuentas con su organización — consulta administrativa, sin filtro de tenant. */
+  async listAll(): Promise<AccountEntity[]> {
+    return this.accountRepository.find({ relations: { organization: true } });
+  }
+
+  async findByIdOrFail(id: string): Promise<AccountEntity> {
     const account = await this.accountRepository.findOne({
       where: { id },
       relations: { organization: true },
@@ -235,7 +173,7 @@ export class AccountService {
    * consultarla. Permiso granular vía `RolesService.hasPermission` en vez de comparar
    * `role.name === 'ADMIN'` a mano — ver docblock de `hasPermission` para el porqué.
    */
-  private async assertHasOrganizationPermission(
+  async assertHasOrganizationPermission(
     callerId: string,
     accountId: string,
     action: ACTION_KEY_ENUM,
@@ -301,17 +239,19 @@ export class AccountService {
    * creador queda como administrador de inmediato, igual que en la cuenta personal). Al
    * confirmar, refresca el catálogo de cuentas cacheado en Redis.
    */
-  async createOrganization(
-    userId: string,
+  /**
+   * Crea la organización y la membresía ADMIN de su creador en una sola transacción.
+   *
+   * Van juntas porque una organización sin ningún administrador no la puede gestionar nadie:
+   * si el segundo save fallara con el primero ya confirmado, quedaría una organización
+   * inaccesible y sin forma de repararla desde la API.
+   *
+   * El creador queda como administrador de inmediato, igual que en la cuenta personal.
+   */
+  async saveOrganizationWithAdminAccount(
+    user: UserEntity,
     dto: CreateOrganizationDto,
-  ): Promise<BaseResponse<AccountData>> {
-    const currentUser = await this.userRepository.findOne({
-      where: { id: userId },
-    });
-    if (!currentUser) {
-      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
-    }
-
+  ): Promise<AccountEntity> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -334,13 +274,13 @@ export class AccountService {
 
       const account = await queryRunner.manager.save(
         queryRunner.manager.create(AccountEntity, {
-          userId,
+          userId: user.id,
           accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
           organizationId: organization.id,
           roleId: adminRole.id,
           status: ACCOUNT_STATUS_ENUM.ACTIVE,
-          email: currentUser.email,
-          password: currentUser.password,
+          email: user.email,
+          password: user.password,
           isActive: true,
           joinedAt: new Date(),
         }),
@@ -348,63 +288,13 @@ export class AccountService {
 
       await queryRunner.commitTransaction();
 
-      const fullAccount = await this.findEntityById(account.id);
-      await this.appendAccountToCatalog(userId, fullAccount);
-
-      return {
-        success: true,
-        message: 'Organización creada correctamente',
-        data: this.toCatalogEntry(fullAccount),
-      };
+      return this.findByIdOrFail(account.id);
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
     } finally {
       await queryRunner.release();
     }
-  }
-
-  /**
-   * Valida que el llamador pueda invitar a la organización activa: ADMIN de esa cuenta, cuenta
-   * de tipo ORGANIZATION, roleId existente. Devuelve el `organizationId` resuelto (distinto del
-   * `accountId` recibido — ese es la fila de membresía del propio llamador) para que el caller
-   * (`OrganizationsController.invite`, ver historia [STORY] Eventos Kafka, Email (SendGrid) y
-   * Miembros (/join)) pueda persistir la invitación real y publicar el evento de Kafka. Esta
-   * validación vive aquí (no en `OrganizationInvitationService`) para no crear una dependencia
-   * circular entre ambos servicios — `OrganizationInvitationService` ya depende de
-   * `AccountService` (para refrescar el catálogo de Redis al aceptar), así que el sentido
-   * contrario se evita a propósito orquestando desde el controller.
-   */
-  async inviteMember(
-    callerId: string,
-    accountId: string,
-    dto: InviteMemberDto,
-  ): Promise<BaseResponse<{ organizationId: string }>> {
-    if (!accountId) {
-      throw new BadRequestException(
-        'Falta el header X-Account-Id de la organización activa',
-      );
-    }
-
-    const account = await this.assertHasOrganizationPermission(
-      callerId,
-      accountId,
-      ACTION_KEY_ENUM.CREATE,
-    );
-
-    if (account.accountType !== ACCOUNT_TYPE_ENUM.ORGANIZATION) {
-      throw new BadRequestException(
-        'Solo se pueden invitar miembros a una cuenta de tipo ORGANIZATION',
-      );
-    }
-
-    await this.rolesService.findByIdOrFail(dto.roleId);
-
-    return {
-      success: true,
-      message: 'Invitación validada correctamente',
-      data: { organizationId: account.organizationId as string },
-    };
   }
 
   /**
@@ -438,7 +328,7 @@ export class AccountService {
    * miembro activo. Se usa tras renombrar/actualizar el perfil de una organización
    * (`update()`) para que el switcher del frontend no muestre datos obsoletos indefinidamente.
    */
-  private async refreshCatalogForOrganizationMembers(
+  async refreshCatalogForOrganizationMembers(
     organizationId: string,
   ): Promise<void> {
     const members = await this.accountRepository.find({
@@ -585,7 +475,7 @@ export class AccountService {
     await repository.update({ userId }, { email });
   }
 
-  private toCatalogEntry(account: AccountEntity): AccountData {
+  toCatalogEntry(account: AccountEntity): AccountData {
     return {
       id: account.id,
       type: account.accountType,

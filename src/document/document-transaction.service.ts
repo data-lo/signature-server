@@ -59,7 +59,7 @@ export class DocumentTransactionService {
    * Registro inicial al crear un documento — chainHash vacío (no hay registro previo que
    * encadenar). `actualHash` es el hash del archivo (originalHash) ya calculado por el caller.
    * `manager` opcional: cuando se crea dentro de una transacción más grande (ver
-   * DocumentSignaturesService), pasar el `EntityManager` transaccional para que el INSERT corra
+   * CreateDocumentSignatureFlowUseCase), pasar el `EntityManager` transaccional para que el INSERT corra
    * en la misma transacción y participe del rollback si algo más falla después.
    */
   async createInitial(

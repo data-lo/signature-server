@@ -6,9 +6,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * (ver "verification_codes", que es la misma idea pero para firma de documentos). Se usa el
  * mismo `OTPService` genérico (src/shared/otp/otp.service.ts) para generar/comparar el código.
  */
-export class CreateEmailVerificationCodes1784300000021
-  implements MigrationInterface
-{
+export class CreateEmailVerificationCodes1784300000021 implements MigrationInterface {
   name = 'CreateEmailVerificationCodes1784300000021';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

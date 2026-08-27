@@ -19,7 +19,7 @@ interface EmitNotificationCreatedParams {
 
 /**
  * Publica un evento por cada `Notification` creada durante la orquestación de
- * `POST /api/v1/documents/signatures` (ver DocumentSignaturesService) — a diferencia de
+ * `POST /api/v1/documents/signatures` (ver CreateDocumentSignatureFlowUseCase) — a diferencia de
  * `DocumentEventsProducer` (eventos del ciclo de vida del documento, uno por documento), este
  * tópico es uno por notificación/colaborador, pensado para que N workers de correo lo consuman
  * de forma asíncrona y disparen el envío real.

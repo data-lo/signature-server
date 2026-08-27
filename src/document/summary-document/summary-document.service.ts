@@ -51,7 +51,6 @@ const SIGNATURES_INTRO_TEXT =
   'elementos permiten acreditar la identidad de los firmantes y sustentan la atribución del ' +
   'mensaje de datos en términos de los artículos 89, 90 y 93 del Código de Comercio.';
 
-
 /**
  * Renglones de la constancia NOM-151. En esta hoja se imprimen SIEMPRE vacíos: el sellado ante el
  * PSC solo corre para documentos de firma AVANZADA (`sealAdvancedSignatures` filtra por firmantes

@@ -1,27 +1,23 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrganizationsController } from './organizations.controller';
-import { AccountService } from './account.service';
-import { AccountMemberService } from './account-member.service';
-import { OrganizationInvitationService } from './organization-invitation.service';
-import { OrganizationPermissionsService } from 'src/organization-permissions/organization-permissions.service';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
+import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
+import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
+import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
+import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
+import { GetMemberPermissionsUseCase } from 'src/organization-permissions/applications/get-member-permissions.use-case';
+import { AssignMemberPermissionsUseCase } from 'src/organization-permissions/applications/assign-member-permissions.use-case';
 
 describe('OrganizationsController', () => {
   let controller: OrganizationsController;
-  let accountService: {
-    createOrganization: jest.Mock;
-    inviteMember: jest.Mock;
-  };
-  let accountMemberService: {
-    findMembersForOrganizationDetailed: jest.Mock;
-    update: jest.Mock;
-    remove: jest.Mock;
-  };
-  let organizationInvitationService: { create: jest.Mock };
-  let organizationPermissionsService: {
-    findMemberPermissions: jest.Mock;
-    assignToMember: jest.Mock;
-  };
+  let createOrganization: { execute: jest.Mock };
+  let inviteOrganizationMember: { execute: jest.Mock };
+  let getOrganizationMemberList: { execute: jest.Mock };
+  let updateAccountMember: { execute: jest.Mock };
+  let revokeAccountAccess: { execute: jest.Mock };
+  let getMemberPermissions: { execute: jest.Mock };
+  let assignMemberPermissions: { execute: jest.Mock };
 
   const user: JwtPayload = {
     sub: 'user-1',
@@ -32,37 +28,35 @@ describe('OrganizationsController', () => {
   };
 
   beforeEach(async () => {
-    accountService = {
-      createOrganization: jest.fn(),
-      inviteMember: jest.fn().mockResolvedValue({
-        success: true,
-        message: 'Invitación validada correctamente',
-        data: { organizationId: 'org-1' },
-      }),
-    };
-    accountMemberService = {
-      findMembersForOrganizationDetailed: jest.fn(),
-      update: jest.fn(),
-      remove: jest.fn(),
-    };
-    organizationInvitationService = { create: jest.fn() };
-    organizationPermissionsService = {
-      findMemberPermissions: jest.fn(),
-      assignToMember: jest.fn(),
-    };
+    createOrganization = { execute: jest.fn() };
+    inviteOrganizationMember = { execute: jest.fn() };
+    getOrganizationMemberList = { execute: jest.fn() };
+    updateAccountMember = { execute: jest.fn() };
+    revokeAccountAccess = { execute: jest.fn() };
+    getMemberPermissions = { execute: jest.fn() };
+    assignMemberPermissions = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrganizationsController],
       providers: [
-        { provide: AccountService, useValue: accountService },
-        { provide: AccountMemberService, useValue: accountMemberService },
+        { provide: CreateOrganizationUseCase, useValue: createOrganization },
         {
-          provide: OrganizationInvitationService,
-          useValue: organizationInvitationService,
+          provide: InviteOrganizationMemberUseCase,
+          useValue: inviteOrganizationMember,
         },
         {
-          provide: OrganizationPermissionsService,
-          useValue: organizationPermissionsService,
+          provide: GetOrganizationMemberListUseCase,
+          useValue: getOrganizationMemberList,
+        },
+        { provide: UpdateAccountMemberUseCase, useValue: updateAccountMember },
+        { provide: RevokeAccountAccessUseCase, useValue: revokeAccountAccess },
+        {
+          provide: GetMemberPermissionsUseCase,
+          useValue: getMemberPermissions,
+        },
+        {
+          provide: AssignMemberPermissionsUseCase,
+          useValue: assignMemberPermissions,
         },
       ],
     }).compile();
@@ -74,78 +68,71 @@ describe('OrganizationsController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('create delega en accountService.createOrganization con el userId del JWT', () => {
+  it('create delega en CreateOrganizationUseCase con el userId del JWT', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
     controller.create(user, dto);
 
-    expect(accountService.createOrganization).toHaveBeenCalledWith(
-      'user-1',
-      dto,
-    );
+    expect(createOrganization.execute).toHaveBeenCalledWith('user-1', dto);
   });
 
-  it('invite valida con accountService.inviteMember y persiste+publica la invitación con organizationInvitationService.create', async () => {
+  /**
+   * Toda la orquestación de la invitación —validar quién invita, persistirla y publicar el
+   * evento— vive ahora en el caso de uso: el controller sólo pasa el usuario del JWT, el
+   * `X-Account-Id` y el body.
+   */
+  it('invite delega en InviteOrganizationMemberUseCase con el userId del JWT y el accountId activo', () => {
     const dto = { email: 'nuevo@empresa.com', roleId: 'role-1' };
-    const result = await controller.invite(user, 'account-1', dto);
+    controller.invite(user, 'account-1', dto);
 
-    expect(accountService.inviteMember).toHaveBeenCalledWith(
+    expect(inviteOrganizationMember.execute).toHaveBeenCalledWith(
       'user-1',
       'account-1',
       dto,
     );
-    expect(organizationInvitationService.create).toHaveBeenCalledWith({
-      organizationId: 'org-1',
-      roleId: 'role-1',
-      invitedBy: 'user-1',
-      email: 'nuevo@empresa.com',
-    });
-    expect(result).toEqual({
-      success: true,
-      message: 'Invitación enviada correctamente',
-      data: null,
-    });
   });
 
-  it('findMembers delega en accountMemberService.findMembersForOrganizationDetailed con el userId del JWT y el organizationId de la ruta', () => {
+  it('findMembers delega en GetOrganizationMemberListUseCase con el userId del JWT y el organizationId de la ruta', () => {
     controller.findMembers(user, 'org-1');
 
-    expect(
-      accountMemberService.findMembersForOrganizationDetailed,
-    ).toHaveBeenCalledWith('user-1', 'org-1');
+    expect(getOrganizationMemberList.execute).toHaveBeenCalledWith(
+      'user-1',
+      'org-1',
+    );
   });
 
-  it('updateMemberRole delega en accountMemberService.update con el userId del JWT, el accountId de la ruta y solo el roleId del body', () => {
+  it('updateMemberRole delega en UpdateAccountMemberUseCase con solo el roleId del body', () => {
     controller.updateMemberRole(user, 'account-1', { roleId: 'role-2' });
 
-    expect(accountMemberService.update).toHaveBeenCalledWith(
+    expect(updateAccountMember.execute).toHaveBeenCalledWith(
       'user-1',
       'account-1',
       { roleId: 'role-2' },
     );
   });
 
-  it('removeMember delega en accountMemberService.remove con el userId del JWT y el accountId de la ruta', () => {
+  it('removeMember delega en RevokeAccountAccessUseCase con el userId del JWT y el accountId de la ruta', () => {
     controller.removeMember(user, 'account-1');
 
-    expect(accountMemberService.remove).toHaveBeenCalledWith(
+    expect(revokeAccountAccess.execute).toHaveBeenCalledWith(
       'user-1',
       'account-1',
     );
   });
 
-  it('findMemberPermissions delega en organizationPermissionsService.findMemberPermissions con el userId del JWT y el accountId de la ruta', () => {
+  it('findMemberPermissions delega en GetMemberPermissionsUseCase con el userId del JWT y el accountId de la ruta', () => {
     controller.findMemberPermissions(user, 'account-1');
 
-    expect(
-      organizationPermissionsService.findMemberPermissions,
-    ).toHaveBeenCalledWith('user-1', 'account-1');
+    expect(getMemberPermissions.execute).toHaveBeenCalledWith(
+      'user-1',
+      'account-1',
+    );
   });
 
-  it('assignMemberPermissions delega en organizationPermissionsService.assignToMember con el userId del JWT, el accountId de la ruta y los permissionIds del body', () => {
+  it('assignMemberPermissions delega en AssignMemberPermissionsUseCase con los permissionIds del body', () => {
     const dto = { permissionIds: ['perm-1', 'perm-2'] };
     controller.assignMemberPermissions(user, 'account-1', dto);
 
-    expect(organizationPermissionsService.assignToMember).toHaveBeenCalledWith(
+    expect(assignMemberPermissions.execute).toHaveBeenCalledWith(
       'user-1',
       'account-1',
       ['perm-1', 'perm-2'],

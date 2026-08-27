@@ -20,6 +20,21 @@ import { EventModule } from 'src/event/event.module';
 import { DocumentTransactionModule } from 'src/document/document-transaction.module';
 import { AuditChainModule } from 'src/audit-chain/audit-chain.module';
 
+// Capacidades compartidas por los casos de uso de eventos
+import { DocumentEventNotificationsService } from './document-event-notifications.service';
+import { DocumentEventAuditService } from './document-event-audit.service';
+
+// Use cases
+import { ProcessDocumentCreatedEventUseCase } from './applications/process-document-created-event.use-case';
+import { ProcessDocumentSentToSignEventUseCase } from './applications/process-document-sent-to-sign-event.use-case';
+import { ProcessDocumentCollaboratorSignedEventUseCase } from './applications/process-document-collaborator-signed-event.use-case';
+import { ProcessDocumentSignedEventUseCase } from './applications/process-document-signed-event.use-case';
+import { ProcessDocumentRejectedEventUseCase } from './applications/process-document-rejected-event.use-case';
+import { ProcessDocumentCancellationRequestedEventUseCase } from './applications/process-document-cancellation-requested-event.use-case';
+import { ProcessDocumentCancelledEventUseCase } from './applications/process-document-cancelled-event.use-case';
+import { SendPendingSignatureNotificationUseCase } from './applications/send-pending-signature-notification.use-case';
+import { SendOrganizationInvitationEmailUseCase } from './applications/send-organization-invitation-email.use-case';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -60,6 +75,17 @@ import { AuditChainModule } from 'src/audit-chain/audit-chain.module';
   ],
   providers: [
     KafkaProducerService,
+    DocumentEventNotificationsService,
+    DocumentEventAuditService,
+    ProcessDocumentCreatedEventUseCase,
+    ProcessDocumentSentToSignEventUseCase,
+    ProcessDocumentCollaboratorSignedEventUseCase,
+    ProcessDocumentSignedEventUseCase,
+    ProcessDocumentRejectedEventUseCase,
+    ProcessDocumentCancellationRequestedEventUseCase,
+    ProcessDocumentCancelledEventUseCase,
+    SendPendingSignatureNotificationUseCase,
+    SendOrganizationInvitationEmailUseCase,
     DocumentEventsProducer,
     OrganizationInvitationEventsProducer,
     NotificationEventsProducer,

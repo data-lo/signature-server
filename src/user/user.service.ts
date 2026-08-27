@@ -1,6 +1,5 @@
 // External dependencies
 import {
-  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -13,7 +12,6 @@ import { DataSource, Repository } from 'typeorm';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
-import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 
 // Entities
 import { UserEntity } from './entities/user.entity';
@@ -57,25 +55,16 @@ export class UserService {
     private emailVerificationCodeService: EmailVerificationCodeService,
   ) {}
 
-  async create(
-    createUserDto: CreateUserDto,
-  ): Promise<BaseResponse<UserEntity>> {
-    const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email.toLowerCase() },
-    });
-    if (existingUser) {
-      throw new ConflictException(
-        'Ya existe un usuario registrado con ese correo electrónico',
-      );
-    }
-
-    if (createUserDto.nationalId) {
-      await this.assertCurpNotTaken(createUserDto.nationalId.toUpperCase());
-    }
-    if (createUserDto.rfc) {
-      await this.assertRfcNotTaken(createUserDto.rfc.toUpperCase());
-    }
-
+  /**
+   * Alta transaccional de un usuario junto con su fila de información personal. Las dos van en
+   * la misma transacción porque `users.personal_information_id` es obligatorio: si el segundo
+   * save fallara con el primero ya confirmado, quedaría una fila de información personal
+   * huérfana que nadie volvería a referenciar.
+   *
+   * La normalización a mayúsculas/minúsculas se hace acá y no en el caso de uso porque es la
+   * forma canónica con la que la columna se consulta después (ver `isRfcRegistered`).
+   */
+  async saveNewUser(createUserDto: CreateUserDto): Promise<UserEntity> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -110,11 +99,7 @@ export class UserService {
       const newUser = await queryRunner.manager.save(user);
       await queryRunner.commitTransaction();
 
-      return {
-        success: true,
-        message: 'Usuario creado correctamente',
-        data: this.removeSensitiveData(newUser),
-      };
+      return newUser;
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
@@ -123,9 +108,27 @@ export class UserService {
     }
   }
 
-  async findAllActiveUsers(
-    withSignature = false,
-  ): Promise<BaseResponse<UserEntity[]>> {
+  /** Lanza ConflictException si ya hay un usuario con ese correo. */
+  async assertEmailNotTaken(email: string): Promise<void> {
+    const existingUser = await this.userRepository.findOne({
+      where: { email: email.toLowerCase() },
+    });
+
+    if (existingUser) {
+      throw new ConflictException(
+        'Ya existe un usuario registrado con ese correo electrónico',
+      );
+    }
+  }
+
+  /**
+   * Todos los usuarios activos, saneados y —si se piden— con la URL prefirmada de su firma
+   * resuelta contra MinIO.
+   *
+   * Una URL que no se puede resolver deja al usuario sin el campo `signature` en vez de romper
+   * el listado entero: un objeto perdido en MinIO no debe impedir ver a los otros usuarios.
+   */
+  async listActiveUsers(withSignature = false): Promise<UserEntity[]> {
     const users = await this.userRepository.find({
       where: { isActive: true },
       ...(withSignature && {
@@ -140,11 +143,7 @@ export class UserService {
     });
 
     if (!users || users.length === 0) {
-      return {
-        success: true,
-        message: 'No hay usuarios registrados',
-        data: [],
-      };
+      return [];
     }
 
     const secureUsers = await Promise.all(
@@ -175,17 +174,21 @@ export class UserService {
       }),
     );
 
-    return {
-      success: true,
-      message: 'Usuarios obtenidos correctamente',
-      data: secureUsers as any,
-    };
+    return secureUsers as any;
   }
 
-  async findOneActiveUser(
+  /**
+   * Perfil de un usuario activo, con la información personal aplanada al primer nivel y, si se
+   * piden, las URLs prefirmadas de firma y credencial oficial.
+   *
+   * Lo comparten `GET /user/:id` y `GET /auth/me`: los dos publican exactamente el mismo perfil
+   * y sólo cambia de dónde sale el identificador, así que la lectura vive acá y el envoltorio
+   * de respuesta en cada caso de uso.
+   */
+  async getActiveUserProfile(
     id: string,
     withSignature = false,
-  ): Promise<BaseResponse<UserEntity | null>> {
+  ): Promise<UserEntity | null> {
     const user = await this.userRepository.findOne({
       where: { id, isActive: true },
       relations: {
@@ -243,11 +246,19 @@ export class UserService {
       }
     }
 
-    const newUserObject = {
+    return {
       ...sanitizedUser,
       phoneNumber: personalInformation?.phoneNumber ?? null,
       secondaryEmail: personalInformation?.secondaryEmail ?? null,
       rfc: personalInformation?.rfc ?? null,
+      /**
+       * Derivada explícita, igual que en el snapshot de `GET /users/me`: el frontend decide con
+       * ella si habilita las acciones de firma Simple, y calcularla de este lado evita que cada
+       * pantalla vuelva a comparar contra el enum y se equivoque distinto.
+       */
+      signingCredentialConfigured:
+        user.signingCredentialStatus ===
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
       ...(withSignature &&
         signature && {
           signature: {
@@ -264,19 +275,14 @@ export class UserService {
             expiresIn: officialFile.expiresIn,
           },
         }),
-    };
-
-    return {
-      success: true,
-      message: 'Usuario obtenido correctamente',
-      data: newUserObject as any,
-    };
+    } as any;
   }
 
-  async update(
+  /** Escribe los campos editables de un usuario, normalizados a su forma canónica. */
+  async applyUserUpdate(
     id: string,
     updateUserDto: UpdateUserDto,
-  ): Promise<BaseResponse<any>> {
+  ): Promise<void> {
     await this.userRepository.update(id, {
       ...(updateUserDto.firstName && {
         firstName: formatPersonName(updateUserDto.firstName),
@@ -287,14 +293,6 @@ export class UserService {
       ...(updateUserDto.email && { email: updateUserDto.email.toLowerCase() }),
       ...(updateUserDto.roles && { roles: updateUserDto.roles }),
     });
-
-    const updatedUser = await this.findOneActiveUser(id);
-
-    return {
-      success: true,
-      message: 'Usuario actualizado correctamente',
-      data: updatedUser,
-    };
   }
 
   async findOne(id: string): Promise<UserEntity> {
@@ -317,7 +315,12 @@ export class UserService {
     await this.userRepository.update(userId, { password: hashedPassword });
   }
 
-  async remove(id: string): Promise<BaseResponse> {
+  /**
+   * Baja lógica: el usuario deja de estar activo pero la fila permanece, porque su id sigue
+   * referenciado desde documentos firmados y colaboradores. Borrarla de verdad rompería la
+   * trazabilidad de firmas que ya ocurrieron.
+   */
+  async softDelete(id: string): Promise<void> {
     const result = await this.userRepository.update(
       { id, isActive: true },
       { isDeleted: true, isActive: false },
@@ -326,11 +329,6 @@ export class UserService {
     if (result.affected === 0) {
       throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
     }
-
-    return {
-      success: true,
-      message: 'Usuario eliminado correctamente',
-    };
   }
 
   private removeSensitiveData(user: UserEntity): UserEntity;
@@ -479,7 +477,7 @@ export class UserService {
 
       await queryRunner.commitTransaction();
 
-      await this.refreshUserCurpCache(newUser, personalInformation);
+      await this.refreshCurpCache(newUser, personalInformation);
       await this.accountService.appendAccountToCatalog(
         newUser.id,
         personalAccount,
@@ -656,10 +654,7 @@ export class UserService {
         );
       }
     }
-    await this.refreshUserCurpCache(
-      updatedUser,
-      updatedUser.personalInformation,
-    );
+    await this.refreshCurpCache(updatedUser, updatedUser.personalInformation);
 
     if (emailChanged) {
       await this.sendRegistrationOtpBestEffort(
@@ -697,70 +692,35 @@ export class UserService {
       throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
     }
 
-    await this.refreshUserCurpCache(
-      updatedUser,
-      updatedUser.personalInformation,
-    );
+    await this.refreshCurpCache(updatedUser, updatedUser.personalInformation);
 
     return updatedUser;
   }
 
   /**
-   * Actualiza de forma atómica isConfigured=true (consolidación final del onboarding)
-   * y refresca el snapshot cacheado en Redis bajo la key del CURP. El valor recibido
-   * en el DTO no se usa: este endpoint es un disparador de consolidación de un solo
-   * sentido, no un toggle genérico de estado.
+   * Consolida el onboarding marcando `isConfigured=true`. Quién puede hacerlo y con qué
+   * condiciones lo decide `CompleteMyOnboardingUseCase`: acá sólo se escribe la columna.
    */
-  /**
-   * Bug corregido (ver README, Historia 2): este endpoint confiaba 100% en que el frontend
-   * solo lo llamara cuando personalConfigured/signatureConfigured realmente estuvieran en
-   * true — no validaba nada server-side, así que cualquier request autenticado a este endpoint
-   * marcaba isConfigured=true sin importar el estado real de los datos del usuario. Ahora
-   * recalcula ambas condiciones aquí mismo (mismo criterio que el frontend en
-   * `auth.slice.ts`: teléfono+correo secundario, y signatureId presente) antes de consolidar.
-   */
-  async updateStatus(
-    userId: string,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    dto: UpdateUserStatusDto,
-  ): Promise<BaseResponse<{ isConfigured: boolean }>> {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: { personalInformation: true },
-    });
-    if (!user) {
-      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
-    }
-
-    const personalConfigured = !!(
-      user.personalInformation?.phoneNumber &&
-      user.personalInformation?.secondaryEmail
-    );
-    const signatureConfigured = !!user.signatureId;
-
-    if (!personalConfigured || !signatureConfigured) {
-      throw new BadRequestException(
-        'No puedes consolidar el onboarding todavía: falta completar tu información personal o tu firma digital',
-      );
-    }
-
+  async markConfigured(userId: string): Promise<void> {
     await this.userRepository.update(userId, { isConfigured: true });
+  }
 
-    const updatedUser = await this.userRepository.findOne({
+  /** Usuario con su información personal cargada, o `null` si no existe. */
+  async findOneWithPersonalInformation(
+    userId: string,
+  ): Promise<UserEntity | null> {
+    return this.userRepository.findOne({
       where: { id: userId },
       relations: { personalInformation: true },
     });
+  }
 
-    await this.refreshUserCurpCache(
-      updatedUser,
-      updatedUser.personalInformation,
-    );
-
-    return {
-      success: true,
-      message: 'Estado de configuración actualizado correctamente',
-      data: { isConfigured: true },
-    };
+  /** Usuario activo por CURP, con su información personal cargada. */
+  async findActiveByNationalId(curp: string): Promise<UserEntity | null> {
+    return this.userRepository.findOne({
+      where: { nationalId: curp, isActive: true },
+      relations: { personalInformation: true },
+    });
   }
 
   /**
@@ -768,7 +728,7 @@ export class UserService {
    * cachea en Redis. Deliberadamente excluye URLs prefirmadas de MinIO
    * (secureUrl/expiresIn) porque expiran y quedarían obsoletas en el cache.
    */
-  private buildCurpCachePayload(
+  buildProfileSnapshot(
     user: UserEntity,
     personalInformation: PersonalInformationEntity,
   ) {
@@ -805,12 +765,12 @@ export class UserService {
    * unificado del usuario. Un fallo de Redis nunca debe tumbar la operación
    * que lo dispara.
    */
-  private async refreshUserCurpCache(
+  async refreshCurpCache(
     user: UserEntity,
     personalInformation: PersonalInformationEntity,
   ): Promise<void> {
     try {
-      const payload = this.buildCurpCachePayload(user, personalInformation);
+      const payload = this.buildProfileSnapshot(user, personalInformation);
       await this.redisService.set(user.nationalId, JSON.stringify(payload));
     } catch (error) {
       this.logger.warn(
@@ -822,38 +782,14 @@ export class UserService {
   }
 
   /**
-   * Resuelve GET /users/me consultando exclusivamente Redis DB 0 por CURP
-   * (sin joins ni URLs prefirmadas de MinIO, para una hidratación rápida del
-   * store de onboarding en el cliente). Si la key no existe (por ejemplo, un
-   * fallo previo de Redis al registrar), reconstruye el snapshot desde
-   * PostgreSQL una única vez y lo vuelve a cachear.
+   * Snapshot del perfil cacheado en Redis DB 0 bajo la key del CURP, o `null` si no hay nada
+   * guardado. Devolver `null` en vez de reconstruirlo es lo que permite que quien llama decida
+   * qué hacer con un cache frío.
    */
-  async getMeFromCache(curp: string): Promise<BaseResponse<unknown>> {
+  async readCachedProfile(curp: string): Promise<unknown | null> {
     const raw = await this.redisService.get(curp);
-    if (raw) {
-      return {
-        success: true,
-        message: 'Usuario obtenido correctamente',
-        data: JSON.parse(raw),
-      };
-    }
 
-    const user = await this.userRepository.findOne({
-      where: { nationalId: curp, isActive: true },
-      relations: { personalInformation: true },
-    });
-    if (!user) {
-      throw new NotFoundException(`Usuario con CURP ${curp} no encontrado`);
-    }
-
-    const payload = this.buildCurpCachePayload(user, user.personalInformation);
-    await this.refreshUserCurpCache(user, user.personalInformation);
-
-    return {
-      success: true,
-      message: 'Usuario obtenido correctamente',
-      data: payload,
-    };
+    return raw ? JSON.parse(raw) : null;
   }
 
   /**
@@ -871,57 +807,42 @@ export class UserService {
       throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
     }
 
-    await this.refreshUserCurpCache(user, user.personalInformation);
-  }
-
-  async updatePersonalInformation(
-    userId: string,
-    dto: UpdatePersonalInformationDto,
-  ): Promise<BaseResponse<PersonalInformationEntity>> {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
-    }
-
-    await this.personalInformationRepository.update(
-      user.personalInformationId,
-      { ...dto },
-    );
-
-    const updated = await this.personalInformationRepository.findOne({
-      where: { id: user.personalInformationId },
-    });
-
-    await this.refreshUserCurpCache(user, updated);
-
-    return {
-      success: true,
-      message: 'Información personal actualizada correctamente',
-      data: updated,
-    };
+    await this.refreshCurpCache(user, user.personalInformation);
   }
 
   /**
-   * Público (sin JWT, ver UsersController) — consumido desde /join y /signup en
-   * signature-app para bifurcar el flujo de invitación a organización (ver historia [STORY]
-   * Eventos Kafka, Email (SendGrid) y Miembros (/join)): si el RFC ya existe, el usuario puede
-   * "unirse con su cuenta"; si no, se le manda a registrarse.
+   * Escribe los campos de información personal y devuelve la fila ya actualizada. El refresco
+   * del cache no ocurre acá: lo dispara quien coordina la operación, que es el que sabe si
+   * además cambió algo más del usuario.
    */
-  async checkRfcAvailability(
-    rfc: string,
-  ): Promise<BaseResponse<{ exists: boolean }>> {
+  async savePersonalInformation(
+    personalInformationId: string,
+    dto: UpdatePersonalInformationDto,
+  ): Promise<PersonalInformationEntity> {
+    await this.personalInformationRepository.update(personalInformationId, {
+      ...dto,
+    });
+
+    return this.personalInformationRepository.findOne({
+      where: { id: personalInformationId },
+    });
+  }
+
+  /**
+   * Si algún registro de información personal ya usa ese RFC. Se normaliza a mayúsculas porque
+   * la columna guarda el RFC en su forma canónica y una consulta en minúsculas no encontraría
+   * nada.
+   */
+  async isRfcRegistered(rfc: string): Promise<boolean> {
     const existing = await this.personalInformationRepository.findOne({
       where: { rfc: rfc.toUpperCase() },
     });
-    return {
-      success: true,
-      message: 'Disponibilidad del RFC consultada correctamente',
-      data: { exists: !!existing },
-    };
+
+    return !!existing;
   }
 
   /** Lanza ConflictException si otro usuario activo ya tiene ese CURP registrado. */
-  private async assertCurpNotTaken(curp: string): Promise<void> {
+  async assertCurpNotTaken(curp: string): Promise<void> {
     const existing = await this.userRepository.findOne({
       where: { nationalId: curp, isActive: true },
     });
@@ -933,7 +854,7 @@ export class UserService {
   }
 
   /** Lanza ConflictException si ya existe un registro de información personal con ese RFC. */
-  private async assertRfcNotTaken(rfc: string): Promise<void> {
+  async assertRfcNotTaken(rfc: string): Promise<void> {
     const existing = await this.personalInformationRepository.findOne({
       where: { rfc },
     });
