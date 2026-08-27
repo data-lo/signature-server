@@ -102,10 +102,7 @@ export class DocumentEventsProducer {
       signedAt,
       timestamp: new Date().toISOString(),
     };
-    this.kafkaProducer.emit(
-      DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED,
-      payload,
-    );
+    this.kafkaProducer.emit(DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED, payload);
 
     this.eventService
       .create({

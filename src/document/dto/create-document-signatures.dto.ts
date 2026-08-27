@@ -20,7 +20,7 @@ import {
 /**
  * Vocabulario del payload en inglés (pedido por la historia de frontend), distinto de los
  * enums internos del dominio (`SIGNATURE_TYPE_ENUM`/`COLABORATOR_TYPE_ENUM`, en
- * español/minúsculas) — el mapeo entre ambos vive en `DocumentSignaturesService`.
+ * español/minúsculas) — el mapeo entre ambos vive en `CreateDocumentSignatureFlowUseCase`.
  */
 export enum PAYLOAD_SIGNATURE_TYPE_ENUM {
   SIMPLE = 'SIMPLE',
@@ -36,7 +36,7 @@ export enum PAYLOAD_COLABORATOR_TYPE_ENUM {
  * Espejo de `documentData.signatureType` en vocabulario de dominio. Ya no admite `MIX`: desde la
  * historia "Selección de tipo de firma al crear documentos" un documento tiene UN tipo de firma
  * para todos sus firmantes, así que un documento con "firmas distintas" dejó de ser un estado
- * alcanzable — `DocumentSignaturesService` rechaza el payload si este campo contradice a
+ * alcanzable — `CreateDocumentSignatureFlowUseCase` rechaza el payload si este campo contradice a
  * `documentData.signatureType`.
  */
 export enum REQUIRES_DIFFERENT_SIGNATURES_ENUM {
@@ -171,7 +171,7 @@ export class CollaboratorPayloadDto {
    * "Selección de tipo de firma al crear documentos"): en firma simple nunca se pidió, y en firma
    * avanzada el RFC real se extrae del certificado de e.firma al momento de firmar (ver
    * `EfirmaService.extaerRfcDeSubject`) — pedirlo al crear el documento capturaba un dato que
-   * nadie contrastaba contra el certificado. `DocumentSignaturesService` descarta lo que llegue
+   * nadie contrastaba contra el certificado. `CreateDocumentSignatureFlowUseCase` descarta lo que llegue
    * acá para un SIGNER, así que un cliente viejo no puede reintroducirlo.
    */
   @ApiPropertyOptional({ example: 'PEAJ800101XXX', nullable: true })
@@ -187,7 +187,7 @@ export class CollaboratorPayloadDto {
    * Ubicaciones de firma de este colaborador (ver historia "Ubicación de firmas por usuario").
    * Solo aplica a SIGNER; el backend además refuerza requiresTwoFactorAuth=true cuando el
    * documento es de firma SIMPLE, sin importar lo que llegue en el payload (ver
-   * DocumentSignaturesService). Un arreglo vacío u
+   * CreateDocumentSignatureFlowUseCase). Un arreglo vacío u
    * omitido es válido: significa que este firmante no tiene ninguna posición asignada, y al
    * firmar se valida su firma sin estampar nada en el PDF (ver finalizeSignedDocument).
    */
@@ -206,7 +206,7 @@ export class CollaboratorPayloadDto {
   /**
    * Posición final del colaborador en el flujo de firma (ver historia "Habilitar ordenamiento
    * Drag and Drop para firmantes requeridos"). El frontend la manda siempre, reflejando el orden
-   * tras el reordenamiento manual; si no viene, DocumentSignaturesService cae de vuelta al orden
+   * tras el reordenamiento manual; si no viene, CreateDocumentSignatureFlowUseCase cae de vuelta al orden
    * de aparición en el arreglo (comportamiento previo a esta historia).
    */
   @ApiPropertyOptional({ example: 0 })
@@ -235,7 +235,7 @@ export class CreateDocumentSignaturesDto {
    * Redundante con `documentData.signatureType` desde la historia "Selección de tipo de firma al
    * crear documentos": se mantiene por compatibilidad del contrato multipart, pero ya no es una
    * entrada — el backend no lee de acá el tipo de firma, solo verifica que no contradiga a
-   * `documentData.signatureType` y rechaza el payload si lo hace (ver DocumentSignaturesService).
+   * `documentData.signatureType` y rechaza el payload si lo hace (ver CreateDocumentSignatureFlowUseCase).
    */
   @ApiPropertyOptional({ enum: REQUIRES_DIFFERENT_SIGNATURES_ENUM })
   @IsOptional()

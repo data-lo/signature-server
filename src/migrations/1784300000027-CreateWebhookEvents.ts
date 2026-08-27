@@ -55,6 +55,8 @@ export class CreateWebhookEvents1784300000027 implements MigrationInterface {
     await queryRunner.query(
       `DROP TYPE "public"."webhook_events_processing_status_enum"`,
     );
-    await queryRunner.query(`DROP TYPE "public"."webhook_events_provider_enum"`);
+    await queryRunner.query(
+      `DROP TYPE "public"."webhook_events_provider_enum"`,
+    );
   }
 }

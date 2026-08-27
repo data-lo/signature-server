@@ -1,50 +1,21 @@
-import { Controller, Logger } from '@nestjs/common';
+import { Controller } from '@nestjs/common';
 import { EventPattern, Payload } from '@nestjs/microservices';
+
 import {
   ORGANIZATION_INVITATION_KAFKA_TOPICS,
   OrganizationInvitationEventPayload,
 } from './organization-invitation.topics';
-import { EmailService } from 'src/shared/email/email.service';
-import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
+import { SendOrganizationInvitationEmailUseCase } from './applications/send-organization-invitation-email.use-case';
 
-/**
- * Worker que consume `organization.member.invited` (ver OrganizationInvitationEventsProducer)
- * y despacha el correo de invitación vía SendGrid — a diferencia de los correos del ciclo de
- * vida de documentos (inline/síncronos en document.service.ts), este envío es intencionalmente
- * asíncrono: `POST /api/v1/organizations/invite` responde en cuanto persiste la invitación,
- * sin esperar a SendGrid.
- */
+/** Adaptador de Kafka: delega en el caso de uso que manda el correo de invitación. */
 @Controller()
 export class OrganizationInvitationEventsConsumer {
-  private readonly logger = new Logger(
-    OrganizationInvitationEventsConsumer.name,
-  );
-
-  constructor(private readonly emailService: EmailService) {}
+  constructor(
+    private readonly sendOrganizationInvitationEmail: SendOrganizationInvitationEmailUseCase,
+  ) {}
 
   @EventPattern(ORGANIZATION_INVITATION_KAFKA_TOPICS.INVITED)
   async handleInvited(@Payload() payload: OrganizationInvitationEventPayload) {
-    this.logger.log(
-      `Invitación a organización: ${payload.email} -> ${payload.organizationName} (${payload.organizationId}) @ ${payload.timestamp}`,
-    );
-
-    try {
-      // Normalizada: leída cruda, una `FRONTEND_URL` con diagonal final generaba
-      // `https://app.ejemplo.com//join?token=...` en el correo de invitación.
-      const joinUrl = `${frontendBaseUrl()}/join?token=${payload.invitationToken}&orgId=${payload.organizationId}`;
-
-      await this.emailService.sendOrganizationInvitationNotification(
-        payload.email,
-        payload.organizationName,
-        joinUrl,
-      );
-    } catch (error) {
-      // Igual criterio que DocumentEventsConsumer: un fallo del consumer nunca debe tumbar el
-      // proceso — la invitación ya quedó persistida (PENDING) aunque el correo falle; el estado
-      // no se pierde, solo el usuario no recibe el aviso hasta reintentar la invitación.
-      this.logger.error(
-        `Error enviando el correo de invitación a ${payload.email}: ${error}`,
-      );
-    }
+    await this.sendOrganizationInvitationEmail.execute(payload);
   }
 }

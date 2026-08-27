@@ -82,7 +82,10 @@ export class PublicSignerData {
   })
   legalBacking: string;
 
-  @ApiProperty({ example: '187.190.12.4', description: 'IP desde la que firmó' })
+  @ApiProperty({
+    example: '187.190.12.4',
+    description: 'IP desde la que firmó',
+  })
   ipAddress: string;
 
   @ApiProperty({

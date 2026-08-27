@@ -1,3 +1,4 @@
+import { setTestModuleGraphEnv } from 'src/shared/testing/module-graph-env';
 import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -11,10 +12,14 @@ import { UpdateSigningCredentialStatusUseCase } from './applications/update-sign
 /**
  * Los errores de cableado de Nest sólo aparecen al arrancar la aplicación contra Postgres,
  * Mongo y Redis; sin esta prueba se descubrirían en el despliegue. También fija el contrato
- * hacia afuera: `ProcessDiditVerificationResultUseCase` (que consumirá el módulo de webhooks) y
+ * hacia afuera: `ProcessDiditVerificationResultUseCase` (que consume el módulo de webhooks) y
  * `UpdateSigningCredentialStatusUseCase` (que consume `SignatureModule`) tienen que ser
  * resolubles.
  */
+beforeAll(() => {
+  setTestModuleGraphEnv();
+});
+
 describe('IdentityVerificationModule', () => {
   it('resuelve su grafo de dependencias y expone los casos de uso que otros módulos consumen', async () => {
     const repositoryStub = {};

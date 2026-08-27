@@ -17,11 +17,14 @@ import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
-// Service
-import { AccountService } from './account.service';
-import { AccountMemberService } from './account-member.service';
-import { OrganizationInvitationService } from './organization-invitation.service';
-import { OrganizationPermissionsService } from 'src/organization-permissions/organization-permissions.service';
+// Use cases
+import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
+import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
+import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
+import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
+import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
+import { GetMemberPermissionsUseCase } from 'src/organization-permissions/applications/get-member-permissions.use-case';
+import { AssignMemberPermissionsUseCase } from 'src/organization-permissions/applications/assign-member-permissions.use-case';
 
 // DTOs
 import { CreateOrganizationDto } from './dto/create-organization.dto';
@@ -43,43 +46,29 @@ import { ApiAssignMemberPermissions } from './docs/api-assign-member-permissions
 @Controller('api/v1/organizations')
 export class OrganizationsController {
   constructor(
-    private readonly accountService: AccountService,
-    private readonly accountMemberService: AccountMemberService,
-    private readonly organizationInvitationService: OrganizationInvitationService,
-    private readonly organizationPermissionsService: OrganizationPermissionsService,
+    private readonly createOrganization: CreateOrganizationUseCase,
+    private readonly inviteOrganizationMember: InviteOrganizationMemberUseCase,
+    private readonly getOrganizationMemberList: GetOrganizationMemberListUseCase,
+    private readonly updateAccountMember: UpdateAccountMemberUseCase,
+    private readonly revokeAccountAccess: RevokeAccountAccessUseCase,
+    private readonly getMemberPermissions: GetMemberPermissionsUseCase,
+    private readonly assignPermissionsToMember: AssignMemberPermissionsUseCase,
   ) {}
 
   @Post()
   @ApiCreateOrganization()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateOrganizationDto) {
-    return this.accountService.createOrganization(user.sub, dto);
+    return this.createOrganization.execute(user.sub, dto);
   }
 
   @Post('invite')
   @ApiInviteOrganizationMember()
-  async invite(
+  invite(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
     @Body() dto: InviteMemberDto,
   ) {
-    const { data } = await this.accountService.inviteMember(
-      user.sub,
-      accountId,
-      dto,
-    );
-
-    await this.organizationInvitationService.create({
-      organizationId: data.organizationId,
-      roleId: dto.roleId,
-      invitedBy: user.sub,
-      email: dto.email,
-    });
-
-    return {
-      success: true,
-      message: 'Invitación enviada correctamente',
-      data: null,
-    };
+    return this.inviteOrganizationMember.execute(user.sub, accountId, dto);
   }
 
   @Get(':organizationId/members')
@@ -88,10 +77,7 @@ export class OrganizationsController {
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
   ) {
-    return this.accountMemberService.findMembersForOrganizationDetailed(
-      user.sub,
-      organizationId,
-    );
+    return this.getOrganizationMemberList.execute(user.sub, organizationId);
   }
 
   @Patch('members/:accountId/role')
@@ -101,7 +87,7 @@ export class OrganizationsController {
     @Param('accountId') accountId: string,
     @Body() dto: UpdateMemberRoleDto,
   ) {
-    return this.accountMemberService.update(user.sub, accountId, {
+    return this.updateAccountMember.execute(user.sub, accountId, {
       roleId: dto.roleId,
     });
   }
@@ -112,7 +98,7 @@ export class OrganizationsController {
     @CurrentUser() user: JwtPayload,
     @Param('accountId') accountId: string,
   ) {
-    return this.accountMemberService.remove(user.sub, accountId);
+    return this.revokeAccountAccess.execute(user.sub, accountId);
   }
 
   @Get('members/:accountId/permissions')
@@ -121,10 +107,7 @@ export class OrganizationsController {
     @CurrentUser() user: JwtPayload,
     @Param('accountId') accountId: string,
   ) {
-    return this.organizationPermissionsService.findMemberPermissions(
-      user.sub,
-      accountId,
-    );
+    return this.getMemberPermissions.execute(user.sub, accountId);
   }
 
   @Patch('members/:accountId/permissions')
@@ -134,7 +117,7 @@ export class OrganizationsController {
     @Param('accountId') accountId: string,
     @Body() dto: AssignMemberPermissionsDto,
   ) {
-    return this.organizationPermissionsService.assignToMember(
+    return this.assignPermissionsToMember.execute(
       user.sub,
       accountId,
       dto.permissionIds,

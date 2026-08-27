@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
 import { SealDocumentDto } from '../dto/seal-document.dto';
+import { SimpleSignatureDTO } from '../dto/simple-signature.dto';
 import {
   SealProviderConfigurationException,
   SealProviderResponseException,
@@ -13,6 +14,15 @@ import { SealDocumentResponse } from '../interfaces/seal-document-response.inter
 
 /** Tiempo máximo de espera de Seal Service: emite dos sellos (TSA + NOM-151) contra un PSC externo. */
 const SEAL_REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * Ruta del envío de firmas simples, hermana de `/seal/signature` (firma avanzada).
+ *
+ * Va aparte porque lo que se manda no tiene nada que ver: `/seal/signature` transporta firmas
+ * criptográficas con su certificado del SAT, y esto transporta la identidad del firmante, la
+ * evidencia de su OTP y la imagen de su rúbrica.
+ */
+const SIMPLE_SIGNATURE_PATH = '/seal/simple-signature';
 
 @Injectable()
 export class SealApiService {
@@ -36,7 +46,9 @@ export class SealApiService {
     dto: SealDocumentDto,
   ): Promise<SealDocumentResponse> {
     const { serviceUrl, apiKey } = this.resolveConfiguration();
-    this.logger.log(`Desde generateDocumentseal ocspEvidence firma 1 ${JSON.stringify(dto.signatures.at(0).ocspEvidence)}`)
+    this.logger.log(
+      `Desde generateDocumentseal ocspEvidence firma 1 ${JSON.stringify(dto.signatures.at(0).ocspEvidence)}`,
+    );
     try {
       const httpResponse = await axios.post<SealDocumentResponse>(
         `${serviceUrl}/seal/signature`,
@@ -79,6 +91,65 @@ export class SealApiService {
 
       throw error;
     }
+  }
+
+  /**
+   * Envía a Seal Service las firmas simples de un documento ya completo.
+   *
+   * El cuerpo lleva datos personales del firmante y su rúbrica en Base64, así que —a diferencia
+   * de `generateDocumentSeals`— acá no se registra ni un fragmento del DTO: ni al enviarlo ni al
+   * fallar. De la respuesta de error del proveedor sólo se toma el código HTTP, porque un cuerpo
+   * de error suele venir con un eco de lo que se le mandó.
+   *
+   * No devuelve nada: este envío no produce evidencia que persistir (a diferencia del sellado
+   * avanzado, que devuelve hash canónico y constancia NOM-151). Falla lanzando, con las mismas
+   * excepciones que el resto del servicio.
+   */
+  async sendSimpleSignatures(dto: SimpleSignatureDTO): Promise<void> {
+    const { serviceUrl, apiKey } = this.resolveConfiguration();
+
+    try {
+      await axios.post(`${serviceUrl}${SIMPLE_SIGNATURE_PATH}`, dto, {
+        headers: { 'x-api-key': apiKey },
+        timeout: SEAL_REQUEST_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw this.translateTransportError(error, dto.documentId);
+    }
+  }
+
+  /**
+   * Traduce un fallo de axios a la excepción de dominio que le corresponde, registrando sólo
+   * el documento afectado y el motivo técnico.
+   *
+   * Devuelve la excepción en vez de lanzarla para que el llamador conserve el `throw` en su
+   * propio flujo, y para que TypeScript no pierda de vista que ese camino termina.
+   */
+  private translateTransportError(error: unknown, documentId: string): Error {
+    if (!axios.isAxiosError(error)) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+
+    const upstreamStatus = error.response?.status;
+
+    if (upstreamStatus) {
+      this.logger.error(
+        `El proveedor respondió HTTP ${upstreamStatus} al recibir las firmas simples del documento ${documentId}.`,
+      );
+      return new SealProviderResponseException();
+    }
+
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      this.logger.error(
+        `Timeout al enviar las firmas simples del documento ${documentId}.`,
+      );
+      return new SealProviderTimeoutException();
+    }
+
+    this.logger.error(
+      `No se pudo conectar con el proveedor de sellado para enviar las firmas simples del documento ${documentId} (code=${error.code ?? 'unknown'}).`,
+    );
+    return new SealProviderUnavailableException();
   }
 
   /**

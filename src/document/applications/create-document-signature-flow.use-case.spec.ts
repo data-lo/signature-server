@@ -1,31 +1,31 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
-import { DocumentSignaturesService } from './document-signatures.service';
-import { DocumentEntity } from './entities/document.entity';
-import { CollaboratorEntity } from './entities/collaborator.entity';
-import { NotificationEntity } from './entities/notification.entity';
+import { CreateDocumentSignatureFlowUseCase } from './create-document-signature-flow.use-case';
+import { DocumentEntity } from '../entities/document.entity';
+import { CollaboratorEntity } from '../entities/collaborator.entity';
+import { NotificationEntity } from '../entities/notification.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { HashService } from 'src/shared/hash/hash.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { AccountMemberService } from 'src/account/account-member.service';
-import { VerificationCodeService } from './verification-code.service';
+import { VerificationCodeService } from '../verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { EmailService } from 'src/shared/email/email.service';
-import { DocumentTransactionService } from './document-transaction.service';
+import { DocumentTransactionService } from '../document-transaction.service';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
-import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
-import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
-import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
+import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import {
   CreateDocumentSignaturesDto,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   REQUIRES_DIFFERENT_SIGNATURES_ENUM,
-} from './dto/create-document-signatures.dto';
+} from '../dto/create-document-signatures.dto';
 
 function createMockRepository() {
   let seq = 0;
@@ -39,8 +39,8 @@ function createMockRepository() {
   };
 }
 
-describe('DocumentSignaturesService', () => {
-  let service: DocumentSignaturesService;
+describe('CreateDocumentSignatureFlowUseCase', () => {
+  let useCase: CreateDocumentSignatureFlowUseCase;
   let documentRepo: ReturnType<typeof createMockRepository>;
   let collaboratorRepo: ReturnType<typeof createMockRepository>;
   let notificationRepo: ReturnType<typeof createMockRepository>;
@@ -82,7 +82,14 @@ describe('DocumentSignaturesService', () => {
         email: 'juan.perez@mail.com',
         rfc: 'PEAJ800101XXX',
         signatures: [
-          { signatureId: 'sig-1', page: 1, xRatio: 0.65, yRatio: 0.8, widthRatio: 0.2, heightRatio: 0.08 },
+          {
+            signatureId: 'sig-1',
+            page: 1,
+            xRatio: 0.65,
+            yRatio: 0.8,
+            widthRatio: 0.2,
+            heightRatio: 0.08,
+          },
         ],
         requiresTwoFactorAuth: true,
       },
@@ -165,7 +172,7 @@ describe('DocumentSignaturesService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        DocumentSignaturesService,
+        CreateDocumentSignatureFlowUseCase,
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: MinioService, useValue: minioService },
         { provide: HashService, useValue: hashService },
@@ -188,11 +195,13 @@ describe('DocumentSignaturesService', () => {
       ],
     }).compile();
 
-    service = module.get<DocumentSignaturesService>(DocumentSignaturesService);
+    useCase = module.get<CreateDocumentSignatureFlowUseCase>(
+      CreateDocumentSignatureFlowUseCase,
+    );
   });
 
   it('Escenario 1: crea Document + N Collaborators + N Notifications + verification_code y publica N eventos Kafka', async () => {
-    const result = await service.create(
+    const result = await useCase.execute(
       'creator-1',
       'account-1',
       baseDto,
@@ -236,7 +245,7 @@ describe('DocumentSignaturesService', () => {
       ],
     };
 
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       dtoSoloSimpleSinFlag,
@@ -263,7 +272,7 @@ describe('DocumentSignaturesService', () => {
       ],
     };
 
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       dtoConMayusculas,
@@ -277,7 +286,7 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('un documento ADVANCED respeta el requiresTwoFactorAuth de cada firmante', async () => {
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       advancedDto,
@@ -290,7 +299,7 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('historia "Selección de tipo de firma": el tipo del documento se copia a todos los firmantes', async () => {
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       advancedDto,
@@ -310,7 +319,7 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('historia "Selección de tipo de firma": descarta el rfc que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       advancedDto,
@@ -332,7 +341,7 @@ describe('DocumentSignaturesService', () => {
     };
 
     await expect(
-      service.create(
+      useCase.execute(
         'creator-1',
         'account-1',
         dtoContradictorio,
@@ -349,7 +358,7 @@ describe('DocumentSignaturesService', () => {
       requiresDifferentSignatures: REQUIRES_DIFFERENT_SIGNATURES_ENUM.FIEL,
     };
 
-    const result = await service.create(
+    const result = await useCase.execute(
       'creator-1',
       'account-1',
       dtoCoherente,
@@ -367,7 +376,7 @@ describe('DocumentSignaturesService', () => {
     };
 
     await expect(
-      service.create(
+      useCase.execute(
         'creator-1',
         'account-1',
         dtoSoloViewer,
@@ -379,7 +388,7 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('bug corregido: asigna signingOrder consecutivo (0,1,2...) solo entre los SIGNER, en el orden del payload; VIEWER queda en null', async () => {
-    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
     const juanCall = collaboratorRepo.create.mock.calls.find(
       (call) => call[0].email === 'juan.perez@mail.com',
@@ -407,7 +416,7 @@ describe('DocumentSignaturesService', () => {
       })),
     };
 
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       dtoConOrderIndexInvertido,
@@ -427,7 +436,7 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('documento secuencial (default, sin isSequential en el payload): no envía invitaciones de firma simple', async () => {
-    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
     expect(
       emailService.sendDocumentInvitationNotification,
@@ -442,7 +451,7 @@ describe('DocumentSignaturesService', () => {
       documentData: { ...baseDto.documentData, isSequential: false },
     };
 
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       dtoSinOrden,
@@ -472,7 +481,7 @@ describe('DocumentSignaturesService', () => {
       documentData: { ...advancedDto.documentData, isSequential: false },
     };
 
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       dtoAvanzadoSinOrden,
@@ -494,7 +503,7 @@ describe('DocumentSignaturesService', () => {
       documentData: { ...baseDto.documentData, isSequential: false },
     };
 
-    const result = await service.create(
+    const result = await useCase.execute(
       'creator-1',
       'account-1',
       dtoSinOrden,
@@ -506,7 +515,7 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('el viewer se crea con colaboratorType WATCHER, sin signatureType ni verification_code', async () => {
-    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
     const viewerCall = collaboratorRepo.create.mock.calls.find(
       (call) => call[0].email === 'auditor@mail.com',
@@ -519,7 +528,7 @@ describe('DocumentSignaturesService', () => {
   });
 
   it('crea una SimpleSignatureEntity por firmante, incluso con un arreglo vacío de posiciones', async () => {
-    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
     // Juan (signatures con 1 elemento) y María (signatures: []) — ambos SIGNER, ambos deben
     // recibir una fila propia (ver historia "Ubicación de firmas por usuario": simpleSignatureId
@@ -567,7 +576,13 @@ describe('DocumentSignaturesService', () => {
     };
 
     await expect(
-      service.create('creator-1', 'account-1', dtoConColision, file, '127.0.0.1'),
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConColision,
+        file,
+        '127.0.0.1',
+      ),
     ).rejects.toThrow(BadRequestException);
     expect(simpleSignatureRepo.save).not.toHaveBeenCalled();
   });
@@ -576,7 +591,7 @@ describe('DocumentSignaturesService', () => {
     collaboratorRepo.save.mockRejectedValueOnce(new Error('DB caída'));
 
     await expect(
-      service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+      useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
     ).rejects.toThrow('DB caída');
 
     expect(notificationEventsProducer.emitCreated).not.toHaveBeenCalled();
@@ -585,7 +600,7 @@ describe('DocumentSignaturesService', () => {
 
   it('rechaza con BadRequestException si no se proporciona archivo', async () => {
     await expect(
-      service.create(
+      useCase.execute(
         'creator-1',
         'account-1',
         baseDto,
@@ -598,7 +613,7 @@ describe('DocumentSignaturesService', () => {
 
   it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
     await expect(
-      service.create(
+      useCase.execute(
         'creator-1',
         undefined as unknown as string,
         baseDto,
@@ -620,7 +635,7 @@ describe('DocumentSignaturesService', () => {
       documentData: { ...baseDto.documentData, requiresApproval: true },
     };
 
-    await service.create(
+    await useCase.execute(
       'creator-1',
       'account-1',
       dtoConAprobacion,
@@ -641,13 +656,19 @@ describe('DocumentSignaturesService', () => {
     };
 
     await expect(
-      service.create('creator-1', 'account-1', dtoConAprobacion, file, '127.0.0.1'),
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion,
+        file,
+        '127.0.0.1',
+      ),
     ).rejects.toThrow(BadRequestException);
     expect(documentRepo.create).not.toHaveBeenCalled();
   });
 
   it('no rechaza una cuenta PERSONAL cuando requiresApproval no se solicita', async () => {
-    await service.create('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
     expect(documentRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ requiresApproval: false }),

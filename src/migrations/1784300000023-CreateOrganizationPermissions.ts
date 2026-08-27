@@ -8,9 +8,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * CreateRolesModule) — este catálogo no participa en ninguna autorización real, es solo una
  * lista administrada por el ADMIN de la organización y asignable como lista a un miembro.
  */
-export class CreateOrganizationPermissions1784300000023
-  implements MigrationInterface
-{
+export class CreateOrganizationPermissions1784300000023 implements MigrationInterface {
   name = 'CreateOrganizationPermissions1784300000023';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

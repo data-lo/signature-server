@@ -22,6 +22,10 @@ import { WEBHOOK_PROCESSING_STATUS_ENUM } from '../enums/webhook-processing-stat
 @Entity('webhook_events')
 @Unique('UQ_webhook_events_provider_event', ['provider', 'providerEventId'])
 @Index('IDX_webhook_events_provider_status', ['provider', 'processingStatus'])
+@Index('IDX_webhook_events_provider_resource', [
+  'provider',
+  'providerResourceId',
+])
 @Index('IDX_webhook_events_received_at', ['receivedAt'])
 export class WebhookEventEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -39,6 +43,18 @@ export class WebhookEventEntity {
    */
   @Column({ name: 'provider_event_id', type: 'varchar', nullable: true })
   providerEventId: string | null;
+
+  /**
+   * Identificador del objeto del proveedor al que se refiere la entrega: `session_id` en Didit.
+   *
+   * No es clave de idempotencia —esa es `provider_event_id`— sino la llave de consulta: una
+   * sesión de verificación produce varias entregas (`In Progress` → `Approved`), y reconstruir
+   * su historia sin esta columna obligaría a filtrar por el interior del `jsonb`. Nullable
+   * porque no todos los proveedores tienen un recurso equivalente y porque una entrega
+   * rechazada por firma inválida no se lee.
+   */
+  @Column({ name: 'provider_resource_id', type: 'varchar', nullable: true })
+  providerResourceId: string | null;
 
   @Column({ name: 'event_type', type: 'varchar' })
   eventType: string;

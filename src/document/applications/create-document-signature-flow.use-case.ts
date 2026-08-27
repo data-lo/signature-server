@@ -3,9 +3,9 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { v4 as uuid4 } from 'uuid';
 
-import { DocumentEntity } from './entities/document.entity';
-import { CollaboratorEntity } from './entities/collaborator.entity';
-import { NotificationEntity } from './entities/notification.entity';
+import { DocumentEntity } from '../entities/document.entity';
+import { CollaboratorEntity } from '../entities/collaborator.entity';
+import { NotificationEntity } from '../entities/notification.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
 
 import {
@@ -14,16 +14,16 @@ import {
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   REQUIRES_DIFFERENT_SIGNATURES_ENUM,
   SignaturePositionDto,
-} from './dto/create-document-signatures.dto';
-import { assertNoOverlappingSignaturePositions } from './utils/signature-collision.util';
+} from '../dto/create-document-signatures.dto';
+import { assertNoOverlappingSignaturePositions } from '../utils/signature-collision.util';
 
-import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
-import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
-import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
-import { ACTOR_TYPE_ENUM } from './enum/actor-type.enum';
-import { NOTIFICATION_CHANNEL_ENUM } from './enum/notification-channel.enum';
-import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
+import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
+import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { ACTOR_TYPE_ENUM } from '../enum/actor-type.enum';
+import { NOTIFICATION_CHANNEL_ENUM } from '../enum/notification-channel.enum';
+import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 
@@ -32,14 +32,14 @@ import { HashService } from 'src/shared/hash/hash.service';
 import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
-import { VerificationCodeService } from './verification-code.service';
+import { VerificationCodeService } from '../verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { EmailService } from 'src/shared/email/email.service';
-import { DocumentTransactionService } from './document-transaction.service';
-import { buildDocumentAccessUrl } from './utils/document-access-url.util';
+import { DocumentTransactionService } from '../document-transaction.service';
+import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -100,8 +100,8 @@ export interface CreateDocumentSignaturesResult {
  * transacción hizo commit.
  */
 @Injectable()
-export class DocumentSignaturesService {
-  private readonly logger = new Logger(DocumentSignaturesService.name);
+export class CreateDocumentSignatureFlowUseCase {
+  private readonly logger = new Logger(CreateDocumentSignatureFlowUseCase.name);
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -116,7 +116,7 @@ export class DocumentSignaturesService {
     private readonly documentTransactionService: DocumentTransactionService,
   ) {}
 
-  async create(
+  async execute(
     createdBy: string,
     accountId: string,
     dto: CreateDocumentSignaturesDto,
@@ -220,202 +220,195 @@ export class DocumentSignaturesService {
       verificationCodesCount,
       invitationEmailTargets,
     } = await this.dataSource.transaction(async (manager) => {
-        const documentRepo = manager.getRepository(DocumentEntity);
-        const collaboratorRepo = manager.getRepository(CollaboratorEntity);
-        const notificationRepo = manager.getRepository(NotificationEntity);
-        const simpleSignatureRepo = manager.getRepository(
-          SimpleSignatureEntity,
-        );
+      const documentRepo = manager.getRepository(DocumentEntity);
+      const collaboratorRepo = manager.getRepository(CollaboratorEntity);
+      const notificationRepo = manager.getRepository(NotificationEntity);
+      const simpleSignatureRepo = manager.getRepository(SimpleSignatureEntity);
 
-        const document = await documentRepo.save(
-          documentRepo.create({
-            objectKey: uploadResponse.fileId,
-            fileName: dto.documentData.fileName,
-            fileType: file.mimetype,
-            totalPages,
+      const document = await documentRepo.save(
+        documentRepo.create({
+          objectKey: uploadResponse.fileId,
+          fileName: dto.documentData.fileName,
+          fileType: file.mimetype,
+          totalPages,
+          ipAddress: ip,
+          originalHash,
+          status: DOCUMENT_STATUS_ENUM.PENDING,
+          createdBy,
+          accountId,
+          organizationId: activeAccount.organizationId,
+          requiresApproval: dto.documentData.requiresApproval === true,
+          totalSigners,
+          isSequential,
+        }),
+      );
+
+      await this.documentTransactionService.createInitial(
+        document.id,
+        originalHash,
+        manager,
+      );
+
+      const notificationEvents: {
+        notification: NotificationEntity;
+        collaboratorId: string;
+      }[] = [];
+      // Firmantes de Firma Digital Simple en un documento sin orden (isSequential=false): se
+      // les invita por correo a registrarse/iniciar sesión de inmediato, ya que no hay que
+      // esperar ningún turno (ver historia "Notificación por Email para Firma Simple y
+      // Vinculación de Cuenta"). Se envían fuera de la transacción, igual que los eventos de
+      // Kafka más abajo.
+      const invitationEmailTargets: {
+        to: string;
+        name: string;
+        collaboratorId: string;
+      }[] = [];
+      let verificationCodesCount = 0;
+      let anyRequiresVerification = false;
+      // Bug corregido: este loop nunca asignaba signingOrder a los firmantes (a diferencia de
+      // DocumentService.create(), que sí lo hace vía signerIds.map((_, index) => ...)) — con
+      // signingOrder siempre null, getNextPendingSigner() (base de "a quién le toca firmar" en
+      // sign()/reject()/las notificaciones) no tenía ningún orden real que respetar para
+      // documentos isSequential=true creados por este endpoint, que es el único que usa el
+      // frontend. Se numera solo entre los SIGNER, en el orden en que vienen en el payload.
+      let signerIndex = 0;
+
+      // Historia "Habilitar ordenamiento Drag and Drop para firmantes requeridos": el frontend
+      // manda orderIndex reflejando el orden tras el arrastre manual — si viene en todos los
+      // colaboradores, se ordena explícitamente sobre esa base en vez de confiar en que el
+      // arreglo ya llegó en el orden correcto (si algún colaborador no lo trae, se conserva el
+      // orden de aparición en el payload, comportamiento previo a esta historia).
+      const orderedCollaborators = dto.collaborators.every(
+        (c) => typeof c.orderIndex === 'number',
+      )
+        ? [...dto.collaborators].sort((a, b) => a.orderIndex! - b.orderIndex!)
+        : dto.collaborators;
+
+      for (const participant of orderedCollaborators) {
+        const isSigner =
+          participant.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;
+
+        // Se crea SIEMPRE (incluso con un arreglo vacío) para todo SIGNER de este flujo —
+        // `simpleSignatureId` asignado (con o sin posiciones) distingue a estos colaboradores
+        // de los creados por el endpoint POST /document más antiguo (que nunca lo asigna y
+        // sigue cayendo al apilado automático en finalizeSignedDocument, sin cambios). Un
+        // arreglo vacío significa "sin posición: se firma sin estampado visual" (ver historia).
+        let simpleSignatureId: string | null = null;
+        if (isSigner) {
+          const simpleSignature = await simpleSignatureRepo.save(
+            simpleSignatureRepo.create({
+              signatureCoordinates: (participant.signatures ?? []).map(
+                (position) => ({
+                  signatureId: position.signatureId ?? uuid4(),
+                  page: position.page,
+                  xRatio: position.xRatio,
+                  yRatio: position.yRatio,
+                  widthRatio: position.widthRatio,
+                  heightRatio: position.heightRatio,
+                }),
+              ),
+            }),
+          );
+          simpleSignatureId = simpleSignature.id;
+        }
+
+        const collaborator = await collaboratorRepo.save(
+          collaboratorRepo.create({
+            documentId: document.id,
+            // Normalizado igual que `users.email` (ver UserService): mientras el colaborador no
+            // tiene cuenta vinculada, este correo es su única identidad, y todo lo que lo
+            // empareja después —listado "Por firmar", vinculación de cuenta, firma y rechazo—
+            // lo compara contra el correo ya normalizado del usuario. Guardarlo tal cual se
+            // tecleó dejaba invisibles en "Por firmar" a los firmantes invitados con
+            // mayúsculas (ver el bug corregido en DocumentService.findWithFilters).
+            email: participant.email.toLowerCase(),
+            firstName: participant.firstName,
+            lastName: participant.lastName,
+            // Solo el VIEWER guarda RFC: para un firmante el dato ya no se pide al crear el
+            // documento, y el del flujo avanzado sale del certificado de e.firma al firmar (ver
+            // `CollaboratorPayloadDto.rfc`). Se descarta explícitamente lo que mande el cliente.
+            rfc: isSigner ? null : (participant.rfc ?? null),
+            colaboratorType:
+              COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN[participant.collaboratorType],
+            signatureType: isSigner ? documentSignatureType : null,
+            simpleSignatureId,
+            signingOrder: isSigner ? signerIndex : null,
+            status: SIGNEE_STATUS_ENUM.PENDING,
             ipAddress: ip,
-            originalHash,
-            status: DOCUMENT_STATUS_ENUM.PENDING,
-            createdBy,
-            accountId,
-            organizationId: activeAccount.organizationId,
-            requiresApproval: dto.documentData.requiresApproval === true,
-            totalSigners,
-            isSequential,
           }),
         );
+        if (isSigner) {
+          signerIndex += 1;
+        }
 
-        await this.documentTransactionService.createInitial(
-          document.id,
-          originalHash,
-          manager,
+        const notification = await notificationRepo.save(
+          notificationRepo.create({
+            collaboratorId: collaborator.id,
+            documentId: document.id,
+            isNotified: false,
+            // Siempre WATCHER: este endpoint trata a todos los colaboradores como invitación
+            // por email (accountId null) — el criterio es "¿tiene cuenta?", no su rol.
+            actorType: ACTOR_TYPE_ENUM.WATCHER,
+            notificationChannelSource: NOTIFICATION_CHANNEL_ENUM.EMAIL,
+            delivered: false,
+          }),
         );
+        notificationEvents.push({
+          notification,
+          collaboratorId: collaborator.id,
+        });
 
-        const notificationEvents: {
-          notification: NotificationEntity;
-          collaboratorId: string;
-        }[] = [];
-        // Firmantes de Firma Digital Simple en un documento sin orden (isSequential=false): se
-        // les invita por correo a registrarse/iniciar sesión de inmediato, ya que no hay que
-        // esperar ningún turno (ver historia "Notificación por Email para Firma Simple y
-        // Vinculación de Cuenta"). Se envían fuera de la transacción, igual que los eventos de
-        // Kafka más abajo.
-        const invitationEmailTargets: {
-          to: string;
-          name: string;
-          collaboratorId: string;
-        }[] = [];
-        let verificationCodesCount = 0;
-        let anyRequiresVerification = false;
-        // Bug corregido: este loop nunca asignaba signingOrder a los firmantes (a diferencia de
-        // DocumentService.create(), que sí lo hace vía signerIds.map((_, index) => ...)) — con
-        // signingOrder siempre null, getNextPendingSigner() (base de "a quién le toca firmar" en
-        // sign()/reject()/las notificaciones) no tenía ningún orden real que respetar para
-        // documentos isSequential=true creados por este endpoint, que es el único que usa el
-        // frontend. Se numera solo entre los SIGNER, en el orden en que vienen en el payload.
-        let signerIndex = 0;
-
-        // Historia "Habilitar ordenamiento Drag and Drop para firmantes requeridos": el frontend
-        // manda orderIndex reflejando el orden tras el arrastre manual — si viene en todos los
-        // colaboradores, se ordena explícitamente sobre esa base en vez de confiar en que el
-        // arreglo ya llegó en el orden correcto (si algún colaborador no lo trae, se conserva el
-        // orden de aparición en el payload, comportamiento previo a esta historia).
-        const orderedCollaborators = dto.collaborators.every(
-          (c) => typeof c.orderIndex === 'number',
-        )
-          ? [...dto.collaborators].sort(
-              (a, b) => a.orderIndex! - b.orderIndex!,
-            )
-          : dto.collaborators;
-
-        for (const participant of orderedCollaborators) {
-          const isSigner =
-            participant.collaboratorType ===
-            PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;
-
-          // Se crea SIEMPRE (incluso con un arreglo vacío) para todo SIGNER de este flujo —
-          // `simpleSignatureId` asignado (con o sin posiciones) distingue a estos colaboradores
-          // de los creados por el endpoint POST /document más antiguo (que nunca lo asigna y
-          // sigue cayendo al apilado automático en finalizeSignedDocument, sin cambios). Un
-          // arreglo vacío significa "sin posición: se firma sin estampado visual" (ver historia).
-          let simpleSignatureId: string | null = null;
-          if (isSigner) {
-            const simpleSignature = await simpleSignatureRepo.save(
-              simpleSignatureRepo.create({
-                signatureCoordinates: (participant.signatures ?? []).map(
-                  (position) => ({
-                    signatureId: position.signatureId ?? uuid4(),
-                    page: position.page,
-                    xRatio: position.xRatio,
-                    yRatio: position.yRatio,
-                    widthRatio: position.widthRatio,
-                    heightRatio: position.heightRatio,
-                  }),
-                ),
-              }),
-            );
-            simpleSignatureId = simpleSignature.id;
-          }
-
-          const collaborator = await collaboratorRepo.save(
-            collaboratorRepo.create({
-              documentId: document.id,
-              // Normalizado igual que `users.email` (ver UserService): mientras el colaborador no
-              // tiene cuenta vinculada, este correo es su única identidad, y todo lo que lo
-              // empareja después —listado "Por firmar", vinculación de cuenta, firma y rechazo—
-              // lo compara contra el correo ya normalizado del usuario. Guardarlo tal cual se
-              // tecleó dejaba invisibles en "Por firmar" a los firmantes invitados con
-              // mayúsculas (ver el bug corregido en DocumentService.findWithFilters).
-              email: participant.email.toLowerCase(),
-              firstName: participant.firstName,
-              lastName: participant.lastName,
-              // Solo el VIEWER guarda RFC: para un firmante el dato ya no se pide al crear el
-              // documento, y el del flujo avanzado sale del certificado de e.firma al firmar (ver
-              // `CollaboratorPayloadDto.rfc`). Se descarta explícitamente lo que mande el cliente.
-              rfc: isSigner ? null : (participant.rfc ?? null),
-              colaboratorType:
-                COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN[
-                  participant.collaboratorType
-                ],
-              signatureType: isSigner ? documentSignatureType : null,
-              simpleSignatureId,
-              signingOrder: isSigner ? signerIndex : null,
-              status: SIGNEE_STATUS_ENUM.PENDING,
-              ipAddress: ip,
-            }),
-          );
-          if (isSigner) {
-            signerIndex += 1;
-          }
-
-          const notification = await notificationRepo.save(
-            notificationRepo.create({
-              collaboratorId: collaborator.id,
-              documentId: document.id,
-              isNotified: false,
-              // Siempre WATCHER: este endpoint trata a todos los colaboradores como invitación
-              // por email (accountId null) — el criterio es "¿tiene cuenta?", no su rol.
-              actorType: ACTOR_TYPE_ENUM.WATCHER,
-              notificationChannelSource: NOTIFICATION_CHANNEL_ENUM.EMAIL,
-              delivered: false,
-            }),
-          );
-          notificationEvents.push({
-            notification,
+        if (
+          isSigner &&
+          documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE &&
+          !isSequential
+        ) {
+          invitationEmailTargets.push({
+            to: collaborator.email!,
+            name:
+              `${collaborator.firstName ?? ''} ${collaborator.lastName ?? ''}`.trim() ||
+              collaborator.email!,
             collaboratorId: collaborator.id,
           });
-
-          if (
-            isSigner &&
-            documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE &&
-            !isSequential
-          ) {
-            invitationEmailTargets.push({
-              to: collaborator.email!,
-              name:
-                `${collaborator.firstName ?? ''} ${collaborator.lastName ?? ''}`.trim() ||
-                collaborator.email!,
-              collaboratorId: collaborator.id,
-            });
-          }
-
-          if (isSigner) {
-            // Regla de negocio reforzada en el backend, no solo confiada del payload (ver
-            // historia): un documento de firma SIMPLE siempre requiere 2FA sin importar lo que
-            // mande el cliente; en ADVANCED se respeta la elección explícita del usuario en el
-            // checkbox, firmante por firmante.
-            const needsVerification =
-              documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE
-                ? true
-                : participant.requiresTwoFactorAuth === true;
-
-            if (needsVerification) {
-              anyRequiresVerification = true;
-              verificationCodesCount += 1;
-              await this.verificationCodeService.issue(
-                document.id,
-                collaborator.id,
-                VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
-                ip,
-                manager,
-              );
-            }
-          }
         }
 
-        if (anyRequiresVerification) {
-          await documentRepo.update(document.id, {
-            requiresVerification: true,
-          });
-        }
+        if (isSigner) {
+          // Regla de negocio reforzada en el backend, no solo confiada del payload (ver
+          // historia): un documento de firma SIMPLE siempre requiere 2FA sin importar lo que
+          // mande el cliente; en ADVANCED se respeta la elección explícita del usuario en el
+          // checkbox, firmante por firmante.
+          const needsVerification =
+            documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE
+              ? true
+              : participant.requiresTwoFactorAuth === true;
 
-        return {
-          document,
-          notificationEvents,
-          verificationCodesCount,
-          invitationEmailTargets,
-        };
-      });
+          if (needsVerification) {
+            anyRequiresVerification = true;
+            verificationCodesCount += 1;
+            await this.verificationCodeService.issue(
+              document.id,
+              collaborator.id,
+              VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+              ip,
+              manager,
+            );
+          }
+        }
+      }
+
+      if (anyRequiresVerification) {
+        await documentRepo.update(document.id, {
+          requiresVerification: true,
+        });
+      }
+
+      return {
+        document,
+        notificationEvents,
+        verificationCodesCount,
+        invitationEmailTargets,
+      };
+    });
 
     // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
     // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.

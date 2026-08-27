@@ -56,7 +56,6 @@ const SIGNATURES_INTRO_TEXT =
   'Conforme a los requisitos del artículo 97 del Código de Comercio, este mecanismo permite ' +
   'acreditar la identidad del firmante.';
 
-
 /**
  * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
  *
