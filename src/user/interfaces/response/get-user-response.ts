@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
 
 export class SignatureUrlDto {
@@ -86,12 +87,33 @@ export class UserGetData {
   })
   signatureId: string | null;
 
+  /**
+   * @deprecated Ya no controla el acceso a nada. Quedó como bandera de onboarding general
+   * (datos personales) y ninguna pantalla la consulta para decidir si se puede crear un
+   * documento o firmar: eso lo decide `signingCredentialStatus`.
+   */
+  @ApiProperty({
+    example: false,
+    deprecated: true,
+    description:
+      'Obsoleta: marca el fin del onboarding general y ya no habilita ninguna acción. Usa signingCredentialStatus.',
+  })
+  isConfigured: boolean;
+
+  @ApiProperty({
+    enum: SIGNING_CREDENTIAL_STATUS_ENUM,
+    example: SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_REQUIRED,
+    description:
+      'Avance de identidad y firma del usuario, y única fuente de verdad sobre qué acciones de firma tiene habilitadas. Sólo lo escribe el backend.',
+  })
+  signingCredentialStatus: SIGNING_CREDENTIAL_STATUS_ENUM;
+
   @ApiProperty({
     example: false,
     description:
-      'Indica si el usuario completó su información personal y firma (onboarding)',
+      'Derivada de signingCredentialStatus === CONFIGURED. Es la condición para poder firmar con firma Simple.',
   })
-  isConfigured: boolean;
+  signingCredentialConfigured: boolean;
 
   @ApiProperty({
     type: SignatureUrlDto,

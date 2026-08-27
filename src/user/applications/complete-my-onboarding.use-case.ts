@@ -12,6 +12,12 @@ import { UserService } from '../user.service';
 /**
  * `PATCH /api/v1/users/me/status`: consolida el onboarding (`isConfigured=true`).
  *
+ * @deprecated Sin consumidor. El frontend lo llamaba de forma automática para poder abrir la
+ * pantalla de creación de documentos; ese bloqueo desapareció —crear un documento ya no depende
+ * de nada— y firmar depende de `signingCredentialStatus`, que este endpoint no toca. Se
+ * mantiene vivo para no romper a ningún cliente que todavía lo llame, pero la bandera que
+ * escribe no habilita ninguna acción.
+ *
  * Es un disparador de un solo sentido, no un toggle genérico de estado: por eso el valor que
  * llega en el DTO se ignora a propósito. Lo único que decide el resultado es si el usuario
  * cumple realmente las dos condiciones.

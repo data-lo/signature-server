@@ -247,6 +247,14 @@ export class UserService {
       phoneNumber: personalInformation?.phoneNumber ?? null,
       secondaryEmail: personalInformation?.secondaryEmail ?? null,
       rfc: personalInformation?.rfc ?? null,
+      /**
+       * Derivada explícita, igual que en el snapshot de `GET /users/me`: el frontend decide con
+       * ella si habilita las acciones de firma Simple, y calcularla de este lado evita que cada
+       * pantalla vuelva a comparar contra el enum y se equivoque distinto.
+       */
+      signingCredentialConfigured:
+        user.signingCredentialStatus ===
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
       ...(withSignature &&
         signature && {
           signature: {

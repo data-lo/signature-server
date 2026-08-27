@@ -91,9 +91,14 @@ export class RejectDocumentUseCase {
       );
     }
 
-    await this.documentService.assertUserHasSignatureOnFile(
-      myParticipant.account!.user,
-    );
+    /**
+     * Rechazar no exige tener la credencial de firma configurada, a diferencia de firmar.
+     *
+     * Antes sí la exigía, y era una trampa: un firmante sin identidad validada no podía firmar
+     * —correcto— pero tampoco declinar, así que el documento se quedaba esperando para siempre
+     * una respuesta que esa persona no tenía forma de dar. Rechazar no produce ninguna firma;
+     * lo único que hace falta es ser el firmante en turno, que ya se comprobó arriba.
+     */
 
     // Claim atómico (mismo criterio que sign(), ver su comentario): cierra la ventana de
     // carrera de un doble clic/doble pestaña rechazando antes de tocar MinIO/estampado.
