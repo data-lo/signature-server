@@ -13,7 +13,15 @@ import { DocumentPublicViewResponse } from '../interfaces/responses/document-pub
 import { toConservationRecord } from '../summary-document/conservation-record.util';
 import { toIsoStringOrNull } from '../utils/iso-date.util';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
+import { SealEntity } from '../seal/entities/seal.entity';
+import { extractTsaCertificateInfo } from '../seal/utils/tsa-certificate.util';
 import { DocumentService } from '../document.service';
+
+/** Serie y fecha de emisión (`notBefore`) del certificado TSA embebido en la evidencia NOM-151. */
+interface PublicIntegrityTsaCertificate {
+  serialNumber: string;
+  issuedAt: string;
+}
 
 @Injectable()
 export class GetPublicDocumentUseCase {
@@ -74,6 +82,7 @@ export class GetPublicDocumentUseCase {
           ),
           downloads: { nom151: false, timestamp: false, canonical: false },
           sealEvidence: { timestampFileBase64: null, integrityFileBase64: null },
+          integrityTsaCertificate: null,
         },
       };
     }
@@ -102,6 +111,8 @@ export class GetPublicDocumentUseCase {
     );
 
     const conservationRecord = toConservationRecord(seal);
+    const integrityTsaCertificate =
+      await this.resolveIntegrityTsaCertificate(seal);
 
     return {
       success: true,
@@ -138,7 +149,52 @@ export class GetPublicDocumentUseCase {
           timestampFileBase64: seal?.timestampEvidence?.fileBase64 ?? null,
           integrityFileBase64: seal?.integrityEvidence?.fileBase64 ?? null,
         },
+        integrityTsaCertificate,
       },
+    };
+  }
+
+  /**
+   * Serie y `notBefore` del certificado TSA de la evidencia NOM-151, para la sección de esa
+   * constancia en la vista pública.
+   *
+   * Si `integrityEvidence` ya los trae (se sella con esto desde `SealMapper`, o una consulta
+   * anterior ya los completó), los usa tal cual y no vuelve a tocar el ASN.1. Si faltan —evidencia
+   * histórica, o la extracción falló al sellar—, reintenta la extracción aquí; si esta vez sí
+   * funciona, la persiste (best-effort: si el guardado falla, igual se muestra lo recién extraído,
+   * y la próxima consulta simplemente lo reintenta) para no reprocesar en cada visita futura. Si no
+   * se puede extraer, devuelve `null` y el frontend no pinta el componente.
+   */
+  private async resolveIntegrityTsaCertificate(
+    seal: SealEntity | null,
+  ): Promise<PublicIntegrityTsaCertificate | null> {
+    if (!seal) {
+      return null;
+    }
+
+    const { certificateSerialNumber, certificateIssuedAt } =
+      seal.integrityEvidence;
+    if (certificateSerialNumber && certificateIssuedAt) {
+      return {
+        serialNumber: certificateSerialNumber,
+        issuedAt: toIsoStringOrNull(certificateIssuedAt) as string,
+      };
+    }
+
+    const extracted = extractTsaCertificateInfo(
+      seal.integrityEvidence.fileBase64,
+    );
+    if (!extracted) {
+      return null;
+    }
+
+    await this.sealDocumentUseCase
+      .persistIntegrityCertificateInfo(seal, extracted)
+      .catch(() => undefined);
+
+    return {
+      serialNumber: extracted.serialNumber,
+      issuedAt: extracted.issuedAt.toISOString(),
     };
   }
 }
