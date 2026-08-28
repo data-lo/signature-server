@@ -4,7 +4,19 @@ import { Certificate, ContentInfo, SignedData } from 'pkijs';
 export interface TsaCertificateInfo {
   serialNumber: string;
   issuedAt: Date;
+  /**
+   * Nombre común (CN) de quien emitió el certificado: lo que la tabla NOM-151 de las hojas de
+   * evidencia imprime como "Certificado (TSA)".
+   *
+   * Opcional porque un certificado puede no traer CN en su emisor —el DN admite otras
+   * combinaciones de atributos— y eso no debe invalidar la serie ni la fecha, que son los datos
+   * que sí se obtuvieron.
+   */
+  issuerCommonName?: string;
 }
+
+/** OID del atributo `commonName` dentro de un DN X.500. */
+const COMMON_NAME_OID = '2.5.4.3';
 
 /**
  * Extrae el número de serie y `notBefore` del certificado del PSC embebido en la evidencia
@@ -59,8 +71,37 @@ export function extractTsaCertificateInfo(
       return null;
     }
 
-    return { serialNumber, issuedAt };
+    const issuerCommonName = extractCommonName(certificate);
+
+    return {
+      serialNumber,
+      issuedAt,
+      ...(issuerCommonName && { issuerCommonName }),
+    };
   } catch {
     return null;
+  }
+}
+
+/**
+ * CN del emisor del certificado.
+ *
+ * Se busca el atributo por su OID y no por posición: el orden de los componentes de un DN no está
+ * garantizado, así que tomar el primero daría el país o la organización según el PSC.
+ *
+ * Devuelve `undefined` —y nunca lanza— ante un DN sin CN o con un valor que no sea texto: el
+ * renglón se queda sin llenar, que es preferible a perder también la serie y la fecha.
+ */
+function extractCommonName(certificate: Certificate): string | undefined {
+  try {
+    const commonName = certificate.issuer.typesAndValues.find(
+      (attribute) => attribute.type === COMMON_NAME_OID,
+    );
+
+    const value = commonName?.value?.valueBlock?.value;
+
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
   }
 }

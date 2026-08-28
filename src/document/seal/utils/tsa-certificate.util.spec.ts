@@ -16,10 +16,21 @@ describe('extractTsaCertificateInfo', () => {
   it('extrae la serie y el notBefore del certificado embebido en un CMS SignedData', () => {
     const result = extractTsaCertificateInfo(CMS_BASE64);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       serialNumber: '4A1B2C3D',
       issuedAt: new Date('2026-08-27T18:06:37.000Z'),
     });
+  });
+
+  /**
+   * El CN es lo que la tabla NOM-151 de las hojas de evidencia imprime como "Certificado (TSA)".
+   * El DN del fixture es `CN=Test TSA, O=Test PSC, C=MX`: se busca por OID justamente para no
+   * devolver la organización o el país según cómo el PSC ordene los componentes.
+   */
+  it('extrae el CN del emisor, no el primer componente del DN', () => {
+    expect(extractTsaCertificateInfo(CMS_BASE64)?.issuerCommonName).toBe(
+      'Test TSA',
+    );
   });
 
   it('devuelve null si el Base64 ni siquiera decodifica a ASN.1 válido', () => {

@@ -108,6 +108,36 @@ describe('AdvancedSummaryDocumentService', () => {
       );
     });
 
+    /**
+     * El bug reportado: los tres renglones salían vacíos aunque el documento estuviera sellado.
+     * El certificado y la serie se extraen del certificado del PSC embebido en la evidencia
+     * NOM-151 y quedan en el sello (ver `toConservationRecord`); la hoja sólo los imprime.
+     */
+    it('imprime el certificado, la serie y la fecha de la constancia', () => {
+      const definition = service['buildDocDefinition'](
+        {
+          ...document,
+          conservationRecord: {
+            tsaCertificate: 'PSC Codex',
+            serialNumber: '4A1B2C3D',
+            issuedAt: new Date('2026-07-30T15:59:22Z'),
+          },
+        },
+        signers,
+      );
+      const [, nom151] = tablesOf(definition);
+
+      expect(nom151.find(([label]) => label === 'Certificado (TSA)')?.[1]).toBe(
+        'PSC Codex',
+      );
+      expect(nom151.find(([label]) => label === 'NUMERO DE SERIE')?.[1]).toBe(
+        '4A1B2C3D',
+      );
+      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toMatch(
+        /30\/07\/26/,
+      );
+    });
+
     // Sin sello (firma no sellada, o sellado fallido: es best-effort) la tabla se imprime igual,
     // vacía: es parte de la plantilla y quitarla del documento legal sería peor.
     it('sin constancia, imprime la tabla vacía en vez de omitirla', () => {
@@ -157,7 +187,8 @@ describe('AdvancedSummaryDocumentService', () => {
     ]);
   });
 
-  // Pedido explícito de la historia: la tabla existe en la hoja, pero todavía sin datos.
+  // Sin constancia que imprimir, la tabla sigue apareciendo: es parte de la plantilla de
+  // referencia. Los renglones se llenan cuando el documento sí se selló (ver el bloque de arriba).
   it('deja vacía la tabla de la Constancia de Conservación (NOM-151)', () => {
     const [, nom151] = tablesOf(buildDefinition());
 
