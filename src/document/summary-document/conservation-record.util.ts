@@ -1,4 +1,5 @@
 import { SealEntity } from '../seal/entities/seal.entity';
+import { extractTsaCertificateInfo } from '../seal/utils/tsa-certificate.util';
 
 /**
  * Datos de la tabla "Información de la Constancia de Conservación (NOM-151)" de las hojas de
@@ -6,14 +7,11 @@ import { SealEntity } from '../seal/entities/seal.entity';
  */
 export interface ConservationRecordInfo {
   /**
-   * Identidad del certificado de la Autoridad de Sellado de Tiempo (el DN del PSC).
-   *
-   * Hoy NO se puede llenar: ni Seal Service ni el PSC devuelven este dato por separado — vive
-   * dentro del token RFC 3161 (`timestampEvidence.fileBase64`), en su estructura ASN.1. Ver la
-   * nota de `toConservationRecord`.
+   * Identidad del certificado de la Autoridad de Sellado de Tiempo: el CN de quien emitió la
+   * evidencia NOM-151.
    */
   tsaCertificate?: string | null;
-  /** Número de serie del sello de tiempo. Mismo caso que `tsaCertificate`. */
+  /** Número de serie de ese certificado. */
   serialNumber?: string | null;
   /** Momento en que el PSC emitió la constancia (`SealEntity.sealedAt`). */
   issuedAt?: Date | string | null;
@@ -23,15 +21,12 @@ export interface ConservationRecordInfo {
  * Traduce el sello persistido a lo que la hoja imprime en la tabla NOM-151. `null` cuando el
  * documento no tiene sello (firma simple, o sellado fallido: es best-effort).
  *
- * **Por qué solo se llena "EMITIDO"**: de los tres renglones de la plantilla, es el único que
- * existe como dato propio. El DN del certificado (TSA) y el número de serie del sello viajan
- * únicamente dentro del token RFC 3161 que emite el PSC — un CMS SignedData con la estructura
- * TSTInfo — y ni PSC CODEX ni Seal Service los exponen por separado (ver
- * `PscCodexResponseHash`: solo `status`, `hashProcessed`, `fileBase64` y `uuid`).
- *
- * Sacarlos exige parsear ASN.1 del token, y ese parseo corresponde a Seal Service —que es quien
- * habla con el PSC y ya tiene el token en la mano—, no a cada consumidor de su respuesta. Cuando
- * los devuelva, llenarlos acá es mapear dos campos más.
+ * **El certificado y la serie salen del certificado del PSC embebido en la evidencia NOM-151.**
+ * `SealMapper` los extrae al sellar y los deja en `integrityEvidence`; acá sólo se leen. Cuando
+ * faltan —evidencia histórica, sellada antes de que existiera la extracción, o un archivo que el
+ * parser no reconoció— se intenta extraerlos del propio ASN.1 en el momento, que es lo mismo que
+ * hace la vista pública: la hoja se genera una sola vez y queda anexada al PDF para siempre, así
+ * que vale el intento antes de imprimir un renglón vacío que ya no se puede corregir.
  */
 export function toConservationRecord(
   seal: SealEntity | null | undefined,
@@ -40,9 +35,18 @@ export function toConservationRecord(
     return null;
   }
 
+  const { certificateIssuerCommonName, certificateSerialNumber, fileBase64 } =
+    seal.integrityEvidence ?? {};
+
+  const extracted =
+    certificateIssuerCommonName && certificateSerialNumber
+      ? null
+      : extractTsaCertificateInfo(fileBase64 ?? '');
+
   return {
-    tsaCertificate: null,
-    serialNumber: null,
+    tsaCertificate:
+      certificateIssuerCommonName ?? extracted?.issuerCommonName ?? null,
+    serialNumber: certificateSerialNumber ?? extracted?.serialNumber ?? null,
     issuedAt: seal.sealedAt,
   };
 }

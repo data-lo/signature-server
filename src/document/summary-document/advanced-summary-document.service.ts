@@ -59,10 +59,10 @@ const SIGNATURES_INTRO_TEXT =
 /**
  * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
  *
- * Solo "EMITIDO" se llena hoy. El DN del certificado (TSA) y el número de serie del sello viajan
- * únicamente dentro del token RFC 3161 del PSC y nadie los expone por separado — ver la nota de
- * `toConservationRecord`, que es donde está el detalle. Los renglones se imprimen igual, vacíos:
- * la tabla es parte de la plantilla y desaparecerla del documento legal sería peor.
+ * Los tres renglones salen del sello: el certificado y la serie del certificado del PSC embebido
+ * en la evidencia, y la fecha de `sealedAt` (ver `toConservationRecord`). Se imprimen vacíos
+ * únicamente cuando el documento no llegó a sellarse —el sellado es best-effort— porque la tabla
+ * es parte de la plantilla y quitarla del documento legal sería peor que mostrarla sin llenar.
  */
 function buildConservationRecordRows(
   record: ConservationRecordInfo | null | undefined,

@@ -3136,7 +3136,10 @@ describe('casos de uso de documentos', () => {
             },
           ],
           downloads: { nom151: false, timestamp: false, canonical: false },
-          sealEvidence: { timestampFileBase64: null, integrityFileBase64: null },
+          sealEvidence: {
+            timestampFileBase64: null,
+            integrityFileBase64: null,
+          },
           integrityTsaCertificate: null,
         });
       });
@@ -3269,7 +3272,10 @@ describe('casos de uso de documentos', () => {
           sealDocumentUseCase.findByDocumentId.mockResolvedValue({
             ...SEAL,
             canonicalPayload: '',
-            integrityEvidence: { ...SEAL.integrityEvidence, certificatePdfBase64: '' },
+            integrityEvidence: {
+              ...SEAL.integrityEvidence,
+              certificatePdfBase64: '',
+            },
           } as unknown as SealEntity);
 
           const result = await getPublicDocument.execute('doc-1');
@@ -3285,7 +3291,10 @@ describe('casos de uso de documentos', () => {
           documentRepository.findOne.mockResolvedValue(signedDocument());
           sealDocumentUseCase.findByDocumentId.mockResolvedValue({
             ...SEAL,
-            integrityEvidence: { ...SEAL.integrityEvidence, certificatePdfBase64: '' },
+            integrityEvidence: {
+              ...SEAL.integrityEvidence,
+              certificatePdfBase64: '',
+            },
           } as unknown as SealEntity);
 
           const result = await getPublicDocument.execute('doc-1');
@@ -3359,6 +3368,8 @@ describe('casos de uso de documentos', () => {
           ).toHaveBeenCalledWith(sealWithoutCertificateInfo, {
             serialNumber: '4A1B2C3D',
             issuedAt: new Date('2026-08-27T18:06:37.000Z'),
+            // El CN del emisor es lo que la tabla NOM-151 imprime como "Certificado (TSA)".
+            issuerCommonName: 'Test TSA',
           });
         });
 
