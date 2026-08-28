@@ -68,6 +68,9 @@ export class SealMapper {
       ...(tsaCertificate && {
         certificateSerialNumber: tsaCertificate.serialNumber,
         certificateIssuedAt: tsaCertificate.issuedAt,
+        ...(tsaCertificate.issuerCommonName && {
+          certificateIssuerCommonName: tsaCertificate.issuerCommonName,
+        }),
       }),
     };
   }

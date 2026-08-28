@@ -3368,6 +3368,8 @@ describe('casos de uso de documentos', () => {
           ).toHaveBeenCalledWith(sealWithoutCertificateInfo, {
             serialNumber: '4A1B2C3D',
             issuedAt: new Date('2026-08-27T18:06:37.000Z'),
+            // El CN del emisor es lo que la tabla NOM-151 imprime como "Certificado (TSA)".
+            issuerCommonName: 'Test TSA',
           });
         });
 

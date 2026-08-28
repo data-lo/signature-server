@@ -74,6 +74,11 @@ export class SealDocumentUseCase {
         ...seal.integrityEvidence,
         certificateSerialNumber: certificateInfo.serialNumber,
         certificateIssuedAt: certificateInfo.issuedAt,
+        // Condicional porque un DN puede no traer CN: sobrescribir con `undefined` borraría un
+        // valor que un sellado posterior sí hubiera conseguido.
+        ...(certificateInfo.issuerCommonName && {
+          certificateIssuerCommonName: certificateInfo.issuerCommonName,
+        }),
       },
     });
   }
