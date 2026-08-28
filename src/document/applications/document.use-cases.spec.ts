@@ -3562,16 +3562,69 @@ describe('casos de uso de documentos', () => {
       expect(result.content).toEqual(Buffer.from('dG9rZW4tdHM=', 'base64'));
     });
 
-    /** La cadena canónica es texto plano (NO xml): se sirve tal cual, sin decodificar base64. */
-    it('devuelve la cadena canónica como texto plano', async () => {
-      const result = await getPublicSealArtifact.execute(
-        'doc-1',
-        SEAL_ARTIFACT_ENUM.CANONICAL,
-      );
+    /**
+     * La cadena canónica se entrega envuelta en XML. El dato en sí no es XML —es la preimagen del
+     * hash sellado, con su formato de segmentos— y por eso el envoltorio la conserva íntegra: lo
+     * único que se le añade es el escapado que exige el formato.
+     */
+    describe('XML canónico', () => {
+      it('lo entrega como XML válido y con extensión .xml', async () => {
+        const result = await getPublicSealArtifact.execute(
+          'doc-1',
+          SEAL_ARTIFACT_ENUM.CANONICAL,
+        );
 
-      expect(result.contentType).toBe('text/plain; charset=utf-8');
-      expect(result.fileName).toBe('cadena-canonica-doc-1.txt');
-      expect(result.content.toString('utf-8')).toBe('v1||12:hola-mundo');
+        expect(result.contentType).toBe('application/xml; charset=utf-8');
+        expect(result.fileName).toBe('cadena-canonica-doc-1.xml');
+
+        const xml = result.content.toString('utf-8');
+        expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+        expect(xml).toContain('>v1||12:hola-mundo<');
+      });
+
+      /**
+       * Lo que hace verificable al archivo: quien lo descargue puede recomputar el hash sobre el
+       * contenido del nodo (desescapado) y comprobarlo contra el atributo.
+       */
+      it('lleva el documento y el hash sellado como atributos', async () => {
+        sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+          ...SEAL,
+          documentId: 'doc-1',
+          signatureHash: 'abc123',
+        } as unknown as SealEntity);
+
+        const xml = (
+          await getPublicSealArtifact.execute(
+            'doc-1',
+            SEAL_ARTIFACT_ENUM.CANONICAL,
+          )
+        ).content.toString('utf-8');
+
+        expect(xml).toContain('documentId="doc-1"');
+        expect(xml).toContain('signatureHash="abc123"');
+        expect(xml).toContain('hashAlgorithm="sha256"');
+      });
+
+      /**
+       * El nombre del firmante y el PEM del certificado entran en la cadena tal cual vengan, así
+       * que un `&` o un `<` producirían un XML que no abre — justo lo que el envoltorio evita.
+       */
+      it('escapa los caracteres que romperían el XML', async () => {
+        sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+          ...SEAL,
+          canonicalPayload: 'v1||18:Ruiz & Cía <S.A.>',
+        } as unknown as SealEntity);
+
+        const xml = (
+          await getPublicSealArtifact.execute(
+            'doc-1',
+            SEAL_ARTIFACT_ENUM.CANONICAL,
+          )
+        ).content.toString('utf-8');
+
+        expect(xml).toContain('Ruiz &amp; Cía &lt;S.A.&gt;');
+        expect(xml).not.toContain('Ruiz & Cía <S.A.>');
+      });
     });
 
     it('404 si el documento todavía no se ha completado de firmar', async () => {
