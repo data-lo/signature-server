@@ -53,8 +53,12 @@ export class GetPublicSealArtifactUseCase {
       );
     }
 
+    const fileContent = descriptor.render
+      ? descriptor.render(rawValue, seal)
+      : rawValue;
+
     return {
-      content: Buffer.from(rawValue, descriptor.encoding),
+      content: Buffer.from(fileContent, descriptor.encoding),
       contentType: descriptor.contentType,
       fileName: `${descriptor.fileNamePrefix}-${documentId}${descriptor.extension}`,
     };
