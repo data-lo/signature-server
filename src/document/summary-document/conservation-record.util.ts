@@ -35,17 +35,17 @@ export function toConservationRecord(
     return null;
   }
 
-  const { certificateIssuerCommonName, certificateSerialNumber, fileBase64 } =
+  const { certificateSubjectCommonName, certificateSerialNumber, fileBase64 } =
     seal.integrityEvidence ?? {};
 
   const extracted =
-    certificateIssuerCommonName && certificateSerialNumber
+    certificateSubjectCommonName && certificateSerialNumber
       ? null
       : extractTsaCertificateInfo(fileBase64 ?? '');
 
   return {
     tsaCertificate:
-      certificateIssuerCommonName ?? extracted?.issuerCommonName ?? null,
+      certificateSubjectCommonName ?? extracted?.subjectCommonName ?? null,
     serialNumber: certificateSerialNumber ?? extracted?.serialNumber ?? null,
     issuedAt: seal.sealedAt,
   };

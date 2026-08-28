@@ -1,4 +1,7 @@
-import { UnprocessableEntityException } from '@nestjs/common';
+import {
+  ServiceUnavailableException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 
 export class CertificadoInvalidoException extends UnprocessableEntityException {
   constructor(detalle?: string) {
@@ -56,11 +59,21 @@ export class CertificadoRevocadoException extends Error {
   }
 }
 
-export class OCSPNotAvilableException extends Error {
-  constructor(reason: string) {
+/**
+ * El respondedor OCSP del SAT no contestó (caído, lento o inalcanzable).
+ *
+ * **503 y no un `Error` plano**, que Nest convertía en un 500 genérico: quien firma necesita
+ * saber que el problema es del SAT y que reintentar más tarde tiene sentido, no leer "error
+ * interno del servidor" sobre algo que no falló de nuestro lado.
+ *
+ * El detalle técnico se registra en el log, no se devuelve: al firmante no le sirve el mensaje de
+ * la librería de OCSP, y puede exponer la topología del servicio.
+ */
+export class OCSPNotAvailableException extends ServiceUnavailableException {
+  constructor() {
     super(
-      `No fue posible verificar el estado de revocación ante el SAT: ${reason}`,
+      'No fue posible validar tu certificado ante el SAT porque su servicio no respondió. ' +
+        'Vuelve a intentarlo en unos minutos.',
     );
-    this.name = 'OCSNotAvilableException';
   }
 }

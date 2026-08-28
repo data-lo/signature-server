@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   BadRequestException,
   ForbiddenException,
@@ -3369,7 +3370,7 @@ describe('casos de uso de documentos', () => {
             serialNumber: '4A1B2C3D',
             issuedAt: new Date('2026-08-27T18:06:37.000Z'),
             // El CN del emisor es lo que la tabla NOM-151 imprime como "Certificado (TSA)".
-            issuerCommonName: 'Test TSA',
+            subjectCommonName: 'Test TSA',
           });
         });
 
@@ -3563,67 +3564,50 @@ describe('casos de uso de documentos', () => {
     });
 
     /**
-     * La cadena canónica se entrega envuelta en XML. El dato en sí no es XML —es la preimagen del
-     * hash sellado, con su formato de segmentos— y por eso el envoltorio la conserva íntegra: lo
-     * único que se le añade es el escapado que exige el formato.
+     * El XML canónico se entrega TAL CUAL: el proveedor ya lo emite como XML —con su propio
+     * namespace— y sólo lo transporta en Base64, que `SealMapper` decodifica al persistir. No se
+     * envuelve ni se reescribe nada, porque es lo único que conserva la propiedad que hace
+     * verificable la constancia.
      */
     describe('XML canónico', () => {
-      it('lo entrega como XML válido y con extensión .xml', async () => {
+      const XML_CANONICO =
+        '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<signatureSeal xmlns="https://app.firma-lo.com/schemas/signature-seal/v1" hashVersion="v1">' +
+        '<file documentId="doc-1"></file></signatureSeal>';
+
+      beforeEach(() => {
+        sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+          ...SEAL,
+          canonicalPayload: XML_CANONICO,
+        } as unknown as SealEntity);
+      });
+
+      it('lo entrega como XML y con extensión .xml', async () => {
         const result = await getPublicSealArtifact.execute(
           'doc-1',
           SEAL_ARTIFACT_ENUM.CANONICAL,
         );
 
         expect(result.contentType).toBe('application/xml; charset=utf-8');
-        expect(result.fileName).toBe('cadena-canonica-doc-1.xml');
-
-        const xml = result.content.toString('utf-8');
-        expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
-        expect(xml).toContain('>v1||12:hola-mundo<');
+        expect(result.fileName).toBe('xml-canonico-doc-1.xml');
       });
 
       /**
-       * Lo que hace verificable al archivo: quien lo descargue puede recomputar el hash sobre el
-       * contenido del nodo (desescapado) y comprobarlo contra el atributo.
+       * Lo que hace verificable al archivo: `sha256` de lo descargado tiene que reproducir el
+       * hash sellado. Cualquier transformación —envolverlo, escaparlo, recodificarlo— lo rompe.
        */
-      it('lleva el documento y el hash sellado como atributos', async () => {
-        sealDocumentUseCase.findByDocumentId.mockResolvedValue({
-          ...SEAL,
-          documentId: 'doc-1',
-          signatureHash: 'abc123',
-        } as unknown as SealEntity);
-
-        const xml = (
+      it('entrega el XML byte por byte, sin transformarlo', async () => {
+        const content = (
           await getPublicSealArtifact.execute(
             'doc-1',
             SEAL_ARTIFACT_ENUM.CANONICAL,
           )
-        ).content.toString('utf-8');
+        ).content;
 
-        expect(xml).toContain('documentId="doc-1"');
-        expect(xml).toContain('signatureHash="abc123"');
-        expect(xml).toContain('hashAlgorithm="sha256"');
-      });
-
-      /**
-       * El nombre del firmante y el PEM del certificado entran en la cadena tal cual vengan, así
-       * que un `&` o un `<` producirían un XML que no abre — justo lo que el envoltorio evita.
-       */
-      it('escapa los caracteres que romperían el XML', async () => {
-        sealDocumentUseCase.findByDocumentId.mockResolvedValue({
-          ...SEAL,
-          canonicalPayload: 'v1||18:Ruiz & Cía <S.A.>',
-        } as unknown as SealEntity);
-
-        const xml = (
-          await getPublicSealArtifact.execute(
-            'doc-1',
-            SEAL_ARTIFACT_ENUM.CANONICAL,
-          )
-        ).content.toString('utf-8');
-
-        expect(xml).toContain('Ruiz &amp; Cía &lt;S.A.&gt;');
-        expect(xml).not.toContain('Ruiz & Cía <S.A.>');
+        expect(content.toString('utf-8')).toBe(XML_CANONICO);
+        expect(createHash('sha256').update(content).digest('hex')).toBe(
+          createHash('sha256').update(XML_CANONICO, 'utf-8').digest('hex'),
+        );
       });
     });
 

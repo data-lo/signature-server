@@ -14,8 +14,6 @@ import {
   CertificadoInvalidoException,
   LLaveNoCorrespondeCertificadoException,
   LLavePrivadaInvalidException,
-  CertificadoRevocadoException,
-  OCSPNotAvilableException,
 } from './efirma.exceptions';
 import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -208,11 +206,12 @@ export class EfirmaService implements OnModuleInit {
   }
 
   /**
-   * @param permitirDegradadoSiOCSPFalla si el SAT no responde (timeout, caído,
-   * cambio de endpoint no documentado), decide si bloqueas la firma o la
-   * dejas pasar dejando constancia de que no se pudo verificar revocación.
-   * Para un producto que compite con Mifiel, recomiendo `false` por default:
-   * es mejor fallar visible que firmar "a ciegas" en revocación.
+   * Firma un documento con la e.firma del SAT.
+   *
+   * **No hay modo degradado**: si el SAT no responde (timeout, caído, endpoint cambiado sin
+   * avisar), la firma falla con un 503 en vez de producirse sin comprobar revocación. Es mejor
+   * fallar visible que firmar "a ciegas" —y además una firma sin evidencia OCSP no se puede
+   * sellar, así que el documento acabaría sin constancia NOM-151.
    */
   async firmar(
     document: Buffer,
@@ -223,25 +222,23 @@ export class EfirmaService implements OnModuleInit {
     const infoCertificado = this.parsearCertificado(cerBuffer);
     this.validarVigencia(infoCertificado);
     const emisorInmediato = this.validarCadenaConfianza(cerBuffer);
-    let ocspEvidence: OCSPEvidence;
-
-    try {
-      ocspEvidence = await this.ocspService.verifyRevokedOCSP(
-        cerBuffer,
-        emisorInmediato,
-      );
-    } catch (err) {
-      if (err instanceof CertificadoRevocadoException) {
-        throw err;
-      }
-      if (err instanceof OCSPNotAvilableException) {
-        this.logger.warn(
-          `Firmando en modo degradado sin confirmación OCSP: ${(err as Error).message}`,
-        );
-      } else {
-        throw err;
-      }
-    }
+    /**
+     * Sin evidencia OCSP no se firma.
+     *
+     * Antes se seguía en "modo degradado": la firma se producía igual, sin evidencia, y el fallo
+     * sólo dejaba un warning. El problema es que esa firma NO se puede sellar —Seal Service exige
+     * `ocspEvidence`— así que el documento acababa firmado pero SIN constancia de conservación
+     * NOM-151, con su tabla vacía en la hoja de evidencia y sin que nadie se enterara hasta
+     * abrirla. Un documento legal a medias es peor que un error claro y un reintento.
+     *
+     * `CertificadoRevocadoException` y la indisponibilidad del SAT suben las dos: la primera es un
+     * rechazo definitivo, la segunda un 503 que invita a reintentar (ver
+     * `OCSPNotAvailableException`).
+     */
+    const ocspEvidence: OCSPEvidence = await this.ocspService.verifyRevokedOCSP(
+      cerBuffer,
+      emisorInmediato,
+    );
 
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
     this.validarParCertificadoLlave(cerBuffer, privateKey);

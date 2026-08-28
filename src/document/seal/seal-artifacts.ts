@@ -53,41 +53,6 @@ interface SealArtifactDescriptor {
   label: string;
 }
 
-/**
- * Escapa el texto que va dentro de un nodo o atributo XML.
- *
- * La cadena canónica puede traer cualquier carácter que venga del certificado o del nombre del
- * firmante, así que sin esto un `&` o un `<` producirían un XML que no abre — justo lo que este
- * envoltorio existe para evitar.
- */
-function escapeXml(value: string | null | undefined): string {
-  // Total a propósito: un atributo sin valor no puede tumbar la descarga de la evidencia, que es
-  // lo único que el usuario vino a buscar.
-  return (value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/**
- * Envuelve la cadena canónica en un documento XML válido.
- *
- * **La cadena es la preimagen literal del hash sellado**, así que el texto se conserva byte por
- * byte dentro del nodo; lo único que cambia es el escapado XML. Para recomputar
- * `sha256` y comprobar el sello hay que desescapar el contenido del nodo primero — de ahí que el
- * hash y el algoritmo viajen como atributos, para poder verificarlo sin consultar nada más.
- */
-function toCanonicalXml(raw: string, seal: SealEntity): string {
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    `<canonicalPayload documentId="${escapeXml(seal.documentId)}" signatureHash="${escapeXml(
-      seal.signatureHash,
-    )}" hashAlgorithm="sha256">${escapeXml(raw)}</canonicalPayload>`,
-    '',
-  ].join('\n');
-}
-
 export const SEAL_ARTIFACT_DESCRIPTORS: Record<
   SEAL_ARTIFACT_ENUM,
   SealArtifactDescriptor
@@ -112,11 +77,20 @@ export const SEAL_ARTIFACT_DESCRIPTORS: Record<
   },
   [SEAL_ARTIFACT_ENUM.CANONICAL]: {
     read: (seal) => seal.canonicalPayload,
-    render: toCanonicalXml,
+    /**
+     * Sin `render`: el dato YA es el XML canónico que emitió el proveedor, con su propio
+     * namespace, y se entrega intacto.
+     *
+     * Antes se envolvía en un elemento sintético porque se creía que el contenido era una cadena
+     * de segmentos imposible de expresar como XML. No lo es: Seal Service devuelve XML y sólo lo
+     * transportaba en Base64 (ver `SealMapper.decodeCanonicalXml`). Entregarlo tal cual es además
+     * lo único que conserva la propiedad que hace verificable la constancia — `sha256` del
+     * archivo descargado reproduce `signature_hash`, sin desescapar nada.
+     */
     encoding: 'utf-8',
     contentType: 'application/xml; charset=utf-8',
-    fileNamePrefix: 'cadena-canonica',
+    fileNamePrefix: 'xml-canonico',
     extension: '.xml',
-    label: 'la cadena canónica',
+    label: 'el XML canónico',
   },
 };

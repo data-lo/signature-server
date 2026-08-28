@@ -5,14 +5,19 @@ export interface TsaCertificateInfo {
   serialNumber: string;
   issuedAt: Date;
   /**
-   * Nombre común (CN) de quien emitió el certificado: lo que la tabla NOM-151 de las hojas de
-   * evidencia imprime como "Certificado (TSA)".
+   * Nombre común (CN) del **titular** del certificado: la Autoridad de Sellado de Tiempo que
+   * emitió la constancia. Es lo que la tabla NOM-151 imprime como "Certificado (TSA)".
    *
-   * Opcional porque un certificado puede no traer CN en su emisor —el DN admite otras
-   * combinaciones de atributos— y eso no debe invalidar la serie ni la fecha, que son los datos
-   * que sí se obtuvieron.
+   * Se toma del `subject` y no del `issuer` a propósito. En una evidencia real de PSC CODEX el
+   * subject es «Autoridad CCMD de PSC CODEX TUL» —quien sella— mientras que el issuer es
+   * «Autoridad Certificadora Raiz Segunda de Secretaria de Economia», la CA raíz que acredita al
+   * PSC. Poner el issuer haría que la hoja nombrara a la Secretaría de Economía como si hubiera
+   * sellado el documento.
+   *
+   * Opcional porque un DN puede no traer CN —admite otras combinaciones de atributos— y eso no
+   * debe invalidar la serie ni la fecha, que sí se obtuvieron.
    */
-  issuerCommonName?: string;
+  subjectCommonName?: string;
 }
 
 /** OID del atributo `commonName` dentro de un DN X.500. */
@@ -45,8 +50,8 @@ export function extractTsaCertificateInfo(
       return null;
     }
 
-    const contentInfo = new ContentInfo({ schema: asn1 });
-    if (contentInfo.contentType !== ContentInfo.SIGNED_DATA) {
+    const contentInfo = toSignedDataContentInfo(asn1);
+    if (!contentInfo) {
       return null;
     }
 
@@ -71,12 +76,12 @@ export function extractTsaCertificateInfo(
       return null;
     }
 
-    const issuerCommonName = extractCommonName(certificate);
+    const subjectCommonName = extractCommonName(certificate);
 
     return {
       serialNumber,
       issuedAt,
-      ...(issuerCommonName && { issuerCommonName }),
+      ...(subjectCommonName && { subjectCommonName }),
     };
   } catch {
     return null;
@@ -84,7 +89,45 @@ export function extractTsaCertificateInfo(
 }
 
 /**
- * CN del emisor del certificado.
+ * Localiza el `ContentInfo` de tipo SignedData dentro de la evidencia, venga desnudo o envuelto.
+ *
+ * **Los PSC no entregan todos la misma envoltura.** PSC CODEX responde un `TimeStampResp` de
+ * RFC 3161 —`SEQUENCE { PKIStatusInfo, TimeStampToken }`—, donde el CMS es el SEGUNDO elemento;
+ * otras evidencias llegan como el `ContentInfo` a secas. Asumir sólo lo segundo es lo que hacía
+ * que la extracción devolviera `null` contra la evidencia real de producción, y con ella que la
+ * tabla NOM-151 saliera vacía: el certificado estaba ahí, pero se buscaba un nivel más arriba.
+ *
+ * Se intenta primero la forma desnuda y después la envuelta, en vez de mirar la estructura para
+ * decidir: `ContentInfo` ya valida el esquema y lanza si no encaja, así que probar es más fiable
+ * que reimplementar esa comprobación.
+ */
+function toSignedDataContentInfo(asn1: unknown): ContentInfo | null {
+  const candidates = [asn1, ...childrenOf(asn1)];
+
+  for (const candidate of candidates) {
+    try {
+      const contentInfo = new ContentInfo({ schema: candidate });
+      if (contentInfo.contentType === ContentInfo.SIGNED_DATA) {
+        return contentInfo;
+      }
+    } catch {
+      // No es un ContentInfo: se prueba el siguiente candidato.
+    }
+  }
+
+  return null;
+}
+
+/** Hijos directos de un bloque ASN.1 constructivo; vacío si no los tiene. */
+function childrenOf(asn1: unknown): unknown[] {
+  const value = (asn1 as { valueBlock?: { value?: unknown[] } })?.valueBlock
+    ?.value;
+
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * CN del titular (`subject`) del certificado: la autoridad que selló.
  *
  * Se busca el atributo por su OID y no por posición: el orden de los componentes de un DN no está
  * garantizado, así que tomar el primero daría el país o la organización según el PSC.
@@ -94,7 +137,7 @@ export function extractTsaCertificateInfo(
  */
 function extractCommonName(certificate: Certificate): string | undefined {
   try {
-    const commonName = certificate.issuer.typesAndValues.find(
+    const commonName = certificate.subject.typesAndValues.find(
       (attribute) => attribute.type === COMMON_NAME_OID,
     );
 

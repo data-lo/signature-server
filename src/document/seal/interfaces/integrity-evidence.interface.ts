@@ -13,8 +13,8 @@ export interface IntegrityEvidence {
   certificateSerialNumber?: string;
   certificateIssuedAt?: Date;
   /**
-   * CN del emisor del certificado del PSC. Es lo que la tabla NOM-151 de las hojas de evidencia
-   * imprime como "Certificado (TSA)".
+   * CN del titular del certificado del PSC —la Autoridad de Sellado de Tiempo que emitió la
+   * constancia—. Es lo que la tabla NOM-151 imprime como "Certificado (TSA)".
    */
-  certificateIssuerCommonName?: string;
+  certificateSubjectCommonName?: string;
 }
