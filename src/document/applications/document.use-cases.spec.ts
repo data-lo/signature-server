@@ -300,6 +300,7 @@ describe('casos de uso de documentos', () => {
     sealDocumentUseCase = {
       create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
       findByDocumentId: jest.fn().mockResolvedValue(null),
+      persistIntegrityCertificateInfo: jest.fn().mockResolvedValue(undefined),
     };
     // Devuelve `false` —"este documento no es asunto suyo"— salvo en las pruebas que lo miran.
     sendCompletedSimpleSignatureToSeal = {
@@ -2991,17 +2992,19 @@ describe('casos de uso de documentos', () => {
       signatureHash: 'hash-sellado',
       canonicalPayload: 'v1||12:hola-mundo',
       sealedAt: new Date('2026-08-14T18:24:11.000Z'),
-      timestampSeal: {
+      timestampEvidence: {
         isValid: true,
         processedHash: 'hash-ts',
-        tokenBase64: 'dG9rZW4tdHM=',
+        fileBase64: 'dG9rZW4tdHM=',
         evidenceId: 'ts-1',
+        issuedAt: new Date('2026-08-14T18:24:11.000Z'),
       },
-      integritySeal: {
+      integrityEvidence: {
         isValid: true,
         processedHash: 'hash-nom151',
-        tokenBase64: 'dG9rZW4tbm9tMTUx',
+        fileBase64: 'dG9rZW4tbm9tMTUx',
         evidenceId: 'nom151-1',
+        issuedAt: new Date('2026-08-14T18:24:11.000Z'),
         certificatePdfBase64: 'JVBERi0xLjQK',
       },
     } as unknown as SealEntity;
@@ -3133,6 +3136,8 @@ describe('casos de uso de documentos', () => {
             },
           ],
           downloads: { nom151: false, timestamp: false, canonical: false },
+          sealEvidence: { timestampFileBase64: null, integrityFileBase64: null },
+          integrityTsaCertificate: null,
         });
       });
 
@@ -3230,6 +3235,10 @@ describe('casos de uso de documentos', () => {
             timestamp: true,
             canonical: true,
           });
+          expect(result.data.sealEvidence).toEqual({
+            timestampFileBase64: 'dG9rZW4tdHM=',
+            integrityFileBase64: 'dG9rZW4tbm9tMTUx',
+          });
         });
 
         /**
@@ -3249,6 +3258,10 @@ describe('casos de uso de documentos', () => {
             timestamp: false,
             canonical: false,
           });
+          expect(result.data.sealEvidence).toEqual({
+            timestampFileBase64: null,
+            integrityFileBase64: null,
+          });
         });
 
         it('habilita solo las descargas cuyo artefacto realmente vino en la respuesta del PSC', async () => {
@@ -3256,7 +3269,7 @@ describe('casos de uso de documentos', () => {
           sealDocumentUseCase.findByDocumentId.mockResolvedValue({
             ...SEAL,
             canonicalPayload: '',
-            integritySeal: { ...SEAL.integritySeal, certificatePdfBase64: '' },
+            integrityEvidence: { ...SEAL.integrityEvidence, certificatePdfBase64: '' },
           } as unknown as SealEntity);
 
           const result = await getPublicDocument.execute('doc-1');
@@ -3266,6 +3279,108 @@ describe('casos de uso de documentos', () => {
             timestamp: true,
             canonical: false,
           });
+        });
+
+        it('la evidencia cruda para descarga viene de fileBase64, no de certificatePdfBase64', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+            ...SEAL,
+            integrityEvidence: { ...SEAL.integrityEvidence, certificatePdfBase64: '' },
+          } as unknown as SealEntity);
+
+          const result = await getPublicDocument.execute('doc-1');
+
+          // `downloads.nom151` sigue en false (mide `certificatePdfBase64`, la ruta de descarga del
+          // backend), pero `sealEvidence.integrityFileBase64` sigue viniendo: son artefactos
+          // distintos de la misma evidencia.
+          expect(result.data.downloads.nom151).toBe(false);
+          expect(result.data.sealEvidence.integrityFileBase64).toBe(
+            'dG9rZW4tbm9tMTUx',
+          );
+        });
+      });
+
+      describe('certificado TSA de la evidencia NOM-151', () => {
+        /**
+         * CMS SignedData (DER, Base64) real, generado con `openssl cms -sign` sobre un
+         * certificado autofirmado (`openssl req -x509 ... -set_serial 0x4A1B2C3D`). Mismo
+         * fixture que `tsa-certificate.util.spec.ts`: serial=4A1B2C3D,
+         * notBefore=2026-08-27T18:06:37.000Z.
+         */
+        const CMS_WITH_CERTIFICATE =
+          'MIIDjwYJKoZIhvcNAQcCoIIDgDCCA3wCAQExDTALBglghkgBZQMEAgEwJAYJKoZIhvcNAQcBoBcEFWhvbGEtbXVuZG8tZXZpZGVuY2lhCqCCAa8wggGrMIIBUaADAgECAgRKGyw9MAoGCCqGSM49BAMCMDMxETAPBgNVBAMMCFRlc3QgVFNBMREwDwYDVQQKDAhUZXN0IFBTQzELMAkGA1UEBhMCTVgwHhcNMjYwODI3MTgwNjM3WhcNMjcwODI3MTgwNjM3WjAzMREwDwYDVQQDDAhUZXN0IFRTQTERMA8GA1UECgwIVGVzdCBQU0MxCzAJBgNVBAYTAk1YMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJHOJY30iMvggdywg6JP+hC8l7ogdCgDnrunBZkklArQbBkJAz6E9DtNVlMuzC9jypxWh5lbpX8Py4QiEHp+IV6NTMFEwHQYDVR0OBBYEFBUIxTafnILGpbiZEVcea2LGzAnsMB8GA1UdIwQYMBaAFBUIxTafnILGpbiZEVcea2LGzAnsMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIhANXcs8sKgBLuhrTNX8TYAYjkft9QwTSnEcp4ywPtr2xMAiAh8FUsFK68JhxcGDcKl509H9cOftJ6Pnnf4FaawZyuEzGCAY0wggGJAgEBMDswMzERMA8GA1UEAwwIVGVzdCBUU0ExETAPBgNVBAoMCFRlc3QgUFNDMQswCQYDVQQGEwJNWAIEShssPTALBglghkgBZQMEAgGggeQwGAYJKoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjYwODI3MTgwNjM3WjAvBgkqhkiG9w0BCQQxIgQgQ7XgrBofCLIuYAXovuRl4knoZu433yrmBFlRA5Xy9poweQYJKoZIhvcNAQkPMWwwajALBglghkgBZQMEASowCwYJYIZIAWUDBAEWMAsGCWCGSAFlAwQBAjAKBggqhkiG9w0DBzAOBggqhkiG9w0DAgICAIAwDQYIKoZIhvcNAwICAUAwBwYFKw4DAgcwDQYIKoZIhvcNAwICASgwCgYIKoZIzj0EAwIERzBFAiEAn04MlsE6WsTM1el7evE7uYXzZnke0/edGFRkWrK2ZEgCIE8207j6a9Uw+2oBN95tk9zOesY6LCyc6F4PwF/bvwmY';
+
+        it('si integrityEvidence ya trae serie y fecha del certificado, los usa sin reprocesar el ASN.1', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue({
+            ...SEAL,
+            integrityEvidence: {
+              ...SEAL.integrityEvidence,
+              fileBase64: CMS_WITH_CERTIFICATE,
+              certificateSerialNumber: 'YA-GUARDADO',
+              certificateIssuedAt: new Date('2020-01-01T00:00:00.000Z'),
+            },
+          } as unknown as SealEntity);
+
+          const result = await getPublicDocument.execute('doc-1');
+
+          expect(result.data.integrityTsaCertificate).toEqual({
+            serialNumber: 'YA-GUARDADO',
+            issuedAt: '2020-01-01T00:00:00.000Z',
+          });
+          // Si hubiera reprocesado, habría extraído 4A1B2C3D del fixture en vez de devolver el
+          // valor ya guardado — y no habría razón para volver a persistir nada.
+          expect(
+            sealDocumentUseCase.persistIntegrityCertificateInfo,
+          ).not.toHaveBeenCalled();
+        });
+
+        it('si faltan los datos del certificado, los extrae de fileBase64 y los persiste para no reprocesar después', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          const sealWithoutCertificateInfo = {
+            ...SEAL,
+            integrityEvidence: {
+              ...SEAL.integrityEvidence,
+              fileBase64: CMS_WITH_CERTIFICATE,
+            },
+          } as unknown as SealEntity;
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue(
+            sealWithoutCertificateInfo,
+          );
+
+          const result = await getPublicDocument.execute('doc-1');
+
+          expect(result.data.integrityTsaCertificate).toEqual({
+            serialNumber: '4A1B2C3D',
+            issuedAt: '2026-08-27T18:06:37.000Z',
+          });
+          expect(
+            sealDocumentUseCase.persistIntegrityCertificateInfo,
+          ).toHaveBeenCalledWith(sealWithoutCertificateInfo, {
+            serialNumber: '4A1B2C3D',
+            issuedAt: new Date('2026-08-27T18:06:37.000Z'),
+          });
+        });
+
+        it('si no se puede extraer nada del ASN.1, no muestra el certificado ni intenta persistir', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue(SEAL); // fileBase64 no es un CMS real
+
+          const result = await getPublicDocument.execute('doc-1');
+
+          expect(result.data.integrityTsaCertificate).toBeNull();
+          expect(
+            sealDocumentUseCase.persistIntegrityCertificateInfo,
+          ).not.toHaveBeenCalled();
+        });
+
+        it('sin sello, el certificado también viene en null', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue(null);
+
+          const result = await getPublicDocument.execute('doc-1');
+
+          expect(result.data.integrityTsaCertificate).toBeNull();
         });
       });
 
@@ -3402,8 +3517,8 @@ describe('casos de uso de documentos', () => {
   describe('getPublicSealArtifact', () => {
     const SEAL = {
       canonicalPayload: 'v1||12:hola-mundo',
-      timestampSeal: { tokenBase64: 'dG9rZW4tdHM=' },
-      integritySeal: { certificatePdfBase64: 'JVBERi0xLjQK' },
+      timestampEvidence: { fileBase64: 'dG9rZW4tdHM=' },
+      integrityEvidence: { certificatePdfBase64: 'JVBERi0xLjQK' },
     } as unknown as SealEntity;
 
     beforeEach(() => {
@@ -3471,7 +3586,7 @@ describe('casos de uso de documentos', () => {
     it('404 si ese artefacto en concreto no vino en la respuesta del PSC', async () => {
       sealDocumentUseCase.findByDocumentId.mockResolvedValue({
         ...SEAL,
-        integritySeal: { certificatePdfBase64: '' },
+        integrityEvidence: { certificatePdfBase64: '' },
       } as unknown as SealEntity);
 
       await expect(

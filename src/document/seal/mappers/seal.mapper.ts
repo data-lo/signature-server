@@ -3,6 +3,8 @@ import { DeepPartial } from 'typeorm';
 import { SealDocumentDto } from '../dto/seal-document.dto';
 import { SealEntity } from '../entities/seal.entity';
 import { SealDocumentResponse } from '../interfaces/seal-document-response.interface';
+import { IntegrityEvidence } from '../interfaces/integrity-evidence.interface';
+import { extractTsaCertificateInfo } from '../utils/tsa-certificate.util';
 
 /** Traduce la respuesta del proveedor externo al modelo de persistencia local. */
 export class SealMapper {
@@ -34,19 +36,39 @@ export class SealMapper {
        * "EMITIDO"; `created_at` no sirve de sustituto, porque mide cuándo insertamos la fila.
        */
       sealedAt: response.sealedAt ? new Date(response.sealedAt) : null,
-      timestampSeal: {
+      timestampEvidence: {
         isValid: response.timeStamp.status,
         processedHash: response.timeStamp.hashProcessed,
-        tokenBase64: response.timeStamp.fileBase64,
+        fileBase64: response.timeStamp.fileBase64,
         evidenceId: response.timeStamp.uuid,
+        issuedAt: response.sealedAt ? new Date(response.sealedAt) : null,
       },
-      integritySeal: {
-        isValid: response.nom151.status,
-        processedHash: response.nom151.hashProcessed,
-        tokenBase64: response.nom151.file,
-        evidenceId: response.nom151.uuid,
-        certificatePdfBase64: response.nom151.pdfFile,
-      },
+      integrityEvidence: SealMapper.buildIntegrityEvidence(response),
+    };
+  }
+
+  /**
+   * `certificateSerialNumber`/`certificateIssuedAt` son best-effort: si `file` no trae un
+   * certificado embebido reconocible (o no es el CMS esperado), la evidencia se guarda igual,
+   * solo sin esos dos campos. La vista pública reintenta la extracción para evidencias que se
+   * quedaron sin ellos (ver `GetPublicDocumentUseCase`).
+   */
+  private static buildIntegrityEvidence(
+    response: SealDocumentResponse,
+  ): IntegrityEvidence {
+    const tsaCertificate = extractTsaCertificateInfo(response.nom151.file);
+
+    return {
+      isValid: response.nom151.status,
+      processedHash: response.nom151.hashProcessed,
+      fileBase64: response.nom151.file,
+      evidenceId: response.nom151.uuid,
+      issuedAt: response.sealedAt ? new Date(response.sealedAt) : null,
+      certificatePdfBase64: response.nom151.pdfFile,
+      ...(tsaCertificate && {
+        certificateSerialNumber: tsaCertificate.serialNumber,
+        certificateIssuedAt: tsaCertificate.issuedAt,
+      }),
     };
   }
 }

@@ -102,11 +102,11 @@ describe('SealDocumentUseCase', () => {
         documentId: 'doc-1',
         signatureHash: 'abc123',
         canonicalPayload: 'v1||13:hash-original|5:doc-1',
-        timestampSeal: expect.objectContaining({
-          tokenBase64: 'tsr-en-base64',
+        timestampEvidence: expect.objectContaining({
+          fileBase64: 'tsr-en-base64',
         }),
-        integritySeal: expect.objectContaining({
-          tokenBase64: 'nom151-en-base64',
+        integrityEvidence: expect.objectContaining({
+          fileBase64: 'nom151-en-base64',
           certificatePdfBase64: 'pdf-en-base64',
         }),
       }),

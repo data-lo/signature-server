@@ -47,7 +47,7 @@ export const SEAL_ARTIFACT_DESCRIPTORS: Record<
   SealArtifactDescriptor
 > = {
   [SEAL_ARTIFACT_ENUM.NOM151]: {
-    read: (seal) => seal.integritySeal?.certificatePdfBase64,
+    read: (seal) => seal.integrityEvidence?.certificatePdfBase64,
     encoding: 'base64',
     contentType: 'application/pdf',
     fileNamePrefix: 'constancia-nom151',
@@ -55,7 +55,7 @@ export const SEAL_ARTIFACT_DESCRIPTORS: Record<
     label: 'la constancia NOM-151',
   },
   [SEAL_ARTIFACT_ENUM.TIMESTAMP]: {
-    read: (seal) => seal.timestampSeal?.tokenBase64,
+    read: (seal) => seal.timestampEvidence?.fileBase64,
     encoding: 'base64',
     // Tipo MIME del TimeStampResp de RFC 3161. `.tsr` es la extensión con la que `openssl ts`
     // espera encontrarlo, que es con lo que se verifica.

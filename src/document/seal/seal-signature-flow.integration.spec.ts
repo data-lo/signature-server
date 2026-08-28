@@ -469,17 +469,19 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       // El momento de emisión que reporta el PSC: se persiste porque la respuesta es la única
       // oportunidad de guardarlo, y es lo que la hoja de evidencia imprime como "EMITIDO".
       sealedAt: new Date('2026-08-13T19:00:00.000Z'),
-      timestampSeal: {
+      timestampEvidence: {
         isValid: true,
         processedHash: 'f00dcafe',
-        tokenBase64: 'tsr-en-base64',
+        fileBase64: 'tsr-en-base64',
         evidenceId: 'ts-uuid',
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
       },
-      integritySeal: {
+      integrityEvidence: {
         isValid: true,
         processedHash: 'f00dcafe',
-        tokenBase64: 'nom151-en-base64',
+        fileBase64: 'nom151-en-base64',
         evidenceId: 'nom-uuid',
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
         certificatePdfBase64: 'pdf-en-base64',
       },
     });

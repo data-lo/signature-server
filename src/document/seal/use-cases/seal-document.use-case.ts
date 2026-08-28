@@ -9,6 +9,7 @@ import {
   DocumentAlreadySealedException,
   SealPersistenceException,
 } from '../exceptions/seal.exceptions';
+import { TsaCertificateInfo } from '../utils/tsa-certificate.util';
 
 @Injectable()
 export class SealDocumentUseCase {
@@ -52,6 +53,29 @@ export class SealDocumentUseCase {
    */
   async findByDocumentId(documentId: string): Promise<SealEntity | null> {
     return this.sealRepository.findOne({ where: { documentId } });
+  }
+
+  /**
+   * Completa `integrityEvidence` con la serie y el `notBefore` del certificado TSA en una
+   * evidencia que se creó antes de que existiera esta extracción (o cuya extracción falló al
+   * sellar). La llama la vista pública cuando encuentra una evidencia sin estos campos y sí logra
+   * extraerlos — así el reprocesamiento de ASN.1 no se repite en cada consulta.
+   *
+   * Recibe la evidencia completa (no solo el id) para reescribir el JSONB entero con los campos
+   * que ya tenía más los dos nuevos: un `update` parcial de una columna `jsonb` reemplaza la
+   * columna completa, no la mezcla.
+   */
+  async persistIntegrityCertificateInfo(
+    seal: SealEntity,
+    certificateInfo: TsaCertificateInfo,
+  ): Promise<void> {
+    await this.sealRepository.update(seal.id, {
+      integrityEvidence: {
+        ...seal.integrityEvidence,
+        certificateSerialNumber: certificateInfo.serialNumber,
+        certificateIssuedAt: certificateInfo.issuedAt,
+      },
+    });
   }
 
   private isDocumentAlreadySealedError(error: unknown): boolean {

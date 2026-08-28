@@ -407,17 +407,19 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         // El momento de emisión que reporta el PSC, no cuándo insertamos la fila: es lo que la
         // hoja de evidencia imprime como "EMITIDO" (ver SealMapper).
         sealedAt: new Date(SEAL_RESPONSE.sealedAt),
-        timestampSeal: {
+        timestampEvidence: {
           isValid: true,
           processedHash: SEAL_RESPONSE.hashHex,
-          tokenBase64: 'tsr-en-base64',
+          fileBase64: 'tsr-en-base64',
           evidenceId: 'ts-uuid',
+          issuedAt: new Date(SEAL_RESPONSE.sealedAt),
         },
-        integritySeal: {
+        integrityEvidence: {
           isValid: true,
           processedHash: SEAL_RESPONSE.hashHex,
-          tokenBase64: 'nom151-en-base64',
+          fileBase64: 'nom151-en-base64',
           evidenceId: 'nom-uuid',
+          issuedAt: new Date(SEAL_RESPONSE.sealedAt),
           certificatePdfBase64: 'pdf-en-base64',
         },
       });
