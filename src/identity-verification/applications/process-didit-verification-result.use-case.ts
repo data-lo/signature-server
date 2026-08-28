@@ -119,18 +119,41 @@ export class ProcessDiditVerificationResultUseCase {
     const status = this.mapStatus(payload.status);
 
     /**
+     * Una aprobación gana siempre sobre un estado terminal que NO es aprobación.
+     *
+     * El caso real: la sesión expira (o se abandona) y Didit emite ese evento, pero el usuario sí
+     * completó la verificación y el `Approved` llega después — el proveedor no garantiza el orden
+     * de entrega. Sin esta excepción, la aprobación chocaba con la guarda de abajo y se descartaba
+     * en silencio: el intento se quedaba en EXPIRED, el usuario en RETRY_REQUIRED y la pantalla le
+     * mostraba "la sesión de verificación expiró" pese a haberla completado, sin forma de avanzar.
+     *
+     * Es seguro porque `Approved` es un hecho verificado y firmado por el proveedor, no una
+     * suposición nuestra: que la URL ya se hubiera consumido describe al canal, no al veredicto.
+     */
+    const supersedesTerminal =
+      status === IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED &&
+      attempt.status !== IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED;
+
+    /**
      * Didit no garantiza el orden de entrega: un `In Progress` retrasado puede llegar después
      * del `Approved`. Sin esta guarda, ese reordenamiento degradaría una identidad ya aprobada
      * y le quitaría al usuario la posibilidad de firmar.
      */
     if (
       TERMINAL_STATUSES.includes(attempt.status) &&
-      attempt.status !== status
+      attempt.status !== status &&
+      !supersedesTerminal
     ) {
       this.logger.warn(
         `Se ignora el estado ${status} para la sesión ${sessionId}: el intento ya está en ${attempt.status}.`,
       );
       return;
+    }
+
+    if (supersedesTerminal && TERMINAL_STATUSES.includes(attempt.status)) {
+      this.logger.log(
+        `La sesión ${sessionId} estaba en ${attempt.status} y Didit la aprobó después: se aplica la aprobación.`,
+      );
     }
 
     const isTerminal = TERMINAL_STATUSES.includes(status);

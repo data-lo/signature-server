@@ -85,6 +85,21 @@ describe('UpdateSigningCredentialStatusUseCase', () => {
         S.IDENTITY_VERIFICATION_RETRY_REQUIRED,
         S.IDENTITY_VERIFICATION_MAX_ATTEMPTS_EXCEEDED,
       ],
+      /**
+       * Didit aprueba DESPUÉS de haber reportado la sesión como expirada o abandonada, que es lo
+       * que deja al usuario en RETRY_REQUIRED. Sin estas dos salidas el intento quedaba aprobado
+       * y el estatus del usuario no se movía.
+       */
+      [
+        'aprueba una sesión ya dada por expirada',
+        S.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+        S.SIGNATURE_PENDING,
+      ],
+      [
+        'la aprueba y ya tenía su rúbrica',
+        S.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+        S.CONFIGURED,
+      ],
       ['bloqueo administrativo', S.CONFIGURED, S.IDENTITY_VERIFICATION_FAILED],
     ])('%s: %s → %s', async (_caso, from, to) => {
       givenUserAt(from);
