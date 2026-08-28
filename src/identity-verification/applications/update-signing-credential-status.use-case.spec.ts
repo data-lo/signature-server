@@ -90,16 +90,17 @@ describe('UpdateSigningCredentialStatusUseCase', () => {
        * que deja al usuario en RETRY_REQUIRED. Sin estas dos salidas el intento quedaba aprobado
        * y el estatus del usuario no se movía.
        */
+      /**
+       * Los dos pasos con los que una aprobación alcanza CONFIGURED en quien ya tenía su rúbrica
+       * (ver `applyApproval`). Se recorren por separado justamente porque el salto directo no es
+       * —ni debe ser— una arista válida: ver "transiciones bloqueadas".
+       */
       [
-        'aprueba una sesión ya dada por expirada',
-        S.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+        'aprueba la identidad de quien ya tenía rúbrica (paso 1)',
+        S.IDENTITY_VERIFICATION_IN_PROGRESS,
         S.SIGNATURE_PENDING,
       ],
-      [
-        'la aprueba y ya tenía su rúbrica',
-        S.IDENTITY_VERIFICATION_RETRY_REQUIRED,
-        S.CONFIGURED,
-      ],
+      ['y completa la credencial (paso 2)', S.SIGNATURE_PENDING, S.CONFIGURED],
       ['bloqueo administrativo', S.CONFIGURED, S.IDENTITY_VERIFICATION_FAILED],
     ])('%s: %s → %s', async (_caso, from, to) => {
       givenUserAt(from);
@@ -134,9 +135,25 @@ describe('UpdateSigningCredentialStatusUseCase', () => {
         S.IDENTITY_VERIFICATION_IN_PROGRESS,
         S.IDENTITY_VERIFICATION_PENDING,
       ],
+      /**
+       * Ninguna de estas puede abrirse para que una aprobación llegue a CONFIGURED de un salto:
+       * `UpdateSignatureUseCase` pide CONFIGURED al reponer la rúbrica SIN comprobar la
+       * identidad, así que la arista le daría credencial completa a quien no la tiene aprobada.
+       * La aprobación llega a CONFIGURED recorriendo SIGNATURE_PENDING (ver `applyApproval`).
+       */
       [
-        'no se configura sin haber subido la firma',
+        'no se configura sin identidad aprobada, desde revisión',
         S.IDENTITY_VERIFICATION_IN_REVIEW,
+        S.CONFIGURED,
+      ],
+      [
+        'no se configura sin identidad aprobada, en curso',
+        S.IDENTITY_VERIFICATION_IN_PROGRESS,
+        S.CONFIGURED,
+      ],
+      [
+        'no se configura sin identidad aprobada, tras un rechazo',
+        S.IDENTITY_VERIFICATION_RETRY_REQUIRED,
         S.CONFIGURED,
       ],
       [

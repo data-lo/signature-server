@@ -36,15 +36,24 @@ describe('validateDiditWebhookPayload', () => {
     });
   });
 
-  it.each(['In Review', 'Declined', 'Abandoned', 'Expired'])(
-    'acepta el estado %s',
-    (status) => {
-      expect(validateDiditWebhookPayload({ ...BASE, status })).toMatchObject({
-        status,
-        reason: null,
-      });
-    },
-  );
+  /**
+   * `Not Started` y `Kyc Expired` llegaban de verdad desde Didit y se rechazaban con un 400 pese a
+   * que el dominio ya sabía traducirlos: el proveedor daba la entrega por fallida y la reintentaba
+   * en bucle. Esta lista tiene que cubrir lo mismo que `DIDIT_STATUS_MAP`.
+   */
+  it.each([
+    'Not Started',
+    'In Review',
+    'Declined',
+    'Abandoned',
+    'Expired',
+    'Kyc Expired',
+  ])('acepta el estado %s', (status) => {
+    expect(validateDiditWebhookPayload({ ...BASE, status })).toMatchObject({
+      status,
+      reason: null,
+    });
+  });
 
   it('devuelve el cuerpo intacto: lo que se audita y lo que procesa el dominio es lo mismo', () => {
     const conExtras = { ...BASE, campo_que_no_conocemos: 'valor' };

@@ -12,14 +12,25 @@
  * y en los logs.
  */
 
-/** Estados que este servidor sabe interpretar. Cualquier otro se rechaza en la puerta. */
+/**
+ * Estados que este servidor sabe interpretar. Cualquier otro se rechaza en la puerta.
+ *
+ * **Tiene que cubrir exactamente lo mismo que `DIDIT_STATUS_MAP`** (en
+ * ProcessDiditVerificationResultUseCase). Cuando esta lista se quedaba corta, el efecto no era
+ * "se ignora el evento" sino un 400 al proveedor: Didit da la entrega por fallida y la reintenta
+ * en bucle, y la fila queda en `webhook_events` como payload inválido pese a ser un cuerpo
+ * legítimo. `Not Started` y `Kyc Expired` llegaban de verdad y caían justo ahí, aunque el
+ * dominio ya sabía traducirlos.
+ */
 export const DIDIT_WEBHOOK_STATUSES = [
+  'Not Started',
   'In Progress',
   'In Review',
   'Approved',
   'Declined',
   'Abandoned',
   'Expired',
+  'Kyc Expired',
 ] as const;
 
 export type DiditWebhookStatus = (typeof DIDIT_WEBHOOK_STATUSES)[number];

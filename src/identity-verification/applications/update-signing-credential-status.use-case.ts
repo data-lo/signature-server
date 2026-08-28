@@ -15,6 +15,16 @@ const S = SIGNING_CREDENTIAL_STATUS_ENUM;
  * estado que le parezca: así una regresión ("aprobado vuelve a pendiente") es imposible por
  * construcción y no depende de que cada llamador se acuerde de comprobarla.
  *
+ * **Esta tabla es también la autorización de los disparadores, no sólo una descripción.** Hay
+ * llamadores que apuntan a un estado sin comprobar por su cuenta los requisitos —
+ * `UpdateSignatureUseCase` pide CONFIGURED al reponer la rúbrica sin mirar la identidad— y
+ * confían en que una transición ilegal quede en no-op. Por eso una arista nueva se agrega sólo si
+ * es válida para TODOS los disparadores que puedan pedirla: abrir
+ * PENDING/IN_PROGRESS/IN_REVIEW → CONFIGURED completaría la credencial de alguien sin identidad
+ * aprobada con sólo volver a subir su firma. Cuando un disparador necesita llegar a un estado que
+ * no es alcanzable en un salto, recorre los pasos legales (ver `applyApproval` en
+ * ProcessDiditVerificationResultUseCase) en vez de ensanchar la tabla.
+ *
  * Notas sobre las aristas menos obvias:
  * - Desde SIGNATURE_PENDING y CONFIGURED se puede volver a RETRY_REQUIRED: si un intento
  *   aprobado expira o se revoca, la credencial tiene que dejar de valer por la misma vía por
@@ -58,18 +68,6 @@ export const ALLOWED_SIGNING_CREDENTIAL_TRANSITIONS: Readonly<
   ],
   [S.IDENTITY_VERIFICATION_RETRY_REQUIRED]: [
     S.IDENTITY_VERIFICATION_PENDING,
-    /**
-     * Salidas directas a "identidad aprobada" sin volver a pasar por PENDING: son para la
-     * aprobación que Didit entrega DESPUÉS de haber reportado la sesión como expirada o
-     * abandonada (el proveedor no garantiza el orden). Sin ellas, el intento quedaba aprobado
-     * pero el estatus del usuario no se movía —`applyIfAllowed` lo rechazaba en silencio— y la
-     * pantalla seguía pidiéndole reintentar una verificación que ya había completado.
-     *
-     * CONFIGURED es el mismo caso sobre alguien que ya tenía su rúbrica registrada: reenviarlo a
-     * SIGNATURE_PENDING le pediría subir de nuevo una firma que no perdió.
-     */
-    S.SIGNATURE_PENDING,
-    S.CONFIGURED,
     S.IDENTITY_VERIFICATION_FAILED,
     S.IDENTITY_VERIFICATION_MAX_ATTEMPTS_EXCEEDED,
   ],
