@@ -1,3 +1,4 @@
+import { escapeXml } from '../utils/xml.util';
 import { SealEntity } from './entities/seal.entity';
 
 /**
@@ -51,23 +52,6 @@ interface SealArtifactDescriptor {
   extension: string;
   /** Cómo se nombra el artefacto en el 404, en un español legible para quien consulta. */
   label: string;
-}
-
-/**
- * Escapa el texto que va dentro de un nodo o atributo XML.
- *
- * La cadena canónica puede traer cualquier carácter que venga del certificado o del nombre del
- * firmante, así que sin esto un `&` o un `<` producirían un XML que no abre — justo lo que este
- * envoltorio existe para evitar.
- */
-function escapeXml(value: string | null | undefined): string {
-  // Total a propósito: un atributo sin valor no puede tumbar la descarga de la evidencia, que es
-  // lo único que el usuario vino a buscar.
-  return (value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 /**
