@@ -58,6 +58,18 @@ export const ALLOWED_SIGNING_CREDENTIAL_TRANSITIONS: Readonly<
   ],
   [S.IDENTITY_VERIFICATION_RETRY_REQUIRED]: [
     S.IDENTITY_VERIFICATION_PENDING,
+    /**
+     * Salidas directas a "identidad aprobada" sin volver a pasar por PENDING: son para la
+     * aprobación que Didit entrega DESPUÉS de haber reportado la sesión como expirada o
+     * abandonada (el proveedor no garantiza el orden). Sin ellas, el intento quedaba aprobado
+     * pero el estatus del usuario no se movía —`applyIfAllowed` lo rechazaba en silencio— y la
+     * pantalla seguía pidiéndole reintentar una verificación que ya había completado.
+     *
+     * CONFIGURED es el mismo caso sobre alguien que ya tenía su rúbrica registrada: reenviarlo a
+     * SIGNATURE_PENDING le pediría subir de nuevo una firma que no perdió.
+     */
+    S.SIGNATURE_PENDING,
+    S.CONFIGURED,
     S.IDENTITY_VERIFICATION_FAILED,
     S.IDENTITY_VERIFICATION_MAX_ATTEMPTS_EXCEEDED,
   ],

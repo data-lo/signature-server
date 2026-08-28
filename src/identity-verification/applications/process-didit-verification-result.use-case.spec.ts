@@ -200,6 +200,41 @@ describe('ProcessDiditVerificationResultUseCase', () => {
     expect(updateSigningCredentialStatus.applyIfAllowed).not.toHaveBeenCalled();
   });
 
+  /**
+   * El bug del reporte: la sesión se reporta expirada (la URL "ya fue consumida") y el `Approved`
+   * de la verificación que el usuario sí completó llega después. Antes chocaba con la guarda de
+   * estados terminales y se descartaba en silencio, dejando al usuario sin poder avanzar.
+   */
+  describe('una aprobación posterior a un estado terminal no aprobado', () => {
+    it.each([
+      ['Expired', IDENTITY_VERIFICATION_STATUS_ENUM.EXPIRED],
+      ['Abandoned', IDENTITY_VERIFICATION_STATUS_ENUM.ABANDONED],
+      ['Declined', IDENTITY_VERIFICATION_STATUS_ENUM.DECLINED],
+      ['Failed', IDENTITY_VERIFICATION_STATUS_ENUM.FAILED],
+    ])('se aplica sobre un intento en %s', async (_label, previous) => {
+      givenAttempt(previous);
+
+      await useCase.execute({ session_id: SESSION_ID, status: 'Approved' });
+
+      expect(identityVerificationRepository.update).toHaveBeenCalledWith(
+        ATTEMPT_ID,
+        expect.objectContaining({
+          status: IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED,
+          // El motivo del rechazo anterior se limpia: dejarlo colgado haría que la pantalla
+          // mostrara un fallo sobre una identidad ya aprobada.
+          failureReason: null,
+        }),
+      );
+      expect(userRepository.update).toHaveBeenCalledWith(USER_ID, {
+        identityVerifiedAt: expect.any(Date),
+      });
+      expect(updateSigningCredentialStatus.applyIfAllowed).toHaveBeenCalledWith(
+        USER_ID,
+        SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING,
+      );
+    });
+  });
+
   it('guarda el motivo del rechazo', async () => {
     givenAttempt();
 
