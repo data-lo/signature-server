@@ -180,10 +180,14 @@ export class ProcessDiditVerificationResultUseCase {
      * que una transición imposible es un evento viejo, no un fallo del servidor. Devolver 500
      * haría que el proveedor reintentara para siempre.
      */
-    await this.updateSigningCredentialStatus.applyIfAllowed(
-      attempt.userId,
-      await this.resolveCredentialTarget(status, attempt.userId),
-    );
+    if (status === IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED) {
+      await this.applyApproval(attempt.userId);
+    } else {
+      await this.updateSigningCredentialStatus.applyIfAllowed(
+        attempt.userId,
+        CREDENTIAL_STATUS_BY_VERIFICATION_STATUS[status],
+      );
+    }
 
     this.logger.log(
       `Verificación ${attempt.id} (sesión ${sessionId}) actualizada a ${status}.`,
@@ -191,26 +195,49 @@ export class ProcessDiditVerificationResultUseCase {
   }
 
   /**
-   * Traduce el resultado del intento al estado global del usuario.
+   * Lleva la credencial hasta donde corresponde tras una aprobación.
    *
-   * La aprobación necesita mirar al usuario: si ya tenía su firma PNG registrada (una
-   * reentrega del webhook sobre un usuario que ya completó todo), el destino correcto es
-   * CONFIGURED. Apuntar siempre a SIGNATURE_PENDING lo haría retroceder y le pediría subir de
-   * nuevo una firma que ya tiene.
+   * Quien ya tenía su rúbrica registrada —el usuario que subió su firma con el onboarding
+   * anterior a Didit y valida su identidad después— termina en CONFIGURED; el resto, en
+   * SIGNATURE_PENDING, que es lo único que le falta.
+   *
+   * **Se recorre en pasos en vez de apuntar directo a CONFIGURED.** La máquina de estados no es
+   * sólo una descripción: es también la autorización de los demás disparadores, y hay uno
+   * (`UpdateSignatureUseCase`) que pide CONFIGURED al reponer la rúbrica sin comprobar la
+   * identidad, confiando en que la transición quede en no-op. Abrir
+   * PENDING/IN_PROGRESS/IN_REVIEW → CONFIGURED para que la aprobación llegara de un salto le
+   * daría de paso credencial completa a quien no tiene identidad aprobada. Los dos pasos que se
+   * dan aquí ya eran aristas válidas, así que nadie más gana permisos.
    */
-  private async resolveCredentialTarget(
-    status: IDENTITY_VERIFICATION_STATUS_ENUM,
-    userId: string,
-  ): Promise<SIGNING_CREDENTIAL_STATUS_ENUM> {
-    if (status !== IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED) {
-      return CREDENTIAL_STATUS_BY_VERIFICATION_STATUS[status];
-    }
-
+  private async applyApproval(userId: string): Promise<void> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
 
-    return user?.signatureId
-      ? SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED
-      : SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING;
+    /**
+     * Desde RETRY_REQUIRED la única salida es PENDING: es el caso de la aprobación que llega
+     * después de que Didit diera la sesión por expirada o abandonada. Se da ese paso primero
+     * para no pedir una transición ilegal (que sólo dejaría un warning y ningún cambio).
+     */
+    if (
+      user?.signingCredentialStatus ===
+      SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED
+    ) {
+      await this.updateSigningCredentialStatus.applyIfAllowed(
+        userId,
+        SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_PENDING,
+      );
+    }
+
+    await this.updateSigningCredentialStatus.applyIfAllowed(
+      userId,
+      SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING,
+    );
+
+    if (user?.signatureId) {
+      await this.updateSigningCredentialStatus.applyIfAllowed(
+        userId,
+        SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+      );
+    }
   }
 
   /**

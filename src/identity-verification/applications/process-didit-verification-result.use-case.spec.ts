@@ -4,7 +4,10 @@ import { IsNull } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { ProcessDiditVerificationResultUseCase } from './process-didit-verification-result.use-case';
-import { UpdateSigningCredentialStatusUseCase } from './update-signing-credential-status.use-case';
+import {
+  canTransitionSigningCredentialStatus,
+  UpdateSigningCredentialStatusUseCase,
+} from './update-signing-credential-status.use-case';
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
@@ -112,6 +115,73 @@ describe('ProcessDiditVerificationResultUseCase', () => {
         USER_ID,
         SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
       );
+    });
+
+    /**
+     * EL BUG REPORTADO. Quien ya tenía su rúbrica (onboarding anterior a Didit) valida su
+     * identidad estando en IN_PROGRESS. El destino es CONFIGURED, pero IN_PROGRESS → CONFIGURED
+     * no es —ni debe ser— una arista válida, así que apuntar directo dejaba la transición
+     * rechazada en silencio y al usuario clavado en IN_PROGRESS con el intento ya APPROVED.
+     *
+     * Se comprueba el RECORRIDO, que es el arreglo: primero SIGNATURE_PENDING y después
+     * CONFIGURED, dos aristas que ya eran legales por separado.
+     */
+    it('llega a CONFIGURED desde IN_PROGRESS pasando por SIGNATURE_PENDING', async () => {
+      givenAttempt(IDENTITY_VERIFICATION_STATUS_ENUM.IN_PROGRESS);
+      userRepository.findOne.mockResolvedValue({
+        id: USER_ID,
+        signatureId: 'sig-1',
+        signingCredentialStatus:
+          SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_PROGRESS,
+      });
+
+      await useCase.execute({ session_id: SESSION_ID, status: 'Approved' });
+
+      expect(updateSigningCredentialStatus.applyIfAllowed.mock.calls).toEqual([
+        [USER_ID, SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING],
+        [USER_ID, SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED],
+      ]);
+
+      // Cada paso del recorrido es legal por sí solo; el salto directo sigue prohibido.
+      expect(
+        canTransitionSigningCredentialStatus(
+          SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_PROGRESS,
+          SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING,
+        ),
+      ).toBe(true);
+      expect(
+        canTransitionSigningCredentialStatus(
+          SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING,
+          SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+        ),
+      ).toBe(true);
+      expect(
+        canTransitionSigningCredentialStatus(
+          SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_IN_PROGRESS,
+          SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED,
+        ),
+      ).toBe(false);
+    });
+
+    /**
+     * La aprobación que llega tras darse la sesión por expirada: el usuario está en
+     * RETRY_REQUIRED, desde donde la única salida es PENDING. El recorrido añade ese paso.
+     */
+    it('desde RETRY_REQUIRED pasa por PENDING antes de aprobar', async () => {
+      givenAttempt(IDENTITY_VERIFICATION_STATUS_ENUM.EXPIRED);
+      userRepository.findOne.mockResolvedValue({
+        id: USER_ID,
+        signatureId: null,
+        signingCredentialStatus:
+          SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_RETRY_REQUIRED,
+      });
+
+      await useCase.execute({ session_id: SESSION_ID, status: 'Approved' });
+
+      expect(updateSigningCredentialStatus.applyIfAllowed.mock.calls).toEqual([
+        [USER_ID, SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_PENDING],
+        [USER_ID, SIGNING_CREDENTIAL_STATUS_ENUM.SIGNATURE_PENDING],
+      ]);
     });
   });
 
