@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -9,10 +9,12 @@ import { UserService } from 'src/user/user.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import { DocumentEntity } from '../entities/document.entity';
 import { DocumentPublicViewResponse } from '../interfaces/responses/document-public-view-response';
 import { toConservationRecord } from '../summary-document/conservation-record.util';
 import { toIsoStringOrNull } from '../utils/iso-date.util';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
+import { RetryPendingSealUseCase } from '../seal/use-cases/retry-pending-seal.use-case';
 import { SealEntity } from '../seal/entities/seal.entity';
 import { extractTsaCertificateInfo } from '../seal/utils/tsa-certificate.util';
 import { DocumentService } from '../document.service';
@@ -32,7 +34,10 @@ export class GetPublicDocumentUseCase {
     private readonly userService: UserService,
     private readonly sealDocumentUseCase: SealDocumentUseCase,
     private readonly documentService: DocumentService,
+    private readonly retryPendingSeal: RetryPendingSealUseCase,
   ) {}
+
+  private readonly logger = new Logger(GetPublicDocumentUseCase.name);
 
   /**
    * Vista pública (sin autenticación) de un documento — ver historia "Visualización pública de
@@ -76,6 +81,8 @@ export class GetPublicDocumentUseCase {
           hash: null,
           totalPages: null,
           createdBy: null,
+          // Un documento sin completar no espera constancia: todavía no hay nada que sellar.
+          sealingPending: false,
           conservationRecord: null,
           signers: signerCollaborators.map((collaborator) =>
             this.documentService.toPendingPublicSigner(collaborator),
@@ -92,6 +99,17 @@ export class GetPublicDocumentUseCase {
       document.objectKey,
       BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
+
+    /**
+     * Reintento perezoso del sellado pendiente: si el documento se firmó mientras el SAT estaba
+     * caído, esta visita es la oportunidad de completar la evidencia y sellarlo. Se hace ANTES de
+     * leer el sello para que la misma respuesta ya incluya la constancia recién emitida, en vez
+     * de mostrarla como pendiente una visita más.
+     *
+     * Best-effort y silencioso: si el SAT sigue sin responder, el documento se muestra igual con
+     * su marca de pendiente. Ninguna consulta pública puede fallar por esto.
+     */
+    await this.completePendingSealIfDue(document, signerCollaborators);
 
     // Solo se sellan los documentos con firma AVANZADA (ver `sealAdvancedSignatures`) y el sellado
     // es best-effort: un documento de firma simple, o uno cuyo sellado falló, se completa sin
@@ -129,6 +147,12 @@ export class GetPublicDocumentUseCase {
         // El mismo dato que imprime la hoja de evidencia anexada al PDF, para que la pantalla y el
         // documento no digan cosas distintas sobre quién lo creó.
         createdBy: creator?.email ?? null,
+        /**
+         * `true` mientras el documento espera su constancia porque el SAT no respondió al firmar.
+         * La vista lo dice en vez de mostrar la sección vacía sin explicación: el documento está
+         * firmado y es válido, sólo le falta la constancia — y va a llegar.
+         */
+        sealingPending: document.sealingPendingAt !== null,
         conservationRecord: conservationRecord
           ? {
               tsaCertificate: conservationRecord.tsaCertificate ?? null,
@@ -165,6 +189,41 @@ export class GetPublicDocumentUseCase {
    * y la próxima consulta simplemente lo reintenta) para no reprocesar en cada visita futura. Si no
    * se puede extraer, devuelve `null` y el frontend no pinta el componente.
    */
+  /**
+   * Completa la evidencia que faltaba y sella, si el documento estaba esperando.
+   *
+   * Se traga cualquier error a propósito: esto es una mejora oportunista dentro de una consulta de
+   * lectura, y ni el SAT ni el proveedor de sellado pueden impedir que la vista pública se
+   * muestre. Si algo falla, el documento sigue marcado como pendiente y el próximo visitante lo
+   * reintenta.
+   */
+  private async completePendingSealIfDue(
+    document: DocumentEntity,
+    signerCollaborators: CollaboratorEntity[],
+  ): Promise<void> {
+    if (!document.sealingPendingAt) {
+      return;
+    }
+
+    try {
+      const listo = await this.retryPendingSeal.execute(document);
+      if (!listo) {
+        return;
+      }
+
+      await this.documentService.sealAdvancedSignatures(
+        document,
+        signerCollaborators,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo completar el sellado pendiente del documento ${document.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   private async resolveIntegrityTsaCertificate(
     seal: SealEntity | null,
   ): Promise<PublicIntegrityTsaCertificate | null> {

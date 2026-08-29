@@ -19,16 +19,22 @@ export class SealMapper {
       documentId: dto.documentId,
       signatureHash: response.hashHex,
       /**
-       * La cadena canónica que devolvió el proveedor: la preimagen literal de `hashHex`. Con ella
-       * guardada, verificar el sello no requiere reimplementar la canonicalización de Seal Service
+       * El XML canónico que devolvió el proveedor: la preimagen literal de `hashHex`. Con él
+       * guardado, verificar el sello no requiere reimplementar la canonicalización de Seal Service
        * ni conservar el request original — basta recomputar `sha256(canonicalPayload)` y comparar
-       * contra `signature_hash`. La versión del algoritmo va embebida como su primer segmento
-       * (ver `SealDocumentResponse.hashVersion`), así que no hace falta una columna aparte.
+       * contra `signature_hash`.
        *
-       * Las ENTRADAS de esa cadena tampoco se pierden: siguen en `collaborators.advanced_signature`
+       * **Se decodifica el Base64 en el que viaja.** Seal Service lo transporta codificado (su
+       * propio contrato lo documenta como "XML canónico […] codificado en base64"), pero lo que
+       * se hashea es el XML en claro: guardarlo tal como llega dejaba una columna cuyo `sha256`
+       * NO reproduce `signature_hash`, rompiendo en silencio la verificación que este campo
+       * existe para permitir. Decodificar aquí es además lo que hace que la descarga del XML
+       * canónico entregue un archivo XML de verdad, sin transformarlo.
+       *
+       * Las ENTRADAS de ese XML tampoco se pierden: siguen en `collaborators.advanced_signature`
        * de este mismo documento, así que la evidencia se puede auditar de punta a punta.
        */
-      canonicalPayload: response.canonicalString,
+      canonicalPayload: SealMapper.decodeCanonicalXml(response.canonicalString),
       /**
        * Bug corregido: `sealedAt` se descartaba, contradiciendo el criterio de esta misma clase
        * ("Seal Service no tiene base de datos... esta es la única oportunidad de guardarlo"). Es el
@@ -45,6 +51,25 @@ export class SealMapper {
       },
       integrityEvidence: SealMapper.buildIntegrityEvidence(response),
     };
+  }
+
+  /**
+   * Deja el XML canónico en claro, decodificando el Base64 en el que Seal Service lo transporta.
+   *
+   * Tolerante a propósito: si el valor no fuera Base64 —un proveedor más viejo que lo mandaba en
+   * claro, o un cambio de contrato— se conserva tal cual en vez de guardar basura. Se comprueba
+   * re-codificando: sólo un Base64 legítimo vuelve a producirse a sí mismo.
+   */
+  private static decodeCanonicalXml(canonicalString: string): string {
+    if (!canonicalString) {
+      return canonicalString;
+    }
+
+    const decoded = Buffer.from(canonicalString, 'base64').toString('utf-8');
+
+    return Buffer.from(decoded, 'utf-8').toString('base64') === canonicalString
+      ? decoded
+      : canonicalString;
   }
 
   /**
@@ -68,8 +93,8 @@ export class SealMapper {
       ...(tsaCertificate && {
         certificateSerialNumber: tsaCertificate.serialNumber,
         certificateIssuedAt: tsaCertificate.issuedAt,
-        ...(tsaCertificate.issuerCommonName && {
-          certificateIssuerCommonName: tsaCertificate.issuerCommonName,
+        ...(tsaCertificate.subjectCommonName && {
+          certificateSubjectCommonName: tsaCertificate.subjectCommonName,
         }),
       }),
     };

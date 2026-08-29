@@ -11,6 +11,11 @@ import { OscpService } from './oscp/oscp.service';
  */
 @Module({
   providers: [EfirmaService, OscpService],
-  exports: [EfirmaService],
+  /**
+   * `OscpService` se exporta para el reintento del sellado pendiente (`RetryPendingSealUseCase`):
+   * cuando el SAT no respondió al firmar, la evidencia de revocación se completa después, y para
+   * eso hay que poder consultarlo sin volver a pasar por el flujo de firma.
+   */
+  exports: [EfirmaService, OscpService],
 })
 export class EfirmaModule {}

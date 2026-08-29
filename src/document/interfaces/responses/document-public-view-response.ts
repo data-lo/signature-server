@@ -276,6 +276,13 @@ export class DocumentPublicViewData {
       'Constancia NOM-151 del PSC. null cuando el documento no está completado, y también cuando sí lo está pero no tiene sello: solo se sellan los documentos con firma AVANZADA (ver `sealAdvancedSignatures`), y el sellado es best-effort.',
     nullable: true,
   })
+  @ApiProperty({
+    example: false,
+    description:
+      'true mientras el documento firmado espera su constancia NOM-151 porque el respondedor OCSP del SAT no contestó al firmar. El documento es válido; la constancia se emite en cuanto la evidencia de revocación se completa (ver `documents.sealing_pending_at`).',
+  })
+  sealingPending: boolean;
+
   conservationRecord: PublicConservationRecordData | null;
 
   @ApiProperty({

@@ -53,12 +53,13 @@ export class GetPublicSealArtifactUseCase {
       );
     }
 
-    const fileContent = descriptor.render
-      ? descriptor.render(rawValue, seal)
-      : rawValue;
-
+    /**
+     * Los tres artefactos se entregan tal como se persistieron, sin transformarlos: son evidencia
+     * y cualquier reescritura los invalidaría. Los binarios del PSC se decodifican de su Base64 y
+     * el XML canónico ya está en claro (ver `SealMapper.decodeCanonicalXml`).
+     */
     return {
-      content: Buffer.from(fileContent, descriptor.encoding),
+      content: Buffer.from(rawValue, descriptor.encoding),
       contentType: descriptor.contentType,
       fileName: `${descriptor.fileNamePrefix}-${documentId}${descriptor.extension}`,
     };

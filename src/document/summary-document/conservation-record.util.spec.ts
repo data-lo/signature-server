@@ -36,7 +36,7 @@ describe('toConservationRecord', () => {
   it('lee el certificado y la serie que quedaron guardados al sellar', () => {
     const record = toConservationRecord(
       sealWith({
-        certificateIssuerCommonName: 'PSC Codex',
+        certificateSubjectCommonName: 'PSC Codex',
         certificateSerialNumber: '4A1B2C3D',
         fileBase64: CMS_BASE64,
       }),

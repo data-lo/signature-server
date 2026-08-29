@@ -4,7 +4,7 @@ import { X509Certificate } from 'crypto';
 import { OCSPEvidence } from '../interfaces/OCSPEvidence.interface';
 import { getCertStatus } from 'easy-ocsp';
 import {
-  OCSPNotAvilableException,
+  OCSPNotAvailableException,
   CertificadoRevocadoException,
 } from '../efirma.exceptions';
 
@@ -32,7 +32,8 @@ export class OscpService {
       this.logger.error(
         `Fallo en consulta OCSP del certificado en el SAT ${(err as Error).message}`,
       );
-      throw new OCSPNotAvilableException((err as Error).message);
+      // El detalle va al log, no al firmante: ya quedó registrado arriba.
+      throw new OCSPNotAvailableException();
     }
     if (result.status === 'revoked') {
       this.logger.warn(

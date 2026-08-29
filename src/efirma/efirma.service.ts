@@ -14,8 +14,7 @@ import {
   CertificadoInvalidoException,
   LLaveNoCorrespondeCertificadoException,
   LLavePrivadaInvalidException,
-  CertificadoRevocadoException,
-  OCSPNotAvilableException,
+  OCSPNotAvailableException,
 } from './efirma.exceptions';
 import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -208,11 +207,12 @@ export class EfirmaService implements OnModuleInit {
   }
 
   /**
-   * @param permitirDegradadoSiOCSPFalla si el SAT no responde (timeout, caído,
-   * cambio de endpoint no documentado), decide si bloqueas la firma o la
-   * dejas pasar dejando constancia de que no se pudo verificar revocación.
-   * Para un producto que compite con Mifiel, recomiendo `false` por default:
-   * es mejor fallar visible que firmar "a ciegas" en revocación.
+   * Firma un documento con la e.firma del SAT.
+   *
+   * Un certificado inválido, expirado, revocado o cuya llave no corresponda detiene la firma. La
+   * indisponibilidad del respondedor OCSP NO: se firma sin esa evidencia y el sellado queda
+   * pendiente hasta poder obtenerla (ver `documents.sealing_pending_at`). La diferencia es entre
+   * un "no" del SAT y un silencio del SAT.
    */
   async firmar(
     document: Buffer,
@@ -223,7 +223,18 @@ export class EfirmaService implements OnModuleInit {
     const infoCertificado = this.parsearCertificado(cerBuffer);
     this.validarVigencia(infoCertificado);
     const emisorInmediato = this.validarCadenaConfianza(cerBuffer);
-    let ocspEvidence: OCSPEvidence;
+    /**
+     * Que el SAT no responda NO impide firmar, pero deja la firma sin comprobación de revocación.
+     *
+     * Un certificado REVOCADO sigue siendo un rechazo definitivo: eso es una respuesta del SAT, no
+     * su ausencia. Lo que se tolera aquí es no haber podido preguntar, que es un fallo ajeno y
+     * frecuente.
+     *
+     * La firma se produce sin `ocspEvidence`, y quien la persiste marca el documento como
+     * pendiente de sellar (ver `documents.sealing_pending_at`): Seal Service exige esa evidencia,
+     * así que el sellado se difiere hasta poder obtenerla en vez de intentarse y fallar.
+     */
+    let ocspEvidence: OCSPEvidence | undefined;
 
     try {
       ocspEvidence = await this.ocspService.verifyRevokedOCSP(
@@ -231,16 +242,14 @@ export class EfirmaService implements OnModuleInit {
         emisorInmediato,
       );
     } catch (err) {
-      if (err instanceof CertificadoRevocadoException) {
+      if (!(err instanceof OCSPNotAvailableException)) {
         throw err;
       }
-      if (err instanceof OCSPNotAvilableException) {
-        this.logger.warn(
-          `Firmando en modo degradado sin confirmación OCSP: ${(err as Error).message}`,
-        );
-      } else {
-        throw err;
-      }
+
+      this.logger.warn(
+        `El SAT no respondió la consulta OCSP del certificado ${infoCertificado.numeroCertificado}: ` +
+          'se firma sin comprobación de revocación y el documento quedará pendiente de sellar.',
+      );
     }
 
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
