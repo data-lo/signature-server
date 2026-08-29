@@ -30,6 +30,7 @@ import { DocumentTransactionService } from '../document-transaction.service';
 import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
+import { RetryPendingSealUseCase } from '../seal/use-cases/retry-pending-seal.use-case';
 import { SendCompletedSimpleSignatureToSealUseCase } from '../seal/use-cases/send-completed-simple-signature-to-seal.use-case';
 import { SealEntity } from '../seal/entities/seal.entity';
 import { SEAL_ARTIFACT_ENUM } from '../seal/seal-artifacts';
@@ -149,6 +150,7 @@ describe('casos de uso de documentos', () => {
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
+  let retryPendingSeal: { execute: jest.Mock };
   let sendCompletedSimpleSignatureToSeal: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
@@ -303,6 +305,7 @@ describe('casos de uso de documentos', () => {
       findByDocumentId: jest.fn().mockResolvedValue(null),
       persistIntegrityCertificateInfo: jest.fn().mockResolvedValue(undefined),
     };
+    retryPendingSeal = { execute: jest.fn().mockResolvedValue(false) };
     // Devuelve `false` —"este documento no es asunto suyo"— salvo en las pruebas que lo miran.
     sendCompletedSimpleSignatureToSeal = {
       execute: jest.fn().mockResolvedValue(false),
@@ -370,6 +373,14 @@ describe('casos de uso de documentos', () => {
         },
         { provide: EfirmaService, useValue: efirmaService },
         { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
+        /**
+         * Reintento del sellado pendiente: por defecto no hay nada que reintentar (`false`), que
+         * es el caso de todos estos escenarios. Las pruebas que sí lo ejercitan lo sobrescriben.
+         */
+        {
+          provide: RetryPendingSealUseCase,
+          useValue: retryPendingSeal,
+        },
         {
           provide: SendCompletedSimpleSignatureToSealUseCase,
           useValue: sendCompletedSimpleSignatureToSeal,
@@ -3104,6 +3115,8 @@ describe('casos de uso de documentos', () => {
           fileName: 'contrato.pdf',
           status: DOCUMENT_STATUS_ENUM.PENDING,
           isCompleted: false,
+          // Un documento sin completar no espera constancia: no hay nada que sellar todavía.
+          sealingPending: false,
           secureUrl: null,
           expiresIn: null,
           hash: null,

@@ -115,6 +115,20 @@ export class DocumentEntity {
   @Column({ name: 'seal_key', nullable: true })
   sealKey?: string;
 
+  /**
+   * Desde cuándo este documento firmado espera su constancia de conservación NOM-151.
+   *
+   * `null` es lo normal: o ya se selló, o no le corresponde (sólo se sellan los documentos con
+   * firma avanzada). Se marca cuando el sellado no pudo intentarse porque falta la evidencia OCSP
+   * de algún firmante — el respondedor del SAT se cae con frecuencia y bloquear la firma por eso
+   * sería peor que diferir el sellado.
+   *
+   * No es un `status` del documento a propósito: la firma está completa y el documento es válido;
+   * lo que falta es la constancia. Ver la migración `AddSealingPendingAtToDocuments`.
+   */
+  @Column({ name: 'sealing_pending_at', type: 'timestamptz', nullable: true })
+  sealingPendingAt: Date | null;
+
   @Column({ name: 'total_signers' })
   totalSigners: number;
 

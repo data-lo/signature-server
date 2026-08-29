@@ -720,11 +720,11 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
   });
 
   /**
-   * Las firmas guardadas antes de que existiera la verificación OCSP no tienen esa evidencia, y
-   * el proveedor no la usa para construir el hash. Sellar sin ella es correcto; que un documento
-   * viejo se quede sin constancia por eso, no.
+   * Sin evidencia OCSP no se sella: Seal Service la exige y respondería 400. En vez de gastar la
+   * llamada, el documento se marca como PENDIENTE DE SELLAR para retomarlo cuando el SAT vuelva
+   * (ver `RetryPendingSealUseCase`). Ocurre cuando el respondedor del SAT estaba caído al firmar.
    */
-  it('sella igual una firma que no trae evidencia OCSP, omitiendo el campo', async () => {
+  it('no sella una firma sin evidencia OCSP: deja el documento pendiente', async () => {
     const document = mockDocument({ totalSigners: 2 });
     documentRepository.findOne.mockResolvedValue(document);
     const sinEvidencia = buildFielSigner({
@@ -761,11 +761,15 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       TEST_GEOLOCATION,
     );
 
-    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
-    const body = sentPayload();
-    // El campo se omite; no se manda `undefined` ni un objeto a medio llenar.
-    expect(body.signatures[0]).not.toHaveProperty('ocspEvidence');
-    expect(body.signatures[0].signatureBase64).toBe('firma-de-user-a');
+    // Ni siquiera se intenta: el 400 sería previsible, no un fallo del proveedor.
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+    expect(sealRepository.save).not.toHaveBeenCalled();
+
+    // Queda la marca para poder retomarlo y para poder decírselo al usuario.
+    expect(documentRepository.update).toHaveBeenCalledWith(
+      document.id,
+      expect.objectContaining({ sealingPendingAt: expect.any(Date) }),
+    );
   });
 
   it('mientras falte un firmante, no se llama a Seal Service', async () => {

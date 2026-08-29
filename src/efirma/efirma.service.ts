@@ -14,6 +14,7 @@ import {
   CertificadoInvalidoException,
   LLaveNoCorrespondeCertificadoException,
   LLavePrivadaInvalidException,
+  OCSPNotAvailableException,
 } from './efirma.exceptions';
 import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -208,10 +209,10 @@ export class EfirmaService implements OnModuleInit {
   /**
    * Firma un documento con la e.firma del SAT.
    *
-   * **No hay modo degradado**: si el SAT no responde (timeout, caído, endpoint cambiado sin
-   * avisar), la firma falla con un 503 en vez de producirse sin comprobar revocación. Es mejor
-   * fallar visible que firmar "a ciegas" —y además una firma sin evidencia OCSP no se puede
-   * sellar, así que el documento acabaría sin constancia NOM-151.
+   * Un certificado inválido, expirado, revocado o cuya llave no corresponda detiene la firma. La
+   * indisponibilidad del respondedor OCSP NO: se firma sin esa evidencia y el sellado queda
+   * pendiente hasta poder obtenerla (ver `documents.sealing_pending_at`). La diferencia es entre
+   * un "no" del SAT y un silencio del SAT.
    */
   async firmar(
     document: Buffer,
@@ -223,22 +224,33 @@ export class EfirmaService implements OnModuleInit {
     this.validarVigencia(infoCertificado);
     const emisorInmediato = this.validarCadenaConfianza(cerBuffer);
     /**
-     * Sin evidencia OCSP no se firma.
+     * Que el SAT no responda NO impide firmar, pero deja la firma sin comprobación de revocación.
      *
-     * Antes se seguía en "modo degradado": la firma se producía igual, sin evidencia, y el fallo
-     * sólo dejaba un warning. El problema es que esa firma NO se puede sellar —Seal Service exige
-     * `ocspEvidence`— así que el documento acababa firmado pero SIN constancia de conservación
-     * NOM-151, con su tabla vacía en la hoja de evidencia y sin que nadie se enterara hasta
-     * abrirla. Un documento legal a medias es peor que un error claro y un reintento.
+     * Un certificado REVOCADO sigue siendo un rechazo definitivo: eso es una respuesta del SAT, no
+     * su ausencia. Lo que se tolera aquí es no haber podido preguntar, que es un fallo ajeno y
+     * frecuente.
      *
-     * `CertificadoRevocadoException` y la indisponibilidad del SAT suben las dos: la primera es un
-     * rechazo definitivo, la segunda un 503 que invita a reintentar (ver
-     * `OCSPNotAvailableException`).
+     * La firma se produce sin `ocspEvidence`, y quien la persiste marca el documento como
+     * pendiente de sellar (ver `documents.sealing_pending_at`): Seal Service exige esa evidencia,
+     * así que el sellado se difiere hasta poder obtenerla en vez de intentarse y fallar.
      */
-    const ocspEvidence: OCSPEvidence = await this.ocspService.verifyRevokedOCSP(
-      cerBuffer,
-      emisorInmediato,
-    );
+    let ocspEvidence: OCSPEvidence | undefined;
+
+    try {
+      ocspEvidence = await this.ocspService.verifyRevokedOCSP(
+        cerBuffer,
+        emisorInmediato,
+      );
+    } catch (err) {
+      if (!(err instanceof OCSPNotAvailableException)) {
+        throw err;
+      }
+
+      this.logger.warn(
+        `El SAT no respondió la consulta OCSP del certificado ${infoCertificado.numeroCertificado}: ` +
+          'se firma sin comprobación de revocación y el documento quedará pendiente de sellar.',
+      );
+    }
 
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
     this.validarParCertificadoLlave(cerBuffer, privateKey);

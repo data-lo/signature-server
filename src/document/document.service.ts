@@ -793,6 +793,26 @@ export class DocumentService {
       return null;
     }
 
+    /**
+     * Sin la evidencia OCSP de TODOS los firmantes no se intenta sellar: Seal Service la exige y
+     * respondería 400. El documento se marca como pendiente para poder retomarlo cuando el SAT
+     * vuelva (ver `RetryPendingSealUseCase`) y para poder decírselo al usuario.
+     *
+     * Se comprueba antes de llamar en vez de dejar que el proveedor rechace, porque un 400
+     * previsible no es un fallo del sellado: es una precondición que todavía no se cumple.
+     */
+    const sinEvidenciaOcsp = advancedSigners.some(
+      (collaborator) => !collaborator.advancedSignature?.ocspEvidence,
+    );
+
+    if (sinEvidenciaOcsp) {
+      this.logger.warn(
+        `El documento ${document.id} queda pendiente de sellar: falta la evidencia OCSP de al menos un firmante.`,
+      );
+      await this.markSealingPending(document);
+      return null;
+    }
+
     // La traducción del payload va DENTRO del try junto con la llamada: si una firma guardada
     // tuviera una forma inesperada, el error debe tratarse como cualquier otro fallo de sellado
     // (logueado, sin efecto sobre la firma) y no escaparse como una excepción no controlada al
@@ -826,6 +846,30 @@ export class DocumentService {
       }
 
       return null;
+    }
+  }
+
+  /**
+   * Marca el documento como pendiente de sellar, conservando la marca original si ya la tenía:
+   * lo que interesa es DESDE CUÁNDO espera, no cuándo se comprobó por última vez.
+   *
+   * Best-effort como el resto del sellado: si no se puede escribir la marca, el documento sigue
+   * firmado y válido. Se registra y se sigue, en vez de tumbar un flujo de firma ya completado.
+   */
+  private async markSealingPending(document: DocumentEntity): Promise<void> {
+    if (document.sealingPendingAt) {
+      return;
+    }
+
+    try {
+      document.sealingPendingAt = new Date();
+      await this.documentRepository.update(document.id, {
+        sealingPendingAt: document.sealingPendingAt,
+      });
+    } catch (error) {
+      this.logger.error(
+        `No se pudo marcar el documento ${document.id} como pendiente de sellar: ${error}`,
+      );
     }
   }
 
