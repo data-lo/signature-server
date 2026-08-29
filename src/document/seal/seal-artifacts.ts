@@ -13,16 +13,12 @@ export enum SEAL_ARTIFACT_ENUM {
   /** Token de sello de tiempo RFC 3161. */
   TIMESTAMP = 'timestamp',
   /**
-   * Cadena canónica que se selló: la preimagen literal del hash.
+   * XML canónico que se selló: la preimagen literal del hash.
    *
-   * **El dato en sí no es XML.** Seal Service lo arma como segmentos con su longitud en bytes al
-   * frente, unidos por `||` (ver su `seal.service.ts`), justamente para que sea inequívoco sin
-   * depender de un parser. Ese formato NO se puede cambiar: es la preimagen de `signature_hash`,
-   * y tocarlo invalidaría la verificación de todos los sellos ya emitidos.
-   *
-   * Se entrega envuelto en un documento XML (`toCanonicalXml`) porque es como el producto lo pide
-   * y lo consume. El envoltorio no altera la cadena: la conserva íntegra dentro del nodo, sólo con
-   * el escapado que exige XML.
+   * Seal Service lo emite como XML con su propio namespace y lo transporta en Base64;
+   * `SealMapper.decodeCanonicalXml` lo deja en claro al persistirlo. Se entrega intacto: es lo
+   * único que conserva la propiedad que hace verificable la constancia — `sha256` del archivo
+   * descargado reproduce `signature_hash`. Envolverlo o reescribirlo la rompería.
    */
   CANONICAL = 'canonical',
 }
@@ -37,13 +33,6 @@ export interface PublicSealArtifact {
 interface SealArtifactDescriptor {
   /** Cómo sacar el valor crudo del sello persistido. `null`/vacío = ese artefacto no se emitió. */
   read: (seal: SealEntity) => string | null | undefined;
-  /**
-   * Convierte el valor crudo en el contenido final del archivo. Sin definir, se entrega tal cual.
-   *
-   * Sólo la cadena canónica lo usa, para envolverse en un documento XML. Los binarios del PSC se
-   * sirven exactamente como los emitió: cualquier transformación invalidaría la evidencia.
-   */
-  render?: (raw: string, seal: SealEntity) => string;
   /** Codificación del valor crudo: base64 para los binarios del PSC, utf-8 para la cadena canónica. */
   encoding: BufferEncoding;
   contentType: string;
@@ -78,14 +67,9 @@ export const SEAL_ARTIFACT_DESCRIPTORS: Record<
   [SEAL_ARTIFACT_ENUM.CANONICAL]: {
     read: (seal) => seal.canonicalPayload,
     /**
-     * Sin `render`: el dato YA es el XML canónico que emitió el proveedor, con su propio
-     * namespace, y se entrega intacto.
-     *
-     * Antes se envolvía en un elemento sintético porque se creía que el contenido era una cadena
-     * de segmentos imposible de expresar como XML. No lo es: Seal Service devuelve XML y sólo lo
-     * transportaba en Base64 (ver `SealMapper.decodeCanonicalXml`). Entregarlo tal cual es además
-     * lo único que conserva la propiedad que hace verificable la constancia — `sha256` del
-     * archivo descargado reproduce `signature_hash`, sin desescapar nada.
+     * Se entrega intacto, sin transformarlo: el dato ya es el XML que emitió el proveedor. Antes
+     * se envolvía en un elemento sintético porque se creía que era una cadena de segmentos
+     * imposible de expresar como XML; no lo es (ver `SealMapper.decodeCanonicalXml`).
      */
     encoding: 'utf-8',
     contentType: 'application/xml; charset=utf-8',

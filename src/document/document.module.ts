@@ -23,6 +23,7 @@ import { SignatureQrService } from './services/signature-qr.service';
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
 import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
 import { CreateDocumentUseCase } from './applications/create-document.use-case';
 import { GetDocumentsUseCase } from './applications/get-documents.use-case';
@@ -48,6 +49,7 @@ import { CreateDocumentSignatureFlowUseCase } from './applications/create-docume
     GetDocumentFileUrlUseCase,
     GetPublicDocumentUseCase,
     GetPublicSealArtifactUseCase,
+    GetPublicDocumentAuditXmlUseCase,
     GetPublicAdvancedSignatureUseCase,
     CreateDocumentUseCase,
     GetDocumentsUseCase,

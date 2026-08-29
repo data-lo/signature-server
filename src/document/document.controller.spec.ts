@@ -7,6 +7,7 @@ import type { Response } from 'express';
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
 import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
 import { CreateDocumentUseCase } from './applications/create-document.use-case';
 import { GetDocumentsUseCase } from './applications/get-documents.use-case';
@@ -28,6 +29,7 @@ const USE_CASES = [
   GetDocumentFileUrlUseCase,
   GetPublicDocumentUseCase,
   GetPublicSealArtifactUseCase,
+  GetPublicDocumentAuditXmlUseCase,
   GetPublicAdvancedSignatureUseCase,
   CreateDocumentUseCase,
   GetDocumentsUseCase,
@@ -162,6 +164,43 @@ describe('DocumentController', () => {
     expect(response.setHeader).toHaveBeenCalledWith(
       'Content-Disposition',
       'attachment; filename="constancia-nom151-doc-1.pdf"',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Length',
+      String(content.length),
+    );
+    expect(response.send).toHaveBeenCalledWith(content);
+  });
+
+  /**
+   * El XML de auditoría se genera en el momento y no está guardado en ningún lado, pero se sirve
+   * igual que la constancia: como adjunto. Sin `Content-Disposition` el navegador abriría el XML
+   * en una pestaña —con los PDFs en Base64 dentro— en vez de guardarlo.
+   */
+  it('getPublicDocumentAuditXml sirve el XML como adjunto', async () => {
+    const content = Buffer.from('<?xml version="1.0" encoding="UTF-8"?>');
+    useCase(GetPublicDocumentAuditXmlUseCase).execute.mockResolvedValue({
+      content,
+      contentType: 'application/xml',
+      fileName: 'auditoria-doc-1.xml',
+    });
+    const response = { setHeader: jest.fn(), send: jest.fn() };
+
+    await controller.getPublicDocumentAuditXml(
+      'doc-1',
+      response as unknown as Response,
+    );
+
+    expect(
+      useCase(GetPublicDocumentAuditXmlUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1');
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'application/xml',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="auditoria-doc-1.xml"',
     );
     expect(response.setHeader).toHaveBeenCalledWith(
       'Content-Length',
