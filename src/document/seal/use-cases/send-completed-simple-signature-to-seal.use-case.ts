@@ -16,6 +16,9 @@ import {
 } from '../dto/simple-signature.dto';
 import { IncompleteSimpleSignatureDataException } from '../exceptions/seal.exceptions';
 import { SealApiService } from '../services/seal-api.service';
+import { SealEntity } from '../entities/seal.entity';
+import { SealMapper } from '../mappers/seal.mapper';
+import { SealDocumentResponse } from '../interfaces/seal-document-response.interface';
 
 /**
  * Firma de archivo PNG (89 50 4E 47 0D 0A 1A 0A). Se compara contra los primeros bytes del objeto
@@ -59,23 +62,25 @@ export class SendCompletedSimpleSignatureToSealUseCase {
     private readonly documentRepository: Repository<DocumentEntity>,
     @InjectRepository(VerificationCodeEntity)
     private readonly verificationCodeRepository: Repository<VerificationCodeEntity>,
+    @InjectRepository(SealEntity)
+    private readonly sealRepository: Repository<SealEntity>,
     private readonly minioService: MinioService,
     private readonly sealApiService: SealApiService,
   ) {}
 
   /**
-   * @returns `true` si el DTO se envió; `false` si el documento no califica para este flujo
+   * @returns La constancia persistida, o `null` si el documento no califica para este flujo
    *   (firma avanzada, firmas pendientes, o sin hashes todavía).
    * @throws {IncompleteSimpleSignatureDataException} Si el documento sí califica pero a algún
    *   firmante le falta un dato obligatorio. Se lanza ANTES de llamar al proveedor: un envío a
    *   medias es peor que ninguno, porque queda del otro lado como la evidencia completa del
    *   documento.
    */
-  async execute(documentId: string): Promise<boolean> {
+  async execute(documentId: string): Promise<SealEntity | null> {
     const document = await this.findDocumentWithSigners(documentId);
 
     if (!document || !this.isCompletedSimpleSignature(document)) {
-      return false;
+      return null;
     }
 
     const signers = this.signerCollaborators(document);
@@ -88,14 +93,47 @@ export class SendCompletedSimpleSignatureToSealUseCase {
       ),
     };
 
-    await this.sealApiService.sendSimpleSignatures(dto);
+    const response = await this.sealApiService.sendSimpleSignatures(dto);
 
     // Sólo el documento, el número de firmantes y el resultado: nada del contenido del DTO.
     this.logger.log(
       `Firmas simples del documento ${document.id} enviadas a Seal Service (${dto.signatures.length} firmante(s)).`,
     );
 
-    return true;
+    /**
+     * La constancia se persiste con el MISMO mapper que la avanzada: la respuesta del proveedor
+     * tiene idéntica forma, así que interpretarla dos veces sólo abriría la puerta a que las dos
+     * lecturas se separaran. De aquí sale lo que la hoja imprime en su tabla NOM-151.
+     */
+    return this.persistSeal(dto, response);
+  }
+
+  /**
+   * Guarda la constancia, tolerando que ya exista.
+   *
+   * Un documento se sella una sola vez, pero el flujo de firma puede reintentarse tras un fallo
+   * posterior al sellado; en ese caso el índice único de `document_id` salta y lo correcto es
+   * releer la fila que ya está, no perder la constancia ni tumbar la firma.
+   */
+  private async persistSeal(
+    dto: SimpleSignatureDTO,
+    response: SealDocumentResponse,
+  ): Promise<SealEntity | null> {
+    try {
+      return await this.sealRepository.save(
+        this.sealRepository.create(
+          SealMapper.toEntity({ documentId: dto.documentId }, response),
+        ),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo persistir la constancia del documento ${dto.documentId}; se relee la existente: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+
+      return this.sealRepository.findOneBy({ documentId: dto.documentId });
+    }
   }
 
   /**

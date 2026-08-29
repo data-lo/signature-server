@@ -256,10 +256,6 @@ export class SignDocumentUseCase {
       };
     }
 
-    // Último firmante: el documento ya está completo y persistido (firma, snapshot de la rúbrica
-    // y hashes), que es justo lo que el envío de firma simple necesita releer.
-    await this.documentService.sendSimpleSignaturesToSeal(documentId);
-
     return {
       success: true,
       message: 'Documento firmado exitosamente por todos los firmantes',

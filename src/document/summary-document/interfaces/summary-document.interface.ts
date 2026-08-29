@@ -1,3 +1,4 @@
+import { ConservationRecordInfo } from '../conservation-record.util';
 /**
  * Datos de entrada para generar la hoja resumen (ver plantilla de referencia "Firmalo Hoja de
  * Firmas"). Deliberadamente desacoplado de DocumentEntity: el caller (p.ej. el flujo de
@@ -34,6 +35,13 @@ export interface SummaryDocumentInfo {
    * pública del documento). Si se omite, se codifica el `id` del documento.
    */
   verificationUrl?: string;
+  /**
+   * Constancia de conservación NOM-151 del PSC, o `null` si el documento no llegó a sellarse.
+   *
+   * La firma simple TAMBIÉN se sella (ver `SendCompletedSimpleSignatureToSealUseCase`): la tabla
+   * salía vacía porque el sellado corría después de armar esta hoja, no porque no existiera.
+   */
+  conservationRecord?: ConservationRecordInfo | null;
 }
 
 /**

@@ -8,8 +8,14 @@ import { extractTsaCertificateInfo } from '../utils/tsa-certificate.util';
 
 /** Traduce la respuesta del proveedor externo al modelo de persistencia local. */
 export class SealMapper {
+  /**
+   * `dto` se acota a `documentId` porque es lo ÚNICO que se toma de la petición: el resto de la
+   * fila sale de la respuesta del proveedor. Declararlo así deja que lo usen los dos sellados —el
+   * avanzado con su `SealDocumentDto` y el simple con el suyo, que tiene otra forma— sin fabricar
+   * un DTO de mentira para satisfacer al tipo.
+   */
   static toEntity(
-    dto: SealDocumentDto,
+    dto: Pick<SealDocumentDto, 'documentId'>,
     response: SealDocumentResponse,
   ): DeepPartial<SealEntity> {
     return {

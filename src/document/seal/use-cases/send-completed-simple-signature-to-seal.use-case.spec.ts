@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { MinioService } from 'src/shared/minio/minio.service';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { DocumentEntity } from '../../entities/document.entity';
+import { SealEntity } from '../entities/seal.entity';
 import { VerificationCodeEntity } from '../../entities/verification-code.entity';
 import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
@@ -12,6 +13,33 @@ import { IncompleteSimpleSignatureDataException } from '../exceptions/seal.excep
 import { SendCompletedSimpleSignatureToSealUseCase } from './send-completed-simple-signature-to-seal.use-case';
 
 const DOCUMENT_ID = 'doc-1';
+
+/**
+ * Respuesta del proveedor para la firma simple. Tiene la MISMA forma que la del sellado avanzado
+ * —es el hallazgo que arregla la tabla NOM-151 vacía: `sendSimpleSignatures` la devolvía y se
+ * descartaba—, así que acá se declara completa para comprobar que se persiste tal cual.
+ *
+ * `nom151.file` va vacío a propósito: la extracción del certificado embebido es best-effort y
+ * tiene su propia prueba en `tsa-certificate.util.spec.ts`; acá lo que importa es el guardado.
+ */
+const SEAL_RESPONSE = {
+  hashHex: 'hash-canonico',
+  canonicalString: Buffer.from('<xml/>', 'utf-8').toString('base64'),
+  sealedAt: '2026-08-20T15:05:00.000Z',
+  timeStamp: {
+    status: true,
+    hashProcessed: 'hash-tsr',
+    fileBase64: 'tsr-en-base64',
+    uuid: 'uuid-tsr',
+  },
+  nom151: {
+    status: true,
+    hashProcessed: 'hash-nom',
+    file: '',
+    uuid: 'uuid-nom',
+    pdfFile: 'constancia-en-base64',
+  },
+};
 
 /** PNG mínimo: los 8 bytes de la firma del formato más algo de relleno. */
 const PNG_BYTES = Buffer.concat([
@@ -61,6 +89,11 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
   let verificationCodeQueryBuilder: { getOne: jest.Mock };
   let minioService: { getFileInBytesFormat: jest.Mock };
   let sealApiService: { sendSimpleSignatures: jest.Mock };
+  let sealRepository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    findOneBy: jest.Mock;
+  };
 
   /**
    * Los `QueryBuilder` se simulan como cadenas donde todo método devuelve el mismo objeto y sólo
@@ -92,7 +125,12 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
       getFileInBytesFormat: jest.fn().mockResolvedValue(PNG_BYTES),
     };
     sealApiService = {
-      sendSimpleSignatures: jest.fn().mockResolvedValue(undefined),
+      sendSimpleSignatures: jest.fn().mockResolvedValue(SEAL_RESPONSE),
+    };
+    sealRepository = {
+      create: jest.fn((entity: unknown) => entity),
+      save: jest.fn((entity: unknown) => Promise.resolve(entity)),
+      findOneBy: jest.fn().mockResolvedValue(null),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -115,6 +153,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
           },
         },
         { provide: MinioService, useValue: minioService },
+        { provide: getRepositoryToken(SealEntity), useValue: sealRepository },
         { provide: SealApiService, useValue: sealApiService },
       ],
     }).compile();
@@ -132,7 +171,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
     );
 
     it('envía un DTO con los hashes del documento y una firma por firmante', async () => {
-      await expect(useCase.execute(DOCUMENT_ID)).resolves.toBe(true);
+      await expect(useCase.execute(DOCUMENT_ID)).resolves.not.toBeNull();
 
       expect(sentDto()).toMatchObject({
         documentId: DOCUMENT_ID,
@@ -240,8 +279,41 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
         }),
       );
 
-      await expect(useCase.execute(DOCUMENT_ID)).resolves.toBe(true);
+      await expect(useCase.execute(DOCUMENT_ID)).resolves.not.toBeNull();
       expect(sentDto().signatures).toHaveLength(1);
+    });
+
+    /**
+     * El bug de la hoja de evidencia con la tabla NOM-151 vacía en la firma simple: la constancia
+     * llegaba del proveedor y no se guardaba en ningún lado, así que no había nada que imprimir.
+     */
+    it('persiste la constancia que devuelve el proveedor', async () => {
+      const seal = await useCase.execute(DOCUMENT_ID);
+
+      expect(sealRepository.save).toHaveBeenCalledTimes(1);
+      expect(seal).toMatchObject({
+        documentId: DOCUMENT_ID,
+        signatureHash: 'hash-canonico',
+        // El XML canónico se guarda en claro, decodificado del Base64 en que viaja: su sha256 es
+        // lo que tiene que reproducir `signature_hash` al verificar el sello.
+        canonicalPayload: '<xml/>',
+        sealedAt: new Date('2026-08-20T15:05:00.000Z'),
+        integrityEvidence: expect.objectContaining({
+          certificatePdfBase64: 'constancia-en-base64',
+        }),
+      });
+    });
+
+    /**
+     * Un reintento del flujo de firma posterior al sellado hace saltar el índice único de
+     * `document_id`. La constancia ya existe: se relee en vez de perderla o tumbar la firma.
+     */
+    it('relee la constancia existente si el guardado choca con una previa', async () => {
+      const existing = { id: 'seal-1', documentId: DOCUMENT_ID };
+      sealRepository.save.mockRejectedValue(new Error('duplicate key'));
+      sealRepository.findOneBy.mockResolvedValue(existing);
+
+      await expect(useCase.execute(DOCUMENT_ID)).resolves.toBe(existing);
     });
   });
 
@@ -274,7 +346,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
     ])('no llama a Seal Service cuando el documento %s', async (_caso, doc) => {
       documentQueryBuilder.getOne.mockResolvedValue(doc);
 
-      await expect(useCase.execute(DOCUMENT_ID)).resolves.toBe(false);
+      await expect(useCase.execute(DOCUMENT_ID)).resolves.toBeNull();
       expect(sealApiService.sendSimpleSignatures).not.toHaveBeenCalled();
     });
 
@@ -285,7 +357,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
         }),
       );
 
-      await expect(useCase.execute(DOCUMENT_ID)).resolves.toBe(true);
+      await expect(useCase.execute(DOCUMENT_ID)).resolves.not.toBeNull();
     });
   });
 
