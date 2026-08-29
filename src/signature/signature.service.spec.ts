@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -145,6 +146,74 @@ describe('SignatureService', () => {
         signatureId: 'signature-1',
       });
       expect(result.success).toBe(true);
+    });
+
+    /**
+     * Bug reportado: borrar la firma y volver a dibujarla respondía "ya tiene una firma
+     * registrada". `deleteSignatureImage` sólo borra la FILA —y con ella `user.signature_id`—
+     * cuando la INE también está vacía; si el usuario tenía INE, la fila sobrevive con
+     * `signature_object_key` en null y el usuario sigue apuntando a ella, así que este guard la
+     * confundía con una firma existente y el alta quedaba bloqueada para siempre.
+     */
+    it('registra la firma reusando la fila que quedó sin imagen tras borrarla', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: 'signature-1',
+      });
+      signatureRepository.findOne.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: null,
+        officialCardObjectKey: 'ine-object-key',
+      });
+      minioService.uploadObject.mockResolvedValue({
+        status: 'FILE_CREATED',
+        fileId: 'firma-nueva',
+      });
+      signatureRepository.save.mockImplementation((data) =>
+        Promise.resolve(data),
+      );
+
+      const result = await service.create('user-1', {} as any, {
+        signatureImage: [{ originalname: 'firma.png' } as Express.Multer.File],
+      });
+
+      expect(result.success).toBe(true);
+      // La INE que sobrevivió al borrado se conserva: no se estaba eliminando.
+      expect(signatureRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'signature-1',
+          signatureObjectKey: 'firma-nueva',
+          officialCardObjectKey: 'ine-object-key',
+          isActive: true,
+        }),
+      );
+      // No se inserta una fila nueva ni se repunta al usuario: ya apuntaba a ésta.
+      expect(signatureRepository.create).not.toHaveBeenCalled();
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('sigue rechazando el alta cuando la firma existente sí tiene imagen', async () => {
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        signatureId: 'signature-1',
+      });
+      signatureRepository.findOne.mockResolvedValue({
+        id: 'signature-1',
+        signatureObjectKey: 'firma-vigente',
+        officialCardObjectKey: null,
+      });
+
+      await expect(
+        service.create('user-1', {} as any, {
+          signatureImage: [
+            { originalname: 'firma.png' } as Express.Multer.File,
+          ],
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      // Se corta ANTES de subir nada: si no, quedaría un objeto huérfano en MinIO por cada
+      // intento rechazado.
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
     });
 
     it('lanza error si se envía INE pero su subida a Minio falla', async () => {

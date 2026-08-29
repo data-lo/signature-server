@@ -167,6 +167,14 @@ function createMockRepository() {
   };
 }
 
+/**
+ * Cada caso recorre la finalización completa —incluido el render real de la hoja de evidencia con
+ * pdfmake, que carga las tipografías de disco— y ronda el segundo cuando el archivo corre solo.
+ * Los 5 s por defecto de Jest alcanzaban justo, pero se agotaban al correr la suite entera en
+ * paralelo: el spec fallaba por timeout de forma intermitente, sin que nada estuviera roto.
+ */
+jest.setTimeout(30_000);
+
 describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => {
   let signDocument: SignDocumentUseCase;
   let documentRepository: ReturnType<typeof createMockRepository>;

@@ -134,7 +134,24 @@ export class SignatureService {
       throw new NotFoundException(`Usuario con id ${userId} no encontrado`);
     }
 
-    if (user.signatureId) {
+    /**
+     * Se rechaza el alta sólo si el usuario tiene una firma CON IMAGEN, no por el mero hecho de
+     * apuntar a una fila.
+     *
+     * Bug corregido: `deleteSignatureImage` borra la fila —y con ella `users.signature_id`—
+     * únicamente cuando la INE también está vacía (ver `clearFieldOrDeleteRow`); si el usuario
+     * tenía INE, la fila sobrevive con `signature_object_key` en null y el usuario sigue
+     * apuntándole. Este guard leía sólo `signatureId`, así que confundía esa fila sin imagen con
+     * una firma vigente: quien borraba su firma y volvía a dibujarla recibía "ya tiene una firma
+     * registrada" y quedaba bloqueado de forma permanente, sin manera de salir desde la app.
+     */
+    const existingSignature = user.signatureId
+      ? await this.signatureRepository.findOne({
+          where: { id: user.signatureId },
+        })
+      : null;
+
+    if (existingSignature?.signatureObjectKey) {
       throw new ConflictException('El usuario ya tiene una firma registrada');
     }
 
@@ -188,15 +205,36 @@ export class SignatureService {
       );
     }
 
-    const newSignature = this.signatureRepository.create({
-      signatureObjectKey: signatureObjectKeyResponse.fileId,
-      officialCardObjectKey: officialCardObjectKeyResponse?.fileId ?? null,
-      isActive: true,
-    });
+    /**
+     * Sobre la fila que sobrevivió al borrado se ESCRIBE, no se inserta otra: el usuario ya
+     * apunta a ella y su INE sigue ahí. Insertar una segunda dejaría la anterior huérfana con la
+     * identificación oficial dentro.
+     *
+     * `officialCardObjectKey` se conserva salvo que esta alta traiga una INE nueva, que es lo
+     * único que puede legítimamente reemplazarla.
+     */
+    const saved = existingSignature
+      ? await this.signatureRepository.save({
+          ...existingSignature,
+          signatureObjectKey: signatureObjectKeyResponse.fileId,
+          officialCardObjectKey:
+            officialCardObjectKeyResponse?.fileId ??
+            existingSignature.officialCardObjectKey,
+          isActive: true,
+        })
+      : await this.signatureRepository.save(
+          this.signatureRepository.create({
+            signatureObjectKey: signatureObjectKeyResponse.fileId,
+            officialCardObjectKey:
+              officialCardObjectKeyResponse?.fileId ?? null,
+            isActive: true,
+          }),
+        );
 
-    const saved = await this.signatureRepository.save(newSignature);
-
-    await this.userRepository.update(userId, { signatureId: saved.id });
+    // Sólo cuando la fila es nueva: al reusar la existente el usuario ya la referencia.
+    if (!existingSignature) {
+      await this.userRepository.update(userId, { signatureId: saved.id });
+    }
 
     return {
       success: true,
