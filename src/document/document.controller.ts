@@ -33,6 +33,7 @@ import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
 import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
 import { CreateDocumentUseCase } from './applications/create-document.use-case';
 import { GetDocumentsUseCase } from './applications/get-documents.use-case';
@@ -80,6 +81,7 @@ import { ApiConfirmDocumentCancellation } from './docs/api-confirm-document-canc
 import { ApiUpdateDocument } from './docs/api-update-document.docs';
 import { ApiDeleteDocument } from './docs/api-delete-document.docs';
 import { ApiGetPublicSealArtifact } from './docs/api-get-public-seal-artifact.docs';
+import { ApiGetPublicDocumentAuditXml } from './docs/api-get-public-document-audit-xml.docs';
 
 /**
  * El controller sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
@@ -92,6 +94,7 @@ export class DocumentController {
     private readonly getDocumentFileUrl: GetDocumentFileUrlUseCase,
     private readonly getPublicDocument: GetPublicDocumentUseCase,
     private readonly getPublicSealArtifactUseCase: GetPublicSealArtifactUseCase,
+    private readonly getPublicDocumentAuditXmlUseCase: GetPublicDocumentAuditXmlUseCase,
     private readonly getPublicAdvancedSignature: GetPublicAdvancedSignatureUseCase,
     private readonly createDocument: CreateDocumentUseCase,
     private readonly getDocuments: GetDocumentsUseCase,
@@ -139,6 +142,32 @@ export class DocumentController {
     response.setHeader('Content-Type', contentType);
     // `attachment`: son evidencia para guardar y verificar por fuera (openssl ts, un visor de PDF),
     // no algo que el navegador deba intentar renderizar dentro de la vista pública.
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`,
+    );
+    response.setHeader('Content-Length', String(content.length));
+    response.send(content);
+  }
+
+  /**
+   * Expediente de auditoría completo del documento, armado en el momento de la petición.
+   *
+   * Comparte la forma de respuesta con `getPublicSealArtifact` —un adjunto que el navegador guarda
+   * sin intentar renderizarlo— porque es lo mismo: evidencia para conservar y revisar por fuera.
+   * Lo que cambia es que aquí el archivo no está guardado en ningún lado, se genera al pedirlo.
+   */
+  @Get('public/:id/audit-xml')
+  @SkipJwtAuth()
+  @ApiGetPublicDocumentAuditXml()
+  async getPublicDocumentAuditXml(
+    @Param('id') id: string,
+    @Res() response: Response,
+  ) {
+    const { content, contentType, fileName } =
+      await this.getPublicDocumentAuditXmlUseCase.execute(id);
+
+    response.setHeader('Content-Type', contentType);
     response.setHeader(
       'Content-Disposition',
       `attachment; filename="${fileName}"`,
