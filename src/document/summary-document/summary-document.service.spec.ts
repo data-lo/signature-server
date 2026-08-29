@@ -123,9 +123,38 @@ describe('SummaryDocumentService', () => {
       ]);
     });
 
-    // La constancia se emite DESPUÉS de armar la hoja (ver `sealAdvancedSignatures`), así que la
-    // tabla existe pero todavía no tiene qué mostrar.
-    it('deja vacía la tabla de la Constancia de Conservación (NOM-151)', () => {
+    /**
+     * La firma simple TAMBIÉN se sella ante el PSC. Esta tabla salía siempre vacía porque el
+     * sellado corría después de armar la hoja y la constancia ni siquiera se persistía.
+     */
+    it('imprime la Constancia de Conservación (NOM-151) del sello', () => {
+      const [, nom151] = tablesOf(
+        service['buildDocDefinition'](
+          {
+            ...document,
+            conservationRecord: {
+              tsaCertificate: 'Autoridad CCMD de PSC CODEX TUL',
+              serialNumber: '00E4',
+              issuedAt: new Date('2026-08-20T15:05:00.000Z'),
+            },
+          },
+          signers,
+        ),
+      );
+
+      expect(nom151.map(([label]) => label)).toEqual([
+        'Certificado (TSA)',
+        'NUMERO DE SERIE',
+        'EMITIDO',
+      ]);
+      expect(nom151[0][1]).toBe('Autoridad CCMD de PSC CODEX TUL');
+      expect(nom151[1][1]).toBe('00E4');
+      expect(nom151[2][1]).not.toBe('');
+    });
+
+    // El sellado es best-effort: si falla, la hoja se arma igual. La tabla es parte de la
+    // plantilla de referencia, así que se imprime vacía en vez de desaparecer.
+    it('deja vacía la tabla NOM-151 cuando el documento no llegó a sellarse', () => {
       const [, nom151] = tablesOf(buildDefinition());
 
       expect(nom151).toEqual([

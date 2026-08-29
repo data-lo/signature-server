@@ -737,10 +737,10 @@ export class DocumentService {
    * completado (ver `SendCompletedSimpleSignatureToSealUseCase`, que decide si el documento
    * califica y arma el DTO).
    *
-   * Se invoca cuando ya se guardó todo —el claim de la firma, el snapshot de la rúbrica del
-   * último firmante y los hashes que escribió `finalizeSignedDocument`— y no desde dentro de esa
-   * finalización: el caso de uso relee el documento de la base, así que correr antes le mostraría
-   * un documento sin `signed_hash` y sin la rúbrica de quien acaba de firmar.
+   * Se invoca DENTRO de `finalizeSignedDocument`, justo después de persistir `signed_hash` y antes
+   * de armar la hoja de evidencia: es lo único que permite que su tabla NOM-151 salga llena. El
+   * caso de uso relee el documento de la base, de ahí que ese guardado tenga que preceder a la
+   * llamada; el snapshot de la rúbrica del último firmante ya está persistido a esta altura.
    *
    * Best-effort, con el mismo criterio que el sellado avanzado y los correos de finalización: a
    * esta altura la firma ya está registrada y el PDF ya está en su bucket. Devolver un 500 al
@@ -750,15 +750,16 @@ export class DocumentService {
    * Del error se registra sólo su mensaje, nunca el DTO: lleva CURP, correo y la rúbrica del
    * firmante.
    */
-  async sendSimpleSignaturesToSeal(documentId: string): Promise<void> {
+  async sealSimpleSignatures(documentId: string): Promise<SealEntity | null> {
     try {
-      await this.sendCompletedSimpleSignatureToSeal.execute(documentId);
+      return await this.sendCompletedSimpleSignatureToSeal.execute(documentId);
     } catch (error) {
       this.logger.error(
         `Error enviando las firmas simples del documento ${documentId} a Seal Service: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      return null;
     }
   }
 
@@ -1061,15 +1062,29 @@ export class DocumentService {
         await this.hashService.generateFileHash(documentBuffer);
       document.signedAt = new Date();
 
-      // Sellado con Seal Service ANTES de armar la hoja: el documento ya tiene todas sus firmas
-      // avanzadas (que es lo que el proveedor necesita para un único hash del conjunto) y la hoja
-      // imprime la constancia resultante en su tabla NOM-151. Antes corría después de la hoja, así
-      // que esa tabla salía siempre vacía. Sigue siendo best-effort: si el sellado falla, la firma
-      // no se ve afectada y la hoja se arma sin constancia, como hasta ahora.
-      const seal = await this.sealAdvancedSignatures(
-        document,
-        signerCollaborators,
-      );
+      /**
+       * `signed_hash` se persiste ANTES de sellar porque el sellado de firma simple relee el
+       * documento de la base para armar su evidencia, y sin este guardado leería la fila sin
+       * hash y se descartaría a sí mismo. El estado sigue sin tocarse: el documento se marca
+       * SIGNED al final, después de la hoja, para que un fallo al armarla lo deje reintentable.
+       */
+      await this.documentRepository.update(document.id, {
+        signedHash: document.signedHash,
+        signedAt: document.signedAt,
+      });
+
+      /**
+       * Sellado ANTES de armar la hoja, para los DOS tipos de firma: la hoja imprime la constancia
+       * resultante en su tabla NOM-151, así que sellar después la dejaba siempre vacía. Se corrigió
+       * primero para la firma avanzada; la simple seguía sellándose al final de `sign()` y por eso
+       * su tabla nunca se llenaba.
+       *
+       * Best-effort en ambos casos: si el sellado falla, la firma no se ve afectada y la hoja se
+       * arma sin constancia.
+       */
+      const seal =
+        (await this.sealAdvancedSignatures(document, signerCollaborators)) ??
+        (await this.sealSimpleSignatures(document.id));
 
       // La versión definitiva se arma DESPUÉS de calcular signedHash y ANTES de marcar el
       // documento como SIGNED: la hoja imprime ese hash, y si el anexado falla el documento no
@@ -1295,14 +1310,15 @@ export class DocumentService {
       totalPages: document.totalPages,
       createdBy: creator.email,
       verificationUrl: buildPublicDocumentUrl(document.id),
+      // La constancia va en las DOS hojas: los dos tipos de firma se sellan ante el PSC y las dos
+      // plantillas llevan su tabla NOM-151. Estaba sólo en la avanzada, y por eso la de la firma
+      // simple se imprimía vacía aunque el sello existiera.
+      conservationRecord: toConservationRecord(seal),
     };
 
     const summarySheet = isAdvancedSignatureDocument(signerCollaborators)
       ? await this.advancedSummaryDocumentService.generateAdvancedSummaryPdf(
-          {
-            ...sheetDocumentInfo,
-            conservationRecord: toConservationRecord(seal),
-          },
+          sheetDocumentInfo,
           signerCollaborators.map((collaborator) =>
             this.toAdvancedSummarySigner(collaborator),
           ),

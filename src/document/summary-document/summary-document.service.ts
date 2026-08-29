@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { TDocumentDefinitions } from 'pdfmake/interfaces';
+import { ConservationRecordInfo } from './conservation-record.util';
 import {
   SummaryDocumentInfo,
   SummaryDocumentSigner,
@@ -52,14 +53,25 @@ const SIGNATURES_INTRO_TEXT =
   'mensaje de datos en términos de los artículos 89, 90 y 93 del Código de Comercio.';
 
 /**
- * Renglones de la constancia NOM-151. En esta hoja se imprimen SIEMPRE vacíos: el sellado ante el
- * PSC solo corre para documentos de firma AVANZADA (`sealAdvancedSignatures` filtra por firmantes
- * con e.firma), así que un documento de firma simple no tiene constancia que mostrar.
+ * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
  *
- * La tabla se imprime igual porque es parte de la plantilla de referencia: quitarla del documento
- * legal sería peor que mostrarla sin llenar.
+ * La firma simple también se sella ante el PSC, con su propia evidencia (los datos de identidad y
+ * el OTP de cada firmante, ver `SendCompletedSimpleSignatureToSealUseCase`). Estos renglones
+ * salían siempre vacíos porque ese sellado corría DESPUÉS de armar la hoja, no porque no hubiera
+ * constancia.
+ *
+ * Se imprimen vacíos únicamente cuando el documento no llegó a sellarse —el sellado es
+ * best-effort— porque la tabla es parte de la plantilla de referencia.
  */
-const NOM151_ROW_LABELS = ['Certificado (TSA)', 'NUMERO DE SERIE', 'EMITIDO'];
+function buildConservationRecordRows(
+  record: ConservationRecordInfo | null | undefined,
+): string[][] {
+  return [
+    ['Certificado (TSA)', record?.tsaCertificate ?? ''],
+    ['NUMERO DE SERIE', record?.serialNumber ?? ''],
+    ['EMITIDO', formatSheetDate(record?.issuedAt)],
+  ];
+}
 
 @Injectable()
 export class SummaryDocumentService {
@@ -114,7 +126,9 @@ export class SummaryDocumentService {
           style: 'sectionTitle',
           margin: [0, 14, 0, 6],
         },
-        buildInfoTable(NOM151_ROW_LABELS.map((label) => [label, ''])),
+        buildInfoTable(
+          buildConservationRecordRows(document.conservationRecord),
+        ),
         {
           text: dashBanner('Firmas'),
           style: 'mono',

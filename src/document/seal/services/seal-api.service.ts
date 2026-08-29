@@ -101,18 +101,30 @@ export class SealApiService {
    * fallar. De la respuesta de error del proveedor sólo se toma el código HTTP, porque un cuerpo
    * de error suele venir con un eco de lo que se le mandó.
    *
-   * No devuelve nada: este envío no produce evidencia que persistir (a diferencia del sellado
-   * avanzado, que devuelve hash canónico y constancia NOM-151). Falla lanzando, con las mismas
-   * excepciones que el resto del servicio.
+   * **Devuelve la constancia igual que el sellado avanzado.** La respuesta trae la misma forma
+   * (`hashHex`, `canonicalString`, `sealedAt`, `timeStamp` y `nom151`), así que el llamador la
+   * persiste con el mismo `SealMapper`. Antes se declaraba `void` y se descartaba, bajo la idea de
+   * que este envío no producía evidencia: no era cierto, y por eso los documentos de firma simple
+   * se quedaban sin fila en `document_seals` y con la tabla NOM-151 vacía en su hoja.
+   *
+   * Falla lanzando, con las mismas excepciones que el resto del servicio.
    */
-  async sendSimpleSignatures(dto: SimpleSignatureDTO): Promise<void> {
+  async sendSimpleSignatures(
+    dto: SimpleSignatureDTO,
+  ): Promise<SealDocumentResponse> {
     const { serviceUrl, apiKey } = this.resolveConfiguration();
 
     try {
-      await axios.post(`${serviceUrl}${SIMPLE_SIGNATURE_PATH}`, dto, {
-        headers: { 'x-api-key': apiKey },
-        timeout: SEAL_REQUEST_TIMEOUT_MS,
-      });
+      const httpResponse = await axios.post<SealDocumentResponse>(
+        `${serviceUrl}${SIMPLE_SIGNATURE_PATH}`,
+        dto,
+        {
+          headers: { 'x-api-key': apiKey },
+          timeout: SEAL_REQUEST_TIMEOUT_MS,
+        },
+      );
+
+      return httpResponse.data;
     } catch (error) {
       throw this.translateTransportError(error, dto.documentId);
     }
