@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ContentTable, TDocumentDefinitions } from 'pdfmake/interfaces';
 import { ConservationRecordInfo } from './conservation-record.util';
+import { toIsoWithMexicoOffset } from '../utils/iso-offset-date.util';
 import {
   AdvancedSummaryDocumentInfo,
   AdvancedSummaryDocumentSigner,
@@ -70,7 +71,13 @@ function buildConservationRecordRows(
   return [
     ['Certificado (TSA)', record?.tsaCertificate ?? ''],
     ['NUMERO DE SERIE', record?.serialNumber ?? ''],
-    ['EMITIDO', formatSheetDate(record?.issuedAt)],
+    /**
+     * En ISO 8601 con desfase explícito y no en el formato corto del resto de la hoja: es la
+     * marca de tiempo que emite el PSC y la que se contrasta contra el sello, así que tiene que
+     * ser inequívoca y legible por una máquina. Las fechas de firma siguen en formato corto,
+     * que es lo que la plantilla de referencia pide.
+     */
+    ['EMITIDO', toIsoWithMexicoOffset(record?.issuedAt)],
   ];
 }
 

@@ -1325,8 +1325,12 @@ export class DocumentService {
         )
       : await this.summaryDocumentService.generateSummaryPdf(
           sheetDocumentInfo,
-          signerCollaborators.map((collaborator) =>
-            this.toSummarySigner(collaborator),
+          // Cada firmante requiere una consulta para recuperar su OTP consumido, que es su prueba
+          // de identidad en una firma simple.
+          await Promise.all(
+            signerCollaborators.map((collaborator) =>
+              this.toSummarySigner(document.id, collaborator),
+            ),
           ),
         );
 
@@ -1348,11 +1352,32 @@ export class DocumentService {
   }
 
   /** Traduce un colaborador firmante a un renglón de la sección "Firmas" de la hoja. */
-  toSummarySigner(collaborator: CollaboratorEntity): SummaryDocumentSigner {
+  /**
+   * Traduce un colaborador que firmó con firma simple a una tabla de la sección "Firmas".
+   *
+   * **El OTP se resuelve aquí, no se hereda del colaborador.** El renglón "OTP CODE" salía vacío
+   * en todas las hojas de firma simple porque este método nunca lo llenaba, pese a que la
+   * interfaz lo declara y la vista pública sí lo publica. En una firma simple ese código ES la
+   * prueba de identidad —no hay certificado que lo acredite—, así que la hoja sin él pierde
+   * justo la evidencia que la sostiene.
+   *
+   * Puede no existir: la verificación por OTP depende de `document.requiresVerification`, y un
+   * documento que no la exigió se completa sin código. En ese caso el renglón queda vacío, que es
+   * correcto.
+   */
+  async toSummarySigner(
+    documentId: string,
+    collaborator: CollaboratorEntity,
+  ): Promise<SummaryDocumentSigner> {
     return {
       name: collaboratorDisplayName(collaborator),
       ipAddress: collaborator.ipAddress,
       signedAt: collaborator.signedAt,
+      otpCode: await this.verificationCodeService.findConsumedCode(
+        documentId,
+        collaborator.id,
+        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      ),
     };
   }
 

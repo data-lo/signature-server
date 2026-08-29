@@ -103,8 +103,9 @@ describe('AdvancedSummaryDocumentService', () => {
       );
       const [, nom151] = tablesOf(definition);
 
-      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toMatch(
-        /30\/07\/26/,
+      // ISO 8601 con desfase explícito: es la marca del PSC, tiene que ser inequívoca.
+      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toBe(
+        '2026-07-30T09:59:22.000-06:00',
       );
     });
 
@@ -133,8 +134,9 @@ describe('AdvancedSummaryDocumentService', () => {
       expect(nom151.find(([label]) => label === 'NUMERO DE SERIE')?.[1]).toBe(
         '4A1B2C3D',
       );
-      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toMatch(
-        /30\/07\/26/,
+      // ISO 8601 con desfase explícito: es la marca del PSC, tiene que ser inequívoca.
+      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toBe(
+        '2026-07-30T09:59:22.000-06:00',
       );
     });
 
