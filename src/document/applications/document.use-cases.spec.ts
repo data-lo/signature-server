@@ -1390,6 +1390,50 @@ describe('casos de uso de documentos', () => {
         );
       });
 
+      /**
+       * El caso de uso del sellado RELEE los firmantes de la base, así que sólo ve lo que ya está
+       * escrito. El snapshot de la rúbrica del último firmante se tomaba en memoria y se
+       * persistía en el `save` del final —después del sellado—, de modo que la evidencia enviada
+       * al PSC caía a la firma EN VIVO del perfil mientras el PDF se estampaba con el snapshot.
+       *
+       * Se comprueba el ORDEN y no sólo que el UPDATE ocurra: escribirlo después del sellado deja
+       * el dato igual de guardado y el bug intacto.
+       */
+      it('persiste el snapshot de la rúbrica ANTES de sellar, no en el save final', async () => {
+        documentRepository.findOne.mockResolvedValue(mockDocument());
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+
+        await signDocument.execute(
+          'doc-1',
+          'user-1',
+          undefined,
+          TEST_GEOLOCATION,
+        );
+
+        const snapshotUpdate = collaboratorRepository.update.mock.calls.findIndex(
+          ([, patch]) =>
+            (patch as { signatureSnapshotObjectKey?: string })
+              ?.signatureSnapshotObjectKey !== undefined,
+        );
+        expect(snapshotUpdate).toBeGreaterThanOrEqual(0);
+
+        const ordenSnapshot =
+          collaboratorRepository.update.mock.invocationCallOrder[
+            snapshotUpdate
+          ];
+        const ordenSellado =
+          sendCompletedSimpleSignatureToSeal.execute.mock
+            .invocationCallOrder[0];
+        const ordenSaveFinal =
+          collaboratorRepository.save.mock.invocationCallOrder.at(-1)!;
+
+        expect(ordenSnapshot).toBeLessThan(ordenSellado);
+        expect(ordenSellado).toBeLessThan(ordenSaveFinal);
+      });
+
       it('no se dispara mientras queden firmas pendientes', async () => {
         documentRepository.findOne.mockResolvedValue(mockDocument());
         const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });

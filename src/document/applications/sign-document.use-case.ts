@@ -171,6 +171,30 @@ export class SignDocumentUseCase {
         await this.documentService.snapshotSignatureImage(
           myParticipant.account!.user as UserEntity,
         );
+
+      /**
+       * Se persiste ACÁ y no en el `save` del final del método.
+       *
+       * El sellado de firma simple corre dentro de `finalizeSignedDocument` —antes de ese save— y
+       * RELEE los firmantes de la base para armar la evidencia que manda al PSC
+       * (`SendCompletedSimpleSignatureToSealUseCase.findDocumentWithSigners`). Con el snapshot
+       * todavía sin escribir, el del último firmante llegaba en NULL y el caso de uso caía a la
+       * firma EN VIVO de su perfil.
+       *
+       * El estampado, en cambio, sí veía el snapshot: recibe el arreglo de colaboradores por
+       * referencia y lee el valor en memoria. Es decir que el PDF se firmaba con el snapshot y la
+       * evidencia se sellaba con la firma en vivo — dos rúbricas que el snapshot existe justamente
+       * para garantizar que sean la misma. Coinciden mientras el usuario no cambie su firma, así
+       * que la divergencia no se manifestaba como error sino como una evidencia que podía no
+       * corresponder al documento.
+       *
+       * Un UPDATE puntual en vez de adelantar el `save` completo: ese save persiste además la
+       * geolocalización y, en firma avanzada, la firma electrónica, y moverlo entero cambiaría
+       * cuándo se escriben cosas que no tienen nada que ver con esto.
+       */
+      await this.collaboratorRepository.update(myParticipant.id, {
+        signatureSnapshotObjectKey: myParticipant.signatureSnapshotObjectKey,
+      });
     }
 
     const remainingSigners = signerCollaborators.filter(
@@ -211,8 +235,10 @@ export class SignDocumentUseCase {
       );
     }
 
-    // El claim atómico ya persistió status/signedAt — este save solo persiste
-    // signatureSnapshotObjectKey (y re-escribe status/signedAt con el mismo valor, sin efecto).
+    // Lo que este save persiste, a esta altura, es la geolocalización y —en firma avanzada— la
+    // firma electrónica. El claim atómico ya escribió status/signedAt y el snapshot de la rúbrica
+    // se escribió apenas se tomó (ver arriba, lo necesita el sellado); re-escribirlos con el mismo
+    // valor no tiene efecto.
     await this.collaboratorRepository.save(myParticipant);
 
     // Bug corregido: este evento alimenta el encadenamiento de DocumentTransaction y del ledger
