@@ -238,12 +238,17 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
       );
     });
 
-    it('omite las imágenes de la INE sin impedir el envío', async () => {
+    /**
+     * Las imágenes de la INE ya no viajan en el contrato (ver `SimpleSignatureMedia`): Seal
+     * Service las canonicalizaba sin comprobar que vinieran y reventaba el sellado entero, que es
+     * lo que dejaba vacía la tabla NOM-151 de la hoja. `signatureMedia` no debe llevar nada más
+     * que la rúbrica, o el XML canónico volvería a depender de campos que nadie llena.
+     */
+    it('manda en signatureMedia únicamente la rúbrica', async () => {
       await useCase.execute(DOCUMENT_ID);
 
       const media = sentDto().signatures[0].signatureMedia;
-      expect(media.identityDocumentFrontImage).toBeUndefined();
-      expect(media.identityDocumentBackImage).toBeUndefined();
+      expect(Object.keys(media)).toEqual(['signatureImage']);
       expect(media.signatureImage).toEqual(expect.any(String));
     });
 

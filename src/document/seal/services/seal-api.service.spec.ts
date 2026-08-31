@@ -144,10 +144,10 @@ describe('SealApiService', () => {
   });
 
   describe('firmas simples', () => {
-    it('manda el DTO a /seal/simple-signature con la API key', async () => {
-      mockedAxios.post.mockResolvedValue({ data: {} });
+    it('manda el DTO a /seal/simple-signature con la API key y devuelve la constancia', async () => {
+      mockedAxios.post.mockResolvedValue({ data: RESPONSE });
 
-      await service.sendSimpleSignatures(SIMPLE_DTO);
+      const result = await service.sendSimpleSignatures(SIMPLE_DTO);
 
       expect(mockedAxios.post).toHaveBeenCalledWith(
         'http://seal-service:3002/seal/simple-signature',
@@ -156,6 +156,21 @@ describe('SealApiService', () => {
           headers: { 'x-api-key': 'api-key-de-prueba' },
         }),
       );
+      expect(result).toEqual(RESPONSE);
+    });
+
+    /**
+     * Se persiste con el mismo mapper y en las mismas columnas NOT NULL que el sellado avanzado,
+     * así que un 200 con cuerpo incompleto tiene que fallar acá y no al guardar, donde
+     * `persistSeal` lo confundiría con "la fila ya existía" y dejaría la tabla NOM-151 vacía sin
+     * rastro en el log.
+     */
+    it('rechaza una respuesta incompleta del proveedor', async () => {
+      mockedAxios.post.mockResolvedValue({ data: {} });
+
+      await expect(
+        service.sendSimpleSignatures(SIMPLE_DTO),
+      ).rejects.toBeInstanceOf(SealProviderResponseException);
     });
 
     it('sin configuración, falla sin llegar a llamar al proveedor', async () => {

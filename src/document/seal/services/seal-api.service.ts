@@ -124,7 +124,14 @@ export class SealApiService {
         },
       );
 
-      return httpResponse.data;
+      /**
+       * Misma comprobación que el sellado avanzado: la respuesta se persiste con el MISMO
+       * `SealMapper`, en las MISMAS columnas NOT NULL. Sin ella, un proveedor que devuelva 200 con
+       * un cuerpo incompleto no falla acá sino al guardar, donde `persistSeal` trata el error como
+       * "la fila ya existía" y se queda sin constancia en silencio — otra vez la tabla NOM-151
+       * vacía y sin nada en el log que lo explique.
+       */
+      return this.assertUsableResponse(httpResponse.data, dto.documentId);
     } catch (error) {
       throw this.translateTransportError(error, dto.documentId);
     }

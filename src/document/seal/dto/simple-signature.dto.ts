@@ -41,6 +41,23 @@ export interface SimpleSignatureVerificationData {
   usedAt: string;
 }
 
+/**
+ * Lo único que acompaña a la firma: la rúbrica.
+ *
+ * Aquí vivían `identityDocumentFrontImage` / `identityDocumentBackImage`, el anverso y reverso de
+ * la INE, declarados opcionales porque la descarga desde Didit todavía no existe y por lo tanto
+ * nunca se mandaban. Del otro lado NO eran opcionales: Seal Service los canonicalizaba sin
+ * comprobar, así que cada envío moría con `TypeError: ... (reading 'replace')`, el 500 lo tragaba
+ * el sellado best-effort (`DocumentService.sealSimpleSignatures`) y el documento se quedaba sin
+ * fila en `document_seals`. Ese es el motivo por el que la tabla "Información de la Constancia de
+ * Conservación (NOM-151)" de la hoja de firma simple —y la vista pública de verificación— salían
+ * vacías: no es que la constancia no se imprimiera, es que nunca llegó a emitirse.
+ *
+ * Los campos se eliminan de los DOS contratos en vez de tolerarse: mientras no se descarguen de
+ * Didit no hay nada que mandar, y un campo que nadie llena sólo invita a que el XML canónico
+ * dependa de si vino o no. Cuando existan se agregan de vuelta a la vez en ambos lados, con su
+ * versión de hash (`HASH_VERSION` en Seal Service).
+ */
 export interface SimpleSignatureMedia {
   /**
    * PNG de la rúbrica del firmante en Base64, sin prefijo `data:`.
@@ -49,13 +66,4 @@ export interface SimpleSignatureMedia {
    * caso de uso valida que lo descargado de MinIO sea realmente un PNG antes de codificarlo.
    */
   signatureImage: string;
-  /**
-   * Anverso y reverso de la identificación oficial, en Base64.
-   *
-   * Ausentes en esta etapa: la descarga de las imágenes de INE desde Didit todavía no existe.
-   * Se declaran opcionales —y no como cadena vacía— para que Seal Service distinga "no lo
-   * tenemos" de "lo tenemos y está vacío", y su ausencia nunca bloquea el envío.
-   */
-  identityDocumentFrontImage?: string;
-  identityDocumentBackImage?: string;
 }

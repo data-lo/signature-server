@@ -255,10 +255,6 @@ export class SendCompletedSimpleSignatureToSealUseCase {
       verificationData: await this.resolveVerificationData(documentId, signer),
       signatureMedia: {
         signatureImage: await this.resolveSignatureImage(signer),
-        /**
-         * Anverso y reverso de la INE: todavía no se descargan de Didit, así que se omiten. Su
-         * ausencia no bloquea el envío — ver `SimpleSignatureMedia`.
-         */
       },
     };
   }
