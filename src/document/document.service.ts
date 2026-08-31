@@ -392,15 +392,41 @@ export class DocumentService {
     );
   }
 
-  /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
-  async getDocumentMinioURL(documentId: string) {
+  /**
+   * Genera y retorna la URL segura del archivo en Minio según el estatus del documento.
+   *
+   * `asAttachment` es lo que distingue descargar de previsualizar, y las dos cosas salen de esta
+   * misma ruta. Al descargar, el archivo se nombra con `file_name` —el nombre configurado del
+   * documento, el que el usuario reconoce— en vez de con la clave del objeto, que es un UUID. Al
+   * previsualizar no se manda nada: una cabecera `attachment` haría que el visor se descargara el
+   * PDF en lugar de mostrarlo.
+   *
+   * El nombre lo resuelve el backend y no el cliente a propósito: es el que está guardado, viaja
+   * firmado dentro de la URL, y así ninguna pantalla puede bautizar el archivo por su cuenta.
+   */
+  async getDocumentMinioURL(
+    documentId: string,
+    { asAttachment = false }: { asAttachment?: boolean } = {},
+  ) {
     try {
       const document = await this.findOne(documentId);
       const bucket = this.resolveDocumentBucket(document);
-      const fileResponse = await this.minioService.getFile(
-        document.objectKey,
-        bucket,
-      );
+      /**
+       * La rama de previsualización llama EXACTAMENTE como siempre, con dos argumentos. No es
+       * cosmético: `getFile` recibe el nombre de descarga en su cuarto parámetro, y pasarlo como
+       * `undefined` en el camino del visor volvería vacuas las pruebas que verifican que un
+       * documento firmado nunca se sirve desde el bucket equivocado —un `not.toHaveBeenCalledWith`
+       * de dos argumentos deja de poder fallar en cuanto la llamada real tiene cuatro—.
+       */
+      const fileResponse = asAttachment
+        ? await this.minioService.getFile(
+            document.objectKey,
+            bucket,
+            undefined,
+            document.fileName,
+          )
+        : await this.minioService.getFile(document.objectKey, bucket);
+
       return fileResponse;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
