@@ -347,6 +347,70 @@ describe('PdfSignatureService', () => {
    * criterio de aceptación habla de dónde la ve el usuario, no de qué números quedaron en el
    * flujo de contenido.
    */
+  /**
+   * El resize automático normaliza a `DEFAULT_SIGNATURE_SIZE` (200x80) cualquier caja fuera del
+   * rango dibujable. Tiene sentido para un tamaño que llega sin respaldo —coordenadas legacy en
+   * píxeles, el apilado por defecto—, pero no para una caja que el usuario dibujó sobre la página:
+   * ahí el tamaño se derivó de las dimensiones de esa hoja y se vio en pantalla antes de firmar.
+   */
+  describe('mergeSignatureIntoPdf — normalizeSize', () => {
+    // Fuera del máximo (320x128): en una hoja muy ancha, el 20% del ancho llega a estos valores
+    // sin que nada esté mal.
+    const CAJA_GRANDE = { x: 40, y: 60, width: 420, height: 150 };
+
+    it('por defecto normaliza un tamaño fuera de rango (comportamiento previo)', async () => {
+      const documentBuffer = await buildPdf([[2400, 1000]]);
+
+      const signed = await service.mergeSignatureIntoPdf(
+        documentBuffer,
+        MINIMAL_PNG,
+        CAJA_GRANDE,
+      );
+
+      const { width, height } = await drawnPlacement(signed);
+      expect({ width, height }).toEqual({ width: 200, height: 80 });
+    });
+
+    /**
+     * Sin esto, la firma no sólo cambia de tamaño: al encogerse desde la esquina inferior
+     * izquierda deja de cubrir la caja que el usuario ve dibujada, y termina en otro sitio.
+     */
+    it('con normalizeSize:false respeta la caja configurada tal cual', async () => {
+      const documentBuffer = await buildPdf([[2400, 1000]]);
+
+      const signed = await service.mergeSignatureIntoPdf(
+        documentBuffer,
+        MINIMAL_PNG,
+        CAJA_GRANDE,
+        undefined,
+        { normalizeSize: false },
+      );
+
+      expect(await drawnPlacement(signed)).toEqual({
+        x: 40,
+        y: 60,
+        width: 420,
+        height: 150,
+      });
+    });
+
+    /** Una caja diminuta tampoco se agranda: lo configurado es lo que se estampa. */
+    it('con normalizeSize:false tampoco agranda una caja por debajo del mínimo', async () => {
+      const documentBuffer = await buildPdf([[600, 800]]);
+
+      const signed = await service.mergeSignatureIntoPdf(
+        documentBuffer,
+        MINIMAL_PNG,
+        { x: 10, y: 10, width: 30, height: 12 },
+        undefined,
+        { normalizeSize: false },
+      );
+
+      const { width, height } = await drawnPlacement(signed);
+      expect({ width, height }).toEqual({ width: 30, height: 12 });
+    });
+  });
+
   describe('mergeSignatureIntoPdf — orientación de la página', () => {
     const RATIOS = {
       page: 1,

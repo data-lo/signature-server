@@ -1143,7 +1143,16 @@ describe('casos de uso de documentos', () => {
 
         const [, , , , options] =
           documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
-        expect(options).toEqual({ preserveAspectRatio: true });
+        expect(options).toEqual({
+          preserveAspectRatio: true,
+          /**
+           * La caja viene de una posición configurada, así que su tamaño no se renormaliza: se
+           * derivó de las dimensiones de la página y es la que el usuario ve dibujada. El QR se
+           * encaja DENTRO de ella sin deformarse, que es cosa de `preserveAspectRatio`; las dos
+           * opciones resuelven cosas distintas y por eso viajan juntas.
+           */
+          normalizeSize: false,
+        });
       });
 
       // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".

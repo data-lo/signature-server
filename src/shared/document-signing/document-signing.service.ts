@@ -138,6 +138,12 @@ export class PdfSignatureService {
    * @param options         `preserveAspectRatio` encaja la imagen dentro de la caja sin
    *                        deformarla, centrada. Lo usa el QR de la firma avanzada (ver más
    *                        abajo); las rúbricas siguen ocupando la caja completa, como siempre.
+   *
+   *                        `normalizeSize: false` respeta el tamaño recibido tal cual, saltándose
+   *                        el resize automático. Lo pasa el estampado por posición configurada:
+   *                        ahí el tamaño no es un dato suelto que pueda venir mal, es el de la
+   *                        caja que el usuario dibujó sobre la página, y sustituirlo por el
+   *                        tamaño por defecto movería la firma del lugar donde se la ve colocada.
    * @returns               PDF firmado en formato PDF/A-2B como Buffer.
    */
   async mergeSignatureIntoPdf(
@@ -145,7 +151,7 @@ export class PdfSignatureService {
     signatureBuffer: Buffer,
     coordinates: SignatureCoordinates,
     pageIndex?: number,
-    options?: { preserveAspectRatio?: boolean },
+    options?: { preserveAspectRatio?: boolean; normalizeSize?: boolean },
   ): Promise<Buffer> {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
@@ -175,11 +181,24 @@ export class PdfSignatureService {
     const targetPage =
       pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
 
-    // Paso 5: resolver el tamaño final de la firma aplicando el resize automático si corresponde.
-    // Se calcula en el espacio VISIBLE, que es donde el usuario colocó la caja: en una hoja con
-    // `/Rotate` los lados del MediaBox están intercambiados, y medir ahí compararía el ancho de la
-    // rúbrica contra el alto de la página.
-    const drawSize = this.resolveSignatureSize(coordinates);
+    /**
+     * Paso 5: resolver el tamaño final de la firma.
+     *
+     * Se calcula en el espacio VISIBLE, que es donde el usuario colocó la caja: en una hoja con
+     * `/Rotate` los lados del MediaBox están intercambiados, y medir ahí compararía el ancho de la
+     * rúbrica contra el alto de la página.
+     *
+     * El resize automático es para los tamaños que llegan sin respaldo —coordenadas legacy en
+     * píxeles, el apilado por defecto—, donde un valor absurdo tiene que corregirse a algo
+     * dibujable. Una caja configurada por el usuario no es ese caso: su tamaño se derivó de las
+     * dimensiones de la página, se ve en pantalla antes de firmar, y normalizarla a
+     * `DEFAULT_SIGNATURE_SIZE` la movería a un tamaño que nadie eligió —justo lo que ocurre en una
+     * hoja muy ancha, donde el ancho de la caja supera el máximo sin que nada esté mal—.
+     */
+    const drawSize =
+      options?.normalizeSize === false
+        ? { width: coordinates.width, height: coordinates.height }
+        : this.resolveSignatureSize(coordinates);
 
     // Paso 6: encajar la imagen en la caja, también en espacio visible — `preserveAspectRatio`
     // centra el QR dentro de la caja, y "centrado" sólo significa algo respecto de los ejes que
