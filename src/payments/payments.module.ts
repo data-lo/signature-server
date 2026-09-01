@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { BillingModule } from 'src/billing/billing.module';
@@ -6,7 +6,6 @@ import { AccountSubscriptionEntity } from './entities/account-subscription.entit
 import { StripePaymentGatewayService } from './stripe/stripe-payment-gateway.service';
 import { StripeWebhookService } from './stripe/stripe-webhook.service';
 import { GetPaymentServicesUseCase } from './applications/get-payment-services.use-case';
-import { CreateStripeCheckoutSessionUseCase } from './applications/create-stripe-checkout-session.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { PaymentsController } from './payments.controller';
 
@@ -29,14 +28,15 @@ import { PaymentsController } from './payments.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([AccountSubscriptionEntity, AccountEntity]),
-    BillingModule,
+    // `forwardRef`: billing necesita el adaptador de Stripe de este módulo para abrir el
+    // checkout, y este módulo necesita los handlers de billing en su router de webhooks.
+    forwardRef(() => BillingModule),
   ],
   controllers: [PaymentsController],
   providers: [
     StripePaymentGatewayService,
     StripeWebhookService,
     GetPaymentServicesUseCase,
-    CreateStripeCheckoutSessionUseCase,
     GetSubscriptionStateUseCase,
   ],
   exports: [StripePaymentGatewayService, StripeWebhookService],

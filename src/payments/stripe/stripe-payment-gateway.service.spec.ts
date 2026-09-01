@@ -132,15 +132,22 @@ describe('StripePaymentGatewayService', () => {
       metadata: { accountId: 'account-1' },
     };
 
-    it('devuelve la URL hospedada', async () => {
+    /**
+     * El `sessionId` viaja junto a la URL —antes se devolvía sólo la URL— porque es la llave con
+     * la que `checkout_orders` se reconcilia después: `checkout.session.completed` sólo trae el
+     * id de la sesión, así que sin guardarlo al crearla no habría forma de encontrar la orden
+     * pendiente que le corresponde.
+     */
+    it('devuelve el id de la sesión y su URL hospedada', async () => {
       mockSessionsCreate.mockResolvedValue({
         id: 'cs_1',
         url: 'https://checkout.stripe.com/c/pay/cs_1',
       });
 
-      await expect(service.createCheckoutSession(input)).resolves.toBe(
-        'https://checkout.stripe.com/c/pay/cs_1',
-      );
+      await expect(service.createCheckoutSession(input)).resolves.toEqual({
+        sessionId: 'cs_1',
+        checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_1',
+      });
     });
 
     it('copia la metadata a la suscripción: los eventos de renovación no traen la de la sesión', async () => {

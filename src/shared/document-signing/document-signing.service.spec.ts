@@ -120,7 +120,8 @@ async function drawnOnScreen(
   const block = upToDraw.slice(upToDraw.lastIndexOf('q'));
 
   let ctm: Matrix = [1, 0, 0, 1, 0, 0];
-  const cmPattern = /(-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) cm/g;
+  const cmPattern =
+    /(-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) (-?[\d.e-]+) cm/g;
   for (const match of block.matchAll(cmPattern)) {
     ctm = multiply(ctm, match.slice(1).map(Number) as Matrix);
   }
@@ -464,18 +465,16 @@ describe('PdfSignatureService', () => {
           pageIndex,
         );
 
-        const screen = await drawnOnScreen(
-          signed,
-          0,
-          content,
-          page.rotate,
-        );
+        const screen = await drawnOnScreen(signed, 0, content, page.rotate);
         const viewer = viewerTransform(content, page.rotate);
 
         expect(screen.left).toBeCloseTo(RATIOS.xRatio * viewer.width, 3);
         expect(screen.top).toBeCloseTo(RATIOS.yRatio * viewer.height, 3);
         expect(screen.width).toBeCloseTo(RATIOS.widthRatio * viewer.width, 3);
-        expect(screen.height).toBeCloseTo(RATIOS.heightRatio * viewer.height, 3);
+        expect(screen.height).toBeCloseTo(
+          RATIOS.heightRatio * viewer.height,
+          3,
+        );
       },
     );
 
@@ -520,7 +519,10 @@ describe('PdfSignatureService', () => {
         expect(screen.left).toBeCloseTo(RATIOS.xRatio * viewer.width, 3);
         expect(screen.top).toBeCloseTo(RATIOS.yRatio * viewer.height, 3);
         expect(screen.width).toBeCloseTo(RATIOS.widthRatio * viewer.width, 3);
-        expect(screen.height).toBeCloseTo(RATIOS.heightRatio * viewer.height, 3);
+        expect(screen.height).toBeCloseTo(
+          RATIOS.heightRatio * viewer.height,
+          3,
+        );
       }
     });
 

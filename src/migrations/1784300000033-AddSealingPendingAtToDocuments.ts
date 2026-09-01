@@ -17,9 +17,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Nullable: `NULL` significa que no hay nada pendiente, que es el caso de todos los documentos
  * existentes y de los que se sellan con normalidad.
  */
-export class AddSealingPendingAtToDocuments1784300000033
-  implements MigrationInterface
-{
+export class AddSealingPendingAtToDocuments1784300000033 implements MigrationInterface {
   name = 'AddSealingPendingAtToDocuments1784300000033';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

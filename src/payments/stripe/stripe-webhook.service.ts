@@ -6,16 +6,22 @@ import { AccountSubscriptionEntity } from '../entities/account-subscription.enti
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
+import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 
 /**
- * Cada evento soportado tiene su propio handler privado — para reaccionar a
- * un evento nuevo de Stripe basta con agregar un case al switch de
- * `process()` y un método privado, sin tocar el resto del módulo.
+ * Router de los eventos de Stripe ya autenticados. Cada evento soportado tiene su propio handler
+ * — para reaccionar a uno nuevo basta con agregar un case al switch de `process()`.
  *
- * Excepción: los eventos `product.*` no tienen handler privado acá — delegan directo a
- * `CatalogSyncService` (módulo `billing`). No es sólo un efecto de un pago (activar/cancelar una
- * suscripción); es mantenimiento de catálogo, con sus propias reglas sobre qué se sincroniza y
- * qué se conserva. Este switch sigue siendo sólo el enrutador de la entrega ya autenticada.
+ * **Conviven dos modelos de suscripción y los dos se atienden aquí.** Los handlers privados
+ * mantienen `account_subscriptions`, el modelo anterior, del que todavía dependen
+ * `GetSubscriptionStateUseCase` y la pantalla de suscripciones del frontend. Los servicios de
+ * `billing` mantienen el modelo nuevo (`billing_profiles` + `credit_lots`), que además concede el
+ * saldo de documentos. Se invocan los dos por evento, en ese orden, hasta que el modelo viejo se
+ * retire: quitarlo ahora dejaría esa pantalla sin datos.
+ *
+ * Los efectos de `billing` van DESPUÉS del handler heredado a propósito. Si el nuevo falla, el
+ * evento se propaga y Stripe reintenta la entrega completa; que el efecto heredado se haya
+ * aplicado antes no estorba, porque todos los handlers de este archivo son idempotentes.
  */
 @Injectable()
 export class StripeWebhookService {
@@ -25,23 +31,43 @@ export class StripeWebhookService {
     @InjectRepository(AccountSubscriptionEntity)
     private readonly subscriptionRepository: Repository<AccountSubscriptionEntity>,
     private readonly catalogSyncService: CatalogSyncService,
+    private readonly subscriptionBillingService: SubscriptionBillingService,
   ) {}
 
   async process(event: Stripe.Event): Promise<void> {
     switch (event.type) {
-      case 'checkout.session.completed':
-        await this.handleCheckoutSessionCompleted(
-          event.data.object as Stripe.Checkout.Session,
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        await this.handleCheckoutSessionCompleted(session);
+        await this.subscriptionBillingService.handleCheckoutSessionCompleted(
+          session,
         );
         break;
-      case 'invoice.paid':
-        await this.handleInvoicePaid(event.data.object as Stripe.Invoice);
+      }
+      case 'invoice.paid': {
+        const invoice = event.data.object as Stripe.Invoice;
+        await this.handleInvoicePaid(invoice);
+        await this.subscriptionBillingService.handleInvoicePaid(invoice);
         break;
-      case 'customer.subscription.deleted':
-        await this.handleSubscriptionDeleted(
+      }
+      case 'invoice.payment_failed':
+        await this.subscriptionBillingService.handleInvoicePaymentFailed(
+          event.data.object as Stripe.Invoice,
+        );
+        break;
+      case 'customer.subscription.updated':
+        await this.subscriptionBillingService.handleSubscriptionUpdated(
           event.data.object as Stripe.Subscription,
         );
         break;
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        await this.handleSubscriptionDeleted(subscription);
+        await this.subscriptionBillingService.handleSubscriptionDeleted(
+          subscription,
+        );
+        break;
+      }
       case 'product.created':
       case 'product.updated':
         await this.catalogSyncService.syncProductUpserted(

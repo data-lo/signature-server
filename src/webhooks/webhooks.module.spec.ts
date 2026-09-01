@@ -1,14 +1,20 @@
 import { setTestModuleGraphEnv } from 'src/shared/testing/module-graph-env';
+import { Global, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { PlanEntity } from 'src/billing/catalog/plan.entity';
-import { DocumentPackOfferEntity } from 'src/billing/catalog/document-pack-offer.entity';
 import { RedisService } from 'src/shared/redis/redis.service';
+import { PlanEntity } from 'src/billing/catalog/plan.entity';
+import { PlanPriceEntity } from 'src/billing/catalog/plan-price.entity';
+import { DocumentPackOfferEntity } from 'src/billing/catalog/document-pack-offer.entity';
+import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entity';
+import { CheckoutOrderEntity } from 'src/billing/checkout/checkout-order.entity';
+import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
+import { DocumentCreditConsumptionEntity } from 'src/billing/credits/document-credit-consumption.entity';
 import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
@@ -26,12 +32,31 @@ beforeAll(() => {
   setTestModuleGraphEnv();
 });
 
+/**
+ * `overrideProvider` sólo puede sustituir un provider que YA exista, y aquí no hay ningún
+ * `TypeOrmModule.forRoot()` que aporte el `DataSource` que `SubscriptionBillingService` inyecta
+ * para la transacción de `invoice.paid`. Un módulo global de prueba sí lo introduce en todos los
+ * contextos, incluido el de `BillingModule`.
+ */
+@Global()
+@Module({
+  providers: [
+    { provide: getDataSourceToken(), useValue: { transaction: jest.fn() } },
+  ],
+  exports: [getDataSourceToken()],
+})
+class StubDataSourceModule {}
+
 describe('WebhooksModule', () => {
   it('resuelve el grafo de dependencias, incluido el procesador de Didit', async () => {
     const repositoryStub = {};
 
     const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ isGlobal: true }), WebhooksModule],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        StubDataSourceModule,
+        WebhooksModule,
+      ],
     })
       .overrideProvider(getRepositoryToken(WebhookEventEntity))
       .useValue(repositoryStub)
@@ -45,7 +70,17 @@ describe('WebhooksModule', () => {
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(PlanEntity))
       .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(PlanPriceEntity))
+      .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(DocumentPackOfferEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(BillingProfileEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CheckoutOrderEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CreditLotEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(DocumentCreditConsumptionEntity))
       .useValue(repositoryStub)
       .overrideProvider(RedisService)
       .useValue({ del: jest.fn() })

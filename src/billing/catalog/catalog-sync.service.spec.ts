@@ -164,7 +164,9 @@ describe('CatalogSyncService', () => {
       });
 
       // Primera corrida: no existe por stripeProductId ni por code → se crea.
-      planRepository.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      planRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
       await service.syncProductUpserted(product);
       const createdRow = planRepository.save.mock.calls[0][0];
 

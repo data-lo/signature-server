@@ -1,29 +1,66 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { PaymentsModule } from 'src/payments/payments.module';
 import { PlanEntity } from './catalog/plan.entity';
 import { PlanPriceEntity } from './catalog/plan-price.entity';
 import { DocumentPackOfferEntity } from './catalog/document-pack-offer.entity';
+import { BillingProfileEntity } from './profiles/billing-profile.entity';
+import { CheckoutOrderEntity } from './checkout/checkout-order.entity';
+import { CreditLotEntity } from './credits/credit-lot.entity';
+import { DocumentCreditConsumptionEntity } from './credits/document-credit-consumption.entity';
 import { CatalogSyncService } from './catalog/catalog-sync.service';
+import { BillingCatalogService } from './catalog/billing-catalog.service';
+import { BillingOwnerService } from './profiles/billing-owner.service';
+import { CheckoutOrderService } from './checkout/checkout-order.service';
+import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
+import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
 
 /**
- * Dominio de catálogo comercial. Primer módulo que usa las entidades de `billing/` —hasta ahora
- * sólo existían como modelo de datos, sin ningún consumidor—, así que registra únicamente las
- * tablas que hacen falta para que `CatalogSyncService` sincronice `plans`/`document_pack_offers`
- * con Stripe. Las demás entidades del directorio (perfiles de facturación, checkout, créditos)
- * todavía no tienen ningún caso de uso y se quedan fuera hasta que la funcionalidad que las
- * necesite las registre.
+ * Dominio de facturación: catálogo comercial, perfiles, órdenes de compra y saldo de documentos.
  *
- * `PlanPriceEntity` va aquí aunque `CatalogSyncService` no la use directamente: con
- * `autoLoadEntities: true` (ver `app.module.ts`), TypeORM sólo carga el metadata de una entidad
- * si algún `forFeature()` la registra — nada de que exista el archivo `.entity.ts` basta. La
- * relación `PlanEntity.prices` (`@OneToMany` hacia `PlanPriceEntity`) revienta al construir el
- * grafo de metadata si `PlanPriceEntity` no está cargada en algún lado, aunque nadie la inyecte.
+ * Registra TODAS las entidades del directorio y no sólo las que hoy se inyectan porque con
+ * `autoLoadEntities: true` (ver `app.module.ts`) TypeORM únicamente carga el metadata de una
+ * entidad si algún `forFeature()` la nombra — que exista su archivo `.entity.ts` no basta. Las
+ * relaciones entre ellas (`credit_lots → checkout_orders`, `checkout_orders → document_pack_offers`,
+ * `plans → plan_prices`) revientan al construir el grafo si alguna falta, aunque nadie la inyecte.
+ *
+ * `forwardRef` con `PaymentsModule`: ambos se necesitan mutuamente. Billing usa el adaptador de
+ * Stripe (`StripePaymentGatewayService`) para abrir el checkout, y payments usa los handlers de
+ * billing desde su router de webhooks. La alternativa —sacar el adaptador a un tercer módulo— es
+ * una reorganización mayor de `payments` que no toca a esta historia.
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PlanEntity, PlanPriceEntity, DocumentPackOfferEntity]),
+    TypeOrmModule.forFeature([
+      PlanEntity,
+      PlanPriceEntity,
+      DocumentPackOfferEntity,
+      BillingProfileEntity,
+      CheckoutOrderEntity,
+      CreditLotEntity,
+      DocumentCreditConsumptionEntity,
+      // Sólo para comprobar la membresía de la cuenta activa (ver `BillingOwnerService`);
+      // este módulo nunca escribe en `accounts`.
+      AccountEntity,
+    ]),
+    forwardRef(() => PaymentsModule),
   ],
-  providers: [CatalogSyncService],
-  exports: [CatalogSyncService],
+  providers: [
+    CatalogSyncService,
+    BillingCatalogService,
+    BillingOwnerService,
+    CheckoutOrderService,
+    CreateSubscriptionCheckoutUseCase,
+    SubscriptionBillingService,
+  ],
+  exports: [
+    CatalogSyncService,
+    BillingCatalogService,
+    BillingOwnerService,
+    CheckoutOrderService,
+    CreateSubscriptionCheckoutUseCase,
+    SubscriptionBillingService,
+  ],
 })
 export class BillingModule {}
