@@ -1,4 +1,6 @@
 import {
+  ADVANCED_SIGNATURE_QUERY_PARAM,
+  buildAdvancedSignatureUrl,
   buildAllDocumentsUrl,
   buildDocumentAccessUrl,
   buildPublicDocumentUrl,
@@ -65,6 +67,64 @@ describe('document-access-url.util', () => {
 
       expect(buildAllDocumentsUrl()).toBe(
         'https://app.example.com/dashboard/documents',
+      );
+    });
+  });
+
+  /**
+   * Historia "Redirigir QR de firma avanzada a la vista pública y resaltar al firmante". Es la URL
+   * que se codifica en el QR estampado junto a cada firma avanzada.
+   */
+  describe('buildAdvancedSignatureUrl', () => {
+    it('apunta a la vista pública del documento, señalando la firma por query', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+
+      expect(buildAdvancedSignatureUrl('doc-1', 'collab-1')).toBe(
+        'https://app.example.com/public/documents/doc-1?firma=collab-1',
+      );
+    });
+
+    /**
+     * Antes apuntaba a `/public/documents/:id/signatures/:collaboratorId`, una pantalla que
+     * mostraba esa firma sola, fuera del documento al que pertenece. Esa ruta sigue existiendo
+     * para los QR ya estampados —viven dentro de PDFs que no se regeneran—, pero los nuevos ya no
+     * se generan así.
+     */
+    it('ya no apunta a la pantalla de una firma suelta', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+
+      expect(buildAdvancedSignatureUrl('doc-1', 'collab-1')).not.toContain(
+        '/signatures/',
+      );
+    });
+
+    /** Criterio "el enlace funciona en los ambientes configurados usando su URL base". */
+    it('usa la base del ambiente configurado', () => {
+      process.env.FRONTEND_URL = 'https://staging.firma-lo.com/';
+
+      expect(buildAdvancedSignatureUrl('doc-1', 'collab-1')).toBe(
+        'https://staging.firma-lo.com/public/documents/doc-1?firma=collab-1',
+      );
+    });
+
+    /** Dos firmantes del mismo documento no pueden compartir el enlace: es lo que los distingue. */
+    it('da una URL distinta por firmante del mismo documento', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+
+      expect(buildAdvancedSignatureUrl('doc-1', 'collab-1')).not.toBe(
+        buildAdvancedSignatureUrl('doc-1', 'collab-2'),
+      );
+    });
+
+    /**
+     * El nombre del parámetro se exporta porque lo consume el frontend; si aquí se renombrara sin
+     * actualizar allá, el QR abriría la vista pública sin resaltar a nadie y nada fallaría.
+     */
+    it('el parámetro publicado es el que viaja en la URL', () => {
+      process.env.FRONTEND_URL = 'https://app.example.com';
+
+      expect(buildAdvancedSignatureUrl('doc-1', 'collab-1')).toContain(
+        `${ADVANCED_SIGNATURE_QUERY_PARAM}=collab-1`,
       );
     });
   });

@@ -15,23 +15,19 @@ const QR_PIXEL_SIZE = 512;
  */
 const QR_MARGIN = 0;
 
-/** Datos de la firma que se codifican en el QR. Todos salen del colaborador que firmó, no de su perfil en vivo. */
+/**
+ * Lo que se codifica en el QR: nada más que el enlace.
+ *
+ * Aquí viajaban además el nombre, el RFC, la IP y la fecha de la firma, que se imprimían como
+ * texto dentro del código. Ese contenido quedaba legible para cualquiera que escaneara la hoja
+ * —incluida una copia impresa que circulara fuera de la plataforma— sin pasar por ningún control
+ * sobre qué se publica de un firmante. Ahora esos datos sólo se ven en la vista pública, que es
+ * la que decide qué expone y bajo qué condiciones.
+ */
 export interface AdvancedSignatureQrData {
-  /** Nombre completo del firmante; preferentemente el del certificado del SAT. */
-  signerName: string;
-  rfc?: string | null;
-  ipAddress?: string | null;
-  /** Momento real de la firma (`advancedSignature.signedAt`, con el del colaborador como respaldo). */
-  signedAt?: Date | string | null;
-  /** Constancia pública de esta firma — se conserva como última línea para que el QR siga llevando a la verificación en línea. */
+  /** Vista pública del documento, con esta firma señalada (ver `buildAdvancedSignatureUrl`). */
   verificationUrl: string;
 }
-
-/** Etiqueta que encabeza el contenido, para que quien escanee sepa de inmediato qué está leyendo. */
-const QR_TITLE = 'Firma Electrónica Avanzada — Firmalo';
-
-/** Sin dato es preferible a un renglón mentiroso: los campos vacíos se omiten del contenido. */
-const EMPTY_FIELD_PLACEHOLDER = 'No disponible';
 
 /**
  * Genera el código QR que representa visualmente a una firma avanzada (historias "Generar código
@@ -42,15 +38,19 @@ const EMPTY_FIELD_PLACEHOLDER = 'No disponible';
  * para esa firma quedaba vacío. El QR ocupa ese lugar y cumple la misma función que la rúbrica de
  * una firma simple: dejar constancia visible de quién firmó.
  *
- * El contenido es TEXTO PLANO con los datos del firmante y del evento de firma, no solo un enlace:
- * quien escanea el código con cualquier lector ve ahí mismo quién firmó, cuándo y con qué RFC,
- * sin depender de tener red ni de que la plataforma siga en línea. La URL de la constancia va
- * como última línea para no perder la verificación en línea que ya existía.
+ * **El contenido es ÚNICAMENTE la URL de la vista pública del documento, con esta firma
+ * señalada.** Antes era texto plano con el nombre, el RFC, la IP y la fecha, y el enlace como
+ * última línea. Eso tenía dos problemas: publicaba datos del firmante a cualquiera que escaneara
+ * una copia impresa, sin pasar por ningún control sobre qué se expone; y un QR de varias líneas
+ * de texto no es un enlace para el lector del teléfono, que muestra el texto en vez de abrir la
+ * verificación. Con la URL sola, escanear el código abre el documento.
  *
- * NO incluye la geolocalización (historia "Ocultar geolocalización en hojas de firma y vistas
- * públicas"): el dato se sigue registrando en `CollaboratorEntity.geoLoc`, solo dejó de
- * publicarse. Los QR ya estampados conservan el contenido con el que se generaron — son parte
- * del PDF y no se regeneran.
+ * Se pierde a cambio la lectura sin red que aquel formato permitía. Es la decisión de la historia
+ * "Redirigir QR de firma avanzada a la vista pública": la constancia legible sin conexión ya vive
+ * en la hoja de firmas anexada al PDF, que imprime nombre, certificado y fecha de cada firmante.
+ *
+ * Los QR ya estampados conservan el contenido con el que se generaron —son parte del PDF y no se
+ * regeneran—, así que la pantalla a la que apuntaban sigue existiendo.
  *
  * Devuelve un PNG para que el estampado sea exactamente el mismo camino que el de una rúbrica
  * (`DocumentSigningService.mergeSignatureIntoPdf`): el QR no necesita un mecanismo de posicionado
@@ -66,18 +66,14 @@ export class SignatureQrService {
   }
 
   /**
-   * Texto que lee el escáner. Un renglón por dato, con etiqueta al frente: es el formato que
-   * cualquier lector muestra tal cual, sin necesitar una app que sepa interpretarlo.
+   * Lo que lee el escáner: la URL a secas.
+   *
+   * Sin etiquetas ni renglones adicionales a propósito. Un QR cuyo contenido es exactamente una
+   * URL lo reconocen como enlace la cámara nativa y el lector del teléfono, y ofrecen abrirlo; en
+   * cuanto se le antepone una línea de texto pasa a ser un QR de texto y deja de ser accionable.
    */
   buildContent(data: AdvancedSignatureQrData): string {
-    return [
-      QR_TITLE,
-      `Firmante: ${data.signerName || EMPTY_FIELD_PLACEHOLDER}`,
-      `RFC: ${data.rfc || EMPTY_FIELD_PLACEHOLDER}`,
-      `Fecha y hora: ${this.formatSignedAt(data.signedAt)}`,
-      `IP: ${data.ipAddress || EMPTY_FIELD_PLACEHOLDER}`,
-      `Constancia: ${data.verificationUrl}`,
-    ].join('\n');
+    return data.verificationUrl;
   }
 
   /**
@@ -92,57 +88,4 @@ export class SignatureQrService {
       margin: QR_MARGIN,
     });
   }
-
-  /**
-   * Fecha y hora en la zona horaria del sistema, con el desfase explícito (`GMT-6`).
-   *
-   * El desfase no es decorativo: el QR queda impreso en un documento que se puede leer en
-   * cualquier lugar y años después, y una hora sin zona no identifica un instante. Se usa la del
-   * servidor (`TZ`, o la que resuelva el sistema operativo) porque es la única definida en el
-   * momento de firmar — quien escanea puede estar en otro huso, y la constancia no debería cambiar
-   * según quién la mire.
-   */
-  private formatSignedAt(value: Date | string | null | undefined): string {
-    if (!value) {
-      return EMPTY_FIELD_PLACEHOLDER;
-    }
-
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return EMPTY_FIELD_PLACEHOLDER;
-    }
-
-    return new Intl.DateTimeFormat('es-MX', {
-      timeZone: resolveSystemTimeZone(),
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-      timeZoneName: 'shortOffset',
-    }).format(date);
-  }
-}
-
-/**
- * Zona horaria del sistema. `TZ` gana cuando está configurada (es como se fija la zona de un
- * contenedor); si trae un valor que Intl no reconoce, se cae a la que resuelva el runtime en vez
- * de reventar la generación del QR —y con ella el estampado de todo el documento— por una variable
- * de entorno mal escrita.
- */
-function resolveSystemTimeZone(): string {
-  const configured = process.env.TZ;
-
-  if (configured) {
-    try {
-      new Intl.DateTimeFormat('es-MX', { timeZone: configured });
-      return configured;
-    } catch {
-      // Cae al valor resuelto por el runtime.
-    }
-  }
-
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
