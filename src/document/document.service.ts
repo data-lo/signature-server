@@ -1177,7 +1177,18 @@ export class DocumentService {
                 signatureBuffer,
                 coordinates,
                 pageIndex,
-                stampOptions,
+                {
+                  ...stampOptions,
+                  /**
+                   * El tamaño ya está decidido: sale de la caja que el usuario dibujó sobre la
+                   * página y se calculó contra las dimensiones reales de ESA hoja. El resize
+                   * automático existe para tamaños sin respaldo (ver `mergeSignatureIntoPdf`), y
+                   * aplicarlo acá sustituiría la caja configurada por el tamaño por defecto —la
+                   * firma aparecería con otro tamaño y desplazada respecto de donde se la ve
+                   * colocada, sin ningún error de por medio—.
+                   */
+                  normalizeSize: false,
+                },
               );
           } else {
             // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
