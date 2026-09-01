@@ -12,6 +12,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
 import axios from 'axios';
 
+import { applyGlobalApiPrefix } from './../src/shared/constants/api-prefix.constants';
 import { DocumentController } from './../src/document/document.controller';
 import { DocumentService } from './../src/document/document.service';
 import { SignDocumentUseCase } from './../src/document/applications/sign-document.use-case';
@@ -75,6 +76,20 @@ const SEAL_RESPONSE = {
   },
 };
 
+/**
+ * `sealAdvancedSignatures` exige evidencia OCSP de TODOS los firmantes antes de intentar sellar
+ * (si falta la de cualquiera, marca el documento como pendiente y nunca llama a Seal Service —
+ * ver el docblock de ese método en `document.service.ts`). Sin este objeto en `EFIRMA_RESULT`,
+ * el "camino completo" de esta prueba nunca llegaba a sellar nada, y las dos aserciones que
+ * revisan la llamada a Seal Service fallaban en silencio.
+ */
+const OCSP_EVIDENCE = {
+  status: 'good' as const,
+  verifiedAt: new Date('2026-08-13T18:45:57.000Z'),
+  ocspResponse: 'respuesta-ocsp-base64',
+  ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+};
+
 const EFIRMA_RESULT = {
   originalHash: 'hash-original-del-documento',
   signatureBase64: 'firma-criptografica-en-base64',
@@ -88,6 +103,7 @@ const EFIRMA_RESULT = {
     certificatePem:
       '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
   },
+  ocspEvidence: OCSP_EVIDENCE,
 };
 
 /** Sustituye al `JwtAuthGuard` global (vive en AuthModule, que no se importa acá). */
@@ -130,6 +146,12 @@ function buildFielSigner(): CollaboratorEntity {
       userId: SIGNER_USER_ID,
       user: { id: SIGNER_USER_ID, firstName: 'Juan', lastName: 'Pérez' },
     },
+    // `sealAdvancedSignatures` relee los firmantes desde `collaboratorRepository.find` —no desde
+    // `myParticipant` en memoria— así que este mock necesita traer ya la firma que la petición
+    // acaba de guardar, igual que la fila real quedaría en la base tras el `save()`. Sin esto el
+    // filtro de `advancedSigners` en `document.service.ts` siempre daba vacío y el sellado se
+    // saltaba entero, sin ningún error.
+    advancedSignature: EFIRMA_RESULT,
   } as unknown as CollaboratorEntity;
 }
 
@@ -164,7 +186,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
 
   function signRequest() {
     return request(app.getHttpServer())
-      .patch(`/document/${DOCUMENT_ID}/sign`)
+      .patch(`/api/v1/document/${DOCUMENT_ID}/sign`)
       .field('geolocation', JSON.stringify(GEOLOCATION))
       .field('password', 'clave-de-la-llave');
   }
@@ -333,6 +355,10 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    // Mismo prefijo global que monta main.ts. Sin esto la prueba pegaría a `/document/...`,
+    // una ruta que en producción ya no existe, y seguiría en verde mientras el endpoint real
+    // estuviera roto.
+    applyGlobalApiPrefix(app);
     // Mismo pipe global que monta main.ts: es lo que transforma el `geolocation` serializado del
     // multipart en una instancia de GeolocationDto y valida sus rangos.
     app.useGlobalPipes(
@@ -392,6 +418,12 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
             algorithm: 'sha256',
             signedAt: '2026-08-13T18:45:56.000Z',
             certificate: EFIRMA_RESULT.certificate,
+            ocspEvidence: {
+              status: OCSP_EVIDENCE.status,
+              verifiedAt: OCSP_EVIDENCE.verifiedAt.toISOString(),
+              ocspResponse: OCSP_EVIDENCE.ocspResponse,
+              ocspUrl: OCSP_EVIDENCE.ocspUrl,
+            },
           },
         ],
       });
@@ -478,7 +510,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
 
     it('sin geolocalización responde 400 antes de tocar la e.firma', async () => {
       await request(app.getHttpServer())
-        .patch(`/document/${DOCUMENT_ID}/sign`)
+        .patch(`/api/v1/document/${DOCUMENT_ID}/sign`)
         .field('password', 'clave-de-la-llave')
         .attach('key', Buffer.from('contenido-key'), 'llave.key')
         .attach('cer', Buffer.from('contenido-cer'), 'certificado.cer')

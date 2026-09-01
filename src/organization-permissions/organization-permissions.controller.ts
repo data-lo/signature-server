@@ -29,7 +29,7 @@ import { ApiDeleteOrganizationPermission } from './docs/api-delete-organization-
 
 @ApiTags('Organization Permissions')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/organizations/:organizationId/permissions')
+@Controller('organizations/:organizationId/permissions')
 export class OrganizationPermissionsController {
   constructor(
     private readonly getOrganizationPermissions: GetOrganizationPermissionsUseCase,

@@ -16,7 +16,7 @@ import { ApiGetMyAccounts } from './docs/api-get-my-accounts.docs';
 
 @ApiTags('Accounts')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/accounts')
+@Controller('accounts')
 export class AccountsController {
   constructor(private readonly getMyAccounts: GetMyAccountsUseCase) {}
 

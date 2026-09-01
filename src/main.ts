@@ -11,6 +11,10 @@ import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 import { MulterExceptionFilter } from './shared/filters/multer-exception.filter';
 import { frontendBaseUrl } from './shared/utils/frontend-url.util';
+import {
+  applyGlobalApiPrefix,
+  GLOBAL_API_PREFIX,
+} from './shared/constants/api-prefix.constants';
 
 process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
 
@@ -19,6 +23,12 @@ async function bootstrap() {
     logger: new ConsoleLogger(),
     rawBody: true,
   });
+
+  // El versionado vive acá y no dentro de cada `@Controller()`: ver
+  // `api-prefix.constants.ts` para el prefijo, las exclusiones y por qué.
+  // Tiene que ir ANTES de `SwaggerModule.createDocument`, que lee las rutas ya
+  // resueltas — si se llamara después, el Swagger publicaría las rutas sin prefijo.
+  applyGlobalApiPrefix(app);
 
   // `frontendBaseUrl()` y no `process.env.FRONTEND_URL` crudo: el header `Origin` que manda el
   // navegador nunca lleva diagonal final, así que un `https://app.ejemplo.com/` configurado en el
@@ -73,7 +83,10 @@ async function bootstrap() {
     },
   );
 
-  SwaggerModule.setup('api/docs', app, publicDocument);
+  // `SwaggerModule.setup()` NO recibe el prefijo global —no es una ruta de controlador—, así
+  // que el `api/v1` va escrito aquí para que la documentación cuelgue del mismo prefijo que
+  // documenta y no quede un `/api/docs` suelto al lado de `/api/v1/...`.
+  SwaggerModule.setup(`${GLOBAL_API_PREFIX}/docs`, app, publicDocument);
 
   await app.listen(process.env.BACKEND_PORT ?? 3000);
   await app.startAllMicroservices();
