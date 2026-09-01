@@ -9,6 +9,7 @@ import { FILE_STATUS_ENUM } from './enums/file-status-enum';
 import { v4 as uuid4 } from 'uuid';
 import { GetFileResponse } from './interfaces/minio.get-file-response.interface';
 import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
+import { buildAttachmentDisposition } from './content-disposition.util';
 
 /**
  * Los metadatos de un objeto viajan como cabeceras HTTP `x-amz-meta-*`, que solo admiten ASCII
@@ -361,10 +362,24 @@ export class MinioService {
     }
   }
 
+  /**
+   * URL prefirmada de lectura.
+   *
+   * `downloadFileName` cambia el nombre con el que el navegador guarda el archivo: sin él, el
+   * nombre que ve el usuario es el del objeto en el bucket —un UUID—, que no le dice nada y expone
+   * un identificador interno. Se manda como `response-content-disposition`, un parámetro que S3
+   * (y MinIO) permite sobreescribir en la propia URL firmada y que viaja DENTRO de la firma, así
+   * que nadie puede alterarlo después.
+   *
+   * Sin el parámetro la URL sale exactamente como antes. Eso importa porque el visor usa esta
+   * misma ruta: forzar `attachment` para todos haría que el PDF se descargue en vez de mostrarse
+   * dentro de la pantalla de detalle.
+   */
   async getFile(
     fileId: string, // OBJECT KEY,
     bucketType: BUCKET_TYPES_ENUM,
     expiresIn: number = 24 * 60 * 60,
+    downloadFileName?: string,
   ): Promise<GetFileResponse> {
     try {
       let fileName = fileId;
@@ -395,6 +410,12 @@ export class MinioService {
         bucketName,
         fileName,
         expiresIn,
+        downloadFileName
+          ? {
+              'response-content-disposition':
+                buildAttachmentDisposition(downloadFileName),
+            }
+          : undefined,
       );
 
       this.logger.log(`Presigned URL: ${secureUrl}`);

@@ -392,15 +392,41 @@ export class DocumentService {
     );
   }
 
-  /** Genera y retorna la URL segura del archivo en Minio según el estatus del documento. */
-  async getDocumentMinioURL(documentId: string) {
+  /**
+   * Genera y retorna la URL segura del archivo en Minio según el estatus del documento.
+   *
+   * `asAttachment` es lo que distingue descargar de previsualizar, y las dos cosas salen de esta
+   * misma ruta. Al descargar, el archivo se nombra con `file_name` —el nombre configurado del
+   * documento, el que el usuario reconoce— en vez de con la clave del objeto, que es un UUID. Al
+   * previsualizar no se manda nada: una cabecera `attachment` haría que el visor se descargara el
+   * PDF en lugar de mostrarlo.
+   *
+   * El nombre lo resuelve el backend y no el cliente a propósito: es el que está guardado, viaja
+   * firmado dentro de la URL, y así ninguna pantalla puede bautizar el archivo por su cuenta.
+   */
+  async getDocumentMinioURL(
+    documentId: string,
+    { asAttachment = false }: { asAttachment?: boolean } = {},
+  ) {
     try {
       const document = await this.findOne(documentId);
       const bucket = this.resolveDocumentBucket(document);
-      const fileResponse = await this.minioService.getFile(
-        document.objectKey,
-        bucket,
-      );
+      /**
+       * La rama de previsualización llama EXACTAMENTE como siempre, con dos argumentos. No es
+       * cosmético: `getFile` recibe el nombre de descarga en su cuarto parámetro, y pasarlo como
+       * `undefined` en el camino del visor volvería vacuas las pruebas que verifican que un
+       * documento firmado nunca se sirve desde el bucket equivocado —un `not.toHaveBeenCalledWith`
+       * de dos argumentos deja de poder fallar en cuanto la llamada real tiene cuatro—.
+       */
+      const fileResponse = asAttachment
+        ? await this.minioService.getFile(
+            document.objectKey,
+            bucket,
+            undefined,
+            document.fileName,
+          )
+        : await this.minioService.getFile(document.objectKey, bucket);
+
       return fileResponse;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
@@ -948,7 +974,7 @@ export class DocumentService {
    *
    *  - Firma simple: la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar
    *    (ver `signatureSnapshotObjectKey`), no de su perfil en vivo.
-   *  - Firma avanzada (e.firma): un código QR con los datos del firmante y del evento de firma
+   *  - Firma avanzada (e.firma): un código QR que lleva a la verificación pública del documento
    *    (ver `SignatureQrService`). Su evidencia es criptográfica y no produce ninguna imagen, así
    *    que antes su espacio quedaba vacío.
    *
@@ -956,28 +982,19 @@ export class DocumentService {
    * pendiente no hay firma que consultar, así que no se dibuja nada y su espacio sigue libre.
    */
   /**
-   * Datos que se codifican en el QR de una firma avanzada (historia "Actualizar contenido del
-   * código QR en firma avanzada").
+   * Lo que se codifica en el QR de una firma avanzada (historia "Redirigir QR de firma avanzada a
+   * la vista pública y resaltar al firmante").
    *
-   * Todo describe a ESA firma y no al perfil del firmante hoy: el nombre y el RFC salen del
-   * certificado del SAT con el que firmó —con los datos del colaborador como respaldo, mismo
-   * criterio que `getAdvancedSignaturePublicView`— y la IP y la fecha son las que quedaron
-   * registradas al firmar. La ubicación se sigue guardando, pero ya no se publica (ver
-   * `SignatureQrService`). El documento se puede leer años después; el QR tiene que
-   * seguir diciendo lo que pasó, no lo que pasa.
+   * Sólo el enlace. Aquí se armaban además el nombre, el RFC, la IP y la fecha, que se imprimían
+   * como texto dentro del código; ahora esos datos únicamente se ven en la vista pública, que es
+   * la que decide qué publica de cada firmante. La URL señala a ESTE colaborador, así que dos
+   * firmas avanzadas del mismo documento nunca codifican el mismo QR.
    */
   toAdvancedSignatureQrData(
     document: DocumentEntity,
     collaborator: CollaboratorEntity,
   ): AdvancedSignatureQrData {
-    const certificate = collaborator.advancedSignature?.certificate;
-
     return {
-      signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
-      rfc: certificate?.rfc ?? collaborator.rfc,
-      ipAddress: collaborator.ipAddress,
-      signedAt:
-        collaborator.advancedSignature?.signedAt ?? collaborator.signedAt,
       verificationUrl: buildAdvancedSignatureUrl(document.id, collaborator.id),
     };
   }
@@ -1191,7 +1208,18 @@ export class DocumentService {
                 signatureBuffer,
                 coordinates,
                 pageIndex,
-                stampOptions,
+                {
+                  ...stampOptions,
+                  /**
+                   * El tamaño ya está decidido: sale de la caja que el usuario dibujó sobre la
+                   * página y se calculó contra las dimensiones reales de ESA hoja. El resize
+                   * automático existe para tamaños sin respaldo (ver `mergeSignatureIntoPdf`), y
+                   * aplicarlo acá sustituiría la caja configurada por el tamaño por defecto —la
+                   * firma aparecería con otro tamaño y desplazada respecto de donde se la ve
+                   * colocada, sin ningún error de por medio—.
+                   */
+                  normalizeSize: false,
+                },
               );
           } else {
             // Dato legacy (pre-migración `ArraySignatureCoordinates`, en píxeles absolutos,
