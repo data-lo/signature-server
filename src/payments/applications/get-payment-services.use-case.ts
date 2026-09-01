@@ -14,7 +14,7 @@ import { StripePaymentGatewayService } from '../stripe/stripe-payment-gateway.se
  * **No se crea ninguna sesión de Checkout aquí.** Cada sesión es temporal y cuesta una llamada
  * al proveedor: generarlas al listar significaría abrir tantas como tarjetas se muestran, casi
  * todas para no usarse nunca, y las que el usuario sí abriera podrían haber caducado ya. La
- * sesión se crea al pulsar "Comprar", en `CreateStripeCheckoutSessionUseCase`.
+ * sesión se crea al pulsar "Comprar", en `CreateSubscriptionCheckoutUseCase` (módulo `billing`).
  */
 @Injectable()
 export class GetPaymentServicesUseCase {

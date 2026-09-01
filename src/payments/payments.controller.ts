@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
+import { CreateSubscriptionCheckoutUseCase } from 'src/billing/checkout/create-subscription-checkout.use-case';
 import { GetPaymentServicesUseCase } from './applications/get-payment-services.use-case';
-import { CreateStripeCheckoutSessionUseCase } from './applications/create-stripe-checkout-session.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
 import { CheckoutSessionResponse } from './interfaces/checkout-session-response.interface';
@@ -26,7 +27,7 @@ import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs'
 export class PaymentsController {
   constructor(
     private readonly getPaymentServices: GetPaymentServicesUseCase,
-    private readonly createStripeCheckoutSession: CreateStripeCheckoutSessionUseCase,
+    private readonly createSubscriptionCheckout: CreateSubscriptionCheckoutUseCase,
     private readonly getSubscriptionState: GetSubscriptionStateUseCase,
   ) {}
 
@@ -43,21 +44,27 @@ export class PaymentsController {
   /**
    * La sesión se crea acá y sólo acá: el catálogo no devuelve URLs de pago porque caducan y
    * cada una cuesta una llamada al proveedor.
+   *
+   * `X-Account-Id` no es opcional: determina a quién se le factura (a la persona o a la
+   * organización entera) y, con ello, qué perfil recibe el saldo de documentos. Se valida dentro
+   * del caso de uso que el usuario autenticado pertenezca de verdad a esa cuenta.
    */
   @Post('checkout-sessions')
   @ApiCreateCheckoutSession()
   async checkoutSessions(
     @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
     @Body() dto: CreateCheckoutSessionDto,
   ): Promise<BaseResponse<CheckoutSessionResponse>> {
     return {
       success: true,
       message: 'Sesión de Checkout creada correctamente',
-      data: await this.createStripeCheckoutSession.execute(
-        user.sub,
-        user.email,
-        dto.priceId,
-      ),
+      data: await this.createSubscriptionCheckout.execute({
+        userId: user.sub,
+        email: user.email,
+        accountId,
+        priceId: dto.priceId,
+      }),
     };
   }
 

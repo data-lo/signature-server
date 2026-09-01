@@ -116,7 +116,12 @@ export class StripePaymentGatewayService {
   /**
    * @param priceId Precio ya validado contra el catálogo por el caso de uso: este método no
    *   vuelve a comprobarlo, sólo crea la sesión.
-   * @returns La URL hospedada de Checkout, temporal por definición.
+   * @returns El `cs_...` de la sesión y su URL hospedada, temporal por definición.
+   *
+   * Devuelve el `sessionId` además de la URL —antes sólo la URL— porque es la llave con la que
+   * `checkout_orders` se reconcilia después: `checkout.session.completed` sólo trae el id de la
+   * sesión, así que sin guardarlo al crearla no habría forma de encontrar la orden pendiente que
+   * le corresponde.
    */
   async createCheckoutSession(input: {
     priceId: string;
@@ -125,7 +130,7 @@ export class StripePaymentGatewayService {
     successUrl: string;
     cancelUrl: string;
     metadata: Record<string, string>;
-  }): Promise<string> {
+  }): Promise<{ sessionId: string; checkoutUrl: string }> {
     try {
       const session = await this.client.checkout.sessions.create({
         mode: input.mode,
@@ -150,7 +155,7 @@ export class StripePaymentGatewayService {
         throw new Error('Stripe creó la sesión sin URL de Checkout');
       }
 
-      return session.url;
+      return { sessionId: session.id, checkoutUrl: session.url };
     } catch (error) {
       throw this.translateError(
         error,

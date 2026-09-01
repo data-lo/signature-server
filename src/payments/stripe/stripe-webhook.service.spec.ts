@@ -5,6 +5,7 @@ import { AccountSubscriptionEntity } from '../entities/account-subscription.enti
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
+import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 import Stripe = require('stripe');
 
 function createMockRepository() {
@@ -20,12 +21,20 @@ describe('StripeWebhookService', () => {
   let service: StripeWebhookService;
   let subscriptionRepository: ReturnType<typeof createMockRepository>;
   let catalogSyncService: { syncProductUpserted: jest.Mock; syncProductDeleted: jest.Mock };
+  let subscriptionBillingService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     subscriptionRepository = createMockRepository();
     catalogSyncService = {
       syncProductUpserted: jest.fn().mockResolvedValue(undefined),
       syncProductDeleted: jest.fn().mockResolvedValue(undefined),
+    };
+    subscriptionBillingService = {
+      handleCheckoutSessionCompleted: jest.fn().mockResolvedValue(undefined),
+      handleInvoicePaid: jest.fn().mockResolvedValue(undefined),
+      handleInvoicePaymentFailed: jest.fn().mockResolvedValue(undefined),
+      handleSubscriptionUpdated: jest.fn().mockResolvedValue(undefined),
+      handleSubscriptionDeleted: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -36,6 +45,10 @@ describe('StripeWebhookService', () => {
           useValue: subscriptionRepository,
         },
         { provide: CatalogSyncService, useValue: catalogSyncService },
+        {
+          provide: SubscriptionBillingService,
+          useValue: subscriptionBillingService,
+        },
       ],
     }).compile();
 
@@ -195,6 +208,93 @@ describe('StripeWebhookService', () => {
           signingEnabled: false,
         }),
       );
+    });
+  });
+
+  /**
+   * Conviven dos modelos de suscripción (ver el docblock de `StripeWebhookService`): el heredado
+   * en `account_subscriptions` y el nuevo en `billing_profiles`. Los eventos compartidos tienen
+   * que llegar a los dos, o uno de los dos se queda desincronizado en silencio.
+   */
+  describe('enrutado hacia el modelo de billing', () => {
+    it('checkout.session.completed llega también a SubscriptionBillingService', async () => {
+      subscriptionRepository.findOne.mockResolvedValue(null);
+      const session = {
+        mode: 'subscription',
+        customer: 'cus_1',
+        subscription: 'sub_1',
+        metadata: { accountId: 'account-1', billingProfileId: 'profile-1' },
+      };
+
+      await service.process({
+        type: 'checkout.session.completed',
+        data: { object: session },
+      } as unknown as Stripe.Event);
+
+      expect(
+        subscriptionBillingService.handleCheckoutSessionCompleted,
+      ).toHaveBeenCalledWith(session);
+      // Y el modelo heredado sigue atendiéndose.
+      expect(subscriptionRepository.save).toHaveBeenCalled();
+    });
+
+    it('invoice.paid llega también a SubscriptionBillingService', async () => {
+      subscriptionRepository.findOne.mockResolvedValue({ id: 'row-1' });
+      const invoice = {
+        customer: 'cus_1',
+        parent: { subscription_details: { subscription: 'sub_1' } },
+        lines: { data: [{ period: { end: 1700000000 } }] },
+      };
+
+      await service.process({
+        type: 'invoice.paid',
+        data: { object: invoice },
+      } as unknown as Stripe.Event);
+
+      expect(subscriptionBillingService.handleInvoicePaid).toHaveBeenCalledWith(
+        invoice,
+      );
+    });
+
+    it('invoice.payment_failed se enruta (evento nuevo, sin equivalente heredado)', async () => {
+      const invoice = { id: 'in_1', customer: 'cus_1' };
+
+      await service.process({
+        type: 'invoice.payment_failed',
+        data: { object: invoice },
+      } as unknown as Stripe.Event);
+
+      expect(
+        subscriptionBillingService.handleInvoicePaymentFailed,
+      ).toHaveBeenCalledWith(invoice);
+    });
+
+    it('customer.subscription.updated se enruta (evento nuevo, sin equivalente heredado)', async () => {
+      const subscription = { id: 'sub_1', customer: 'cus_1', status: 'active' };
+
+      await service.process({
+        type: 'customer.subscription.updated',
+        data: { object: subscription },
+      } as unknown as Stripe.Event);
+
+      expect(
+        subscriptionBillingService.handleSubscriptionUpdated,
+      ).toHaveBeenCalledWith(subscription);
+    });
+
+    it('customer.subscription.deleted llega a los dos modelos', async () => {
+      subscriptionRepository.findOne.mockResolvedValue({ id: 'row-1' });
+      const subscription = { id: 'sub_1', customer: 'cus_1' };
+
+      await service.process({
+        type: 'customer.subscription.deleted',
+        data: { object: subscription },
+      } as unknown as Stripe.Event);
+
+      expect(
+        subscriptionBillingService.handleSubscriptionDeleted,
+      ).toHaveBeenCalledWith(subscription);
+      expect(subscriptionRepository.update).toHaveBeenCalled();
     });
   });
 
