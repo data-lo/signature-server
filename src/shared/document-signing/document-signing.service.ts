@@ -19,6 +19,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
+import {
+  displayedPageSize,
+  normalizePageRotation,
+  pageOrientation,
+  toContentSpace,
+  toVisibleRect,
+} from './page-geometry';
 
 // Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
 
@@ -131,6 +138,12 @@ export class PdfSignatureService {
    * @param options         `preserveAspectRatio` encaja la imagen dentro de la caja sin
    *                        deformarla, centrada. Lo usa el QR de la firma avanzada (ver más
    *                        abajo); las rúbricas siguen ocupando la caja completa, como siempre.
+   *
+   *                        `normalizeSize: false` respeta el tamaño recibido tal cual, saltándose
+   *                        el resize automático. Lo pasa el estampado por posición configurada:
+   *                        ahí el tamaño no es un dato suelto que pueda venir mal, es el de la
+   *                        caja que el usuario dibujó sobre la página, y sustituirlo por el
+   *                        tamaño por defecto movería la firma del lugar donde se la ve colocada.
    * @returns               PDF firmado en formato PDF/A-2B como Buffer.
    */
   async mergeSignatureIntoPdf(
@@ -138,7 +151,7 @@ export class PdfSignatureService {
     signatureBuffer: Buffer,
     coordinates: SignatureCoordinates,
     pageIndex?: number,
-    options?: { preserveAspectRatio?: boolean },
+    options?: { preserveAspectRatio?: boolean; normalizeSize?: boolean },
   ): Promise<Buffer> {
     // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
@@ -168,16 +181,58 @@ export class PdfSignatureService {
     const targetPage =
       pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
 
-    // Paso 5: resolver el tamaño final de la firma aplicando el resize automático si corresponde
-    const drawSize = this.resolveSignatureSize(coordinates);
+    /**
+     * Paso 5: resolver el tamaño final de la firma.
+     *
+     * Se calcula en el espacio VISIBLE, que es donde el usuario colocó la caja: en una hoja con
+     * `/Rotate` los lados del MediaBox están intercambiados, y medir ahí compararía el ancho de la
+     * rúbrica contra el alto de la página.
+     *
+     * El resize automático es para los tamaños que llegan sin respaldo —coordenadas legacy en
+     * píxeles, el apilado por defecto—, donde un valor absurdo tiene que corregirse a algo
+     * dibujable. Una caja configurada por el usuario no es ese caso: su tamaño se derivó de las
+     * dimensiones de la página, se ve en pantalla antes de firmar, y normalizarla a
+     * `DEFAULT_SIGNATURE_SIZE` la movería a un tamaño que nadie eligió —justo lo que ocurre en una
+     * hoja muy ancha, donde el ancho de la caja supera el máximo sin que nada esté mal—.
+     */
+    const drawSize =
+      options?.normalizeSize === false
+        ? { width: coordinates.width, height: coordinates.height }
+        : this.resolveSignatureSize(coordinates);
 
-    // Paso 6: dibujar la firma en la página con las coordenadas, dimensiones y opacidad resueltas
-    const placement = options?.preserveAspectRatio
+    // Paso 6: encajar la imagen en la caja, también en espacio visible — `preserveAspectRatio`
+    // centra el QR dentro de la caja, y "centrado" sólo significa algo respecto de los ejes que
+    // ve el usuario.
+    const visiblePlacement = options?.preserveAspectRatio
       ? this.fitPreservingAspectRatio(signatureImage, coordinates, drawSize)
       : { x: coordinates.x, y: coordinates.y, ...drawSize };
 
+    /**
+     * Paso 7: traducir del espacio VISIBLE al espacio del CONTENIDO, que es el único que entiende
+     * `drawImage` (ver `page-geometry.ts`).
+     *
+     * La rotación se lee de la página destino, no la pasa el llamador: `/Rotate` es un dato del
+     * archivo, no de quien pide el estampado, y hacerlo aquí significa que TODOS los caminos
+     * —posiciones en ratios, coordenadas legacy en píxeles y el apilado automático— quedan
+     * corregidos a la vez, sin que ninguno tenga que acordarse de un parámetro.
+     *
+     * En una página sin `/Rotate` (todo documento vertical, y también las hojas apaisadas que ya
+     * traen el MediaBox ancho) la conversión es la identidad y `rotate` vale 0: el comportamiento
+     * anterior se conserva byte por byte.
+     */
+    const rotation = normalizePageRotation(targetPage.getRotation().angle);
+    const placement = toContentSpace(
+      { ...visiblePlacement, opacity: coordinates.opacity },
+      targetPage.getSize(),
+      rotation,
+    );
+
     targetPage.drawImage(signatureImage, {
-      ...placement,
+      x: placement.x,
+      y: placement.y,
+      width: placement.width,
+      height: placement.height,
+      rotate: degrees(placement.rotate),
       opacity: coordinates.opacity ?? 1.0,
     });
 
@@ -250,12 +305,22 @@ export class PdfSignatureService {
 
   /**
    * Convierte una posición en ratios 0-1 (ver historia "Ubicación de firmas por usuario") a
-   * coordenadas absolutas en puntos PDF (origen inferior-izquierdo) contra el tamaño REAL de la
-   * página destino — los ratios no sirven de nada sin saber el tamaño en puntos de ESA página
-   * específica, que puede variar entre páginas de un mismo documento.
+   * coordenadas absolutas en puntos, contra el tamaño REAL de la página destino — los ratios no
+   * sirven de nada sin saber el tamaño de ESA página, que puede variar entre páginas de un mismo
+   * documento.
+   *
+   * **El tamaño que importa es el de la página COMO SE VE, no el de su MediaBox.** El frontend
+   * mide el drop contra la hoja que pdf.js dibuja, y pdf.js ya aplicó el `/Rotate` de la página;
+   * una hoja apaisada escrita como "vertical + `/Rotate 90`" —lo que exporta Word y producen los
+   * escáneres— tiene un MediaBox de 595x842 y se ve de 842x595. Medir los ratios contra el
+   * MediaBox era el bug de las hojas horizontales: la firma salía en otro punto y de costado.
+   * `displayedPageSize` resuelve cuál de los dos tamaños corresponde (ver `page-geometry.ts`).
+   *
+   * Lo que se devuelve está en ese mismo espacio visible; `mergeSignatureIntoPdf` lo traduce al
+   * espacio del contenido justo antes de dibujar.
    *
    * `yRatio` se mide desde el borde SUPERIOR de la página (coincide con cómo el frontend mide la
-   * posición del drop en el DOM), de ahí la resta contra `pageHeight`.
+   * posición del drop en el DOM), de ahí la resta contra el alto.
    *
    * `page` es 1-based; si viniera fuera de rango (no debería, ya validado al crear el
    * documento) se usa la última página como fallback en vez de lanzar.
@@ -277,18 +342,22 @@ export class PdfSignatureService {
       Math.max(position.page - 1, 0),
       pages.length - 1,
     );
-    const { width: pageWidth, height: pageHeight } = pages[pageIndex].getSize();
+    const targetPage = pages[pageIndex];
+    const content = targetPage.getSize();
+    const rotation = normalizePageRotation(targetPage.getRotation().angle);
 
-    return {
-      pageIndex,
-      coordinates: {
-        x: position.xRatio * pageWidth,
-        y: pageHeight - (position.yRatio + position.heightRatio) * pageHeight,
-        width: position.widthRatio * pageWidth,
-        height: position.heightRatio * pageHeight,
-        opacity: position.opacity,
-      },
-    };
+    const displayed = displayedPageSize(content, rotation);
+    const orientation = pageOrientation(content, rotation);
+
+    // A nivel debug y sólo geometría (ningún dato del firmante): es lo primero que hace falta
+    // saber cuando alguien reporta una firma fuera de lugar, y no se puede deducir del PDF sin
+    // volver a abrirlo.
+    this.logger.debug(
+      `Página ${position.page}: MediaBox ${content.width}x${content.height}, /Rotate ${rotation}, ` +
+        `se ve ${displayed.width}x${displayed.height} (${orientation}).`,
+    );
+
+    return { pageIndex, coordinates: toVisibleRect(position, displayed) };
   }
 
   /**

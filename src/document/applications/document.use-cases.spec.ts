@@ -1093,10 +1093,12 @@ describe('casos de uso de documentos', () => {
       }
 
       /**
-       * Historia "Actualizar contenido del código QR en firma avanzada": el código ya no lleva
-       * solo un enlace, sino los datos del firmante y del evento de firma.
+       * Historia "Redirigir QR de firma avanzada a la vista pública y resaltar al firmante": el
+       * código lleva la URL de la verificación pública del documento, con esta firma señalada, y
+       * NADA más. Antes llevaba el nombre, el RFC, la IP y la fecha como texto, que quedaban
+       * legibles para cualquiera que escaneara una copia impresa.
        */
-      it('genera el QR con los datos del firmante y de esa firma', async () => {
+      it('genera el QR con el enlace a la vista pública, señalando esa firma', async () => {
         const { signer } = await signAdvanced();
 
         expect(
@@ -1104,21 +1106,32 @@ describe('casos de uso de documentos', () => {
         ).toHaveBeenCalledTimes(1);
         const [data] =
           signatureQrService.generateAdvancedSignaturePng.mock.calls[0];
-        expect(data).toEqual(
-          expect.objectContaining({
-            // Nombre y RFC del certificado del SAT, no los del perfil.
-            signerName: 'Firmante Uno',
-            rfc: 'XAXX010101000',
-            ipAddress: signer.ipAddress,
-            signedAt: new Date('2026-01-01T00:00:00.000Z'),
-          }),
-        );
-        expect(data.verificationUrl).toContain(
-          `/public/documents/doc-1/signatures/${signer.id}`,
-        );
-        // Historia "Ocultar geolocalización en hojas de firma y vistas públicas": la ubicación se
-        // sigue guardando en el colaborador, pero ya no llega al QR que se estampa en el PDF.
-        expect(data).not.toHaveProperty('geoLocation');
+
+        expect(data.verificationUrl).toContain('/public/documents/doc-1');
+        expect(data.verificationUrl).toContain(`firma=${signer.id}`);
+      });
+
+      /**
+       * Se afirma la ausencia campo por campo porque reponerlos es un renglón, y este contenido
+       * queda impreso dentro de un PDF que ya nadie revisa. La geolocalización sigue en la lista
+       * por la historia "Ocultar geolocalización en hojas de firma y vistas públicas".
+       */
+      it('no manda al QR ningún dato del firmante', async () => {
+        await signAdvanced();
+
+        const [data] =
+          signatureQrService.generateAdvancedSignaturePng.mock.calls[0];
+
+        expect(Object.keys(data)).toEqual(['verificationUrl']);
+        for (const campo of [
+          'signerName',
+          'rfc',
+          'ipAddress',
+          'signedAt',
+          'geoLocation',
+        ]) {
+          expect(data).not.toHaveProperty(campo);
+        }
       });
 
       // El QR ocupa el lugar que tenía asignado esa firma, igual que la rúbrica de una simple: es
@@ -1143,7 +1156,16 @@ describe('casos de uso de documentos', () => {
 
         const [, , , , options] =
           documentSigningService.mergeSignatureIntoPdf.mock.calls[0];
-        expect(options).toEqual({ preserveAspectRatio: true });
+        expect(options).toEqual({
+          preserveAspectRatio: true,
+          /**
+           * La caja viene de una posición configurada, así que su tamaño no se renormaliza: se
+           * derivó de las dimensiones de la página y es la que el usuario ve dibujada. El QR se
+           * encaja DENTRO de ella sin deformarse, que es cosa de `preserveAspectRatio`; las dos
+           * opciones resuelven cosas distintas y por eso viajan juntas.
+           */
+          normalizeSize: false,
+        });
       });
 
       // Criterio: "el QR no se genera ni se muestra mientras la firma avanzada esté pendiente".
@@ -1388,6 +1410,50 @@ describe('casos de uso de documentos', () => {
         expect(sendCompletedSimpleSignatureToSeal.execute).toHaveBeenCalledWith(
           'doc-1',
         );
+      });
+
+      /**
+       * El caso de uso del sellado RELEE los firmantes de la base, así que sólo ve lo que ya está
+       * escrito. El snapshot de la rúbrica del último firmante se tomaba en memoria y se
+       * persistía en el `save` del final —después del sellado—, de modo que la evidencia enviada
+       * al PSC caía a la firma EN VIVO del perfil mientras el PDF se estampaba con el snapshot.
+       *
+       * Se comprueba el ORDEN y no sólo que el UPDATE ocurra: escribirlo después del sellado deja
+       * el dato igual de guardado y el bug intacto.
+       */
+      it('persiste el snapshot de la rúbrica ANTES de sellar, no en el save final', async () => {
+        documentRepository.findOne.mockResolvedValue(mockDocument());
+        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
+        collaboratorRepository.find
+          .mockResolvedValueOnce([onlySigner])
+          .mockResolvedValueOnce([onlySigner]);
+
+        await signDocument.execute(
+          'doc-1',
+          'user-1',
+          undefined,
+          TEST_GEOLOCATION,
+        );
+
+        const snapshotUpdate = collaboratorRepository.update.mock.calls.findIndex(
+          ([, patch]) =>
+            (patch as { signatureSnapshotObjectKey?: string })
+              ?.signatureSnapshotObjectKey !== undefined,
+        );
+        expect(snapshotUpdate).toBeGreaterThanOrEqual(0);
+
+        const ordenSnapshot =
+          collaboratorRepository.update.mock.invocationCallOrder[
+            snapshotUpdate
+          ];
+        const ordenSellado =
+          sendCompletedSimpleSignatureToSeal.execute.mock
+            .invocationCallOrder[0];
+        const ordenSaveFinal =
+          collaboratorRepository.save.mock.invocationCallOrder.at(-1)!;
+
+        expect(ordenSnapshot).toBeLessThan(ordenSellado);
+        expect(ordenSellado).toBeLessThan(ordenSaveFinal);
       });
 
       it('no se dispara mientras queden firmas pendientes', async () => {

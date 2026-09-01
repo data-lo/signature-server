@@ -102,6 +102,29 @@ describe('DocumentController', () => {
     expect(useCase(GetDocumentFileUrlUseCase).execute).toHaveBeenCalledWith(
       'doc-1',
       'user-1',
+      { asAttachment: false },
+    );
+  });
+
+  /**
+   * Historia "Descargar documentos usando el nombre del archivo en lugar del ID": `?download=true`
+   * es lo único que separa bajar el archivo —con el nombre del documento— de mostrarlo en el
+   * visor. Se compara contra la cadena `'true'` y no por presencia: un query sin valor no debe
+   * convertir en descarga la petición del visor.
+   */
+  it.each([
+    ['true', true],
+    ['false', false],
+    [undefined, false],
+    ['', false],
+    ['1', false],
+  ])('con download=%s pide asAttachment=%s', async (download, expected) => {
+    await controller.getDocumentUrl(user, 'doc-1', download);
+
+    expect(useCase(GetDocumentFileUrlUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
+      { asAttachment: expected },
     );
   });
 
