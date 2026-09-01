@@ -116,8 +116,17 @@ export class DocumentController {
   async getDocumentUrl(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
+    /**
+     * `?download=true` pide la URL para BAJAR el archivo, con el nombre del documento; sin el
+     * parámetro se devuelve la de siempre, para mostrarlo en el visor. Es un query y no una ruta
+     * aparte porque lo único que cambia entre los dos casos es la cabecera con la que responde
+     * MinIO: mismo permiso, mismo bucket, mismo objeto.
+     */
+    @Query('download') download?: string,
   ) {
-    return this.getDocumentFileUrl.execute(id, user.sub);
+    return this.getDocumentFileUrl.execute(id, user.sub, {
+      asAttachment: download === 'true',
+    });
   }
 
   @Get('public/:id')

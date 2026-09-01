@@ -3,7 +3,10 @@ import { Injectable } from '@nestjs/common';
 import { DocumentService } from '../document.service';
 
 /**
- * `GET /document/file/:id`: URL prefirmada del PDF, para el visor.
+ * `GET /document/file/:id`: URL prefirmada del PDF, para el visor y para la descarga.
+ *
+ * Las dos comparten ruta porque comparten todo lo demás —permiso, bucket y objeto—; sólo cambia
+ * con qué nombre baja el archivo, y eso lo decide `asAttachment` (ver `getDocumentMinioURL`).
  *
  * El control de acceso es lo primero y es su propio paso: la pantalla de detalle y la descarga
  * del archivo se comprueban por separado, y cuando sólo se validaba la primera, el visor pedía
@@ -17,9 +20,15 @@ import { DocumentService } from '../document.service';
 export class GetDocumentFileUrlUseCase {
   constructor(private readonly documentService: DocumentService) {}
 
-  async execute(documentId: string, userId: string) {
+  async execute(
+    documentId: string,
+    userId: string,
+    { asAttachment = false }: { asAttachment?: boolean } = {},
+  ) {
     await this.documentService.assertUserHasAccess(documentId, userId);
 
-    return this.documentService.getDocumentMinioURL(documentId);
+    return this.documentService.getDocumentMinioURL(documentId, {
+      asAttachment,
+    });
   }
 }

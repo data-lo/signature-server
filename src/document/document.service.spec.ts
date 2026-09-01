@@ -357,6 +357,57 @@ describe('DocumentService', () => {
       },
     );
 
+    /**
+     * Historia "Descargar documentos usando el nombre del archivo en lugar del ID".
+     *
+     * La descarga y la previsualización salen de esta misma ruta y sólo se diferencian en el
+     * nombre con el que baja el archivo. El nombre lo pone el backend desde `file_name`: es el
+     * dato guardado, y así ninguna pantalla puede bautizar el archivo por su cuenta.
+     */
+    describe('nombre del archivo descargado', () => {
+      beforeEach(() => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'Contrato de servicios.pdf',
+          status: DOCUMENT_STATUS_ENUM.SIGNED,
+          objectKey: 'object-key-1',
+        });
+      });
+
+      it('con asAttachment, pide el archivo con el nombre del documento', async () => {
+        await service.getDocumentMinioURL('doc-1', { asAttachment: true });
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+          undefined,
+          'Contrato de servicios.pdf',
+        );
+      });
+
+      /**
+       * El visor consume esta misma ruta: una cabecera `attachment` haría que el PDF se descargue
+       * en lugar de mostrarse dentro de la pantalla de detalle.
+       */
+      it('sin asAttachment, no manda ningún nombre de descarga', async () => {
+        await service.getDocumentMinioURL('doc-1');
+
+        expect(minioService.getFile).toHaveBeenCalledWith(
+          'object-key-1',
+          BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+        );
+      });
+
+      /** El ID es justamente lo que se dejó de usar como nombre visible. */
+      it('nunca nombra el archivo con la clave del objeto ni con el ID', async () => {
+        await service.getDocumentMinioURL('doc-1', { asAttachment: true });
+
+        const [, , , downloadName] = minioService.getFile.mock.calls.at(-1)!;
+        expect(downloadName).not.toBe('object-key-1');
+        expect(downloadName).not.toBe('doc-1');
+      });
+    });
+
     // La vista previa solo aplica mientras se está firmando: un documento ya firmado, rechazado o
     // cancelado tiene su propia versión definitiva y no debe caer nunca en el bucket de avance.
     it.each([
