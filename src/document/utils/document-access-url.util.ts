@@ -44,17 +44,38 @@ export function buildPublicDocumentUrl(documentId: string): string {
 }
 
 /**
- * Enlace a la información de UNA firma avanzada concreta (historia "Generar código QR para firmas
- * avanzadas"). Es lo que se codifica en el QR que se estampa en el documento: como la firma
- * avanzada no deja rúbrica visible, el QR es su representación visual, y quien lo escanea llega a
- * la constancia de esa firma —quién firmó y cuándo— sin necesidad de tener cuenta.
+ * Nombre del parámetro que señala de qué firma vino el QR escaneado.
  *
- * Lleva el id del colaborador y no solo el del documento: cada firmante tiene su propio QR, así
+ * Es el id del colaborador, que ya es el identificador con el que la vista pública publica a cada
+ * firmante (`PublicSigner.id`). No hace falta un token aparte: el parámetro no CONCEDE acceso a
+ * nada —la vista pública ya es consultable sin sesión y decide por su cuenta qué publica—, sólo
+ * dice a quién resaltar. Un token añadiría un secreto que gestionar y caducar sin proteger nada
+ * que no estuviera ya publicado.
+ */
+export const ADVANCED_SIGNATURE_QUERY_PARAM = 'firma';
+
+/**
+ * Enlace del QR que se estampa junto a una firma avanzada.
+ *
+ * **Apunta a la vista pública del DOCUMENTO, con la firma señalada por query.** Antes apuntaba a
+ * `/public/documents/:id/signatures/:collaboratorId`, una pantalla propia que mostraba esa firma
+ * sola y fuera del documento al que pertenece; quien escaneaba el código veía una constancia
+ * suelta y tenía que navegar aparte para ver el documento. Ahora cae en la verificación completa
+ * —el PDF, el sello, todos los firmantes— con el suyo resaltado.
+ *
+ * Esa pantalla propia NO se elimina: los QR ya estampados viven dentro de PDFs que no se
+ * regeneran, así que su URL tiene que seguir resolviendo para siempre.
+ *
+ * Lleva el id del colaborador y no sólo el del documento: cada firmante tiene su propio QR, así
  * que dos firmas avanzadas del mismo documento nunca codifican la misma URL.
  */
 export function buildAdvancedSignatureUrl(
   documentId: string,
   collaboratorId: string,
 ): string {
-  return `${frontendBaseUrl()}/public/documents/${documentId}/signatures/${collaboratorId}`;
+  const query = new URLSearchParams({
+    [ADVANCED_SIGNATURE_QUERY_PARAM]: collaboratorId,
+  });
+
+  return `${buildPublicDocumentUrl(documentId)}?${query.toString()}`;
 }

@@ -943,7 +943,7 @@ export class DocumentService {
    *
    *  - Firma simple: la rúbrica del firmante, tomada del snapshot inmutable del momento de firmar
    *    (ver `signatureSnapshotObjectKey`), no de su perfil en vivo.
-   *  - Firma avanzada (e.firma): un código QR con los datos del firmante y del evento de firma
+   *  - Firma avanzada (e.firma): un código QR que lleva a la verificación pública del documento
    *    (ver `SignatureQrService`). Su evidencia es criptográfica y no produce ninguna imagen, así
    *    que antes su espacio quedaba vacío.
    *
@@ -951,28 +951,19 @@ export class DocumentService {
    * pendiente no hay firma que consultar, así que no se dibuja nada y su espacio sigue libre.
    */
   /**
-   * Datos que se codifican en el QR de una firma avanzada (historia "Actualizar contenido del
-   * código QR en firma avanzada").
+   * Lo que se codifica en el QR de una firma avanzada (historia "Redirigir QR de firma avanzada a
+   * la vista pública y resaltar al firmante").
    *
-   * Todo describe a ESA firma y no al perfil del firmante hoy: el nombre y el RFC salen del
-   * certificado del SAT con el que firmó —con los datos del colaborador como respaldo, mismo
-   * criterio que `getAdvancedSignaturePublicView`— y la IP y la fecha son las que quedaron
-   * registradas al firmar. La ubicación se sigue guardando, pero ya no se publica (ver
-   * `SignatureQrService`). El documento se puede leer años después; el QR tiene que
-   * seguir diciendo lo que pasó, no lo que pasa.
+   * Sólo el enlace. Aquí se armaban además el nombre, el RFC, la IP y la fecha, que se imprimían
+   * como texto dentro del código; ahora esos datos únicamente se ven en la vista pública, que es
+   * la que decide qué publica de cada firmante. La URL señala a ESTE colaborador, así que dos
+   * firmas avanzadas del mismo documento nunca codifican el mismo QR.
    */
   toAdvancedSignatureQrData(
     document: DocumentEntity,
     collaborator: CollaboratorEntity,
   ): AdvancedSignatureQrData {
-    const certificate = collaborator.advancedSignature?.certificate;
-
     return {
-      signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
-      rfc: certificate?.rfc ?? collaborator.rfc,
-      ipAddress: collaborator.ipAddress,
-      signedAt:
-        collaborator.advancedSignature?.signedAt ?? collaborator.signedAt,
       verificationUrl: buildAdvancedSignatureUrl(document.id, collaborator.id),
     };
   }
