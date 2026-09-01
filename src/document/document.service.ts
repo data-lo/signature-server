@@ -764,9 +764,14 @@ export class DocumentService {
    * califica y arma el DTO).
    *
    * Se invoca DENTRO de `finalizeSignedDocument`, justo después de persistir `signed_hash` y antes
-   * de armar la hoja de evidencia: es lo único que permite que su tabla NOM-151 salga llena. El
-   * caso de uso relee el documento de la base, de ahí que ese guardado tenga que preceder a la
-   * llamada; el snapshot de la rúbrica del último firmante ya está persistido a esta altura.
+   * de armar la hoja de evidencia: es lo único que permite que su tabla NOM-151 salga llena.
+   *
+   * **El caso de uso relee TODO de la base**, así que cualquier dato que la evidencia necesite
+   * tiene que estar escrito antes de llegar acá. Son dos: `signed_hash`, que se guarda unas líneas
+   * más arriba, y el snapshot de la rúbrica de cada firmante, que `SignDocumentUseCase` persiste
+   * apenas lo toma —y no en su `save` final, que ocurre después de este punto— precisamente por
+   * esto. Sin ese adelanto, el snapshot del ÚLTIMO firmante llegaba en NULL y la evidencia se
+   * sellaba con la firma en vivo de su perfil mientras el PDF se estampaba con el snapshot.
    *
    * Best-effort, con el mismo criterio que el sellado avanzado y los correos de finalización: a
    * esta altura la firma ya está registrada y el PDF ya está en su bucket. Devolver un 500 al
