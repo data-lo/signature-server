@@ -41,7 +41,7 @@ import { ApiCompleteMyOnboarding } from './docs/api-complete-my-onboarding.docs'
 
 @ApiTags('Users')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/users')
+@Controller('users')
 export class UsersController {
   constructor(
     private readonly checkRfcAvailability: CheckRfcAvailabilityUseCase,

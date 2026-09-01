@@ -5,7 +5,7 @@ import { ApiGetSystemRoles } from './docs/api-get-system-roles.docs';
 
 @ApiTags('Roles')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/roles')
+@Controller('roles')
 export class RolesController {
   constructor(private readonly getSystemRoles: GetSystemRolesUseCase) {}
 

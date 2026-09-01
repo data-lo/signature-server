@@ -43,7 +43,7 @@ import { ApiAssignMemberPermissions } from './docs/api-assign-member-permissions
 
 @ApiTags('Organizations')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/organizations')
+@Controller('organizations')
 export class OrganizationsController {
   constructor(
     private readonly createOrganization: CreateOrganizationUseCase,
