@@ -59,9 +59,10 @@ export class CreateSubscriptionCheckoutUseCase {
     );
     const profile = await this.billingOwnerService.getOrCreateProfile(owner);
 
-    const planPrice = await this.billingCatalogService.findSellableRecurringPrice(
-      input.priceId,
-    );
+    const planPrice =
+      await this.billingCatalogService.findSellableRecurringPrice(
+        input.priceId,
+      );
 
     const customerId = await this.resolveCustomerId(profile, input.email);
     const frontendUrl = frontendBaseUrl();

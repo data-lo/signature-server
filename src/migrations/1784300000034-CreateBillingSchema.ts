@@ -379,10 +379,7 @@ export class CreateBillingSchema1784300000034 implements MigrationInterface {
         'checkout_orders_status_enum',
         ['PENDING', 'COMPLETED', 'FAILED', 'EXPIRED'],
       ],
-      [
-        'credit_lots_origin_enum',
-        ['CURRENT_PERIOD', 'ROLLOVER', 'ADD_ON'],
-      ],
+      ['credit_lots_origin_enum', ['CURRENT_PERIOD', 'ROLLOVER', 'ADD_ON']],
       [
         'document_credit_consumptions_signature_type_enum',
         ['SIMPLE', 'ADVANCED'],

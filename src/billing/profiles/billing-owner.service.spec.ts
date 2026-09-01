@@ -58,9 +58,7 @@ describe('BillingOwnerService', () => {
 
   describe('resolución del propietario facturable', () => {
     it('CA01 — una cuenta personal factura contra su propia fila (personal_account_id)', async () => {
-      accountRepository.findOne.mockResolvedValue(
-        PERSONAL_ACCOUNT,
-      );
+      accountRepository.findOne.mockResolvedValue(PERSONAL_ACCOUNT);
 
       const owner = await service.resolveOwner('user-1', PERSONAL_ACCOUNT.id);
 
@@ -76,9 +74,7 @@ describe('BillingOwnerService', () => {
      * propio perfil y su propio saldo.
      */
     it('CA02 — una cuenta de organización factura contra la organización, no contra la membresía', async () => {
-      accountRepository.findOne.mockResolvedValue(
-        ORGANIZATION_ACCOUNT,
-      );
+      accountRepository.findOne.mockResolvedValue(ORGANIZATION_ACCOUNT);
 
       const owner = await service.resolveOwner(
         'user-1',

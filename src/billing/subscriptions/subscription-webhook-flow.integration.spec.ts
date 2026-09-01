@@ -329,9 +329,12 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         data: { object: invoicePaidEvent.data.object },
       });
 
-      expect(billingProfileRepository.update).toHaveBeenCalledWith('profile-1', {
-        status: BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
-      });
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        {
+          status: BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
+        },
+      );
       expect(creditLotRepository.save).not.toHaveBeenCalled();
     });
 
@@ -342,9 +345,12 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         data: { object: { id: 'sub_1', customer: 'cus_1' } },
       });
 
-      expect(billingProfileRepository.update).toHaveBeenCalledWith('profile-1', {
-        status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
-      });
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        {
+          status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
+        },
+      );
       expect(creditLotRepository.save).not.toHaveBeenCalled();
       expect(creditLotRepository.update).not.toHaveBeenCalled();
     });

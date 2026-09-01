@@ -1435,11 +1435,12 @@ describe('casos de uso de documentos', () => {
           TEST_GEOLOCATION,
         );
 
-        const snapshotUpdate = collaboratorRepository.update.mock.calls.findIndex(
-          ([, patch]) =>
-            (patch as { signatureSnapshotObjectKey?: string })
-              ?.signatureSnapshotObjectKey !== undefined,
-        );
+        const snapshotUpdate =
+          collaboratorRepository.update.mock.calls.findIndex(
+            ([, patch]) =>
+              (patch as { signatureSnapshotObjectKey?: string })
+                ?.signatureSnapshotObjectKey !== undefined,
+          );
         expect(snapshotUpdate).toBeGreaterThanOrEqual(0);
 
         const ordenSnapshot =

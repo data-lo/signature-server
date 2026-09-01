@@ -86,7 +86,10 @@ export class BillingOwnerService {
         throw new InconsistentOrganizationAccountException(account.id);
       }
 
-      return { personalAccountId: null, organizationId: account.organizationId };
+      return {
+        personalAccountId: null,
+        organizationId: account.organizationId,
+      };
     }
 
     return { personalAccountId: account.id, organizationId: null };
@@ -112,9 +115,7 @@ export class BillingOwnerService {
    * esto, la segunda reventaría con un error de constraint crudo en la cara del usuario cuando
    * lo correcto es justamente lo que ya ocurrió: el perfil existe.
    */
-  async getOrCreateProfile(
-    owner: BillingOwner,
-  ): Promise<BillingProfileEntity> {
+  async getOrCreateProfile(owner: BillingOwner): Promise<BillingProfileEntity> {
     const existing = await this.findByOwner(owner);
     if (existing) {
       return existing;

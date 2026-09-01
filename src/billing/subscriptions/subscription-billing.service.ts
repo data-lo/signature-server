@@ -4,7 +4,6 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import Stripe = require('stripe');
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
-import { PlanPriceEntity } from '../catalog/plan-price.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';

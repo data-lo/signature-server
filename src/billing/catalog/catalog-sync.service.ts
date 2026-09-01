@@ -75,7 +75,11 @@ export class CatalogSyncService {
 
     switch (catalogType) {
       case CATALOG_TYPE_ENUM.PLAN:
-        await this.deactivateByStripeProductId(this.planRepository, product.id, 'plan');
+        await this.deactivateByStripeProductId(
+          this.planRepository,
+          product.id,
+          'plan',
+        );
         return;
       case CATALOG_TYPE_ENUM.DOCUMENT_PACK:
         await this.deactivateByStripeProductId(
@@ -89,7 +93,9 @@ export class CatalogSyncService {
     }
   }
 
-  private resolveCatalogType(product: Stripe.Product): CATALOG_TYPE_ENUM | null {
+  private resolveCatalogType(
+    product: Stripe.Product,
+  ): CATALOG_TYPE_ENUM | null {
     const raw = product.metadata?.catalogType?.trim().toLowerCase();
 
     if (!raw) {
@@ -98,7 +104,9 @@ export class CatalogSyncService {
       return null;
     }
 
-    const match = Object.values(CATALOG_TYPE_ENUM).find((value) => value === raw);
+    const match = Object.values(CATALOG_TYPE_ENUM).find(
+      (value) => value === raw,
+    );
     if (!match) {
       this.logger.warn(
         `Producto de Stripe ${product.id} con metadata.catalogType='${raw}' no reconocida ` +
@@ -161,7 +169,9 @@ export class CatalogSyncService {
    * documentos, un identificador de precio falso podría chocar con uno real que Stripe asigne
    * después). Sólo se puede enlazar un paquete que ya exista, dado de alta con su precio real.
    */
-  private async upsertDocumentPackOffer(product: Stripe.Product): Promise<void> {
+  private async upsertDocumentPackOffer(
+    product: Stripe.Product,
+  ): Promise<void> {
     const offer = await this.documentPackOfferRepository.findOne({
       where: { stripeProductId: product.id },
     });
@@ -187,7 +197,10 @@ export class CatalogSyncService {
     stripeProductId: string,
     label: string,
   ): Promise<void> {
-    const result = await repository.update({ stripeProductId }, { active: false });
+    const result = await repository.update(
+      { stripeProductId },
+      { active: false },
+    );
 
     if (!result.affected) {
       this.logger.warn(

@@ -36,9 +36,10 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
   beforeEach(async () => {
     billingProfileRepository = { update: jest.fn() };
     billingOwnerService = {
-      resolveOwner: jest
-        .fn()
-        .mockResolvedValue({ personalAccountId: 'account-1', organizationId: null }),
+      resolveOwner: jest.fn().mockResolvedValue({
+        personalAccountId: 'account-1',
+        organizationId: null,
+      }),
       getOrCreateProfile: jest.fn().mockResolvedValue({
         id: 'profile-1',
         stripeCustomerId: 'cus_1',
@@ -48,7 +49,9 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
       findSellableRecurringPrice: jest.fn().mockResolvedValue(PLAN_PRICE),
     };
     checkoutOrderService = {
-      registerPendingSubscription: jest.fn().mockResolvedValue({ id: 'order-1' }),
+      registerPendingSubscription: jest
+        .fn()
+        .mockResolvedValue({ id: 'order-1' }),
     };
     paymentGateway = {
       createCheckoutSession: jest.fn().mockResolvedValue({
@@ -108,15 +111,15 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
   it('CA04 — registra la orden PENDING con el id de sesión, el importe y la moneda del catálogo local', async () => {
     await execute();
 
-    expect(checkoutOrderService.registerPendingSubscription).toHaveBeenCalledWith(
-      {
-        billingProfileId: 'profile-1',
-        planPriceId: 'plan-price-1',
-        stripeCheckoutSessionId: 'cs_1',
-        amount: 49900,
-        currency: 'mxn',
-      },
-    );
+    expect(
+      checkoutOrderService.registerPendingSubscription,
+    ).toHaveBeenCalledWith({
+      billingProfileId: 'profile-1',
+      planPriceId: 'plan-price-1',
+      stripeCheckoutSessionId: 'cs_1',
+      amount: 49900,
+      currency: 'mxn',
+    });
   });
 
   it('devuelve la URL de Checkout', async () => {
@@ -159,9 +162,12 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
         'profile-1',
         'usuario@correo.com',
       );
-      expect(billingProfileRepository.update).toHaveBeenCalledWith('profile-1', {
-        stripeCustomerId: 'cus_nuevo',
-      });
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        {
+          stripeCustomerId: 'cus_nuevo',
+        },
+      );
       expect(paymentGateway.createCheckoutSession).toHaveBeenCalledWith(
         expect.objectContaining({ customerId: 'cus_nuevo' }),
       );

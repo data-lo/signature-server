@@ -88,7 +88,10 @@ export class GetPublicDocumentUseCase {
             this.documentService.toPendingPublicSigner(collaborator),
           ),
           downloads: { nom151: false, timestamp: false, canonical: false },
-          sealEvidence: { timestampFileBase64: null, integrityFileBase64: null },
+          sealEvidence: {
+            timestampFileBase64: null,
+            integrityFileBase64: null,
+          },
           integrityTsaCertificate: null,
         },
       };

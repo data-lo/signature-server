@@ -4,7 +4,6 @@ import { DataSource } from 'typeorm';
 import Stripe = require('stripe');
 import { SubscriptionBillingService } from './subscription-billing.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
-import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
@@ -97,7 +96,10 @@ describe('SubscriptionBillingService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SubscriptionBillingService,
-        { provide: getDataSourceToken(), useValue: dataSource as unknown as DataSource },
+        {
+          provide: getDataSourceToken(),
+          useValue: dataSource as unknown as DataSource,
+        },
         {
           provide: getRepositoryToken(BillingProfileEntity),
           useValue: billingProfileRepository,
@@ -390,17 +392,20 @@ describe('SubscriptionBillingService', () => {
       ['incomplete_expired', BILLING_PROFILE_STATUS_ENUM.CANCELED],
       ['trialing', BILLING_PROFILE_STATUS_ENUM.ACTIVE],
       ['paused', BILLING_PROFILE_STATUS_ENUM.INCOMPLETE],
-    ])('traduce el estado %s de Stripe a %s', async (stripeStatus, expected) => {
-      await service.handleSubscriptionUpdated({
-        ...subscription,
-        status: stripeStatus,
-      } as unknown as Stripe.Subscription);
+    ])(
+      'traduce el estado %s de Stripe a %s',
+      async (stripeStatus, expected) => {
+        await service.handleSubscriptionUpdated({
+          ...subscription,
+          status: stripeStatus,
+        } as unknown as Stripe.Subscription);
 
-      expect(billingProfileRepository.update).toHaveBeenCalledWith(
-        'profile-1',
-        expect.objectContaining({ status: expected }),
-      );
-    });
+        expect(billingProfileRepository.update).toHaveBeenCalledWith(
+          'profile-1',
+          expect.objectContaining({ status: expected }),
+        );
+      },
+    );
   });
 
   describe('CA11 — customer.subscription.deleted', () => {

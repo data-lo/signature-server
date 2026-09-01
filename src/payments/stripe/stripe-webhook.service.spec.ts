@@ -20,7 +20,10 @@ function createMockRepository() {
 describe('StripeWebhookService', () => {
   let service: StripeWebhookService;
   let subscriptionRepository: ReturnType<typeof createMockRepository>;
-  let catalogSyncService: { syncProductUpserted: jest.Mock; syncProductDeleted: jest.Mock };
+  let catalogSyncService: {
+    syncProductUpserted: jest.Mock;
+    syncProductDeleted: jest.Mock;
+  };
   let subscriptionBillingService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -311,37 +314,58 @@ describe('StripeWebhookService', () => {
    */
   describe('product.created / product.updated / product.deleted', () => {
     it('product.created delega en catalogSyncService.syncProductUpserted', async () => {
-      const product = { id: 'prod_1', name: 'Plan Pro', active: true, metadata: {} };
+      const product = {
+        id: 'prod_1',
+        name: 'Plan Pro',
+        active: true,
+        metadata: {},
+      };
 
       await service.process({
         type: 'product.created',
         data: { object: product },
       } as unknown as Stripe.Event);
 
-      expect(catalogSyncService.syncProductUpserted).toHaveBeenCalledWith(product);
+      expect(catalogSyncService.syncProductUpserted).toHaveBeenCalledWith(
+        product,
+      );
       expect(catalogSyncService.syncProductDeleted).not.toHaveBeenCalled();
     });
 
     it('product.updated delega en catalogSyncService.syncProductUpserted', async () => {
-      const product = { id: 'prod_1', name: 'Plan Pro (renombrado)', active: true, metadata: {} };
+      const product = {
+        id: 'prod_1',
+        name: 'Plan Pro (renombrado)',
+        active: true,
+        metadata: {},
+      };
 
       await service.process({
         type: 'product.updated',
         data: { object: product },
       } as unknown as Stripe.Event);
 
-      expect(catalogSyncService.syncProductUpserted).toHaveBeenCalledWith(product);
+      expect(catalogSyncService.syncProductUpserted).toHaveBeenCalledWith(
+        product,
+      );
     });
 
     it('product.deleted delega en catalogSyncService.syncProductDeleted', async () => {
-      const product = { id: 'prod_1', name: 'Plan Pro', active: false, metadata: {} };
+      const product = {
+        id: 'prod_1',
+        name: 'Plan Pro',
+        active: false,
+        metadata: {},
+      };
 
       await service.process({
         type: 'product.deleted',
         data: { object: product },
       } as unknown as Stripe.Event);
 
-      expect(catalogSyncService.syncProductDeleted).toHaveBeenCalledWith(product);
+      expect(catalogSyncService.syncProductDeleted).toHaveBeenCalledWith(
+        product,
+      );
       expect(catalogSyncService.syncProductUpserted).not.toHaveBeenCalled();
     });
 

@@ -143,7 +143,9 @@ export function toVisibleRect(
 ): SignatureCoordinates {
   return {
     x: ratios.xRatio * displayed.width,
-    y: displayed.height - (ratios.yRatio + ratios.heightRatio) * displayed.height,
+    y:
+      displayed.height -
+      (ratios.yRatio + ratios.heightRatio) * displayed.height,
     width: ratios.widthRatio * displayed.width,
     height: ratios.heightRatio * displayed.height,
     opacity: ratios.opacity,
