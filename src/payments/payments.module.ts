@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { BillingModule } from 'src/billing/billing.module';
 import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
 import { StripePaymentGatewayService } from './stripe/stripe-payment-gateway.service';
 import { StripeWebhookService } from './stripe/stripe-webhook.service';
@@ -28,6 +29,7 @@ import { PaymentsController } from './payments.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([AccountSubscriptionEntity, AccountEntity]),
+    BillingModule,
   ],
   controllers: [PaymentsController],
   providers: [
