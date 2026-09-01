@@ -56,6 +56,6 @@ export interface SimpleSignatureMedia {
    * Se declaran opcionales —y no como cadena vacía— para que Seal Service distinga "no lo
    * tenemos" de "lo tenemos y está vacío", y su ausencia nunca bloquea el envío.
    */
-  identityDocumentFrontImage: string;
-  identityDocumentBackImage: string;
+  identityDocumentFrontImage?: string;
+  identityDocumentBackImage?: string;
 }
