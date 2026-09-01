@@ -22,7 +22,7 @@ import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs'
  */
 @ApiTags('Payments')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/payments')
+@Controller('payments')
 export class PaymentsController {
   constructor(
     private readonly getPaymentServices: GetPaymentServicesUseCase,

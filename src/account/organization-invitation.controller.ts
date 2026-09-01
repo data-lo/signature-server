@@ -24,7 +24,7 @@ import { ApiAcceptInvitation } from './docs/api-accept-invitation.docs';
  * de OrganizationInvitationService).
  */
 @ApiTags('Organization Invitations')
-@Controller('api/v1/organizations/invitations')
+@Controller('organizations/invitations')
 export class OrganizationInvitationsController {
   constructor(
     private readonly getInvitationPreview: GetOrganizationInvitationPreviewUseCase,

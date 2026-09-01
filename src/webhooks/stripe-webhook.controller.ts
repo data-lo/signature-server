@@ -19,7 +19,7 @@ import { WebhookReceptionResult } from './interfaces/webhook-reception-result.in
  * en el caso de uso contra el cuerpo crudo.
  */
 @ApiExcludeController()
-@Controller('api/v1/webhooks')
+@Controller('webhooks')
 export class StripeWebhookController {
   constructor(
     private readonly receiveStripeWebhook: ReceiveStripeWebhookUseCase,

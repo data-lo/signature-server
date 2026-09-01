@@ -23,7 +23,7 @@ import { ApiGetCurrentIdentityVerification } from './docs/api-get-current-identi
  */
 @ApiTags('Identity Verification')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/identity-verifications')
+@Controller('identity-verifications')
 export class IdentityVerificationsController {
   constructor(
     private readonly startDiditVerification: StartDiditVerificationUseCase,

@@ -20,7 +20,7 @@ import { WebhookReceptionResult } from './interfaces/webhook-reception-result.in
  * del caso de uso antes de tocar cualquier dato.
  */
 @ApiExcludeController()
-@Controller('api/v1/webhooks')
+@Controller('webhooks')
 export class DiditWebhookController {
   constructor(
     private readonly receiveDiditWebhook: ReceiveDiditWebhookUseCase,

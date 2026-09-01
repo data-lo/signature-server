@@ -23,7 +23,7 @@ import { ApiCreateDocumentSignatureFlow } from './docs/api-create-document-signa
 
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/documents')
+@Controller('documents')
 export class DocumentSignaturesController {
   constructor(
     private readonly createDocumentSignatureFlow: CreateDocumentSignatureFlowUseCase,

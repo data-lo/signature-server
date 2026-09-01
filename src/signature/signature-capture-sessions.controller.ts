@@ -56,7 +56,7 @@ import { ApiCancelSignatureCaptureSession } from './docs/api-cancel-signature-ca
  */
 @ApiTags('Signature Capture')
 @ApiBearerAuth('access-token')
-@Controller('api/v1/signature-capture-sessions')
+@Controller('signature-capture-sessions')
 export class SignatureCaptureSessionsController {
   constructor(
     private readonly createSignatureCaptureSession: CreateSignatureCaptureSessionUseCase,

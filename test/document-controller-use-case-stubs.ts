@@ -3,6 +3,7 @@ import type { Provider } from '@nestjs/common';
 import { GetDocumentFileUrlUseCase } from './../src/document/applications/get-document-file-url.use-case';
 import { GetPublicDocumentUseCase } from './../src/document/applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './../src/document/applications/get-public-seal-artifact.use-case';
+import { GetPublicDocumentAuditXmlUseCase } from './../src/document/applications/get-public-document-audit-xml.use-case';
 import { GetPublicAdvancedSignatureUseCase } from './../src/document/applications/get-public-advanced-signature.use-case';
 import { CreateDocumentUseCase } from './../src/document/applications/create-document.use-case';
 import { GetDocumentsUseCase } from './../src/document/applications/get-documents.use-case';
@@ -22,7 +23,7 @@ import { DeleteDocumentUseCase } from './../src/document/applications/delete-doc
  * ejercita.
  *
  * Nest resuelve el constructor completo del controller aunque la prueba sólo llame a una de sus
- * rutas, así que sin estos dobles habría que cablear las dependencias reales de los diecisiete
+ * rutas, así que sin estos dobles habría que cablear las dependencias reales de los dieciocho
  * casos de uso para probar uno. Cada prueba registra por su cuenta el caso de uso que sí quiere
  * ejercitar: como se declara después de este arreglo, su provider gana.
  */
@@ -30,6 +31,7 @@ export const DOCUMENT_CONTROLLER_USE_CASE_STUBS: Provider[] = [
   GetDocumentFileUrlUseCase,
   GetPublicDocumentUseCase,
   GetPublicSealArtifactUseCase,
+  GetPublicDocumentAuditXmlUseCase,
   GetPublicAdvancedSignatureUseCase,
   CreateDocumentUseCase,
   GetDocumentsUseCase,

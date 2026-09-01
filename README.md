@@ -188,47 +188,76 @@ Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt al
 
 ## 3. Módulos, endpoints y funciones
 
-### `document` (`/document`)
+### Prefijo global: `/api/v1`
+
+**Todas las rutas HTTP de esta sección cuelgan de `/api/v1`.** El prefijo se aplica una sola vez
+en el arranque (`applyGlobalApiPrefix()`, en `src/shared/constants/api-prefix.constants.ts`, que
+`main.ts` invoca antes de construir el Swagger) y **no** se repite dentro de los `@Controller()`:
+el controlador de webhooks se declara `@Controller('webhooks')` y responde en
+`/api/v1/webhooks/stripe`.
+
+Antes convivían las dos formas —unos módulos declaraban `@Controller('api/v1/users')` y otros
+`@Controller('user')` a secas—, así que la misma API contestaba con y sin versión según el módulo.
+Si al agregar un controlador se le vuelve a poner el `api/v1` local, su ruta real pasa a ser
+`/api/v1/api/v1/...` y el endpoint desaparece de donde lo busca el cliente; hay una prueba que fija
+ese caso (`api-prefix.constants.spec.ts`).
+
+**Las dos únicas exclusiones**, ambas registradas en `GLOBAL_API_PREFIX_EXCLUDE`:
+
+| Ruta | Por qué queda fuera del prefijo |
+|---|---|
+| `GET /health` | Lo consumen probes de infraestructura que apuntan a una URL fija. El `HEALTHCHECK` del `Dockerfile` pide `http://localhost:4000/health` literalmente; moverlo dejaría el contenedor marcado como `unhealthy` |
+| `GET /` | Saludo de sanidad del andamiaje de Nest, también oculto del Swagger publicado (`ApiGetHello`). No es parte del contrato de la API |
+
+Donde una tabla escribe la ruta relativa (`POST /`, `PATCH /:permissionId`, `GET /me`), es relativa
+a la base del controlador que encabeza la subsección — que ya incluye el prefijo.
+
+Del lado del navegador esto se apila con el proxy de `signature-app`: el `baseURL` de axios es
+`/api` y las rutas que se le pasan empiezan por `/api/v1`, así que la petición sale como
+`/api/api/v1/...` y el rewrite de `next.config.ts` se come el primer `/api` antes de reenviarla.
+Son dos `api` distintos y ninguno sobra; está fijado en `lib/axios.spec.ts` de ese repo.
+
+### `document` (`/api/v1/document`)
 
 | Endpoint | Método de servicio | Qué hace |
 |---|---|---|
-| `POST /document` | `create()` | Sube el PDF, crea documento + participantes. **Requiere el header `X-Account-Id`** (cuenta activa); el documento queda scopeado a esa cuenta (`DocumentEntity.accountId`) |
-| `GET /document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros. Cada fila incluye `creator` y `creatorRfc` (el RFC sale de `personal_information` vía `leftJoinAndSelect` sobre `requester`, no de `users`; `null` si el creador aún no lo registró) y `signatureType` (`simple`/`fiel`, para la columna "Tipo de firma" del frontend — se resuelve a partir de los SIGNER del documento, que ya vienen en el mismo query, y es `null` si no todos coinciden o si ninguno lo tiene registrado, como en los documentos del endpoint antiguo) |
-| `GET /document/:id` | `findDetailForUser()` | Detalle + permisos del usuario (`canSign`/`canReject`). **Todavía no scopeado por cuenta** (ver Pendientes) |
-| `GET /document/file/:id` | `getDocumentMinioURL()` | URL prefirmada según estado |
-| `GET /document/public/:id` | `getPublicDocument()` | **`@SkipJwtAuth()`** — vista pública de verificación, sin autenticación. El contenido depende de `isCompleted`: pendiente ⇒ solo nombre del documento y nombres de los firmantes; completado ⇒ además hash, páginas, creador, constancia NOM-151, la evidencia de cada firma **según su tipo** y `secureUrl`. Consumido por `signature-app` en `/public/documents/:id` |
-| `GET /document/public/:id/seal/:artifact` | `getPublicSealArtifact()` | **Nuevo, `@SkipJwtAuth()`** — descarga un artefacto de la constancia ya persistida en `document_seals`: `nom151` (PDF), `timestamp` (token RFC 3161) o `canonical` (cadena canónica en texto plano). Nunca vuelve a llamar al PSC. 404 si el documento no está firmado, no tiene sello, o ese artefacto no vino del proveedor |
-| `PATCH /document/:id/submit-for-authorization` | `submitForAuthorization()` | `CREATED → PENDING`, notifica al primer firmante |
-| `PATCH /document/:id/sign` | `sign()` | Firma en turno; finaliza el documento si es el último firmante |
-| `PATCH /document/:id/link-collaborator` | `linkCollaborator()` | **Nuevo** — vincula al usuario autenticado como colaborador si fue invitado solo por email (sin cuenta todavía); consumido por `/access-document` en el frontend |
-| `POST /document/:id/verification-codes` | `requestVerificationCode()` | **Nuevo** — emite un OTP de firma cuando el documento tiene `requiresVerification = true` |
-| `POST /document/:id/verification-codes/verify` | `verifyCode()` | **Nuevo** — valida el OTP anterior antes de habilitar `sign()` |
-| `PATCH /document/:id/reject` | `reject()` | Rechaza con motivo, marca de agua, notifica al creador |
-| `PATCH /document/:id/submit-for-cancellation` | `requestCancellation()` | `SIGNED → CANCELLATION_PENDING` (solo el creador) |
-| `PATCH /document/:id/confirm-cancellation` | `confirmCancellation()` | `CANCELLATION_PENDING → CANCELLED` (cualquier firmante), marca de agua + notificación |
-| `PATCH /document/:id` | `update()` | Reemplaza archivo/coordenadas (solo `CREATED`) |
-| `DELETE /document/:id` | `remove()` | Borra archivo + registro (solo `CREATED`) |
+| `POST /api/v1/document` | `create()` | Sube el PDF, crea documento + participantes. **Requiere el header `X-Account-Id`** (cuenta activa); el documento queda scopeado a esa cuenta (`DocumentEntity.accountId`) |
+| `GET /api/v1/document` | `findWithFilters()` | Listado paginado con filtros (id, email, participante, estado, fechas, "mi turno"). **Requiere `X-Account-Id`**: el listado se restringe a los documentos de esa cuenta, sin importar los demás filtros. Cada fila incluye `creator` y `creatorRfc` (el RFC sale de `personal_information` vía `leftJoinAndSelect` sobre `requester`, no de `users`; `null` si el creador aún no lo registró) y `signatureType` (`simple`/`fiel`, para la columna "Tipo de firma" del frontend — se resuelve a partir de los SIGNER del documento, que ya vienen en el mismo query, y es `null` si no todos coinciden o si ninguno lo tiene registrado, como en los documentos del endpoint antiguo) |
+| `GET /api/v1/document/:id` | `findDetailForUser()` | Detalle + permisos del usuario (`canSign`/`canReject`). **Todavía no scopeado por cuenta** (ver Pendientes) |
+| `GET /api/v1/document/file/:id` | `getDocumentMinioURL()` | URL prefirmada según estado |
+| `GET /api/v1/document/public/:id` | `getPublicDocument()` | **`@SkipJwtAuth()`** — vista pública de verificación, sin autenticación. El contenido depende de `isCompleted`: pendiente ⇒ solo nombre del documento y nombres de los firmantes; completado ⇒ además hash, páginas, creador, constancia NOM-151, la evidencia de cada firma **según su tipo** y `secureUrl`. Consumido por `signature-app` en `/public/documents/:id` |
+| `GET /api/v1/document/public/:id/seal/:artifact` | `getPublicSealArtifact()` | **Nuevo, `@SkipJwtAuth()`** — descarga un artefacto de la constancia ya persistida en `document_seals`: `nom151` (PDF), `timestamp` (token RFC 3161) o `canonical` (cadena canónica en texto plano). Nunca vuelve a llamar al PSC. 404 si el documento no está firmado, no tiene sello, o ese artefacto no vino del proveedor |
+| `PATCH /api/v1/document/:id/submit-for-authorization` | `submitForAuthorization()` | `CREATED → PENDING`, notifica al primer firmante |
+| `PATCH /api/v1/document/:id/sign` | `sign()` | Firma en turno; finaliza el documento si es el último firmante |
+| `PATCH /api/v1/document/:id/link-collaborator` | `linkCollaborator()` | **Nuevo** — vincula al usuario autenticado como colaborador si fue invitado solo por email (sin cuenta todavía); consumido por `/access-document` en el frontend |
+| `POST /api/v1/document/:id/verification-codes` | `requestVerificationCode()` | **Nuevo** — emite un OTP de firma cuando el documento tiene `requiresVerification = true` |
+| `POST /api/v1/document/:id/verification-codes/verify` | `verifyCode()` | **Nuevo** — valida el OTP anterior antes de habilitar `sign()` |
+| `PATCH /api/v1/document/:id/reject` | `reject()` | Rechaza con motivo, marca de agua, notifica al creador |
+| `PATCH /api/v1/document/:id/submit-for-cancellation` | `requestCancellation()` | `SIGNED → CANCELLATION_PENDING` (solo el creador) |
+| `PATCH /api/v1/document/:id/confirm-cancellation` | `confirmCancellation()` | `CANCELLATION_PENDING → CANCELLED` (cualquier firmante), marca de agua + notificación |
+| `PATCH /api/v1/document/:id` | `update()` | Reemplaza archivo/coordenadas (solo `CREATED`) |
+| `DELETE /api/v1/document/:id` | `remove()` | Borra archivo + registro (solo `CREATED`) |
 
-**Multi-tenancy (`X-Account-Id`)**: `create()`/`findWithFilters()` reciben el header y llaman `AccountMemberService.assertIsActiveMember(userId, accountId)` (`ForbiddenException` si el usuario no es miembro activo de esa cuenta) **antes** de usarlo para nada — el header lo manda el cliente, así que confiar en él sin validar contra la membresía real habría sido un hueco de aislamiento por tenant, no una solución. Si falta el header, `BadRequestException`. `DocumentEntity.accountId` (migración `AddAccountIdToDocuments`, con backfill a la cuenta PERSONAL del creador para los documentos ya existentes) es la columna que hace posible el filtro. El resto de los endpoints del módulo (`GET /document/:id`, `sign`/`reject`/cancelación/`update`/`remove`) siguen sin este scoping — ver Pendientes.
+**Multi-tenancy (`X-Account-Id`)**: `create()`/`findWithFilters()` reciben el header y llaman `AccountMemberService.assertIsActiveMember(userId, accountId)` (`ForbiddenException` si el usuario no es miembro activo de esa cuenta) **antes** de usarlo para nada — el header lo manda el cliente, así que confiar en él sin validar contra la membresía real habría sido un hueco de aislamiento por tenant, no una solución. Si falta el header, `BadRequestException`. `DocumentEntity.accountId` (migración `AddAccountIdToDocuments`, con backfill a la cuenta PERSONAL del creador para los documentos ya existentes) es la columna que hace posible el filtro. El resto de los endpoints del módulo (`GET /api/v1/document/:id`, `sign`/`reject`/cancelación/`update`/`remove`) siguen sin este scoping — ver Pendientes.
 
-### `document-signatures` (`POST /api/v1/documents/signatures`) — endpoint de creación alternativo, coexiste con `POST /document`
+### `document-signatures` (`POST /api/v1/documents/signatures`) — endpoint de creación alternativo, coexiste con `POST /api/v1/document`
 
-`DocumentSignaturesController`/`DocumentSignaturesService` (`src/document/`): recibe multipart (archivo + `documentData` + `collaborators`, cada uno `SIGNER`/`VIEWER` con datos libres, sin `userId`), sube el PDF él mismo, y orquesta en una sola transacción (`DataSource.transaction`) Document → Collaborator (uno por colaborador) → Notification (`isNotified: false`) → `verification_code` (si el colaborador es SIGNER y aplica verificación). Los eventos Kafka (`notification.created`, uno por notificación, vía `NotificationEventsProducer`) se publican **fuera** de la transacción, después de que resuelve — si algo falla adentro, el rollback ya ocurrió antes de llegar al publish. Es el endpoint que consume hoy `signature-app` desde `/dashboard/documents/create` (ver su README) — `POST /document` sigue existiendo y expuesto, pero con un contrato distinto (JSON con `objectKey` ya subido, no multipart).
+`DocumentSignaturesController`/`DocumentSignaturesService` (`src/document/`): recibe multipart (archivo + `documentData` + `collaborators`, cada uno `SIGNER`/`VIEWER` con datos libres, sin `userId`), sube el PDF él mismo, y orquesta en una sola transacción (`DataSource.transaction`) Document → Collaborator (uno por colaborador) → Notification (`isNotified: false`) → `verification_code` (si el colaborador es SIGNER y aplica verificación). Los eventos Kafka (`notification.created`, uno por notificación, vía `NotificationEventsProducer`) se publican **fuera** de la transacción, después de que resuelve — si algo falla adentro, el rollback ya ocurrió antes de llegar al publish. Es el endpoint que consume hoy `signature-app` desde `/dashboard/documents/create` (ver su README) — `POST /api/v1/document` sigue existiendo y expuesto, pero con un contrato distinto (JSON con `objectKey` ya subido, no multipart).
 
-### `signature` (`/signature`) — credencial de firma del usuario
+### `signature` (`/api/v1/signature`) — credencial de firma del usuario
 
 | Endpoint | Servicio |
 |---|---|
-| `GET /signature/files/:fileId` | `getFile()` — URL prefirmada |
-| `GET /signature/:id` | `findOne()` |
-| `PATCH /signature/:id` | `update()` — reemplaza imagen de firma y/o INE |
-| `PATCH /signature/:id/deactivate` | `deactivate()` — sustituye la firma por PNG en blanco |
-| `DELETE /signature/:id/signature-image` | `deleteSignatureImage()` |
-| `DELETE /signature/:id/official-file` | `deleteOfficialFile()` |
+| `GET /api/v1/signature/files/:fileId` | `getFile()` — URL prefirmada |
+| `GET /api/v1/signature/:id` | `findOne()` |
+| `PATCH /api/v1/signature/:id` | `update()` — reemplaza imagen de firma y/o INE |
+| `PATCH /api/v1/signature/:id/deactivate` | `deactivate()` — sustituye la firma por PNG en blanco |
+| `DELETE /api/v1/signature/:id/signature-image` | `deleteSignatureImage()` |
+| `DELETE /api/v1/signature/:id/official-file` | `deleteOfficialFile()` |
 
 Ownership de cada operación se valida contra `User.signatureId` (dueño real de la relación), no contra una FK en `Signature`.
 
-> `POST /signature` (creación inicial) ya no está expuesto aquí — `SignatureService.create()` ahora solo se llama desde `PUT /api/v1/users/me/signature` (onboarding, JWT). El resto de operaciones (`update`/`deactivate`/`delete*`) siguen bajo `/signature` sin cambios.
+> `POST /api/v1/signature` (creación inicial) ya no está expuesto aquí — `SignatureService.create()` ahora solo se llama desde `PUT /api/v1/users/me/signature` (onboarding, JWT). El resto de operaciones (`update`/`deactivate`/`delete*`) siguen bajo `/signature` sin cambios.
 
 ### `signature-capture-sessions` (`/api/v1/signature-capture-sessions`, JWT) — captura de la firma manuscrita por canvas o QR
 
@@ -244,17 +273,17 @@ Permite al usuario cuya identidad ya aprobó Didit registrar su rúbrica dibujá
 
 Reglas transversales: el `userId` sale siempre del JWT (nunca del cuerpo, del path ni del QR); el token del QR es aleatorio de 256 bits, opaco, de un solo uso y **en base sólo vive su hash**; una sesión completada, cancelada o vencida no acepta nada; el PNG se valida por sus bytes de cabecera, no por el `Content-Type` que declara el cliente.
 
-### `user` (`/user`) — CRUD administrativo (API key)
+### `user` (`/api/v1/user`) — CRUD administrativo (API key)
 
 | Endpoint | Servicio |
 |---|---|
-| `POST /user` | `create()` — crea usuario + `PersonalInformation` vinculada |
-| `GET /user` | `findAllActiveUsers()` |
-| `GET /user/:id` | `findOneActiveUser()` |
-| `PATCH /user/:id` | `update()` |
-| `DELETE /user/:id` | `remove()` — soft delete |
+| `POST /api/v1/user` | `create()` — crea usuario + `PersonalInformation` vinculada |
+| `GET /api/v1/user` | `findAllActiveUsers()` |
+| `GET /api/v1/user/:id` | `findOneActiveUser()` |
+| `PATCH /api/v1/user/:id` | `update()` |
+| `DELETE /api/v1/user/:id` | `remove()` — soft delete |
 
-> `PATCH /user/personal-information` y `PATCH /user/me/status` ya **no** existen aquí — se movieron a `api/v1/users` (JWT, ver abajo) como parte del flujo de onboarding.
+> `PATCH /api/v1/user/personal-information` y `PATCH /api/v1/user/me/status` ya **no** existen aquí — se movieron a `api/v1/users` (JWT, ver abajo) como parte del flujo de onboarding.
 
 ### `users` (`/api/v1/users`) — perfil y onboarding del usuario autenticado (JWT)
 
@@ -262,14 +291,14 @@ Reglas transversales: el `userId` sale siempre del JWT (nunca del cuerpo, del pa
 |---|---|---|
 | `GET /api/v1/users/me` | `UserService.getMeFromCache()` | Lee **exclusivamente Redis DB 0** por CURP (key = `nationalId`) el snapshot unificado User+PersonalInformation, para hidratar rápido el store de onboarding en el cliente. Si la key no existe (p. ej. un fallo previo de Redis), reconstruye una única vez desde Postgres y recachea. |
 | `PUT /api/v1/users/me/personal-information` | `UserService.updatePersonalInformation()` | Actualiza `phoneNumber`/`secondaryEmail` en Postgres. El userId sale del JWT, nunca de params/body. **No refresca el cache de Redis por CURP** (ver Pendientes). |
-| `PUT /api/v1/users/me/signature` | `SignatureService.create()` | Sube la firma PNG (+ INE opcional) y vincula `signatureId` al usuario — mismo servicio que usaba `POST /signature`, ya no expuesto ahí (ver módulo `signature`). Tampoco refresca el cache de Redis por CURP. |
+| `PUT /api/v1/users/me/signature` | `SignatureService.create()` | Sube la firma PNG (+ INE opcional) y vincula `signatureId` al usuario — mismo servicio que usaba `POST /api/v1/signature`, ya no expuesto ahí (ver módulo `signature`). Tampoco refresca el cache de Redis por CURP. |
 | `PATCH /api/v1/users/me/status` | `UserService.updateStatus()` | Consolidación final del onboarding: fija `isConfigured = true` de forma atómica y **sí** refresca el cache de Redis por CURP. El body (`{ isConfigured: true }`) se ignora — es un disparador de un solo sentido, no un toggle. |
 
 El JWT ahora incluye `nationalId` (CURP) como claim estable (ver sección 4) para que `GET /me` pueda resolver directo por Redis sin una consulta previa a Postgres.
 
-### `account` (`/account`) — CRUD genérico de cuentas (JWT)
+### `account` (`/api/v1/account`) — CRUD genérico de cuentas (JWT)
 
-`AccountService`: `create()`, `findAll()`, `findOne()`, `update()` (maneja `OrganizationEntity` cuando `accountType = ORGANIZATION`). `findOne()` exige `ORGANIZATION:READ` y `update()` exige `ORGANIZATION:UPDATE` vía RBAC granular real (`assertHasOrganizationPermission` → `RolesService.assertHasPermission`, consulta `role_permissions` — ya no una comparación de `role.name === 'ADMIN'` a mano, ver la entrada "RBAC granular" en la sección 7). `create()`/`findAll()` solo exigen JWT válido — no hay un `accountId` concreto contra el cual validar ownership (`findAll()` en particular sigue devolviendo el listado completo de cuentas de **todos** los usuarios a cualquier autenticado; ver Pendientes). Ninguno de los 4 se usa desde `signature-app` hoy — la creación real de cuentas pasa por `POST /auth/register` (personal) y `POST /api/v1/organizations` (organización).
+`AccountService`: `create()`, `findAll()`, `findOne()`, `update()` (maneja `OrganizationEntity` cuando `accountType = ORGANIZATION`). `findOne()` exige `ORGANIZATION:READ` y `update()` exige `ORGANIZATION:UPDATE` vía RBAC granular real (`assertHasOrganizationPermission` → `RolesService.assertHasPermission`, consulta `role_permissions` — ya no una comparación de `role.name === 'ADMIN'` a mano, ver la entrada "RBAC granular" en la sección 7). `create()`/`findAll()` solo exigen JWT válido — no hay un `accountId` concreto contra el cual validar ownership (`findAll()` en particular sigue devolviendo el listado completo de cuentas de **todos** los usuarios a cualquier autenticado; ver Pendientes). Ninguno de los 4 se usa desde `signature-app` hoy — la creación real de cuentas pasa por `POST /api/v1/auth/register` (personal) y `POST /api/v1/organizations` (organización).
 
 ### `organizations` (`/api/v1/organizations`, JWT) — mucho más grande que solo "crear e invitar"
 
@@ -285,13 +314,13 @@ El JWT ahora incluye `nationalId` (CURP) como claim estable (ver sección 4) par
 
 ### `organization-invitations` (`/api/v1/organizations/invitations`, público) — aceptar una invitación
 
-Rutas `@SkipJwtAuth()` (el invitado puede no tener sesión): **`GET /:token`** (preview — nombre de la organización, para el mensaje de `/join` en el frontend; expiración perezosa, se marca `EXPIRED` en el primer acceso posterior a `expiresAt`, sin job programado) y **`POST /:token/accept`** (`{rfc}`, resuelve al usuario por RFC — el correo es solo el canal de entrega, no el criterio de aceptación). El registro (`POST /auth/register`) acepta un `invitationToken` opcional para el camino de "RFC nuevo": crea la cuenta y se une a la organización automáticamente (best-effort, un fallo no tumba un registro que por lo demás fue exitoso).
+Rutas `@SkipJwtAuth()` (el invitado puede no tener sesión): **`GET /:token`** (preview — nombre de la organización, para el mensaje de `/join` en el frontend; expiración perezosa, se marca `EXPIRED` en el primer acceso posterior a `expiresAt`, sin job programado) y **`POST /:token/accept`** (`{rfc}`, resuelve al usuario por RFC — el correo es solo el canal de entrega, no el criterio de aceptación). El registro (`POST /api/v1/auth/register`) acepta un `invitationToken` opcional para el camino de "RFC nuevo": crea la cuenta y se une a la organización automáticamente (best-effort, un fallo no tumba un registro que por lo demás fue exitoso).
 
 ### `accounts` (`GET /api/v1/accounts/me`, JWT) — catálogo de cuentas del usuario autenticado
 
 `AccountService.getAccountsCatalog(userId)`: lee **exclusivamente** el catálogo cacheado en Redis DB 0 (key `accounts:{userId}`), sin fallback a Postgres. Si la key no existe, retorna un catálogo vacío (no hay self-heal como en `users/me`, porque el catálogo se puebla siempre al registrarse/crear una organización).
 
-### `account-member` (`/account-member`) — membresías (JWT, RBAC)
+### `account-member` (`/api/v1/account-member`) — membresías (JWT, RBAC)
 
 `AccountMemberService`: `create()` (otorgar acceso con un `roleId` del catálogo RBAC, exige `ORGANIZATION:CREATE`), `findByAccount()`/`findOne()` (`ORGANIZATION:READ`), `update()` (cambia rol/puesto/vigencia, `ORGANIZATION:UPDATE`), `remove()` (revocación = soft delete `isActive=false`, `ORGANIZATION:DELETE`) — todos vía `assertHasOrganizationPermission`, no una comparación de nombre de rol. Para `findOne()`/`update()`/`remove()`, que reciben el id de la membresía, primero se resuelve para obtener su `organizationId` y luego se valida contra ese id. `create()`/`update()` además validan que el `roleId` recibido exista de verdad antes de asignarlo. Internamente opera sobre `AccountEntity` filtrado por `organizationId` — no existe `AccountMemberEntity` como archivo (ver sección 2.1).
 
@@ -311,23 +340,23 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 
 **Seed** (`npm run seed:roles`, `src/scripts/seed-roles.ts`, mismo patrón standalone que `seed:documents`): puebla `ADMIN`/`MEMBER` (`isSystemRole: true`, `organizationId: null`), los 3 `resources` (`DOCUMENT`/`ORGANIZATION`/`USER`), las 4 `actions` (`CREATE`/`READ`/`UPDATE`/`DELETE`), y `role_permissions`: `ADMIN` con las 12 combinaciones resource×action (`scope: ANY`), `MEMBER` solo con `READ`+`CREATE` sobre `DOCUMENT`. Idempotente: cada tabla se busca por su clave natural antes de insertar (`key`/`name`, o el par de FKs en las pivote), así que correrlo varias veces no duplica filas — verificado corriéndolo dos veces seguidas contra Postgres local (mismos conteos: 2/3/4/12/14).
 
-### `auth` (`/auth`) — mucho más grande que solo login/registro
+### `auth` (`/api/v1/auth`) — mucho más grande que solo login/registro
 
 | Endpoint | Servicio |
 |---|---|
-| `POST /auth/register` | `register()` — primero verifica el token de **Cloudflare Turnstile** (`turnstileToken`, obligatorio en el body) contra Siteverify; solo si pasa llama a `UserService.createFromSignup()`, que crea una **pre-cuenta** (`isEmailVerified: false`) y envía OTP. No autentica todavía |
-| `POST /auth/verify-otp` | Confirma el OTP de registro (`EmailVerificationCodeEntity`), marca `isEmailVerified = true` y autentica de inmediato (auto-login) |
-| `POST /auth/resend-otp` | Reenvía el OTP de verificación de registro |
-| `POST /auth/forgot-password` | Inicia recuperación de contraseña, envía OTP (`PasswordResetCodeEntity`) |
-| `POST /auth/verify-reset-code` | Valida el OTP de recuperación |
-| `POST /auth/reset-password` | Fija la contraseña nueva tras un OTP válido |
-| `POST /auth/login` | `login()` — valida password (bcrypt) contra `Account.email`/`.password`, rechaza con `403` si `!user.isEmailVerified`, firma JWT con `jti` único |
-| `POST /auth/logout` | `logout()` — agrega el `jti` a la blacklist de Redis |
-| `GET /auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/dashboard/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
+| `POST /api/v1/auth/register` | `register()` — primero verifica el token de **Cloudflare Turnstile** (`turnstileToken`, obligatorio en el body) contra Siteverify; solo si pasa llama a `UserService.createFromSignup()`, que crea una **pre-cuenta** (`isEmailVerified: false`) y envía OTP. No autentica todavía |
+| `POST /api/v1/auth/verify-otp` | Confirma el OTP de registro (`EmailVerificationCodeEntity`), marca `isEmailVerified = true` y autentica de inmediato (auto-login) |
+| `POST /api/v1/auth/resend-otp` | Reenvía el OTP de verificación de registro |
+| `POST /api/v1/auth/forgot-password` | Inicia recuperación de contraseña, envía OTP (`PasswordResetCodeEntity`) |
+| `POST /api/v1/auth/verify-reset-code` | Valida el OTP de recuperación |
+| `POST /api/v1/auth/reset-password` | Fija la contraseña nueva tras un OTP válido |
+| `POST /api/v1/auth/login` | `login()` — valida password (bcrypt) contra `Account.email`/`.password`, rechaza con `403` si `!user.isEmailVerified`, firma JWT con `jti` único |
+| `POST /api/v1/auth/logout` | `logout()` — agrega el `jti` a la blacklist de Redis |
+| `GET /api/v1/auth/me` | `me()` — perfil completo desde Postgres (joins + URLs prefirmadas de MinIO para firma/INE); lo consume `/dashboard/personal-documents` en el frontend. **No** es el mismo endpoint que `GET /api/v1/users/me` (ese lee solo Redis, sin URLs firmadas, pensado para hidratar rápido el onboarding). |
 
 Todos los endpoints públicos de este módulo tienen `ThrottlerGuard` explícito (5 intentos/60s) — no solo `register`/`login` como documentaba antes este README.
 
-**CAPTCHA en el registro (Cloudflare Turnstile).** `POST /auth/register` exige además `turnstileToken`: el token de un solo uso que genera el widget en `/signup`. `TurnstileService` (ver `shared/*`) lo canjea contra la API Siteverify de Cloudflare **antes** de cualquier escritura, así que un token ausente, inválido, expirado o ya usado devuelve `400` sin crear ni actualizar el pre-registro y sin enviar OTP. El throttler no sustituía esto: limita la frecuencia, no distingue a una persona de un script.
+**CAPTCHA en el registro (Cloudflare Turnstile).** `POST /api/v1/auth/register` exige además `turnstileToken`: el token de un solo uso que genera el widget en `/signup`. `TurnstileService` (ver `shared/*`) lo canjea contra la API Siteverify de Cloudflare **antes** de cualquier escritura, así que un token ausente, inválido, expirado o ya usado devuelve `400` sin crear ni actualizar el pre-registro y sin enviar OTP. El throttler no sustituía esto: limita la frecuencia, no distingue a una persona de un script.
 
 Falla cerrado: si `TURNSTILE_SECRET_KEY` no está configurada, o Siteverify no responde, el registro se rechaza con `503` en vez de dejarse pasar. Para desarrollo, Cloudflare publica claves de prueba que siempre aprueban (están puestas en `.env.example`).
 
@@ -339,9 +368,9 @@ Además de los 4 ya documentados arriba: **`GET /api/v1/users/check-rfc?rfc=`** 
 
 `@SkipJwtAuth()` en todo el controlador (**sin autenticación de ningún tipo**). Recibe multipart (`cerBuffer`, `keyBuffer`, `documento`) y firma directo contra los buffers con e.firma/CSD mexicana, sin guardar nada — `Efirma` no es siquiera una `@Entity()` TypeORM real (ver sección 2.1). No usa `CollaboratorEntity`/`FielSignatureEntity` para nada; no está conectado al flujo de firma de documentos del resto del sistema.
 
-### `audit` (`/audit`)
+### `audit` (`/api/v1/audit`)
 
-`GET /audit/document/:documentId`, `GET /audit/decrypted`, `GET /audit` (paginado). `AuditService.create()` es interno, invocado desde `DocumentService`.
+`GET /api/v1/audit/document/:documentId`, `GET /api/v1/audit/decrypted`, `GET /api/v1/audit` (paginado). `AuditService.create()` es interno, invocado desde `DocumentService`.
 
 ### `payments` (`/api/v1/payments`, JWT)
 
@@ -387,7 +416,7 @@ Punto de entrada único de los proveedores externos. Recibe el cuerpo crudo, ver
 
 ### `health`, `ip`, `kafka`
 
-- `GET /health` — combina pings de Postgres, Mongo y Redis. `@SkipJwtAuth()` (sin JWT ni x-api-key): lo consumen probes de infraestructura.
+- `GET /health` — combina pings de Postgres, Mongo y Redis. `@SkipJwtAuth()` (sin JWT ni x-api-key): lo consumen probes de infraestructura. **Sin el prefijo `/api/v1`**, a propósito: está en `GLOBAL_API_PREFIX_EXCLUDE` porque el `HEALTHCHECK` del `Dockerfile` apunta a `/health` literal (ver «Prefijo global» al inicio de esta sección).
 - `IpInterceptor` (global) — extrae la IP real del cliente e inyecta `request.clientIp`.
 - **`KafkaModule`** — 3 productores, no 1:
   - **`DocumentEventsProducer`** → `DOCUMENT_KAFKA_TOPICS`, **7 tópicos, no 5**: `document.created`, `document.sent_to_sign`, `document.collaborator_signed` (se dispara por cada colaborador que firma, distinto de `.signed` que solo dispara al terminar el último), `document.signed`, `document.rejected`, `document.cancellation_requested`, `document.cancelled`.
@@ -489,7 +518,7 @@ npm install
 npm run start:dev         # aplica las migraciones pendientes automáticamente (migrationsRun: true) y levanta con --watch
 ```
 
-Swagger disponible en `/api/docs` una vez levantado.
+Swagger disponible en `/api/v1/docs` una vez levantado (cuelga del mismo prefijo que documenta; ver «Prefijo global» en la sección 3).
 
 ### Migraciones (TypeORM)
 
