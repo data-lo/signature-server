@@ -5,11 +5,17 @@ import Stripe = require('stripe');
 import { AccountSubscriptionEntity } from '../entities/account-subscription.entity';
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
+import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
 
 /**
  * Cada evento soportado tiene su propio handler privado — para reaccionar a
  * un evento nuevo de Stripe basta con agregar un case al switch de
  * `process()` y un método privado, sin tocar el resto del módulo.
+ *
+ * Excepción: los eventos `product.*` no tienen handler privado acá — delegan directo a
+ * `CatalogSyncService` (módulo `billing`). No es sólo un efecto de un pago (activar/cancelar una
+ * suscripción); es mantenimiento de catálogo, con sus propias reglas sobre qué se sincroniza y
+ * qué se conserva. Este switch sigue siendo sólo el enrutador de la entrega ya autenticada.
  */
 @Injectable()
 export class StripeWebhookService {
@@ -18,6 +24,7 @@ export class StripeWebhookService {
   constructor(
     @InjectRepository(AccountSubscriptionEntity)
     private readonly subscriptionRepository: Repository<AccountSubscriptionEntity>,
+    private readonly catalogSyncService: CatalogSyncService,
   ) {}
 
   async process(event: Stripe.Event): Promise<void> {
@@ -33,6 +40,17 @@ export class StripeWebhookService {
       case 'customer.subscription.deleted':
         await this.handleSubscriptionDeleted(
           event.data.object as Stripe.Subscription,
+        );
+        break;
+      case 'product.created':
+      case 'product.updated':
+        await this.catalogSyncService.syncProductUpserted(
+          event.data.object as Stripe.Product,
+        );
+        break;
+      case 'product.deleted':
+        await this.catalogSyncService.syncProductDeleted(
+          event.data.object as Stripe.Product,
         );
         break;
       default:

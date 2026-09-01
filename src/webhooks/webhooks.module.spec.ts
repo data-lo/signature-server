@@ -6,6 +6,8 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { PlanEntity } from 'src/billing/catalog/plan.entity';
+import { DocumentPackOfferEntity } from 'src/billing/catalog/document-pack-offer.entity';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
@@ -40,6 +42,10 @@ describe('WebhooksModule', () => {
       .overrideProvider(getRepositoryToken(IdentityVerificationEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(UserEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(PlanEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(DocumentPackOfferEntity))
       .useValue(repositoryStub)
       .overrideProvider(RedisService)
       .useValue({ del: jest.fn() })

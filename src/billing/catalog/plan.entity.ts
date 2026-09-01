@@ -22,6 +22,20 @@ export class PlanEntity {
   @Column({ default: true })
   active: boolean;
 
+  /**
+   * `prod_...` de Stripe. Nullable: un plan puede existir localmente (con sus límites
+   * comerciales ya definidos) antes de vincularse a un producto de Stripe — ver
+   * `CatalogSyncService`, que lo escribe la primera vez que llega un `product.created` o
+   * `product.updated` con `metadata.planCode` igual a este `code`.
+   */
+  @Column({
+    name: 'stripe_product_id',
+    type: 'varchar',
+    unique: true,
+    nullable: true,
+  })
+  stripeProductId: string | null;
+
   @Column({ name: 'monthly_document_limit', type: 'integer' })
   monthlyDocumentLimit: number;
 

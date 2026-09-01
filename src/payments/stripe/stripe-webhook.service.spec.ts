@@ -4,6 +4,7 @@ import { StripeWebhookService } from './stripe-webhook.service';
 import { AccountSubscriptionEntity } from '../entities/account-subscription.entity';
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
+import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
 import Stripe = require('stripe');
 
 function createMockRepository() {
@@ -18,9 +19,14 @@ function createMockRepository() {
 describe('StripeWebhookService', () => {
   let service: StripeWebhookService;
   let subscriptionRepository: ReturnType<typeof createMockRepository>;
+  let catalogSyncService: { syncProductUpserted: jest.Mock; syncProductDeleted: jest.Mock };
 
   beforeEach(async () => {
     subscriptionRepository = createMockRepository();
+    catalogSyncService = {
+      syncProductUpserted: jest.fn().mockResolvedValue(undefined),
+      syncProductDeleted: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -29,6 +35,7 @@ describe('StripeWebhookService', () => {
           provide: getRepositoryToken(AccountSubscriptionEntity),
           useValue: subscriptionRepository,
         },
+        { provide: CatalogSyncService, useValue: catalogSyncService },
       ],
     }).compile();
 
@@ -195,5 +202,60 @@ describe('StripeWebhookService', () => {
     await expect(
       service.process({ type: 'payment_intent.created' } as Stripe.Event),
     ).resolves.toBeUndefined();
+  });
+
+  /**
+   * Sólo se prueba que `StripeWebhookService` DELEGA correctamente — la lógica de a qué tabla
+   * del catálogo pertenece cada producto, cómo se hace el upsert y qué se conserva vive en
+   * `CatalogSyncService` y se prueba en su propio spec.
+   */
+  describe('product.created / product.updated / product.deleted', () => {
+    it('product.created delega en catalogSyncService.syncProductUpserted', async () => {
+      const product = { id: 'prod_1', name: 'Plan Pro', active: true, metadata: {} };
+
+      await service.process({
+        type: 'product.created',
+        data: { object: product },
+      } as unknown as Stripe.Event);
+
+      expect(catalogSyncService.syncProductUpserted).toHaveBeenCalledWith(product);
+      expect(catalogSyncService.syncProductDeleted).not.toHaveBeenCalled();
+    });
+
+    it('product.updated delega en catalogSyncService.syncProductUpserted', async () => {
+      const product = { id: 'prod_1', name: 'Plan Pro (renombrado)', active: true, metadata: {} };
+
+      await service.process({
+        type: 'product.updated',
+        data: { object: product },
+      } as unknown as Stripe.Event);
+
+      expect(catalogSyncService.syncProductUpserted).toHaveBeenCalledWith(product);
+    });
+
+    it('product.deleted delega en catalogSyncService.syncProductDeleted', async () => {
+      const product = { id: 'prod_1', name: 'Plan Pro', active: false, metadata: {} };
+
+      await service.process({
+        type: 'product.deleted',
+        data: { object: product },
+      } as unknown as Stripe.Event);
+
+      expect(catalogSyncService.syncProductDeleted).toHaveBeenCalledWith(product);
+      expect(catalogSyncService.syncProductUpserted).not.toHaveBeenCalled();
+    });
+
+    it('propaga el error de la sincronización para que la entrega quede FAILED y Stripe reintente', async () => {
+      catalogSyncService.syncProductUpserted.mockRejectedValue(
+        new Error('falla de sincronización'),
+      );
+
+      await expect(
+        service.process({
+          type: 'product.created',
+          data: { object: { id: 'prod_1', metadata: {} } },
+        } as unknown as Stripe.Event),
+      ).rejects.toThrow('falla de sincronización');
+    });
   });
 });
