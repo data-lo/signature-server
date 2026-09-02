@@ -237,6 +237,12 @@ export class GetDocumentsUseCase {
             doc.collaborators,
           ),
           createdAt: doc.createdAt,
+          /**
+           * Fecha en que el documento quedó firmado por completo (`document.signedAt`, que solo
+           * se fija cuando la última firma cierra el flujo), no la de una firma individual. Null
+           * mientras eso no ocurra: el listado lo muestra como "No disponible".
+           */
+          signedAt: doc.signedAt ?? null,
         };
 
         if (!withUrl) {
