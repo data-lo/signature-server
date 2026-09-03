@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
-import { StripePaymentGatewayService } from 'src/payments/stripe/stripe-payment-gateway.service';
+import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
@@ -44,7 +44,7 @@ export class CreateSubscriptionCheckoutUseCase {
     private readonly billingOwnerService: BillingOwnerService,
     private readonly billingCatalogService: BillingCatalogService,
     private readonly checkoutOrderService: CheckoutOrderService,
-    private readonly paymentGateway: StripePaymentGatewayService,
+    private readonly paymentGateway: StripePaymentService,
   ) {}
 
   async execute(input: {

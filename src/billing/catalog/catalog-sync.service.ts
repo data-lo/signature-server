@@ -21,7 +21,7 @@ const DEFAULT_NEW_PLAN_MONTHLY_DOCUMENT_LIMIT = 1;
 /**
  * Sincroniza el catálogo comercial local (`plans`, `document_pack_offers`) con los productos de
  * Stripe. Vive separado de `StripeWebhookService` (que sólo enruta el evento ya autenticado) y de
- * `StripePaymentGatewayService` (que atiende el checkout): esto no es un efecto de un pago, es
+ * `StripePaymentService` (que atiende el checkout): esto no es un efecto de un pago, es
  * mantenimiento de catálogo — un admin puede crear/renombrar/desactivar un producto en el
  * dashboard de Stripe sin que nadie compre nada, y aun así el catálogo local se tiene que enterar.
  *

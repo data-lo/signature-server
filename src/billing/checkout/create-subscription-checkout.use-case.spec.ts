@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { StripePaymentGatewayService } from 'src/payments/stripe/stripe-payment-gateway.service';
+import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { CreateSubscriptionCheckoutUseCase } from './create-subscription-checkout.use-case';
 import { CheckoutOrderService } from './checkout-order.service';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
@@ -71,7 +71,7 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
         { provide: BillingOwnerService, useValue: billingOwnerService },
         { provide: BillingCatalogService, useValue: billingCatalogService },
         { provide: CheckoutOrderService, useValue: checkoutOrderService },
-        { provide: StripePaymentGatewayService, useValue: paymentGateway },
+        { provide: StripePaymentService, useValue: paymentGateway },
       ],
     }).compile();
 
