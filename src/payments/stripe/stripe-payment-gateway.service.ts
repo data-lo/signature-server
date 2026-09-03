@@ -164,6 +164,22 @@ export class StripePaymentGatewayService {
     }
   }
 
+  /**
+   * Producto completo por su id. Lo necesita la sincronización de catálogo: el payload de un
+   * evento `price.*` trae `product` como id suelto, y toda la metadata que decide a qué tabla
+   * local pertenece el precio vive en el producto.
+   */
+  async retrieveProduct(productId: string): Promise<Stripe.Product> {
+    try {
+      return await this.client.products.retrieve(productId);
+    } catch (error) {
+      throw this.translateError(
+        error,
+        `leer el producto de Stripe ${productId}`,
+      );
+    }
+  }
+
   /** Crea el cliente de Stripe con el que se factura a la cuenta. */
   async createCustomer(accountId: string, email: string): Promise<string> {
     try {

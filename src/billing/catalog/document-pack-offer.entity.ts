@@ -3,6 +3,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -38,13 +39,18 @@ export class DocumentPackOfferEntity {
    * lo escribe `CatalogSyncService` al recibir `product.created`/`updated`). Un paquete puede
    * existir localmente, con su precio real ya dado de alta, antes de que su producto de Stripe
    * se sincronice — o si el paquete no se modela como producto propio en Stripe.
+   *
+   * **No es único**, a diferencia de `stripePriceId`: un mismo paquete se vende a distinto
+   * importe según el plan del comprador (`eligiblePlanCode`) y en distintos tamaños, y cada una
+   * de esas combinaciones es una fila con su propio `price_...` bajo el mismo `prod_...`. Lo que
+   * identifica a la oferta es el precio, no el producto.
    */
   @Column({
     name: 'stripe_product_id',
     type: 'varchar',
-    unique: true,
     nullable: true,
   })
+  @Index('IDX_document_pack_offers_stripe_product_id')
   stripeProductId: string | null;
 
   /**

@@ -5,6 +5,7 @@ import { AccountSubscriptionEntity } from '../entities/account-subscription.enti
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
+import { StripePaymentGatewayService } from './stripe-payment-gateway.service';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 import Stripe = require('stripe');
 
@@ -17,13 +18,23 @@ function createMockRepository() {
   };
 }
 
+/** Producto que el adaptador devuelve al expandir el `product` de un precio. */
+const PRODUCTO_DE_PLAN = {
+  id: 'prod_pro',
+  name: 'Plan Pro',
+  active: true,
+  metadata: { catalogType: 'plan', planType: 'pro' },
+} as unknown as Stripe.Product;
+
 describe('StripeWebhookService', () => {
   let service: StripeWebhookService;
   let subscriptionRepository: ReturnType<typeof createMockRepository>;
   let catalogSyncService: {
     syncProductUpserted: jest.Mock;
     syncProductDeleted: jest.Mock;
+    syncPriceUpserted: jest.Mock;
   };
+  let paymentGateway: { retrieveProduct: jest.Mock };
   let subscriptionBillingService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -31,6 +42,10 @@ describe('StripeWebhookService', () => {
     catalogSyncService = {
       syncProductUpserted: jest.fn().mockResolvedValue(undefined),
       syncProductDeleted: jest.fn().mockResolvedValue(undefined),
+      syncPriceUpserted: jest.fn().mockResolvedValue(undefined),
+    };
+    paymentGateway = {
+      retrieveProduct: jest.fn().mockResolvedValue(PRODUCTO_DE_PLAN),
     };
     subscriptionBillingService = {
       handleCheckoutSessionCompleted: jest.fn().mockResolvedValue(undefined),
@@ -48,6 +63,7 @@ describe('StripeWebhookService', () => {
           useValue: subscriptionRepository,
         },
         { provide: CatalogSyncService, useValue: catalogSyncService },
+        { provide: StripePaymentGatewayService, useValue: paymentGateway },
         {
           provide: SubscriptionBillingService,
           useValue: subscriptionBillingService,
@@ -380,6 +396,84 @@ describe('StripeWebhookService', () => {
           data: { object: { id: 'prod_1', metadata: {} } },
         } as unknown as Stripe.Event),
       ).rejects.toThrow('falla de sincronización');
+    });
+  });
+
+  /**
+   * Historia "Sincronizar productos y precios de Stripe con el catálogo local". Igual que con los
+   * eventos de producto, aquí sólo se prueba el ENRUTADO: qué se escribe en `plan_prices` o en
+   * `document_pack_offers` vive en `CatalogSyncService` y se prueba en su propio spec.
+   */
+  describe('price.created / price.updated', () => {
+    const price = {
+      id: 'price_pro_mensual',
+      active: true,
+      currency: 'mxn',
+      unit_amount: 49900,
+      product: 'prod_pro',
+      recurring: { interval: 'month', interval_count: 1 },
+    } as unknown as Stripe.Price;
+
+    it.each(['price.created', 'price.updated'])(
+      '%s delega en catalogSyncService.syncPriceUpserted con el producto ya expandido',
+      async (type) => {
+        await service.process({
+          type,
+          data: { object: price },
+        } as unknown as Stripe.Event);
+
+        expect(paymentGateway.retrieveProduct).toHaveBeenCalledWith('prod_pro');
+        expect(catalogSyncService.syncPriceUpserted).toHaveBeenCalledWith(
+          price,
+          PRODUCTO_DE_PLAN,
+        );
+      },
+    );
+
+    /** Si Stripe alguna vez lo mandara expandido, no hace falta ir a buscarlo. */
+    it('usa el producto del propio payload cuando ya viene expandido', async () => {
+      const expandido = {
+        ...price,
+        product: PRODUCTO_DE_PLAN,
+      } as unknown as Stripe.Price;
+
+      await service.process({
+        type: 'price.created',
+        data: { object: expandido },
+      } as unknown as Stripe.Event);
+
+      expect(paymentGateway.retrieveProduct).not.toHaveBeenCalled();
+      expect(catalogSyncService.syncPriceUpserted).toHaveBeenCalledWith(
+        expandido,
+        PRODUCTO_DE_PLAN,
+      );
+    });
+
+    /**
+     * `plan.created` es el objeto heredado que Stripe reemplazó por `price`: atenderlo duplicaría
+     * cada alta de precio en el catálogo local.
+     */
+    it('no procesa plan.created', async () => {
+      await service.process({
+        type: 'plan.created',
+        data: { object: { id: 'plan_viejo' } },
+      } as unknown as Stripe.Event);
+
+      expect(catalogSyncService.syncPriceUpserted).not.toHaveBeenCalled();
+      expect(paymentGateway.retrieveProduct).not.toHaveBeenCalled();
+    });
+
+    it('propaga el error de la sincronización para que Stripe reintente la entrega', async () => {
+      catalogSyncService.syncPriceUpserted.mockRejectedValue(
+        new Error('metadata inválida'),
+      );
+
+      await expect(
+        service.process({
+          type: 'price.created',
+          data: { object: price },
+        } as unknown as Stripe.Event),
+      ).rejects.toThrow('metadata inválida');
     });
   });
 });

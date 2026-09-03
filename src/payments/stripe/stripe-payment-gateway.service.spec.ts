@@ -7,12 +7,14 @@ import {
 import { StripePaymentGatewayService } from './stripe-payment-gateway.service';
 
 const mockPricesList = jest.fn();
+const mockProductsRetrieve = jest.fn();
 const mockSessionsCreate = jest.fn();
 const mockCustomersCreate = jest.fn();
 
 jest.mock('stripe', () =>
   jest.fn().mockImplementation(() => ({
     prices: { list: mockPricesList },
+    products: { retrieve: mockProductsRetrieve },
     checkout: { sessions: { create: mockSessionsCreate } },
     customers: { create: mockCustomersCreate },
   })),
@@ -117,6 +119,28 @@ describe('StripePaymentGatewayService', () => {
       );
 
       await expect(service.listActiveServices()).rejects.toBeInstanceOf(
+        BadGatewayException,
+      );
+    });
+  });
+
+  /**
+   * Lo usa la sincronización de catálogo: un evento `price.*` trae `product` como id suelto y la
+   * metadata que decide a qué tabla local pertenece el precio vive en el producto.
+   */
+  describe('producto por id', () => {
+    it('devuelve el producto que responde Stripe', async () => {
+      const producto = { id: 'prod_pro', name: 'Plan Pro' };
+      mockProductsRetrieve.mockResolvedValue(producto);
+
+      await expect(service.retrieveProduct('prod_pro')).resolves.toBe(producto);
+      expect(mockProductsRetrieve).toHaveBeenCalledWith('prod_pro');
+    });
+
+    it('traduce un fallo del proveedor a 502, sin filtrar su error', async () => {
+      mockProductsRetrieve.mockRejectedValue(new Error('Stripe: timeout'));
+
+      await expect(service.retrieveProduct('prod_pro')).rejects.toBeInstanceOf(
         BadGatewayException,
       );
     });
