@@ -40,15 +40,15 @@ export class GetPublicDocumentUseCase {
   private readonly logger = new Logger(GetPublicDocumentUseCase.name);
 
   /**
-   * Vista pública (sin autenticación) de un documento — ver historia "Visualización pública de
-   * documentos firmados mediante MinIO". A diferencia de `getDocumentMinioURL`/
-   * `findDetailForUser` (que resuelven una URL de Minio para CUALQUIER estatus vía
-   * STATUS_BUCKET_MAP, apoyados en que ya hubo un chequeo de acceso previo), esta ruta no tiene
-   * ningún control de acceso — cualquiera con el UUID puede llamarla — así que el gate por
-   * `status === SIGNED` ocurre ANTES de siquiera considerar Minio: si el documento no está
-   * firmado, ni se resuelve el bucket ni se llama a `minioService.getFile` (que es lo único que
-   * genera la URL prefirmada), evitando exponer el archivo de un documento pendiente, rechazado,
-   * cancelado o expirado.
+   * Devuelve la vista pública de un documento, sin autenticación.
+   *
+   * El gate por `status === SIGNED` ocurre ANTES de siquiera considerar Minio: como cualquiera con
+   * el UUID puede llamar esta ruta, si el documento no está firmado no se resuelve el bucket ni se
+   * llama a `minioService.getFile` —lo único que genera la URL prefirmada—, así que nunca se expone
+   * el archivo de un documento pendiente, rechazado, cancelado o expirado.
+   *
+   * Las rutas autenticadas resuelven la URL para cualquier estatus vía `STATUS_BUCKET_MAP`, porque
+   * allí ya hubo un control de acceso previo.
    */
   async execute(documentId: string): Promise<DocumentPublicViewResponse> {
     const document = await this.documentService.findOne(documentId);
@@ -182,23 +182,11 @@ export class GetPublicDocumentUseCase {
   }
 
   /**
-   * Serie y `notBefore` del certificado TSA de la evidencia NOM-151, para la sección de esa
-   * constancia en la vista pública.
-   *
-   * Si `integrityEvidence` ya los trae (se sella con esto desde `SealMapper`, o una consulta
-   * anterior ya los completó), los usa tal cual y no vuelve a tocar el ASN.1. Si faltan —evidencia
-   * histórica, o la extracción falló al sellar—, reintenta la extracción aquí; si esta vez sí
-   * funciona, la persiste (best-effort: si el guardado falla, igual se muestra lo recién extraído,
-   * y la próxima consulta simplemente lo reintenta) para no reprocesar en cada visita futura. Si no
-   * se puede extraer, devuelve `null` y el frontend no pinta el componente.
-   */
-  /**
    * Completa la evidencia que faltaba y sella, si el documento estaba esperando.
    *
-   * Se traga cualquier error a propósito: esto es una mejora oportunista dentro de una consulta de
-   * lectura, y ni el SAT ni el proveedor de sellado pueden impedir que la vista pública se
-   * muestre. Si algo falla, el documento sigue marcado como pendiente y el próximo visitante lo
-   * reintenta.
+   * Se traga cualquier error a propósito: es una mejora oportunista dentro de una consulta de
+   * lectura, y ni el SAT ni el proveedor de sellado pueden impedir que la vista pública se muestre.
+   * Si algo falla, el documento sigue marcado como pendiente y el próximo visitante lo reintenta.
    */
   private async completePendingSealIfDue(
     document: DocumentEntity,
@@ -227,6 +215,18 @@ export class GetPublicDocumentUseCase {
     }
   }
 
+  /**
+   * Resuelve la serie y el `notBefore` del certificado TSA de la evidencia NOM-151 para la sección
+   * de esa constancia en la vista pública.
+   *
+   * Reutiliza los valores que `integrityEvidence` ya traiga —sellados desde `SealMapper` o
+   * completados por una consulta anterior— sin volver a tocar el ASN.1. Si faltan (evidencia
+   * histórica, o extracción fallida al sellar) reintenta la extracción y la persiste para no
+   * reprocesar en cada visita; el guardado es best-effort, y si falla igual se muestra lo recién
+   * extraído.
+   *
+   * Devuelve `null` cuando no se puede extraer, y el frontend no pinta el componente.
+   */
   private async resolveIntegrityTsaCertificate(
     seal: SealEntity | null,
   ): Promise<PublicIntegrityTsaCertificate | null> {

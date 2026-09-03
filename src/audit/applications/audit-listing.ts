@@ -22,8 +22,8 @@ export function resolvePagination(query: AuditQuery): {
 }
 
 /**
- * Filtro de Mongo por rango de fechas. Cada extremo es opcional e independiente, y si no viene
- * ninguno el filtro queda vacío a propósito: "sin rango" significa todos los registros, no
+ * Arma el filtro de Mongo por rango de fechas. Cada extremo es opcional e independiente, y si no
+ * viene ninguno el filtro queda vacío a propósito: "sin rango" significa todos los registros, no
  * ninguno.
  */
 export function buildCreatedAtFilter(query: AuditQuery): Record<string, any> {

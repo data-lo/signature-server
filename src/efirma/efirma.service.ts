@@ -227,12 +227,11 @@ export class EfirmaService implements OnModuleInit {
      * Que el SAT no responda NO impide firmar, pero deja la firma sin comprobación de revocación.
      *
      * Un certificado REVOCADO sigue siendo un rechazo definitivo: eso es una respuesta del SAT, no
-     * su ausencia. Lo que se tolera aquí es no haber podido preguntar, que es un fallo ajeno y
-     * frecuente.
+     * su ausencia. Lo que se tolera acá es no haber podido preguntar, un fallo ajeno y frecuente.
      *
-     * La firma se produce sin `ocspEvidence`, y quien la persiste marca el documento como
-     * pendiente de sellar (ver `documents.sealing_pending_at`): Seal Service exige esa evidencia,
-     * así que el sellado se difiere hasta poder obtenerla en vez de intentarse y fallar.
+     * La firma se produce sin `ocspEvidence`, y quien la persiste marca el documento como pendiente
+     * de sellar: Seal Service exige esa evidencia, así que el sellado se difiere hasta poder
+     * obtenerla en vez de intentarse y fallar.
      */
     let ocspEvidence: OCSPEvidence | undefined;
 

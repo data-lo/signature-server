@@ -68,26 +68,22 @@ export class SignDocumentDto {
   password?: string;
 
   /**
-   * OBLIGATORIA: sin ubicación no se puede firmar. Antes era opcional (rechazar el permiso del
-   * navegador dejaba `geoLoc` en null y la firma seguía adelante); el requisito cambió y ahora
-   * la ubicación es parte no negociable de la evidencia de firma, así que su ausencia corta el
-   * proceso con un 400 en vez de registrar una firma sin ella.
+   * OBLIGATORIA: sin ubicación no se puede firmar. Es parte no negociable de la evidencia, así que
+   * su ausencia corta el proceso con un 400 en vez de registrar una firma sin ella.
    *
-   * La validación vive aquí, en el servidor, y no solo en la UI: el bloqueo del cliente es
-   * evitable llamando al endpoint directamente, y esta es evidencia de una firma legalmente
-   * vinculante.
+   * La validación vive en el servidor y no sólo en la UI: el bloqueo del cliente es evitable
+   * llamando al endpoint directamente, y esto es evidencia de una firma legalmente vinculante.
    *
-   * Este endpoint siempre recibe multipart/form-data (lo exige `FileFieldsInterceptor`, usado
-   * para los archivos `.key`/`.cer` de FIEL) — multer entrega cada campo de texto como string
-   * plano, así que `geolocation` llega como JSON serializado, no como objeto.
+   * Llega como JSON serializado y no como objeto: el endpoint siempre recibe multipart/form-data
+   * —lo exige `FileFieldsInterceptor` por los archivos `.key`/`.cer`— y multer entrega cada campo de
+   * texto como string plano.
    *
-   * El `@Transform` devuelve una INSTANCIA de `GeolocationDto`, no el objeto plano del
-   * `JSON.parse`. Es imprescindible: cuando `@Transform` está presente, class-transformer usa su
-   * resultado tal cual y `@Type(() => GeolocationDto)` ya no se aplica. Con un objeto plano sin
-   * metadatos de clase, `@ValidateNested()` no validaba nada (se aceptaban coordenadas fuera de
-   * rango) y `whitelist: true` del ValidationPipe global borraba sus propiedades, guardando
-   * `{}` como evidencia de ubicación en TODA firma hecha por esta vía. Si el JSON es inválido se
-   * deja el valor tal cual para que la validación falle con un 400 claro en vez de reventar aquí.
+   * El `@Transform` devuelve una INSTANCIA de `GeolocationDto`, no el objeto plano del `JSON.parse`:
+   * cuando hay `@Transform`, class-transformer usa su resultado tal cual y `@Type()` ya no se
+   * aplica. Con un objeto plano sin metadatos de clase, `@ValidateNested()` no validaba nada —se
+   * aceptaban coordenadas fuera de rango— y el `whitelist: true` global borraba sus propiedades,
+   * guardando `{}` como ubicación en toda firma hecha por esta vía. Si el JSON es inválido se deja
+   * el valor tal cual, para fallar con un 400 claro en vez de reventar acá.
    */
   @ApiProperty({
     type: GeolocationDto,

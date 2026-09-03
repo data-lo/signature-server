@@ -16,15 +16,13 @@ import { ProcessDocumentCancellationRequestedEventUseCase } from './applications
 import { ProcessDocumentCancelledEventUseCase } from './applications/process-document-cancelled-event.use-case';
 
 /**
- * Consumidor de los eventos de negocio del ciclo de vida del documento (ver
- * `DocumentEventsProducer`). Es un adaptador de Kafka y nada más: cada tópico delega en un
- * único caso de uso de `applications/`, igual que un controller HTTP delega en el suyo.
+ * Consume los eventos de negocio del ciclo de vida del documento. Es un adaptador de Kafka y nada
+ * más: cada tópico delega en un único caso de uso de `applications/`, igual que un controller HTTP.
  *
- * Todos los tópicos viven en el mismo `@Controller` a propósito: NestJS sólo permite UN handler
- * por patrón de Kafka dentro de un mismo microservicio (`@nestjs/microservices` los registra en
- * un Map por patrón — un segundo `@Controller` con el mismo `@EventPattern` simplemente pisaría
- * a éste, no correrían ambos). Repartirlos en varios consumidores rompería silenciosamente el
- * procesamiento de los tópicos duplicados.
+ * Todos los tópicos viven en el mismo `@Controller` a propósito: NestJS sólo permite UN handler por
+ * patrón de Kafka dentro de un microservicio —los registra en un Map por patrón, así que un segundo
+ * `@Controller` con el mismo `@EventPattern` pisaría a éste en vez de correr ambos—, y repartirlos
+ * rompería en silencio el procesamiento de los tópicos duplicados.
  */
 @Controller()
 export class DocumentEventsConsumer {

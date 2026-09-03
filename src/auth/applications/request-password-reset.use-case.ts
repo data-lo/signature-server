@@ -11,17 +11,15 @@ const PASSWORD_RESET_GENERIC_MESSAGE =
   'Si el correo está registrado, recibirás un código de verificación';
 
 /**
- * `POST /auth/forgot-password`: arranca la recuperación de contraseña mandando un OTP al correo.
+ * Arranca la recuperación de contraseña mandando un OTP al correo (`POST /auth/forgot-password`).
  *
- * "Verificado" se traduce como `isActive: true` (el único flag de legitimidad que existe hoy en
- * `UserEntity`) — ver historia "Recuperación de Contraseña mediante Código de Verificación OTP".
+ * Traduce "verificado" como `isActive: true`, el único flag de legitimidad que hoy existe en
+ * `UserEntity`.
  *
- * La respuesta es siempre la misma, exista el correo o no, esté activo o no y se haya podido
- * mandar el mensaje o no: cualquier diferencia permitiría enumerar qué correos tienen cuenta.
- * Lo que sí cambia según el caso es el log del servidor, y eso es deliberado: antes "el usuario
- * no existe", "está inactivo" y "falló el envío" eran indistinguibles —los dos primeros ni
- * siquiera dejaban rastro—, y por eso este flujo pudo estar caído en producción sin que nadie
- * lo notara.
+ * Responde siempre lo mismo —exista el correo o no, esté activo o no, se haya podido enviar o no—
+ * porque cualquier diferencia permitiría enumerar qué correos tienen cuenta. Lo que sí distingue es
+ * el log del servidor: mientras "no existe", "está inactivo" y "falló el envío" eran
+ * indistinguibles, este flujo pudo estar caído en producción sin que nadie lo notara.
  */
 @Injectable()
 export class RequestPasswordResetUseCase {

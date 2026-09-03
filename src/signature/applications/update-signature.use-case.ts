@@ -12,14 +12,14 @@ import { SignatureService } from '../signature.service';
 import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 
 /**
- * `PATCH /signature/:id`: reemplaza la imagen de la firma, la identificación oficial, o ambas.
+ * Reemplaza la imagen de la firma, la identificación oficial, o ambas (`PATCH /signature/:id`).
  *
- * Los dos archivos son opcionales e independientes: sólo se toca lo que venga en la petición,
- * porque esta pantalla permite corregir un archivo sin volver a subir el otro.
+ * Los dos archivos son opcionales e independientes: sólo se toca lo que venga en la petición, porque
+ * esta pantalla permite corregir uno sin volver a subir el otro.
  *
- * Una firma desactivada vuelve a activarse al actualizarla —y el mensaje lo dice—: subir un
- * archivo nuevo es justamente la señal de que el usuario quiere volver a usarla, y dejarla
- * inactiva obligaría a un paso extra que nadie esperaría.
+ * Una firma desactivada vuelve a activarse al actualizarla —y el mensaje lo dice—: subir un archivo
+ * nuevo es justamente la señal de que el usuario quiere volver a usarla, y dejarla inactiva
+ * obligaría a un paso extra que nadie esperaría.
  */
 @Injectable()
 export class UpdateSignatureUseCase {

@@ -27,14 +27,13 @@ import {
 import { DocumentService } from '../document.service';
 
 /**
- * `PATCH /document/:id/confirm-cancellation`: consuma la cancelación que se había solicitado.
+ * Consuma la cancelación que se había solicitado (`PATCH /document/:id/confirm-cancellation`).
  *
  * Basta con que la confirme un firmante, igual que el rechazo: si alguno acepta cancelar, el
  * documento ya no va a completarse.
  *
- * El PDF se estampa como "CANCELADO" y se mueve a su propio bucket, en vez de borrarse: el
- * documento cancelado sigue siendo evidencia de lo que se pidió firmar y de quién alcanzó a
- * firmarlo antes. Al final se avisa a todos los colaboradores.
+ * Estampa el PDF como "CANCELADO" y lo mueve a su propio bucket en vez de borrarlo: sigue siendo
+ * evidencia de lo que se pidió firmar y de quién alcanzó a firmarlo. Al final avisa a todos.
  */
 @Injectable()
 export class ConfirmDocumentCancellationUseCase {

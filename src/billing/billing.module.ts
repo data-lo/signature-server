@@ -19,16 +19,14 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
 /**
  * Dominio de facturación: catálogo comercial, perfiles, órdenes de compra y saldo de documentos.
  *
- * Registra TODAS las entidades del directorio y no sólo las que hoy se inyectan porque con
- * `autoLoadEntities: true` (ver `app.module.ts`) TypeORM únicamente carga el metadata de una
- * entidad si algún `forFeature()` la nombra — que exista su archivo `.entity.ts` no basta. Las
- * relaciones entre ellas (`credit_lots → checkout_orders`, `checkout_orders → document_pack_offers`,
- * `plans → plan_prices`) revientan al construir el grafo si alguna falta, aunque nadie la inyecte.
+ * Registra TODAS las entidades del directorio y no sólo las que se inyectan hoy: con
+ * `autoLoadEntities: true`, TypeORM carga el metadata de una entidad únicamente si algún
+ * `forFeature()` la nombra, y las relaciones entre ellas revientan al construir el grafo si falta
+ * alguna, aunque nadie la inyecte.
  *
- * `forwardRef` con `PaymentsModule`: ambos se necesitan mutuamente. Billing usa el adaptador de
- * Stripe (`StripePaymentService`) para abrir el checkout, y payments usa los handlers de
- * billing desde su router de webhooks. La alternativa —sacar el adaptador a un tercer módulo— es
- * una reorganización mayor de `payments` que no toca a esta historia.
+ * `forwardRef` con `PaymentsModule` porque se necesitan mutuamente: billing usa el adaptador de
+ * Stripe para abrir el checkout, y payments usa los handlers de billing desde su router de webhooks.
+ * Sacar el adaptador a un tercer módulo es una reorganización mayor de `payments`.
  */
 @Module({
   imports: [

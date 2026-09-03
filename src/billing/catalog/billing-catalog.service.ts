@@ -5,14 +5,13 @@ import { PlanPriceEntity } from './plan-price.entity';
 import { SubscriptionPriceNotAvailableException } from '../exceptions/billing.exceptions';
 
 /**
- * Consulta el catálogo comercial LOCAL (`plan_prices` + `plans`).
+ * Consulta el catálogo comercial LOCAL (`plan_prices` + `plans`) para el flujo de suscripción, en
+ * lugar de preguntárselo a Stripe en cada compra —que es lo que sigue haciendo
+ * `GetPaymentServicesUseCase` para pintar las tarjetas.
  *
- * Es el reemplazo, para el flujo de suscripción, de preguntarle el catálogo a Stripe en cada
- * compra (lo que sigue haciendo `GetPaymentServicesUseCase` para pintar las tarjetas). La razón
- * no es el ahorro de una llamada: es que el importe y los límites que se cobran tienen que salir
- * de una fila nuestra, versionada y auditable, y no de lo que el proveedor conteste en ese
- * instante. `plans.monthly_document_limit` —cuántos documentos concede el plan— no existe en
- * Stripe en absoluto, así que sin el catálogo local no habría de dónde sacarlo al facturar.
+ * No es por ahorrar una llamada: el importe y los límites que se cobran tienen que salir de una fila
+ * nuestra, versionada y auditable, y no de lo que el proveedor conteste en ese instante.
+ * `plans.monthly_document_limit` ni siquiera existe en Stripe.
  */
 @Injectable()
 export class BillingCatalogService {
@@ -26,14 +25,13 @@ export class BillingCatalogService {
   /**
    * Busca un precio recurrente vendible por su `stripe_price_id`.
    *
-   * **Por qué no hay una comprobación explícita de "es recurrente":** la recurrencia es
-   * estructural, no un campo que validar. `plan_prices` sólo contiene precios de suscripción —
-   * `interval` e `interval_count` son NOT NULL en esa tabla— mientras que los pagos únicos viven
-   * en `document_pack_offers`. Que el `price_...` aparezca aquí ES la comprobación; un precio de
-   * paquete no se encuentra y cae por el mismo camino que uno inexistente.
+   * No comprueba explícitamente que sea recurrente porque la recurrencia es estructural:
+   * `plan_prices` sólo contiene precios de suscripción —`interval` e `interval_count` son NOT NULL—
+   * mientras que los pagos únicos viven en `document_pack_offers`. Que el `price_...` aparezca acá
+   * ES la comprobación, y uno de paquete cae por el mismo camino que uno inexistente.
    *
-   * @throws {SubscriptionPriceNotAvailableException} Si no existe, o si el precio o su plan
-   *   están dados de baja, o si está fuera de su ventana de vigencia.
+   * @throws {SubscriptionPriceNotAvailableException} Si no existe, si el precio o su plan están
+   *   dados de baja, o si está fuera de su ventana de vigencia.
    */
   async findSellableRecurringPrice(
     stripePriceId: string,
@@ -78,7 +76,7 @@ export class BillingCatalogService {
   }
 
   /**
-   * Como se resuelve el plan al FACTURAR (no al comprar): sin validar vigencia ni estado.
+   * Resuelve el plan al FACTURAR, no al comprar: sin validar vigencia ni estado.
    *
    * Es deliberado que sea más laxo que `findSellableRecurringPrice`. Aquí ya hubo un cobro real:
    * si el plan se archivó o el precio caducó entre la contratación y la renovación, el cliente

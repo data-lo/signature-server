@@ -7,14 +7,15 @@ import { MemberPermissionsData } from '../interfaces/response/organization-permi
 import { OrganizationPermissionsService } from '../organization-permissions.service';
 
 /**
- * `PATCH /api/v1/organizations/members/:accountId/permissions`: fija los permisos de un miembro.
+ * Fija los permisos de un miembro
+ * (`PATCH /api/v1/organizations/members/:accountId/permissions`).
  *
- * Es un reemplazo total, no una suma: la lista que llega pasa a ser la lista completa del
- * miembro, y una lista vacía le quita todos. Eso es lo que espera una pantalla que envía el
- * estado de sus casillas, y evita necesitar un endpoint aparte para revocar.
+ * Es un reemplazo total y no una suma: la lista que llega pasa a ser la lista completa del miembro,
+ * y una vacía se los quita todos. Es lo que espera una pantalla que envía el estado de sus casillas,
+ * y evita un endpoint aparte para revocar.
  *
- * Los ids repetidos se colapsan antes de tocar la base: la tabla de asignaciones los aceptaría
- * dos veces y el miembro terminaría con filas duplicadas del mismo permiso.
+ * Colapsa los ids repetidos antes de tocar la base: la tabla de asignaciones los aceptaría dos veces
+ * y el miembro terminaría con filas duplicadas del mismo permiso.
  */
 @Injectable()
 export class AssignMemberPermissionsUseCase {

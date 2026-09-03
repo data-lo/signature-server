@@ -40,20 +40,18 @@ export interface PublicDocumentAuditXml {
 const AUDIT_XML_CONTENT_TYPE = 'application/xml';
 
 /**
- * `GET /document/public/:id/audit-xml`: arma en el momento el expediente de auditoría completo del
- * documento —sus tres PDFs, la evidencia del sello y la acreditación de cada firmante— y lo
- * devuelve como un XML descargable.
+ * Arma en el momento el expediente de auditoría completo de un documento —sus tres PDFs, la
+ * evidencia del sello y la acreditación de cada firmante— y lo devuelve como XML descargable
+ * (`GET /document/public/:id/audit-xml`).
  *
- * **No persiste nada.** Ni en PostgreSQL ni en MinIO: se lee lo que ya existe, se serializa en
- * memoria y se responde. Dos descargas del mismo documento producen el mismo contenido salvo el
- * `generatedAt` del encabezado; ninguna deja rastro ni modifica documento, firmas, sellos o
- * archivos.
+ * **No persiste nada**, ni en PostgreSQL ni en MinIO: lee lo que ya existe, serializa en memoria y
+ * responde. Dos descargas producen el mismo contenido salvo el `generatedAt` del encabezado.
  *
- * Pública como el resto de la vista pública (ver `GetPublicSealArtifactUseCase`): es el mismo
- * material de verificación que ya sirven los botones de esa pantalla, reunido en un solo archivo.
- * Lo que sí es nuevo respecto de esos botones es cuánto se publica —los PDFs completos, la CURP,
- * el IP y la ubicación de cada firmante— sobre una URL que sólo exige conocer el UUID; si eso se
- * quiere restringir, el cambio es quitar `@SkipJwtAuth()` de la ruta, no tocar este caso de uso.
+ * Es pública como el resto de la vista pública: es el mismo material de verificación que ya sirven
+ * los botones de esa pantalla, reunido en un archivo. Lo que sí es nuevo es cuánto se publica —los
+ * PDFs completos, la CURP, el IP y la ubicación de cada firmante— sobre una URL que sólo exige
+ * conocer el UUID; para restringirlo, el cambio es quitar `@SkipJwtAuth()` de la ruta, no tocar
+ * este caso de uso.
  */
 @Injectable()
 export class GetPublicDocumentAuditXmlUseCase {
@@ -121,9 +119,9 @@ export class GetPublicDocumentAuditXmlUseCase {
   }
 
   /**
-   * Firmantes del documento con todo lo que su nodo necesita en una sola consulta: la cuenta, el
-   * usuario de esa cuenta, su información personal (de donde sale la CURP) y su firma de perfil,
-   * que respalda a los colaboradores anteriores a que existiera el snapshot de rúbrica.
+   * Trae los firmantes con todo lo que su nodo necesita en una sola consulta: la cuenta, el usuario
+   * de esa cuenta, su información personal —de donde sale la CURP— y su firma de perfil, que
+   * respalda a los colaboradores anteriores al snapshot de rúbrica.
    *
    * El orden es el de la firma, no el de inserción: el expediente se lee como se firmó.
    */
@@ -138,8 +136,8 @@ export class GetPublicDocumentAuditXmlUseCase {
   }
 
   /**
-   * Los tres PDFs del expediente, todos bajo la misma `object_key` del documento en su bucket:
-   * el original sin firmar, el firmado (el insumo con el que se calculó `signedHash`) y el
+   * Resuelve los tres PDFs del expediente, todos bajo la misma `object_key` del documento en su
+   * bucket: el original sin firmar, el firmado —el insumo con el que se calculó `signedHash`— y el
    * definitivo con la hoja de firmas anexada, que es el que se ve en la vista pública.
    *
    * Los dos primeros son obligatorios —sin ellos el archivo no acreditaría qué se firmó ni con qué
@@ -235,8 +233,9 @@ export class GetPublicDocumentAuditXmlUseCase {
   }
 
   /**
-   * Un firmante y su evidencia. Qué se incluye depende del tipo de firma: la avanzada acredita con
-   * el certificado del SAT (`advanced_signature` completo), la simple con la rúbrica que estampó.
+   * Arma el nodo de un firmante y su evidencia. Qué se incluye depende del tipo de firma: la
+   * avanzada acredita con el certificado del SAT (`advanced_signature` completo), la simple con la
+   * rúbrica que estampó.
    *
    * `!== FIEL` y no `=== SIMPLE`: `signature_type` es nullable y las filas anteriores a que
    * existiera la firma avanzada lo tienen en NULL siendo firma simple. Es el mismo criterio con el
@@ -273,17 +272,16 @@ export class GetPublicDocumentAuditXmlUseCase {
   }
 
   /**
-   * Rúbrica PNG del firmante, en Base64.
+   * Resuelve la rúbrica PNG del firmante, en Base64.
    *
-   * Se prefiere `signature_snapshot_object_key` —la copia inmutable tomada en el instante de
-   * firmar— sobre la firma vigente del perfil: si el usuario la reemplazó después, la evidencia
-   * tiene que ser la que realmente se estampó en el PDF. La del perfil queda como respaldo para
-   * las filas anteriores a que existiera el snapshot.
+   * Prefiere `signature_snapshot_object_key` —la copia inmutable del instante de firmar— sobre la
+   * firma vigente del perfil: la evidencia tiene que ser la que realmente se estampó en el PDF. La
+   * del perfil queda como respaldo para las filas anteriores al snapshot.
    *
    * Un firmante sin ninguna llave se anota como rúbrica no registrada y no rompe la descarga: hay
    * documentos anteriores a que se guardara. Pero si la llave existe y el objeto no se puede leer,
-   * eso sí es evidencia rota y se responde con error — un expediente que omitiera la rúbrica de un
-   * firmante sin decirlo estaría afirmando algo falso.
+   * eso sí es evidencia rota y responde con error: un expediente que omitiera la rúbrica sin decirlo
+   * estaría afirmando algo falso.
    */
   private async resolveSimpleSignature(
     documentId: string,

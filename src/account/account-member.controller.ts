@@ -1,4 +1,3 @@
-// NestJS core
 import {
   Body,
   Controller,
@@ -10,25 +9,20 @@ import {
   Query,
 } from '@nestjs/common';
 
-// Swagger
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Auth
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
-// Use cases
 import { GrantAccountAccessUseCase } from './applications/grant-account-access.use-case';
 import { GetOrganizationMembersUseCase } from './applications/get-organization-members.use-case';
 import { GetAccountMemberUseCase } from './applications/get-account-member.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
 
-// DTOs
 import { CreateAccountMemberDto } from './dto/create-account-member.dto';
 import { UpdateAccountMemberDto } from './dto/update-account-member.dto';
 
-// Docs
 import { ApiGrantAccountAccess } from './docs/api-grant-account-access.docs';
 import { ApiGetOrganizationMembers } from './docs/api-get-organization-members.docs';
 import { ApiGetAccountMember } from './docs/api-get-account-member.docs';

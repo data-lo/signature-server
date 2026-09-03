@@ -9,14 +9,13 @@ import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { NOTIFICATION_CHANNEL_ENUM } from 'src/document/enum/notification-channel.enum';
 
 /**
- * Persistencia de la constancia de notificación que dejan los eventos del ciclo de vida del
- * documento.
+ * Persiste la constancia de notificación que dejan los eventos del ciclo de vida del documento.
  *
- * El envío del correo real sigue siendo inline y síncrono en los casos de uso de documentos
- * (decisión del plan de migración ER-V2, Fase 6): estas filas no disparan correos, sólo dejan
- * registrado que el evento ocurrió y a quién le tocaba enterarse. Escribirlas por Kafka —y no
- * dentro de la transición de estado— las vuelve eventuales respecto de la firma, que es
- * justamente lo que se quería: la auditoría de notificaciones no debe poder frenar una firma.
+ * Estas filas no disparan correos: el envío real sigue siendo inline y síncrono en los casos de uso
+ * de documentos, y acá sólo queda registrado que el evento ocurrió y a quién le tocaba enterarse.
+ * Escribirlas por Kafka —y no dentro de la transición de estado— las vuelve eventuales respecto de
+ * la firma, que es justamente lo buscado: la auditoría de notificaciones no debe poder frenar una
+ * firma.
  */
 @Injectable()
 export class DocumentEventNotificationsService {
@@ -40,7 +39,7 @@ export class DocumentEventNotificationsService {
   }
 
   /**
-   * Un registro por colaborador. El `actorType` sale de si el colaborador tiene cuenta o fue
+   * Guarda un registro por colaborador. El `actorType` sale de si el colaborador tiene cuenta o fue
    * invitado sólo por correo: son dos formas distintas de participar y la auditoría necesita
    * distinguirlas.
    */
@@ -70,8 +69,8 @@ export class DocumentEventNotificationsService {
   }
 
   /**
-   * Constancia dirigida al creador del documento, que no siempre tiene fila de colaborador —
-   * por eso se guarda sin `collaboratorId` (ver `NotificationEntity`).
+   * Guarda la constancia dirigida al creador del documento, que no siempre tiene fila de
+   * colaborador: por eso va sin `collaboratorId` (ver `NotificationEntity`).
    */
   async persistForCreator(documentId: string): Promise<void> {
     await this.notificationRepository.save(

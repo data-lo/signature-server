@@ -17,7 +17,6 @@ import { RolesModule } from 'src/roles/roles.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
 import { OrganizationPermissionsModule } from 'src/organization-permissions/organization-permissions.module';
 
-// Use cases
 import { CreateAccountUseCase } from './applications/create-account.use-case';
 import { ListAccountsUseCase } from './applications/list-accounts.use-case';
 import { GetAccountUseCase } from './applications/get-account.use-case';

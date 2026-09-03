@@ -5,15 +5,15 @@ import { GetUserUseCase } from 'src/user/applications/get-user.use-case';
 import { JwtPayload } from '../interfaces/jwt-payload.interface';
 
 /**
- * `GET /auth/me`: el perfil de quien está autenticado, resuelto desde el `sub` del JWT y nunca
- * desde un parámetro de la petición.
+ * Devuelve el perfil de quien está autenticado (`GET /auth/me`), resuelto desde el `sub` del JWT y
+ * nunca desde un parámetro de la petición.
  *
- * Se relee de la base en vez de devolver lo que trae el token: el JWT es una foto del momento
- * en que se emitió, y entre ese momento y ahora el usuario pudo cambiar sus datos, completar el
- * onboarding o quedar desactivado.
+ * Relee de la base en vez de devolver lo que trae el token: el JWT es una foto del momento en que se
+ * emitió, y desde entonces el usuario pudo cambiar datos, completar el onboarding o quedar
+ * desactivado.
  *
- * El perfil lo arma `GetUserUseCase`, el mismo que atiende `GET /user/:id`: este endpoint no es
- * otra vista, es esa misma consulta con el identificador tomado del token en lugar de la ruta.
+ * El perfil lo arma `GetUserUseCase`, el mismo de `GET /user/:id`: no es otra vista, es esa consulta
+ * con el identificador tomado del token.
  */
 @Injectable()
 export class GetAuthenticatedUserUseCase {

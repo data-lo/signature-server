@@ -60,13 +60,12 @@ export class CheckoutOrderService {
   /**
    * Cierra la orden cuando Stripe confirma que la sesión se completó.
    *
-   * Idempotente por diseño: el `WHERE` exige que siga en PENDING, así que una re-entrega del
-   * mismo `checkout.session.completed` no vuelve a mover `completed_at` (que dejaría de ser la
-   * fecha real del pago) y no pisa un `stripePaymentIntentId` ya grabado.
+   * Es idempotente por diseño: el `WHERE` exige que siga en PENDING, así que una re-entrega del
+   * mismo `checkout.session.completed` no mueve `completed_at` —que dejaría de ser la fecha real del
+   * pago— ni pisa un `stripePaymentIntentId` ya grabado.
    *
-   * No lanza si no encuentra la orden: la sesión puede haberse creado fuera de este flujo (una
-   * prueba desde el dashboard de Stripe, por ejemplo). El evento en sí sigue siendo válido y su
-   * efecto importante —vincular el perfil con el cliente y la suscripción— ya ocurrió.
+   * No lanza si no encuentra la orden: la sesión pudo crearse fuera de este flujo, y su efecto
+   * importante —vincular el perfil con el cliente y la suscripción— ya ocurrió.
    */
   async markCompleted(input: {
     stripeCheckoutSessionId: string;

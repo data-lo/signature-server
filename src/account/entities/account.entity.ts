@@ -13,23 +13,18 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { RoleEntity } from 'src/roles/entities/role.entity';
 
 /**
- * Fusión de las antiguas AccountEntity (el tenant: PERSONAL u ORGANIZATION) +
- * AccountMemberEntity (la membresía usuario↔cuenta) en una sola fila por (usuario × contexto),
- * tal como lo pide el diagrama ER-V2 (ver plan de migración, Fase 5, decisión D5).
+ * Fila única por (usuario × contexto): fusiona el antiguo tenant (PERSONAL u ORGANIZATION) con la
+ * membresía usuario↔cuenta, según el diagrama ER-V2 (Fase 5, decisión D5).
  *
- * Para cuentas PERSONAL no hay ambigüedad (1 usuario = 1 miembro = 1 fila = el tenant). Para
- * ORGANIZATION, cada miembro tiene su propia fila aquí, todas compartiendo el mismo
- * `organizationId` → una fila en `OrganizationEntity` (la identidad real del tenant).
- * `Document.organizationId`/`AccountSubscription.organizationId` son la clave real de
- * aislamiento multi-tenant para contexto de organización; para contexto personal, el `id` de
- * esta fila (única por usuario) sigue sirviendo, ya que un miembro personal siempre es 1:1.
+ * En PERSONAL no hay ambigüedad (1 usuario = 1 fila = el tenant). En ORGANIZATION cada miembro tiene
+ * su fila, todas con el mismo `organizationId` → una fila de `OrganizationEntity`, que es la
+ * identidad real del tenant. El aislamiento multi-tenant se apoya en
+ * `Document.organizationId`/`AccountSubscription.organizationId`; en contexto personal basta el
+ * `id` de esta fila, única por usuario.
  *
- * `email`/`password` existen aquí (coinciden con el diagrama) pero se sincronizan desde una
- * única credencial por usuario (decisión D6, confirmada con el equipo): no hay contraseñas
- * independientes por organización. `UserEntity.email`/`.password` se mantienen como la fuente
- * primaria para búsqueda/notificaciones existentes (ver nota en Fase 5 del plan) — aquí son una
- * copia sincronizada, no la única fuente de verdad, para no reescribir el resto del dominio de
- * documentos en la misma migración.
+ * `email`/`password` son una copia sincronizada de la credencial única del usuario (decisión D6):
+ * no hay contraseñas independientes por organización. `UserEntity` sigue siendo la fuente primaria
+ * para búsqueda y notificaciones, para no reescribir el dominio de documentos en la misma migración.
  */
 @Entity('accounts')
 export class AccountEntity {

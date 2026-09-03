@@ -58,7 +58,7 @@ const SIGNATURES_INTRO_TEXT =
   'acreditar la identidad del firmante.';
 
 /**
- * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
+ * Arma la tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
  *
  * Los tres renglones salen del sello: el certificado y la serie del certificado del PSC embebido
  * en la evidencia, y la fecha de `sealedAt` (ver `toConservationRecord`). Se imprimen vacíos
@@ -82,15 +82,14 @@ function buildConservationRecordRows(
 }
 
 /**
- * Hoja de evidencia de FIRMA AVANZADA (e.firma del SAT).
+ * Arma la hoja de evidencia de FIRMA AVANZADA (e.firma del SAT).
  *
- * Gemela de `SummaryDocumentService` y deliberadamente independiente de él: comparten la plomería
- * de render y las piezas de layout (`sheet-rendering.ts`) pero ni un solo texto legal, porque la
+ * Gemela de `SummaryDocumentService` y deliberadamente independiente: comparten la plomería de
+ * render y las piezas de layout (`sheet-rendering.ts`) pero ni un solo texto legal, porque la
  * evidencia de una firma simple y la de una avanzada acreditan cosas distintas y van a evolucionar
- * por separado. Cambiar una no puede arrastrar a la otra.
+ * por separado.
  *
- * No lee ni escribe nada por sí misma: recibe `document` y `signers` ya resueltos por el caller y
- * devuelve el PDF en memoria.
+ * No lee ni escribe nada: recibe `document` y `signers` ya resueltos y devuelve el PDF en memoria.
  */
 @Injectable()
 export class AdvancedSummaryDocumentService {
@@ -193,9 +192,9 @@ export class AdvancedSummaryDocumentService {
   }
 
   /**
-   * La firma en base64 es una sola "palabra" de varios cientos de caracteres: sin puntos de corte,
-   * pdfmake la desborda fuera de la celda en vez de ajustarla. Partirla en renglones fijos la deja
-   * dentro de la tabla y legible, que es para lo que está impresa.
+   * Parte la firma en base64 en renglones fijos: es una sola "palabra" de varios cientos de
+   * caracteres y, sin puntos de corte, pdfmake la desborda fuera de la celda en vez de ajustarla.
+   * Partirla la deja dentro de la tabla y legible, que es para lo que está impresa.
    */
   private wrapSignature(signature: string | null | undefined): string {
     if (!signature) {

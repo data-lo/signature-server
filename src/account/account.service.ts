@@ -1,4 +1,3 @@
-// External dependencies
 import {
   ForbiddenException,
   Injectable,
@@ -8,26 +7,21 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 
-// DTOs
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 
-// Entities
 import { AccountEntity } from './entities/account.entity';
 import { OrganizationEntity } from './entities/organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 
-// Enums
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
-// Services
 import { RolesService } from 'src/roles/roles.service';
 
-// Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { AccountData } from './interfaces/response/account-response';
@@ -35,11 +29,10 @@ import { AccountData } from './interfaces/response/account-response';
 const ACCOUNTS_CATALOG_KEY_PREFIX = 'accounts:';
 
 /**
- * AccountEntity fusiona lo que antes eran AccountEntity (el tenant) + AccountMemberEntity (la
- * membresía) en una sola fila por (usuario × contexto) — ver plan de migración ER-V2, Fase 5.
- * Este servicio absorbe toda la lógica que antes vivía repartida entre AccountService y
- * AccountMemberService para las operaciones que ya no distinguen "la cuenta" de "quién
- * pertenece a ella": ambas cosas son la misma fila ahora.
+ * Concentra las operaciones sobre `accounts`, la fila única por (usuario × contexto) en la que la
+ * migración ER-V2 (Fase 5) fusionó el tenant y la membresía. Absorbe lo que antes repartían
+ * AccountService y AccountMemberService para todo lo que ya no distingue "la cuenta" de "quién
+ * pertenece a ella": son la misma fila.
  */
 @Injectable()
 export class AccountService {
@@ -63,7 +56,7 @@ export class AccountService {
   ) {}
 
   /**
-   * Alta directa de una fila de `accounts`, con su organización si hace falta. Quién puede
+   * Da de alta directamente una fila de `accounts`, con su organización si hace falta. Quién puede
    * crearla y con qué rol lo decide el caso de uso; acá sólo se escribe.
    *
    * `email`/`password` se copian del usuario porque son la credencial única sincronizada
@@ -166,12 +159,13 @@ export class AccountService {
   }
 
   /**
-   * Solo el propio dueño de esa fila de Account, con permiso ORGANIZATION:{action}, puede
-   * leer/actualizar la cuenta o invitar miembros. `accountId` siempre se refiere al contexto
-   * propio del llamador (mismo criterio que `X-Account-Id` en el resto de la API) — nunca a la
-   * fila de otro usuario. Retorna la cuenta para que el caller no tenga que volver a
-   * consultarla. Permiso granular vía `RolesService.hasPermission` en vez de comparar
-   * `role.name === 'ADMIN'` a mano — ver docblock de `hasPermission` para el porqué.
+   * Exige que el llamador sea el dueño de esa fila de `accounts` y tenga el permiso
+   * ORGANIZATION:{action} para leer o actualizar la cuenta e invitar miembros. `accountId` siempre
+   * es el contexto propio del llamador, igual que `X-Account-Id` en el resto de la API, nunca la
+   * fila de otro usuario.
+   *
+   * Devuelve la cuenta para que el caller no tenga que volver a consultarla. Resuelve el permiso con
+   * `RolesService.hasPermission` en vez de comparar `role.name === 'ADMIN'` a mano —ver su docblock.
    */
   async assertHasOrganizationPermission(
     callerId: string,
@@ -199,12 +193,12 @@ export class AccountService {
   }
 
   /**
-   * Crea la cuenta PERSONAL por defecto de un usuario recién registrado. Recibe el
-   * EntityManager del llamador para poder enlistarse en la transacción de registro (no abre su
-   * propia transacción). `email`/`password` sincronizan la credencial única del usuario
-   * (decisión D6, ver plan de migración ER-V2) — se reciben como parámetro en vez de
-   * volver a consultarlas porque el caller (`UserService.createFromSignup`) ya las tiene en
-   * memoria dentro de la misma transacción.
+   * Crea la cuenta PERSONAL por defecto de un usuario recién registrado.
+   *
+   * Recibe el EntityManager del llamador para enlistarse en la transacción de registro en vez de
+   * abrir la suya. `email`/`password` llegan por parámetro —y no de una consulta nueva— porque
+   * `UserService.createFromSignup` ya los tiene en memoria dentro de esa misma transacción; son la
+   * credencial única sincronizada (decisión D6).
    */
   async createDefaultPersonalAccount(
     manager: EntityManager,
@@ -233,12 +227,6 @@ export class AccountService {
     return { account };
   }
 
-  /**
-   * Crea una Organización de forma transaccional: Organization (entidad propia, ver Fase 5) +
-   * Account(type=ORGANIZATION) para el usuario autenticado con el rol de sistema ADMIN (el
-   * creador queda como administrador de inmediato, igual que en la cuenta personal). Al
-   * confirmar, refresca el catálogo de cuentas cacheado en Redis.
-   */
   /**
    * Crea la organización y la membresía ADMIN de su creador en una sola transacción.
    *
@@ -298,9 +286,9 @@ export class AccountService {
   }
 
   /**
-   * Agrega una cuenta al catálogo cacheado en Redis DB 0 bajo la key
-   * accounts:{userId} (lectura-modificación-escritura). Un fallo de Redis
-   * nunca debe tumbar la operación que lo dispara.
+   * Agrega una cuenta al catálogo cacheado en Redis DB 0 bajo `accounts:{userId}`
+   * (lectura-modificación-escritura). Un fallo de Redis nunca debe tumbar la operación que lo
+   * dispara.
    */
   async appendAccountToCatalog(
     userId: string,
@@ -324,9 +312,8 @@ export class AccountService {
   }
 
   /**
-   * Refresca la entrada de esta organización dentro del catálogo cacheado en Redis de cada
-   * miembro activo. Se usa tras renombrar/actualizar el perfil de una organización
-   * (`update()`) para que el switcher del frontend no muestre datos obsoletos indefinidamente.
+   * Refresca la entrada de esta organización en el catálogo cacheado de cada miembro activo, tras
+   * renombrar o actualizar su perfil, para que el switcher del frontend no muestre datos obsoletos.
    */
   async refreshCatalogForOrganizationMembers(
     organizationId: string,
@@ -372,9 +359,8 @@ export class AccountService {
   }
 
   /**
-   * Quita una cuenta del catálogo cacheado en Redis del usuario. Se usa al
-   * revocar el acceso de un miembro, para que el switcher del frontend no
-   * siga ofreciendo una cuenta a la que el usuario ya no tiene acceso.
+   * Quita una cuenta del catálogo cacheado del usuario al revocarle el acceso, para que el switcher
+   * del frontend no siga ofreciendo una cuenta que ya no puede abrir.
    */
   async removeAccountFromCatalog(
     userId: string,
@@ -404,9 +390,8 @@ export class AccountService {
   }
 
   /**
-   * Lee el catálogo de cuentas del usuario autenticado exclusivamente desde
-   * Redis DB 0 (sin fallback a PostgreSQL). Si la key no existe, retorna un
-   * catálogo vacío.
+   * Lee el catálogo de cuentas del usuario exclusivamente desde Redis DB 0, sin fallback a
+   * PostgreSQL. Si la key no existe, devuelve un catálogo vacío.
    */
   async getAccountsCatalog(
     userId: string,
@@ -424,11 +409,12 @@ export class AccountService {
   }
 
   /**
-   * Resuelve una cuenta activa por email — usado por AuthService.login() (ver plan de
-   * migración ER-V2, Fase 5): el login ahora resuelve contra `Account.email` (sincronizado
-   * desde la credencial única del usuario, decisión D6) en vez de `User.email` directamente.
-   * Un usuario puede tener varias filas de Account (una por organización) con el mismo email
-   * sincronizado; cualquiera de ellas sirve para resolver el userId.
+   * Resuelve una cuenta activa por email, que es como `AuthService.login()` obtiene el userId: el
+   * login autentica contra `Account.email` —sincronizado desde la credencial única del usuario,
+   * decisión D6— en vez de contra `User.email`.
+   *
+   * Un usuario puede tener varias filas con el mismo email sincronizado (una por organización);
+   * cualquiera sirve.
    */
   async findActiveAccountByEmail(email: string): Promise<AccountEntity | null> {
     return this.accountRepository.findOne({
@@ -437,12 +423,11 @@ export class AccountService {
   }
 
   /**
-   * Resincroniza la contraseña en TODAS las filas AccountEntity del usuario (personal +
-   * memberships de organización) tras un cambio en UserEntity.password. Necesario porque
-   * `login()` autentica contra Account.email/.password (decisión D6), no contra User.password
-   * directamente — sin esto, un reset de contraseña dejaría al usuario sin poder loguearse con
-   * la contraseña nueva (ver historia "Recuperación de Contraseña mediante Código de
-   * Verificación OTP").
+   * Resincroniza la contraseña en TODAS las filas de `accounts` del usuario (personal y membresías)
+   * tras cambiar `UserEntity.password`.
+   *
+   * `login()` autentica contra `Account.email`/`.password` (decisión D6), no contra
+   * `User.password`: sin esto, un reset dejaría al usuario sin poder entrar con la contraseña nueva.
    */
   async updatePasswordForUser(
     userId: string,
@@ -455,13 +440,13 @@ export class AccountService {
   }
 
   /**
-   * Contraparte de `updatePasswordForUser` para el otro campo sincronizado desde UserEntity: el
-   * correo. Se usa al corregir un registro sin verificar (ver UserService.updatePreRegistration);
-   * sin esto `login()`, que resuelve la credencial por Account.email, seguiría buscando el correo
-   * viejo y el usuario no podría entrar con el que acaba de verificar.
+   * Resincroniza el correo en las filas de `accounts` del usuario, contraparte de
+   * `updatePasswordForUser` para el otro campo copiado desde UserEntity. La usa la corrección de un
+   * registro sin verificar; sin ella `login()`, que resuelve la credencial por `Account.email`,
+   * seguiría buscando el correo viejo y el usuario no podría entrar con el que acaba de verificar.
    *
-   * Acepta un EntityManager para poder correr dentro de la misma transacción que actualiza al
-   * usuario, y que credencial y usuario nunca queden desincronizados a medias.
+   * Acepta un EntityManager para correr dentro de la misma transacción que actualiza al usuario, y
+   * que credencial y usuario nunca queden desincronizados a medias.
    */
   async updateEmailForUser(
     userId: string,

@@ -19,20 +19,16 @@ export interface BillingOwner {
 }
 
 /**
- * Resuelve **de quién** es el dinero y el saldo, y le consigue su `billing_profile`.
+ * Resuelve **de quién** son el dinero y el saldo, y le consigue su `billing_profile`.
  *
- * La distinción que hace este servicio es la que sostiene todo el módulo: la cuenta activa
- * (`X-Account-Id`) es una FILA DE MEMBRESÍA —una por usuario y por contexto, ver el docblock de
- * `AccountEntity`—, no el propietario del dinero. Para una cuenta PERSONAL las dos cosas
- * coinciden, pero en una ORGANIZATION no: cada empleado tiene su propia fila en `accounts`, y
- * facturarle a esa fila daría un perfil (y un saldo de documentos) por empleado en vez del único
- * que comparte la organización.
- *
- * Por eso el propietario se resuelve así:
+ * Es la distinción que sostiene el módulo: la cuenta activa (`X-Account-Id`) es una FILA DE
+ * MEMBRESÍA —una por usuario y contexto, ver `AccountEntity`—, no el propietario del dinero. En
+ * PERSONAL coinciden, pero en ORGANIZATION no: cada empleado tiene su fila, y facturarle a ella daría
+ * un perfil y un saldo por empleado en vez del único que comparte la organización.
  *
  * ```
- * PERSONAL     → personal_account_id = account.id        (la membresía ES el tenant)
- * ORGANIZATION → organization_id     = account.organization_id  (el tenant real, compartido)
+ * PERSONAL     → personal_account_id = account.id              (la membresía ES el tenant)
+ * ORGANIZATION → organization_id     = account.organization_id (el tenant real, compartido)
  * ```
  */
 @Injectable()
@@ -47,22 +43,20 @@ export class BillingOwnerService {
   ) {}
 
   /**
-   * Comprueba que el usuario de verdad pertenece a la cuenta activa y traduce esa cuenta al
-   * propietario facturable.
+   * Comprueba que el usuario pertenece a la cuenta activa y traduce esa cuenta al propietario
+   * facturable.
    *
-   * La comprobación de pertenencia no es opcional ni redundante con el JWT: el header lo elige
-   * el cliente, así que sin verificarlo cualquiera podría contratar (y cargar el saldo) en
-   * nombre de una organización a la que no pertenece con sólo cambiar un valor en la petición.
+   * La comprobación de pertenencia no es redundante con el JWT: el header lo elige el cliente, así
+   * que sin verificarlo cualquiera podría contratar y cargar saldo en nombre de una organización
+   * ajena con sólo cambiar un valor en la petición.
    *
-   * **Se consulta `accounts` directo en vez de reutilizar `AccountMemberService.assertIsActiveMember`,
-   * que aplica exactamente el mismo criterio.** No es por desconocerlo: ese servicio vive en
-   * `AccountModule`, que arrastra Kafka, roles, permisos de organización y la cadena de auditoría.
-   * Importarlo obligaría a este módulo —que sólo necesita saber si una fila de membresía existe y
-   * está activa— a instanciar media aplicación para abrir un checkout. La consulta es la misma
-   * (`id` + `userId` + `isActive`) y la fila resultante hace falta aquí de todos modos, porque de
-   * ella salen `accountType` y `organizationId`.
+   * Consulta `accounts` directo en vez de reutilizar `AccountMemberService.assertIsActiveMember`,
+   * que aplica el mismo criterio: ese servicio vive en `AccountModule`, que arrastra Kafka, roles,
+   * permisos y la cadena de auditoría, y importarlo obligaría a instanciar media aplicación para
+   * abrir un checkout. La fila resultante hace falta acá de todos modos, porque de ella salen
+   * `accountType` y `organizationId`.
    *
-   * Si el criterio de "miembro activo" cambiara, hay que cambiarlo en los dos sitios.
+   * Si el criterio de "miembro activo" cambia, hay que cambiarlo en los dos sitios.
    */
   async resolveOwner(userId: string, accountId: string): Promise<BillingOwner> {
     if (!accountId) {
@@ -106,14 +100,13 @@ export class BillingOwnerService {
   /**
    * Devuelve el perfil del propietario, creándolo la primera vez.
    *
-   * Dos miembros de la misma organización llegan aquí con el MISMO `organizationId`, así que
-   * obtienen la misma fila y comparten suscripción y saldo sin ninguna lógica adicional.
+   * Dos miembros de la misma organización llegan con el MISMO `organizationId`, así que obtienen la
+   * misma fila y comparten suscripción y saldo sin lógica adicional.
    *
-   * El `catch` no es defensivo por costumbre: `personal_account_id` y `organization_id` son
-   * únicos, y dos peticiones simultáneas del mismo propietario (dos pestañas, un doble clic en
-   * "Contratar") pueden pasar las dos por el `findOne` antes de que ninguna haya insertado. Sin
-   * esto, la segunda reventaría con un error de constraint crudo en la cara del usuario cuando
-   * lo correcto es justamente lo que ya ocurrió: el perfil existe.
+   * El `catch` cubre una carrera real: `personal_account_id` y `organization_id` son únicos, y dos
+   * peticiones simultáneas del mismo propietario pueden pasar ambas por el `findOne` antes de que
+   * ninguna inserte. Sin él, la segunda reventaría con un error de constraint crudo cuando lo
+   * correcto es justamente lo que ya ocurrió: el perfil existe.
    */
   async getOrCreateProfile(owner: BillingOwner): Promise<BillingProfileEntity> {
     const existing = await this.findByOwner(owner);

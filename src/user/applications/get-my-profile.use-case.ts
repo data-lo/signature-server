@@ -5,16 +5,16 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { UserService } from '../user.service';
 
 /**
- * `GET /api/v1/users/me`: el perfil unificado con el que el cliente hidrata su store de
- * onboarding.
+ * Devuelve el perfil unificado con el que el cliente hidrata su store de onboarding
+ * (`GET /api/v1/users/me`).
  *
- * Se sirve desde Redis DB 0 por CURP y no desde PostgreSQL, porque esta lectura ocurre en cada
- * carga de la aplicación y lo único que necesita es un snapshot estable —sin joins ni URLs
- * prefirmadas de MinIO, que expiran y quedarían obsoletas dentro del cache—.
+ * Se sirve desde Redis DB 0 por CURP y no desde PostgreSQL porque esta lectura ocurre en cada carga
+ * de la aplicación y sólo necesita un snapshot estable, sin joins ni URLs prefirmadas de MinIO, que
+ * expiran y quedarían obsoletas dentro del cache.
  *
- * Si la key no está (un fallo de Redis en el registro, un TTL vencido, una key borrada a
- * propósito al cambiar el estado de la credencial), el snapshot se reconstruye una vez desde
- * PostgreSQL y se vuelve a cachear: el cache frío es un problema de rendimiento, no un 404.
+ * Si la key no está —fallo de Redis en el registro, TTL vencido, o borrada al cambiar el estado de la
+ * credencial— reconstruye el snapshot desde PostgreSQL y lo vuelve a cachear: el cache frío es un
+ * problema de rendimiento, no un 404.
  */
 @Injectable()
 export class GetMyProfileUseCase {

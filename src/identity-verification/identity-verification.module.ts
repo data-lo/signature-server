@@ -14,21 +14,21 @@ import { IdentityVerificationsController } from './identity-verifications.contro
 /**
  * Dominio de verificación de identidad: iniciar intentos, consultarlos y aplicar resultados.
  *
- * Sin servicio de orquestación: cada operación es un caso de uso en `applications/`, y la única
- * pieza que no lo es (`DiditApiService`) es un adaptador HTTP, no lógica de dominio.
+ * Sin servicio de orquestación: cada operación es un caso de uso en `applications/`, y la única pieza
+ * que no lo es (`DiditApiService`) es un adaptador HTTP.
  *
- * **Este módulo no importa `UserModule` ni `SignatureModule` a propósito.** `UserModule` importa
- * `SignatureModule`, y `SignatureModule` importa este módulo para bloquear el alta de firma sin
- * identidad aprobada: importar de vuelta cerraría el ciclo. Por eso el acceso a `users` es por
- * repositorio (`TypeOrmModule.forFeature`) y el cache de perfil se invalida vía `RedisService`
- * en lugar de llamar a `UserService`.
+ * **No importa `UserModule` ni `SignatureModule` a propósito**: `UserModule` importa
+ * `SignatureModule`, y éste importa el presente módulo para bloquear el alta de firma sin identidad
+ * aprobada, así que importar de vuelta cerraría el ciclo. Por eso el acceso a `users` es por
+ * repositorio y el cache de perfil se invalida vía `RedisService` en lugar de llamar a
+ * `UserService`.
  *
- * `ProcessDiditVerificationResultUseCase` se exporta para que el módulo de webhooks —que recibe
- * el POST de Didit, valida su firma HMAC y comprueba la forma del payload— lo invoque con el
- * cuerpo ya autenticado. La dependencia va en un solo sentido: `webhooks` importa este módulo,
- * nunca al revés. Aquí no hay controller de webhooks ni validación de firma, por diseño.
+ * Exporta `ProcessDiditVerificationResultUseCase` para que el módulo de webhooks —que recibe el POST
+ * de Didit, valida su firma HMAC y comprueba el payload— lo invoque con el cuerpo ya autenticado. La
+ * dependencia va en un solo sentido: `webhooks` importa a éste, nunca al revés, y acá no hay
+ * controller de webhooks ni validación de firma por diseño.
  *
- * `UpdateSigningCredentialStatusUseCase` también se exporta: es el único escritor de
+ * Exporta también `UpdateSigningCredentialStatusUseCase`: es el único escritor de
  * `users.signing_credential_status`, y `SignatureModule` lo necesita para mover al usuario a
  * CONFIGURED o de vuelta a SIGNATURE_PENDING al dar de alta o eliminar su firma PNG.
  */

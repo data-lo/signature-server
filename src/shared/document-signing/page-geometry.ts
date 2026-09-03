@@ -1,25 +1,23 @@
 import { SignatureCoordinates } from './interfaces/signature-coordinates.interface';
 
 /**
- * Geometría de una página según la VE el usuario, no según cómo está guardada.
+ * Traduce entre la geometría de una página según la VE el usuario y según está guardada.
  *
- * Un PDF describe cada página con dos cosas independientes: su MediaBox (el tamaño del lienzo
- * donde vive el contenido) y su `/Rotate` (cuántos grados en sentido horario debe girarla el
- * visor antes de mostrarla). Una hoja apaisada puede estar escrita de las dos maneras:
+ * Un PDF describe cada página con dos cosas independientes: su MediaBox —el lienzo donde vive el
+ * contenido— y su `/Rotate` —cuántos grados debe girarla el visor—. Una hoja apaisada puede estar
+ * escrita de las dos maneras:
  *
- *  - MediaBox ya ancho (842x595) y `/Rotate 0` — la escriben InDesign, LaTeX, pdfmake;
- *  - MediaBox vertical (595x842) y `/Rotate 90` — la escriben los escáneres y casi todo lo que
- *    exporta Word/Excel apaisado, que es el caso que reportó el usuario.
+ *  - MediaBox ya ancho (842x595) y `/Rotate 0`, que escriben InDesign, LaTeX y pdfmake;
+ *  - MediaBox vertical (595x842) y `/Rotate 90`, que escriben los escáneres y casi todo lo que
+ *    exporta Word o Excel apaisado.
  *
- * pdf.js —el visor del frontend— aplica `/Rotate` al construir el viewport, así que el usuario
- * arrastra la firma sobre una hoja de 842x595 en los dos casos y los ratios que persistimos son
- * relativos a ESA hoja. pdf-lib NO lo aplica: `page.getSize()` devuelve el MediaBox crudo y
- * `drawImage` dibuja en el espacio del contenido, sin girar. Interpretar los ratios contra el
- * MediaBox era exactamente el bug: en el segundo caso el backend creía estar sobre una hoja
- * vertical de 595x842 y estampaba la rúbrica en otro sitio y de costado.
+ * pdf.js aplica `/Rotate` al construir el viewport, así que el usuario arrastra la firma sobre una
+ * hoja de 842x595 en ambos casos y los ratios persistidos son relativos a ESA hoja. pdf-lib no lo
+ * aplica: `page.getSize()` devuelve el MediaBox crudo y `drawImage` dibuja sin girar. Interpretar
+ * los ratios contra el MediaBox hacía que el backend creyera estar sobre una hoja vertical y
+ * estampara la rúbrica en otro sitio y de costado.
  *
- * Este módulo es la traducción entre los dos espacios, y es pura a propósito: la matemática se
- * prueba con números, sin cargar un PDF ni rasterizar nada.
+ * Es puro a propósito: la matemática se prueba con números, sin cargar un PDF ni rasterizar nada.
  */
 
 /** Los cuatro valores que admite `/Rotate` una vez normalizado. */
@@ -57,8 +55,8 @@ export function normalizePageRotation(angle: number): PageRotation {
 }
 
 /**
- * Tamaño de la hoja tal como se ve: con `/Rotate 90` o `270` los lados se intercambian respecto
- * del MediaBox. Es contra ESTE tamaño que se interpretan los ratios del frontend.
+ * Resuelve el tamaño de la hoja tal como se ve: con `/Rotate 90` o `270` los lados se intercambian
+ * respecto del MediaBox. Es contra ESTE tamaño que se interpretan los ratios del frontend.
  */
 export function displayedPageSize(
   content: ContentPageSize,
@@ -70,8 +68,8 @@ export function displayedPageSize(
 }
 
 /**
- * Orientación de la hoja tal como se ve. Una hoja cuadrada cuenta como vertical: no hay nada que
- * transformar y es el caso que ya funcionaba.
+ * Resuelve la orientación de la hoja tal como se ve. Una hoja cuadrada cuenta como vertical: no hay
+ * nada que transformar y es el caso que ya funcionaba.
  */
 export function pageOrientation(
   content: ContentPageSize,
@@ -82,25 +80,22 @@ export function pageOrientation(
 }
 
 /**
- * Convierte un rectángulo del espacio VISIBLE (el que ve el usuario y contra el que se midieron
- * los ratios, origen en la esquina inferior izquierda) al espacio del CONTENIDO que usa
- * `drawImage`.
+ * Convierte un rectángulo del espacio VISIBLE —contra el que se midieron los ratios, origen en la
+ * esquina inferior izquierda— al espacio del CONTENIDO que usa `drawImage`.
  *
- * La regla es una sola, aplicada cuatro veces: **el ancla es siempre la esquina inferior
- * izquierda de la caja visible, trasladada al espacio del contenido**, porque `drawImage` ancla
- * ahí la esquina `(0,0)` de la imagen y gira alrededor de ese punto. El ángulo es el que deja la
- * rúbrica derecha DESPUÉS de que el visor gire la página.
+ * La regla es una sola, aplicada cuatro veces: **el ancla es siempre la esquina inferior izquierda
+ * de la caja visible, trasladada al espacio del contenido**, porque `drawImage` ancla ahí la esquina
+ * `(0,0)` de la imagen y gira alrededor de ese punto. El ángulo es el que deja la rúbrica derecha
+ * DESPUÉS de que el visor gire la página.
  *
  * Los dos giros y los dos ángulos salen de medir, no de deducir: se leyó con pdf.js la matriz de
- * viewport de cada `/Rotate` y la CTM que `drawImage` emite por cada ángulo. Ojo con el signo,
- * porque es contraintuitivo y fue el error de la primera versión: `/Rotate 90` necesita
- * `degrees(+90)` y `/Rotate 270` necesita `degrees(-90)`. Un ángulo invertido produce la caja en
- * el lugar CORRECTO pero con la rúbrica de cabeza, que es un fallo fácil de pasar por alto si
- * sólo se compara el rectángulo.
+ * viewport de cada `/Rotate` y la CTM que `drawImage` emite por cada ángulo. Ojo con el signo, que
+ * es contraintuitivo: `/Rotate 90` necesita `degrees(+90)` y `/Rotate 270` necesita `degrees(-90)`.
+ * Un ángulo invertido produce la caja en el lugar CORRECTO pero con la rúbrica de cabeza, fácil de
+ * pasar por alto si sólo se compara el rectángulo.
  *
- * Con `rotation = 0` devuelve el rectángulo intacto y `rotate: 0`. Ese es el camino de todo
- * documento vertical sin `/Rotate`, el que ya funcionaba: la conversión es la identidad, no un
- * caso particular que haya que confiar en que esté bien.
+ * Con `rotation = 0` devuelve el rectángulo intacto: el camino de todo documento vertical sin
+ * `/Rotate` es la identidad, no un caso particular que haya que confiar en que esté bien.
  */
 export function toContentSpace(
   visible: SignatureCoordinates,
@@ -126,7 +121,7 @@ export function toContentSpace(
 }
 
 /**
- * Ratios 0-1 del frontend -> rectángulo en el espacio VISIBLE, en puntos.
+ * Convierte los ratios 0-1 del frontend en un rectángulo del espacio VISIBLE, en puntos.
  *
  * `yRatio` se mide desde el borde SUPERIOR (así lo mide el DOM al soltar la firma) y el PDF mide
  * desde el inferior, de ahí la resta.

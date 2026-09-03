@@ -34,14 +34,15 @@ const NOT_USABLE_REASON: Partial<
 };
 
 /**
- * `POST /api/v1/signature-capture-sessions/:id/signature`: guarda el PNG que el usuario acaba de
- * dibujar y cierra el intento.
+ * Guarda el PNG que el usuario acaba de dibujar y cierra el intento
+ * (`POST /api/v1/signature-capture-sessions/:id/signature`).
  *
- * El alta de la firma **no se reimplementa acá**: se delega en `UploadSignatureImageUseCase`, el
- * mismo caso de uso que atiende `PUT /api/v1/users/me/signature`. Así hay un solo camino hacia
- * CONFIGURED y una sola definición de qué significa registrar una firma, venga de un archivo que
- * el usuario subió desde su computadora o de un canvas dibujado en el teléfono. Lo propio de este
- * caso de uso es lo que rodea a ese alta: validar la sesión, comprobar que lo recibido es de
+ * **No reimplementa el alta de la firma**: la delega en `UploadSignatureImageUseCase`, el mismo que
+ * atiende `PUT /api/v1/users/me/signature`, para que haya un solo camino hacia CONFIGURED y una sola
+ * definición de qué significa registrar una firma, venga de un archivo subido desde la computadora o
+ * de un canvas dibujado en el teléfono.
+ *
+ * Lo propio de acá es lo que rodea a esa alta: validar la sesión, comprobar que lo recibido es de
  * verdad un PNG y dejar constancia de qué intento produjo qué archivo.
  */
 @Injectable()

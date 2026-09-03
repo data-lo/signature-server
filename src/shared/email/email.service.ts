@@ -1,4 +1,3 @@
-// NestJS (framework)
 import { ConfigService } from '@nestjs/config';
 import {
   Injectable,
@@ -6,10 +5,8 @@ import {
   Logger,
 } from '@nestjs/common';
 
-// Third-party libraries
 import * as sgMail from '@sendgrid/mail';
 
-// Internal modules
 import {
   documentCancellationPendingTemplate,
   documentCancelledTemplate,

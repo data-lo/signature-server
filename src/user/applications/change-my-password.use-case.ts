@@ -8,17 +8,16 @@ import { ChangeMyPasswordDto } from '../dto/change-my-password.dto';
 import { UserService } from '../user.service';
 
 /**
- * `PUT /api/v1/users/me/password`: el usuario cambia su propia contraseña desde la pantalla de
- * configuración, acreditándose con la contraseña actual.
+ * Cambia la propia contraseña desde la pantalla de configuración, acreditándose con la actual
+ * (`PUT /api/v1/users/me/password`).
  *
- * Es el hermano con sesión de `ResetPasswordUseCase`: escribe en los mismos dos lugares —
- * `User.password`, la credencial de la persona, y su copia sincronizada en cada `Account`
- * (decisión D6), que es contra la que resuelve el login— porque actualizar solo una dejaría al
- * usuario sin poder entrar con ninguna de las dos contraseñas.
+ * Es el hermano con sesión de `ResetPasswordUseCase`: escribe en los mismos dos lugares
+ * —`User.password` y su copia sincronizada en cada `Account`, contra la que resuelve el login—
+ * porque actualizar sólo una dejaría al usuario sin poder entrar con ninguna de las dos.
  *
- * Lo que NO hace, a diferencia del reset, es invalidar las sesiones: quien cambia su contraseña
- * acá está usando una, y expulsarlo lo dejaría fuera en el mismo momento en que la pantalla le
- * confirma el cambio. El reset puede permitírselo justamente porque ocurre sin sesión.
+ * A diferencia del reset, NO invalida las sesiones: quien cambia su contraseña acá está usando una, y
+ * expulsarlo lo dejaría fuera en el mismo momento en que la pantalla le confirma el cambio. El reset
+ * puede permitírselo justamente porque ocurre sin sesión.
  */
 @Injectable()
 export class ChangeMyPasswordUseCase {

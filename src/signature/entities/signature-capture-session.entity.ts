@@ -16,15 +16,14 @@ import { SIGNATURE_CAPTURE_SESSION_STATUS_ENUM } from '../enums/signature-captur
 /**
  * Un intento temporal de captura de la firma manuscrita.
  *
- * Esta tabla **no guarda la imagen ni define el estado definitivo del usuario**. Su propósito es
- * controlar, auditar y proteger cada intento —sobre todo la comunicación PC ↔ teléfono—: quién
- * lo abrió, por qué canal, si el teléfono llegó a reclamarlo, cuándo vencía y en qué terminó.
- * El PNG vive en MinIO y la firma vigente del usuario sigue siendo `users.signature_id`.
+ * **No guarda la imagen ni define el estado definitivo del usuario**: sirve para controlar, auditar y
+ * proteger cada intento —sobre todo la comunicación PC ↔ teléfono—, registrando quién lo abrió, por
+ * qué canal, si el teléfono llegó a reclamarlo, cuándo vencía y en qué terminó. El PNG vive en MinIO
+ * y la firma vigente sigue siendo `users.signature_id`.
  *
- * `signatureFileId` responde "¿qué archivo produjo este intento?"; `users.signatureId` responde
- * "¿cuál es la firma que hay que usar hoy?". Son preguntas distintas y por eso son dos columnas:
- * si el usuario borra su firma y captura otra, el historial de intentos sigue apuntando cada uno
- * al archivo que generó, aunque ya no sea el vigente.
+ * `signatureFileId` responde "¿qué archivo produjo este intento?" y `users.signatureId` responde
+ * "¿cuál es la firma vigente?": son preguntas distintas, y por eso son dos columnas. Si el usuario
+ * borra su firma y captura otra, el historial sigue apuntando cada intento al archivo que generó.
  */
 @Entity('signature_capture_sessions')
 /**

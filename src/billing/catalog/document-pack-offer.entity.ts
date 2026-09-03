@@ -34,16 +34,14 @@ export class DocumentPackOfferEntity {
   stripePriceId: string;
 
   /**
-   * `prod_...` de Stripe. Nullable y sin relación con `stripePriceId` de arriba: ese es el
-   * PRECIO (obligatorio, es lo que se cobra), este es el PRODUCTO al que pertenece (opcional,
-   * lo escribe `CatalogSyncService` al recibir `product.created`/`updated`). Un paquete puede
-   * existir localmente, con su precio real ya dado de alta, antes de que su producto de Stripe
-   * se sincronice — o si el paquete no se modela como producto propio en Stripe.
+   * `prod_...` de Stripe: el PRODUCTO al que pertenece la oferta, no el precio. Es nullable y sin
+   * relación con `stripePriceId` —que sí es obligatorio, porque es lo que se cobra— porque un
+   * paquete puede existir localmente antes de que su producto se sincronice, o no modelarse como
+   * producto propio en Stripe.
    *
-   * **No es único**, a diferencia de `stripePriceId`: un mismo paquete se vende a distinto
-   * importe según el plan del comprador (`eligiblePlanType`) y en distintos tamaños, y cada una
-   * de esas combinaciones es una fila con su propio `price_...` bajo el mismo `prod_...`. Lo que
-   * identifica a la oferta es el precio, no el producto.
+   * **No es único**, a diferencia de `stripePriceId`: cada combinación de plan elegible y tamaño es
+   * una fila con su propio `price_...` bajo el mismo `prod_...`. Lo que identifica a la oferta es el
+   * precio.
    */
   @Column({
     name: 'stripe_product_id',

@@ -21,19 +21,19 @@ export class GetPublicAdvancedSignatureUseCase {
   ) {}
 
   /**
-   * Constancia pública de una firma avanzada — el destino del código QR estampado en el documento
-   * (historia "Generar código QR para firmas avanzadas").
+   * Devuelve la constancia pública de una firma avanzada: el destino del QR estampado en el
+   * documento.
    *
-   * Sin autenticación, igual que `getPublicDocumentView`: quien tiene el documento en la mano
-   * puede escanear el QR y verificar quién firmó y cuándo sin necesidad de tener cuenta. Por eso
-   * el gate es estricto — solo responde para una firma avanzada YA COMPLETADA de ese documento:
+   * Va sin autenticación, igual que la vista pública: quien tiene el documento en la mano puede
+   * escanear el QR y verificar quién firmó y cuándo sin tener cuenta. Por eso el gate es estricto y
+   * sólo responde para una firma avanzada YA COMPLETADA de ese documento:
    *
-   *  - si el colaborador no pertenece al documento, no existe o no es firmante → 404
-   *  - si su firma es simple → 404 (su constancia es la rúbrica visible, no este QR)
-   *  - si todavía no firmó → 404, no hay firma que consultar
+   *  - colaborador ajeno al documento, inexistente o que no es firmante → 404
+   *  - firma simple → 404, porque su constancia es la rúbrica visible y no este QR
+   *  - firma todavía pendiente → 404, no hay firma que consultar
    *
-   * Se responde 404 y no 403 a propósito: un 403 confirmaría que ese colaborador existe, y esta
-   * ruta la puede llamar cualquiera con un UUID.
+   * Responde 404 y no 403 a propósito: un 403 confirmaría que ese colaborador existe, y esta ruta la
+   * puede llamar cualquiera con un UUID.
    */
   async execute(
     documentId: string,

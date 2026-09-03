@@ -37,14 +37,12 @@ const TERMINAL_STATUSES = [
 ];
 
 /**
- * Qué significa cada resultado de Didit para el avance global del usuario.
+ * Traduce cada resultado de Didit al avance global del usuario.
  *
- * Rechazo, abandono, expiración y error del proveedor caen todos en RETRY_REQUIRED: desde el
- * lado del usuario los cuatro se resuelven igual, volviendo a intentar. El bloqueo definitivo
+ * Rechazo, abandono, expiración y error del proveedor caen todos en RETRY_REQUIRED: desde el lado
+ * del usuario los cuatro se resuelven volviendo a intentar. El bloqueo definitivo
  * (`IDENTITY_VERIFICATION_FAILED`) no lo decide un webhook, sino la regla de intentos o una
- * intervención administrativa.
- *
- * APPROVED es el caso especial y se resuelve aparte, en `resolveCredentialTarget`.
+ * intervención administrativa. APPROVED se resuelve aparte, en `resolveCredentialTarget`.
  */
 const CREDENTIAL_STATUS_BY_VERIFICATION_STATUS: Record<
   IDENTITY_VERIFICATION_STATUS_ENUM,
@@ -69,16 +67,13 @@ const CREDENTIAL_STATUS_BY_VERIFICATION_STATUS: Record<
 };
 
 /**
- * Aplica al intento local el resultado que Didit reportó por webhook.
+ * Aplica al intento local el resultado que Didit reportó por webhook: acá vive exclusivamente qué
+ * significa ese resultado para la identidad del usuario, mientras que la recepción HTTP y la
+ * validación de la firma HMAC quedan en el módulo `webhooks`.
  *
- * Punto de entrada del módulo `webhooks`, que es donde viven la recepción HTTP y la validación
- * de la firma HMAC. Acá está exclusivamente qué significa el resultado para la identidad del
- * usuario.
- *
- * **Contrato explícito: este caso de uso asume que la autenticidad del payload YA fue
- * verificada.** No valida firmas ni conoce cabeceras HTTP; quien lo invoque es responsable de
- * no entregarle nunca un cuerpo no confiable. Se expone con una firma deliberadamente genérica
- * (`Record<string, unknown>`) para que el módulo de webhooks pueda llamarlo sin que este módulo
+ * **Asume que la autenticidad del payload YA fue verificada**: no valida firmas ni conoce cabeceras,
+ * así que quien lo invoque es responsable de no entregarle nunca un cuerpo no confiable. La firma
+ * genérica (`Record<string, unknown>`) permite que el módulo de webhooks lo llame sin que éste
  * dependa de él.
  */
 @Injectable()
@@ -119,16 +114,15 @@ export class ProcessDiditVerificationResultUseCase {
     const status = this.mapStatus(payload.status);
 
     /**
-     * Una aprobación gana siempre sobre un estado terminal que NO es aprobación.
+     * Deja que una aprobación gane siempre sobre un estado terminal que no lo sea.
      *
-     * El caso real: la sesión expira (o se abandona) y Didit emite ese evento, pero el usuario sí
-     * completó la verificación y el `Approved` llega después — el proveedor no garantiza el orden
-     * de entrega. Sin esta excepción, la aprobación chocaba con la guarda de abajo y se descartaba
-     * en silencio: el intento se quedaba en EXPIRED, el usuario en RETRY_REQUIRED y la pantalla le
-     * mostraba "la sesión de verificación expiró" pese a haberla completado, sin forma de avanzar.
+     * Didit no garantiza el orden de entrega: la sesión expira o se abandona, emite ese evento, y el
+     * `Approved` del usuario que sí completó la verificación llega después. Sin esta excepción la
+     * aprobación chocaba con la guarda de abajo y se descartaba en silencio —el intento quedaba en
+     * EXPIRED y la pantalla mostraba "la sesión expiró" sin forma de avanzar.
      *
-     * Es seguro porque `Approved` es un hecho verificado y firmado por el proveedor, no una
-     * suposición nuestra: que la URL ya se hubiera consumido describe al canal, no al veredicto.
+     * Es seguro porque `Approved` es un hecho verificado y firmado por el proveedor: que la URL ya
+     * se hubiera consumido describe al canal, no al veredicto.
      */
     const supersedesTerminal =
       status === IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED &&
@@ -172,13 +166,12 @@ export class ProcessDiditVerificationResultUseCase {
     }
 
     /**
-     * El estado global se mueve en todos los resultados, no sólo al aprobar: si un intento
-     * aprobado termina en EXPIRED, la credencial de firma tiene que dejar de valer por la misma
-     * vía por la que se otorgó.
+     * Mueve el estado global en todos los resultados, no sólo al aprobar: si un intento aprobado
+     * termina en EXPIRED, la credencial de firma tiene que dejar de valer por la misma vía por la
+     * que se otorgó.
      *
-     * `applyIfAllowed` y no `execute`: Didit reentrega webhooks y no garantiza el orden, así
-     * que una transición imposible es un evento viejo, no un fallo del servidor. Devolver 500
-     * haría que el proveedor reintentara para siempre.
+     * Usa `applyIfAllowed` y no `execute` porque Didit reentrega webhooks sin garantizar el orden:
+     * una transición imposible es un evento viejo, y devolver 500 haría que reintentara para siempre.
      */
     if (status === IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED) {
       await this.applyApproval(attempt.userId);
@@ -195,19 +188,15 @@ export class ProcessDiditVerificationResultUseCase {
   }
 
   /**
-   * Lleva la credencial hasta donde corresponde tras una aprobación.
+   * Lleva la credencial hasta donde corresponde tras una aprobación: quien ya tenía su rúbrica
+   * registrada termina en CONFIGURED, y el resto en SIGNATURE_PENDING, que es lo único que le falta.
    *
-   * Quien ya tenía su rúbrica registrada —el usuario que subió su firma con el onboarding
-   * anterior a Didit y valida su identidad después— termina en CONFIGURED; el resto, en
-   * SIGNATURE_PENDING, que es lo único que le falta.
-   *
-   * **Se recorre en pasos en vez de apuntar directo a CONFIGURED.** La máquina de estados no es
-   * sólo una descripción: es también la autorización de los demás disparadores, y hay uno
-   * (`UpdateSignatureUseCase`) que pide CONFIGURED al reponer la rúbrica sin comprobar la
-   * identidad, confiando en que la transición quede en no-op. Abrir
-   * PENDING/IN_PROGRESS/IN_REVIEW → CONFIGURED para que la aprobación llegara de un salto le
-   * daría de paso credencial completa a quien no tiene identidad aprobada. Los dos pasos que se
-   * dan aquí ya eran aristas válidas, así que nadie más gana permisos.
+   * **Recorre la máquina de estados en pasos en vez de apuntar directo a CONFIGURED.** Esas
+   * transiciones son además la autorización de los demás disparadores, y `UpdateSignatureUseCase`
+   * pide CONFIGURED al reponer la rúbrica sin comprobar la identidad, confiando en que quede en
+   * no-op. Abrir PENDING/IN_PROGRESS/IN_REVIEW → CONFIGURED para llegar de un salto le daría
+   * credencial completa a quien no tiene identidad aprobada; los dos pasos de acá ya eran aristas
+   * válidas, así que nadie gana permisos.
    */
   private async applyApproval(userId: string): Promise<void> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
@@ -241,12 +230,12 @@ export class ProcessDiditVerificationResultUseCase {
   }
 
   /**
-   * Búsqueda por `session_id` y, si falla, por `vendor_data`.
+   * Busca el intento por `session_id` y, si falla, por `vendor_data` —el `userId` que mandamos al
+   * crear la sesión.
    *
-   * `vendor_data` es el `userId` que mandamos al crear la sesión. El respaldo cubre un caso
-   * real: si la respuesta del alta se pierde (timeout de red después de que Didit ya creó la
-   * sesión), el intento local quedó sin `provider_session_id`, pero el webhook sí trae de
-   * vuelta nuestro identificador y permite reconciliarlo.
+   * El respaldo cubre un caso real: si la respuesta del alta se pierde por timeout después de que
+   * Didit ya creó la sesión, el intento local queda sin `provider_session_id`, pero el webhook sí
+   * devuelve nuestro identificador y permite reconciliarlo.
    */
   private async findAttempt(
     sessionId: string,
@@ -311,8 +300,8 @@ export class ProcessDiditVerificationResultUseCase {
   }
 
   /**
-   * Sólo se guarda motivo en los estados que lo tienen. Dejar un `failure_reason` colgado de un
-   * intento que después se aprobó haría que la pantalla mostrara un rechazo inexistente.
+   * Guarda motivo sólo en los estados que lo tienen: dejar un `failure_reason` colgado de un intento
+   * que después se aprobó haría que la pantalla mostrara un rechazo inexistente.
    */
   private resolveFailureReason(
     status: IDENTITY_VERIFICATION_STATUS_ENUM,

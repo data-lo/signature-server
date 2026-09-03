@@ -45,7 +45,7 @@ export class SealDocumentUseCase {
   }
 
   /**
-   * Sello ya emitido para un documento, o `null` si no tiene.
+   * Devuelve el sello ya emitido para un documento, o `null` si no tiene.
    *
    * Lo usa el flujo de finalización cuando el sellado responde "ya sellado": pasa si un intento
    * anterior selló pero falló más adelante (al armar la hoja, por ejemplo) y la firma se reintentó.
@@ -56,14 +56,13 @@ export class SealDocumentUseCase {
   }
 
   /**
-   * Completa `integrityEvidence` con la serie y el `notBefore` del certificado TSA en una
-   * evidencia que se creó antes de que existiera esta extracción (o cuya extracción falló al
-   * sellar). La llama la vista pública cuando encuentra una evidencia sin estos campos y sí logra
-   * extraerlos — así el reprocesamiento de ASN.1 no se repite en cada consulta.
+   * Completa `integrityEvidence` con la serie y el `notBefore` del certificado TSA en una evidencia
+   * anterior a que existiera esta extracción, o cuya extracción falló al sellar. La llama la vista
+   * pública cuando encuentra una evidencia sin estos campos y sí logra extraerlos, para no
+   * reprocesar el ASN.1 en cada consulta.
    *
-   * Recibe la evidencia completa (no solo el id) para reescribir el JSONB entero con los campos
-   * que ya tenía más los dos nuevos: un `update` parcial de una columna `jsonb` reemplaza la
-   * columna completa, no la mezcla.
+   * Recibe la evidencia completa y no sólo el id porque un `update` parcial sobre una columna
+   * `jsonb` reemplaza la columna entera en vez de mezclarla.
    */
   async persistIntegrityCertificateInfo(
     seal: SealEntity,

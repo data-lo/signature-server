@@ -1,20 +1,14 @@
-// NestJS core
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 
-// Swagger
 import { ApiTags } from '@nestjs/swagger';
 
-// Auth
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 
-// Use cases
 import { GetOrganizationInvitationPreviewUseCase } from './applications/get-organization-invitation-preview.use-case';
 import { AcceptOrganizationInvitationUseCase } from './applications/accept-organization-invitation.use-case';
 
-// DTOs
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 
-// Docs
 import { ApiGetInvitationPreview } from './docs/api-get-invitation-preview.docs';
 import { ApiAcceptInvitation } from './docs/api-accept-invitation.docs';
 

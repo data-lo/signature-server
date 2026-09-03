@@ -1,4 +1,3 @@
-// External dependencies
 import {
   Controller,
   Get,
@@ -12,7 +11,6 @@ import {
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Use cases
 import { GetSignatureFileUseCase } from './applications/get-signature-file.use-case';
 import { GetSignatureUseCase } from './applications/get-signature.use-case';
 import { UpdateSignatureUseCase } from './applications/update-signature.use-case';
@@ -20,18 +18,14 @@ import { DeactivateSignatureUseCase } from './applications/deactivate-signature.
 import { DeleteSignatureImageUseCase } from './applications/delete-signature-image.use-case';
 import { DeleteOfficialFileUseCase } from './applications/delete-official-file.use-case';
 
-// Decorators
 import { Public } from 'src/auth/decorators/public.decorator';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 
-// Enums
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 
-// Interfaces
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
-// Docs
 import { ApiGetSignatureFile } from './docs/api-get-signature-file.docs';
 import { ApiGetSignature } from './docs/api-get-signature.docs';
 import { ApiUpdateSignature } from './docs/api-update-signature.docs';

@@ -14,17 +14,14 @@ import { AuthService } from '../auth.service';
 import { LoginDto } from '../dto/login.dto';
 
 /**
- * `POST /auth/login`: inicio de sesión con correo y contraseña.
+ * Inicia sesión con correo y contraseña (`POST /auth/login`).
  *
- * La credencial se resuelve contra `Account.email`/`Account.password` (plan de migración ER-V2,
- * Fase 5) y no contra `User.email`/`.password`. Son una copia sincronizada de la credencial
- * única de la persona (decisión D6): un usuario con varias cuentas —personal más
- * organizaciones— tiene el mismo correo y contraseña en cada fila, así que cualquiera de ellas
- * resuelve el mismo `userId`.
+ * Resuelve la credencial contra `Account.email`/`.password` y no contra `User`: son una copia
+ * sincronizada de la credencial única de la persona (decisión D6), así que un usuario con varias
+ * cuentas tiene el mismo correo y contraseña en cada fila y cualquiera resuelve el mismo `userId`.
  *
- * Todos los motivos de rechazo por credenciales dan el mismo 401 con el mismo texto: separar
- * "ese correo no existe" de "esa contraseña no es" convertiría el endpoint en un oráculo de qué
- * correos están registrados.
+ * Todos los motivos de rechazo dan el mismo 401 con el mismo texto: separar "ese correo no existe"
+ * de "esa contraseña no es" convertiría el endpoint en un oráculo de qué correos están registrados.
  */
 @Injectable()
 export class LoginUseCase {

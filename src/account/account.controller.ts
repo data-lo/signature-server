@@ -1,24 +1,18 @@
-// NestJS core
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 
-// Swagger
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Auth
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
-// Use cases
 import { CreateAccountUseCase } from './applications/create-account.use-case';
 import { ListAccountsUseCase } from './applications/list-accounts.use-case';
 import { GetAccountUseCase } from './applications/get-account.use-case';
 import { UpdateAccountUseCase } from './applications/update-account.use-case';
 
-// DTOs
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 
-// Docs
 import { ApiCreateAccount } from './docs/api-create-account.docs';
 import { ApiGetAccounts } from './docs/api-get-accounts.docs';
 import { ApiGetAccount } from './docs/api-get-account.docs';

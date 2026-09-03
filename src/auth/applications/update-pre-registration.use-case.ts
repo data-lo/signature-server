@@ -12,14 +12,14 @@ import { UserService } from 'src/user/user.service';
 import { UpdatePreRegistrationDto } from '../dto/update-pre-registration.dto';
 
 /**
- * `PATCH /auth/pre-registration`: corrige los datos de un registro que todavía no verifica su
- * correo (ver historia "Permitir corregir datos antes de verificar el correo").
+ * Corrige los datos de un registro que todavía no verifica su correo
+ * (`PATCH /auth/pre-registration`).
  *
- * Lo que autoriza el cambio es la contraseña del propio pre-registro, no el OTP: cuando el error
- * está justamente en el correo, el código nunca llega y no habría forma de demostrar nada.
+ * Autoriza el cambio con la contraseña del propio pre-registro y no con el OTP: cuando el error está
+ * justamente en el correo, el código nunca llega y no habría forma de demostrar nada.
  *
- * Se responde con los mismos mensajes que el login ante credenciales incorrectas, para no
- * convertir este endpoint en un oráculo que confirme qué correos tienen un registro pendiente.
+ * Responde con los mismos mensajes que el login ante credenciales incorrectas, para no convertirse
+ * en un oráculo de qué correos tienen un registro pendiente.
  */
 @Injectable()
 export class UpdatePreRegistrationUseCase {

@@ -7,14 +7,13 @@ import { UserEntity } from '../entities/user.entity';
 import { UserService } from '../user.service';
 
 /**
- * `POST /user`: alta de un usuario desde la API con llave (`@Public`), no desde el registro
- * público — ese es `RegisterUseCase`, que además pide CAPTCHA, contraseña y verificación de
- * correo. Acá el llamante ya está autorizado por la llave de API y crea la ficha directamente.
+ * Da de alta un usuario desde la API con llave (`POST /user`, `@Public`), no desde el registro
+ * público —ése es `RegisterUseCase`, que además pide CAPTCHA, contraseña y verificación de correo—:
+ * acá el llamante ya está autorizado por la llave de API y crea la ficha directamente.
  *
- * Las tres unicidades se comprueban antes de abrir la transacción: correo siempre, CURP y RFC
- * sólo si vienen. Adelantarlas evita empezar una transacción que se sabe condenada, y sobre
- * todo hace que el cliente reciba un 409 explicando qué campo choca en vez del error de
- * restricción única de PostgreSQL.
+ * Comprueba las tres unicidades antes de abrir la transacción —correo siempre, CURP y RFC sólo si
+ * vienen— para no empezar una transacción condenada y, sobre todo, para que el cliente reciba un 409
+ * explicando qué campo choca en vez del error de restricción única de PostgreSQL.
  */
 @Injectable()
 export class CreateUserUseCase {

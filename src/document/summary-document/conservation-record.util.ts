@@ -18,15 +18,14 @@ export interface ConservationRecordInfo {
 }
 
 /**
- * Traduce el sello persistido a lo que la hoja imprime en la tabla NOM-151. `null` cuando el
- * documento no tiene sello (firma simple, o sellado fallido: es best-effort).
+ * Traduce el sello persistido a lo que la hoja imprime en su tabla NOM-151, o `null` si el documento
+ * no tiene sello (firma simple, o sellado fallido: es best-effort).
  *
- * **El certificado y la serie salen del certificado del PSC embebido en la evidencia NOM-151.**
- * `SealMapper` los extrae al sellar y los deja en `integrityEvidence`; acá sólo se leen. Cuando
- * faltan —evidencia histórica, sellada antes de que existiera la extracción, o un archivo que el
- * parser no reconoció— se intenta extraerlos del propio ASN.1 en el momento, que es lo mismo que
- * hace la vista pública: la hoja se genera una sola vez y queda anexada al PDF para siempre, así
- * que vale el intento antes de imprimir un renglón vacío que ya no se puede corregir.
+ * El certificado y la serie salen del certificado del PSC embebido en la evidencia, que `SealMapper`
+ * extrae al sellar. Cuando faltan —evidencia histórica o archivo que el parser no reconoció— los
+ * extrae del ASN.1 en el momento, igual que la vista pública: la hoja se genera una sola vez y queda
+ * anexada al PDF para siempre, así que vale el intento antes de imprimir un renglón vacío que ya no
+ * se puede corregir.
  */
 export function toConservationRecord(
   seal: SealEntity | null | undefined,

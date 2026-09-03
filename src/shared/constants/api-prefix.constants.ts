@@ -1,29 +1,26 @@
 import type { INestApplication } from '@nestjs/common';
 
 /**
- * Prefijo global de la API HTTP. Se aplica una sola vez en el arranque
- * (`applyGlobalApiPrefix`) en vez de repetirse dentro de cada `@Controller()`.
+ * Prefijo global de la API HTTP, aplicado una sola vez en el arranque (`applyGlobalApiPrefix`) en
+ * vez de repetirse dentro de cada `@Controller()`.
  *
- * Antes convivían las dos formas: unos controladores declaraban `@Controller('api/v1/users')`
- * y otros `@Controller('user')` a secas, así que la misma API respondía en `/api/v1/...` y en
- * `/...` según el módulo. Centralizarlo evita que el próximo controlador vuelva a elegir, y
- * evita el error inverso —dejar el `api/v1` local con el prefijo global puesto— que produce
- * rutas `/api/v1/api/v1/...`.
+ * Mientras convivieron las dos formas —`@Controller('api/v1/users')` y `@Controller('user')`— la
+ * misma API respondía en `/api/v1/...` y en `/...` según el módulo. Centralizarlo evita que el
+ * próximo controlador vuelva a elegir, y evita el error inverso —dejar el `api/v1` local con el
+ * prefijo global puesto— que produce rutas `/api/v1/api/v1/...`.
  */
 export const GLOBAL_API_PREFIX = 'api/v1';
 
 /**
- * Rutas que quedan FUERA del prefijo, con el motivo por el que cada una se queda donde está:
+ * Rutas que quedan FUERA del prefijo, con el motivo de cada una:
  *
- * - `health`: lo consumen probes de infraestructura que apuntan a una URL fija y no pasan por
- *   el versionado de la API. El `HEALTHCHECK` del `Dockerfile` pide `http://localhost:4000/health`
- *   literalmente; moverlo a `/api/v1/health` dejaría el contenedor marcado como `unhealthy`.
- * - `''` (la raíz): `GET /` es el saludo de sanidad del andamiaje de Nest, excluido también del
- *   Swagger publicado (ver `ApiGetHello`). No es parte del contrato de la API, así que no le
- *   corresponde vivir bajo el prefijo versionado.
+ * - `health`: lo consumen probes de infraestructura que apuntan a una URL fija. El `HEALTHCHECK` del
+ *   `Dockerfile` pide `http://localhost:4000/health` literalmente, y moverlo dejaría el contenedor
+ *   marcado como `unhealthy`.
+ * - `''` (la raíz): es el saludo de sanidad del andamiaje de Nest, excluido también del Swagger
+ *   publicado. No es parte del contrato de la API.
  *
- * Ninguna de las dos devuelve datos de negocio: son los dos únicos endpoints que no forman
- * parte de la API pública. Todo lo demás va prefijado.
+ * Ninguna devuelve datos de negocio: son los dos únicos endpoints fuera de la API pública.
  */
 export const GLOBAL_API_PREFIX_EXCLUDE = ['health', '/'];
 

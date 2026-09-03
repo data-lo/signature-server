@@ -11,26 +11,23 @@ export const PUBLIC_STRIPE_PLANS_CACHE_KEY = 'payments:public-stripe-plans';
 export const PUBLIC_STRIPE_PLANS_CACHE_TTL_SECONDS = 600;
 
 /**
- * Catálogo de planes públicos, tal como lo pintan las tarjetas.
+ * Devuelve el catálogo de planes públicos, tal como lo pintan las tarjetas.
  *
- * Los planes se leen de Stripe y no de una tabla local ni de variables de entorno: dar de alta
- * un producto o cambiarle el precio se hace en el panel del proveedor y se refleja solo. Qué
- * productos son "públicos" también se decide allá, con la metadata `catalogType=plan` +
- * `visibility=true`; el filtro concreto vive en `StripePaymentService` porque `prices.list()` no
- * sabe filtrar por metadata.
+ * Los planes se leen de Stripe y no de una tabla local ni de variables de entorno: dar de alta un
+ * producto o cambiarle el precio se hace en el panel del proveedor y se refleja solo. Qué productos
+ * son públicos también se decide allá, con `catalogType=plan` + `visibility=true`; el filtro concreto
+ * vive en `StripePaymentService` porque `prices.list()` no sabe filtrar por metadata.
  *
- * **Caché de 10 minutos en Redis.** Antes cada visita a la pantalla de planes era una llamada a
- * Stripe, aunque el catálogo cambie unas pocas veces al año. El precio de la caché es que un
- * cambio hecho en el dashboard tarda hasta ese TTL en verse, que es exactamente el trato que la
- * historia pide.
+ * **Cachea 10 minutos en Redis**: sin eso, cada visita a la pantalla era una llamada a Stripe aunque
+ * el catálogo cambie unas pocas veces al año. El precio es que un cambio hecho en el dashboard tarda
+ * hasta ese TTL en verse.
  *
- * El plan gratuito no aparece por acá y no es un olvido: no se administra en Stripe, así que no
- * tiene producto ni precio que listar.
+ * El plan gratuito no aparece acá y no es un olvido: no se administra en Stripe, así que no tiene
+ * producto ni precio que listar.
  *
- * **No se crea ninguna sesión de Checkout aquí.** Cada sesión es temporal y cuesta una llamada
- * al proveedor: generarlas al listar significaría abrir tantas como tarjetas se muestran, casi
- * todas para no usarse nunca. La sesión se crea al pulsar "Comprar", en
- * `CreateSubscriptionCheckoutUseCase` (módulo `billing`).
+ * **No crea ninguna sesión de Checkout**: cada una es temporal y cuesta una llamada al proveedor, así
+ * que generarlas al listar abriría tantas como tarjetas, casi todas para no usarse nunca. La sesión
+ * se crea al pulsar "Comprar", en `CreateSubscriptionCheckoutUseCase`.
  */
 @Injectable()
 export class GetPublicStripePlansUseCase {
@@ -73,10 +70,10 @@ export class GetPublicStripePlansUseCase {
   }
 
   /**
-   * Redis es una optimización, no la fuente de verdad: si está caído o devuelve algo que ya no
-   * se puede leer (un despliegue que cambió la forma de la respuesta y dejó claves viejas), se
-   * sigue con Stripe. Lo contrario convertiría una caída del caché en una caída del catálogo,
-   * que es peor que la situación previa a tenerlo.
+   * Trata a Redis como optimización y no como fuente de verdad: si está caído o devuelve algo
+   * ilegible —un despliegue que cambió la forma de la respuesta y dejó claves viejas— se sigue con
+   * Stripe. Lo contrario convertiría una caída del caché en una caída del catálogo, peor que la
+   * situación previa a tenerlo.
    */
   private async readCache(): Promise<PaymentServiceResponse[] | null> {
     try {
@@ -107,10 +104,10 @@ export class GetPublicStripePlansUseCase {
   }
 
   /**
-   * Se recorta lo que sale hacia el navegador. El `productId` y cualquier campo interno del
-   * proveedor se quedan del lado del servidor: la pantalla sólo necesita el `priceId` para
-   * pedir el checkout. Se normaliza ANTES de cachear, así lo guardado es exactamente lo que se
-   * responde y un cache hit no tiene que volver a mapear nada.
+   * Recorta lo que sale hacia el navegador: el `productId` y cualquier campo interno del proveedor
+   * se quedan del lado del servidor, porque la pantalla sólo necesita el `priceId` para pedir el
+   * checkout. Normaliza ANTES de cachear, así lo guardado es exactamente lo que se responde y un
+   * cache hit no tiene que volver a mapear nada.
    */
   private toResponse(plan: PaymentService): PaymentServiceResponse {
     return {

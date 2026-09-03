@@ -76,9 +76,9 @@ export class GetCurrentIdentityVerificationUseCase {
   }
 
   /**
-   * La URL sólo se expone mientras el intento siga abierto y vigente. Devolverla en un intento
-   * ya rechazado o expirado invitaría al frontend a reabrir una sesión muerta de Didit en vez
-   * de arrancar una nueva.
+   * Expone la URL sólo mientras el intento siga abierto y vigente: devolverla en uno ya rechazado o
+   * expirado invitaría al frontend a reabrir una sesión muerta de Didit en vez de arrancar una
+   * nueva.
    */
   private resumableUrl(attempt: IdentityVerificationEntity): string | null {
     if (!RESUMABLE_STATUSES.includes(attempt.status)) {

@@ -8,7 +8,6 @@ import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CheckoutOrderService } from './checkout-order.service';
 
-
 const SUCCESS_PATH = '/dashboard/subscriptions?payment=success&session_id={CHECKOUT_SESSION_ID}';
 const CANCEL_PATH = '/dashboard/subscriptions?payment=cancel';
 

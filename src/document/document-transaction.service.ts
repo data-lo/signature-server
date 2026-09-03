@@ -11,34 +11,30 @@ import { HashService } from 'src/shared/hash/hash.service';
 const DOCUMENT_TRANSACTION_LOCK_NAMESPACE = 445566;
 
 /**
- * Los dos registros sin `collaboratorId` (inicial y final) se distinguen por el chainHash: el
- * inicial es el único de la cadena que no encadena con nada, así que su chainHash es ''.
+ * Distingue el registro final del inicial, los dos que van sin `collaboratorId`, por su chainHash:
+ * el inicial es el único de la cadena que no encadena con nada, así que el suyo es ''.
  */
 export function isCompletionRecord(record: DocumentTransactionEntity): boolean {
   return record.collaboratorId === null && record.chainHash !== '';
 }
 
 /**
- * Registro de Transacciones (Document Transaction, ver diagrama ER-V2): bitácora de integridad
- * encadenada por documento, independiente de AuditService (Mongo, best-effort). Cada documento
- * arranca con un registro inicial (chainHash vacío) y cada registro nuevo encadena con el
- * actualHash del registro inmediato anterior — mismo criterio de encadenamiento que ya usa
- * AuditService, aplicado aquí a una tabla relacional propia para poder consultarse en tiempo real
- * junto con el resto del dominio de documentos (GET /document/:id).
+ * Mantiene la bitácora de integridad encadenada por documento, independiente de AuditService (Mongo,
+ * best-effort). Cada documento arranca con un registro inicial de `chainHash` vacío y cada registro
+ * nuevo encadena con el `actualHash` del anterior.
  *
- * **Qué se encadena depende del tipo de firma** (ver DocumentEventsConsumer, que es quien decide):
+ * Vive en una tabla relacional propia para poder consultarse en tiempo real junto con el resto del
+ * dominio de documentos (`GET /document/:id`).
  *
- * - **Firma simple**: un registro por cada firma (`registerSignature`). La rúbrica estampada no
- *   es prueba criptográfica por sí misma, así que la integridad de cada acto de firma vive en
- *   esta cadena.
- * - **Firma avanzada (FIEL)**: las firmas intermedias NO generan registro. Cada una ya lleva su
- *   propia evidencia criptográfica verificable (`CollaboratorEntity.advancedSignature`: hash del
- *   documento, firma RSA en base64 y certificado del SAT, ver EfirmaService), así que duplicarla
- *   en la cadena no agrega garantías. Solo se agrega un registro final (`registerCompletion`)
- *   cuando el último firmante termina.
+ * **Qué se encadena depende del tipo de firma** (lo decide `DocumentEventsConsumer`):
  *
- * En un documento mixto conviven ambas reglas: las firmas simples encadenan una a una y las
- * avanzadas quedan representadas por el registro final.
+ * - **Firma simple**: un registro por firma. La rúbrica estampada no es prueba criptográfica por sí
+ *   misma, así que la integridad de cada acto de firma vive en esta cadena.
+ * - **Firma avanzada (FIEL)**: las firmas intermedias no generan registro, porque cada una ya lleva
+ *   su evidencia criptográfica verificable en `CollaboratorEntity.advancedSignature` y duplicarla no
+ *   agrega garantías. Sólo se agrega el registro final cuando termina el último firmante.
+ *
+ * En un documento mixto conviven ambas reglas.
  */
 @Injectable()
 export class DocumentTransactionService {
@@ -56,11 +52,11 @@ export class DocumentTransactionService {
   }
 
   /**
-   * Registro inicial al crear un documento — chainHash vacío (no hay registro previo que
-   * encadenar). `actualHash` es el hash del archivo (originalHash) ya calculado por el caller.
-   * `manager` opcional: cuando se crea dentro de una transacción más grande (ver
-   * CreateDocumentSignatureFlowUseCase), pasar el `EntityManager` transaccional para que el INSERT corra
-   * en la misma transacción y participe del rollback si algo más falla después.
+   * Abre la cadena con el registro inicial al crear un documento: `chainHash` vacío, porque no hay
+   * registro previo que encadenar, y `actualHash` es el hash del archivo ya calculado por el caller.
+   *
+   * `manager` es opcional: cuando se crea dentro de una transacción más grande, pasar el
+   * `EntityManager` transaccional hace que el INSERT participe del rollback si algo falla después.
    */
   async createInitial(
     documentId: string,
@@ -114,14 +110,13 @@ export class DocumentTransactionService {
   }
 
   /**
-   * Registro final del documento: se agrega cuando el ÚLTIMO firmante completó su firma y el
-   * documento tiene al menos una firma avanzada (ver docblock de la clase). Va sin
-   * `collaboratorId` —igual que el inicial— porque representa al documento completo, no a un
-   * firmante: cierra la cadena ligándola al hash del PDF final ya estampado (`signedHash`).
+   * Cierra la cadena con el registro final, cuando el ÚLTIMO firmante completó su firma y el
+   * documento tiene al menos una firma avanzada. Va sin `collaboratorId` —como el inicial— porque
+   * representa al documento completo y lo liga al hash del PDF final ya estampado (`signedHash`).
    *
-   * Es idempotente: si el documento ya tiene su registro final, lo devuelve en vez de encadenar
-   * otro. La comprobación corre dentro de la misma sección crítica que la inserción, así que dos
-   * eventos concurrentes del mismo documento no pueden crear dos registros finales.
+   * Es idempotente: si el documento ya tiene su registro final lo devuelve en vez de encadenar otro.
+   * La comprobación corre dentro de la misma sección crítica que la inserción, así que dos eventos
+   * concurrentes no pueden crear dos registros finales.
    */
   async registerCompletion(
     documentId: string,
@@ -144,15 +139,14 @@ export class DocumentTransactionService {
   }
 
   /**
-   * Sección crítica compartida por todos los registros encadenados: leer el último registro,
-   * calcular el hash y insertar.
+   * Serializa la sección crítica que comparten todos los registros encadenados: leer el último,
+   * calcular el hash e insertar.
    *
-   * Bug corregido: sin serializar esa secuencia, dos firmantes del MISMO documento firmando casi
-   * al mismo tiempo (posible a propósito en un documento `isSequential=false`, donde cualquiera
-   * puede firmar ya, sin esperar turno) podían leer el mismo "último" registro y encadenar dos
-   * filas nuevas al mismo padre, bifurcando la cadena de ESE documento. `pg_advisory_xact_lock`
-   * (con hashtext(documentId) como segunda clave, para no serializar documentos distintos entre
-   * sí) cierra esa ventana — mismo criterio que AuditChainService usa para su cadena global.
+   * Sin serializar esa secuencia, dos firmantes del MISMO documento firmando casi a la vez —posible
+   * a propósito cuando `isSequential=false`— podían leer el mismo "último" registro y encadenar dos
+   * filas al mismo padre, bifurcando la cadena de ese documento. `pg_advisory_xact_lock`, con
+   * `hashtext(documentId)` como segunda clave para no serializar documentos distintos entre sí,
+   * cierra esa ventana. Mismo criterio que `AuditChainService` en su cadena global.
    */
   private async appendChained(
     documentId: string,

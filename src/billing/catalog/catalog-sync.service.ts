@@ -37,27 +37,24 @@ const SUPPORTED_INTERVALS: Record<string, BILLING_INTERVAL_ENUM> = {
 
 /**
  * Sincroniza el catálogo comercial local (`plans`, `plan_prices`, `document_pack_offers`) con los
- * productos y precios de Stripe. Vive separado de `StripeWebhookService` (que sólo enruta el
- * evento ya autenticado) y de `StripePaymentService` (que atiende el checkout): esto no es un
- * efecto de un pago, es mantenimiento de catálogo — un admin puede crear/renombrar/desactivar un
- * producto en el dashboard de Stripe sin que nadie compre nada, y aun así el catálogo local se
- * tiene que enterar.
+ * productos y precios de Stripe.
  *
- * **Enrutamiento por metadata del PRODUCTO, no por nombre.** Un producto de Stripe no dice si es
- * un plan de suscripción o un paquete de documentos — ver `CATALOG_TYPE_ENUM`. Los eventos de
- * precio también se enrutan por la metadata de su producto: por eso `syncPriceUpserted` lo recibe
- * ya resuelto, porque el payload de `price.*` sólo trae su id.
+ * Vive separado de `StripeWebhookService`, que sólo enruta el evento ya autenticado, y de
+ * `StripePaymentService`, que atiende el checkout: esto no es efecto de un pago sino mantenimiento
+ * de catálogo, y un admin puede renombrar o desactivar un producto en el dashboard sin que nadie
+ * compre nada.
  *
- * **Qué NO se toca nunca desde acá:** `monthlyDocumentLimit`, `allowSimpleSignature` y
- * `allowAdvancedSignature` de `PlanEntity`. Son configuración comercial interna (qué puede hacer
- * quien compró el plan), no algo que Stripe conozca — su Producto sólo tiene nombre, estado y
- * metadata. Sincronizarlos sobrescribiría, con nada, la configuración real cada vez que alguien
- * sólo quisiera renombrar el plan en el dashboard.
+ * **Enruta por la metadata del PRODUCTO, no por nombre**: un producto de Stripe no dice si es plan o
+ * paquete (ver `CATALOG_TYPE_ENUM`). Los eventos de precio se enrutan igual, y por eso
+ * `syncPriceUpserted` lo recibe ya resuelto: el payload de `price.*` sólo trae su id.
  *
- * **Nada se borra.** Ni `product.deleted` ni un cambio de precio destruyen filas: se marcan
- * inactivas. `checkout_orders` apunta a `plan_prices`/`document_pack_offers` con `ON DELETE
- * RESTRICT`, así que el importe que se cobró tiene que seguir existiendo tal cual para las
- * facturas y las órdenes históricas.
+ * **Nunca toca** `monthlyDocumentLimit`, `allowSimpleSignature` ni `allowAdvancedSignature`: son
+ * configuración comercial interna que Stripe no conoce, y sincronizarlos sobrescribiría con nada la
+ * configuración real cada vez que alguien sólo quisiera renombrar el plan.
+ *
+ * **Nada se borra**: ni `product.deleted` ni un cambio de precio destruyen filas, se marcan
+ * inactivas. `checkout_orders` apunta a ellas con `ON DELETE RESTRICT`, así que el importe cobrado
+ * tiene que seguir existiendo tal cual para las facturas y órdenes históricas.
  */
 @Injectable()
 export class CatalogSyncService {
@@ -220,9 +217,9 @@ export class CatalogSyncService {
   }
 
   /**
-   * De un producto de paquete sólo se sincroniza lo comercial: nombre y estado, sobre TODAS sus
-   * ofertas. Un mismo producto puede tener varias filas —una por plan elegible y precio, ver
-   * `upsertDocumentPackPrice`—, y el nombre del producto es el de todas ellas.
+   * Sincroniza de un producto de paquete sólo lo comercial —nombre y estado— sobre TODAS sus
+   * ofertas. Un mismo producto puede tener varias filas, una por plan elegible y precio, y el
+   * nombre del producto es el de todas ellas.
    *
    * A diferencia de `upsertPlan`, esto NUNCA crea una fila: `documentsGranted`, `stripePriceId`,
    * `amount` y `currency` son NOT NULL y son datos del PRECIO, que un evento `product.*` no trae.
@@ -247,7 +244,7 @@ export class CatalogSyncService {
   }
 
   /**
-   * Precio de un plan: una fila de `plan_prices` por `stripe_price_id`.
+   * Da de alta o actualiza el precio de un plan: una fila de `plan_prices` por `stripe_price_id`.
    *
    * Toda modificación comercial crea una versión local. Aunque Stripe normalmente publica un
    * nuevo `price_...` para un importe nuevo, no dependemos de ese detalle: si llega el mismo id
@@ -383,16 +380,16 @@ export class CatalogSyncService {
   }
 
   /**
-   * Precio de un paquete de documentos: una fila de `document_pack_offers` por `stripe_price_id`.
+   * Da de alta o actualiza el precio de un paquete de documentos: una fila de
+   * `document_pack_offers` por `stripe_price_id`.
    *
-   * La fila —y no el producto— es la unidad del catálogo de paquetes, porque el mismo paquete
-   * puede venderse a distinto importe según el plan del comprador (`eligiblePlanType`) y en
-   * distintos tamaños (`documentsGranted`). Todas esas filas comparten `stripe_product_id`.
+   * La fila —y no el producto— es la unidad del catálogo, porque el mismo paquete se vende a
+   * distinto importe según el plan del comprador (`eligiblePlanType`) y en distintos tamaños
+   * (`documentsGranted`), todos compartiendo `stripe_product_id`.
    *
-   * Por eso mismo un precio nuevo NO releva a los anteriores, al revés que en los planes: dos
-   * precios activos del mismo producto suelen ser dos ofertas distintas y legítimas, no dos
-   * versiones de la misma. Quien las da de baja es Stripe, archivándolas (`price.updated` con
-   * `active: false`).
+   * Por eso un precio nuevo NO releva a los anteriores, al revés que en los planes: dos precios
+   * activos del mismo producto suelen ser dos ofertas legítimas. Quien las da de baja es Stripe, al
+   * archivarlas.
    */
   private async upsertDocumentPackPrice(
     price: Stripe.Price,
@@ -449,8 +446,8 @@ export class CatalogSyncService {
   }
 
   /**
-   * A qué plan se le ofrece este paquete. Ausente significa "a cualquiera", que es una oferta
-   * válida y por eso no falla; lo que sí falla es nombrar un plan que no existe localmente.
+   * Resuelve a qué plan se le ofrece este paquete. Ausente significa "a cualquiera", que es una
+   * oferta válida y por eso no falla; lo que sí falla es nombrar un plan que no existe localmente.
    */
   private async resolveEligiblePlanType(
     price: Stripe.Price,

@@ -9,18 +9,16 @@ import { AuthService } from '../auth.service';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
 
 /**
- * `POST /auth/reset-password`: fija la contraseña nueva con el `resetToken` que devolvió el
- * canje del OTP.
+ * Fija la contraseña nueva con el `resetToken` que devolvió el canje del OTP
+ * (`POST /auth/reset-password`).
  *
- * El token se verifica acá y no en `JwtAuthGuard` porque el endpoint es `@SkipJwtAuth`: quien
- * cambia su contraseña justamente no tiene sesión. Se prefiere el token a volver a pedir correo
- * más código porque el OTP ya se consumió en el paso anterior.
+ * Verifica el token acá y no en `JwtAuthGuard` porque el endpoint es `@SkipJwtAuth`: quien cambia su
+ * contraseña justamente no tiene sesión. Usa el token en vez de pedir correo más código porque el
+ * OTP ya se consumió en el paso anterior.
  *
- * La invalidación de sesiones del final hace, de paso, que el propio `resetToken` sea de un solo
- * uso: tras un reset exitoso la marca queda en "ahora", así que reintentar con el mismo token
- * —cuyo `iat` es anterior— queda rechazado igual que cualquier sesión previa. Es lo que se
- * quiere si alguien llegó a interceptarlo: cambiar la contraseña expulsa a todo el mundo,
- * incluido quien acaba de hacerlo.
+ * La invalidación de sesiones del final hace de paso que el `resetToken` sea de un solo uso: la
+ * marca queda en "ahora" y reintentar con el mismo token —de `iat` anterior— queda rechazado como
+ * cualquier sesión previa. Es lo deseable si alguien llegó a interceptarlo.
  */
 @Injectable()
 export class ResetPasswordUseCase {

@@ -6,8 +6,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private client: Redis;
 
   /**
-   * Se ejecuta automáticamente al iniciar el módulo.
-   * Crea la conexión con Redis usando las variables de entorno configuradas.
+   * Crea la conexión con Redis al iniciar el módulo, con las variables de entorno configuradas.
    */
   onModuleInit() {
     this.client = new Redis({
@@ -53,8 +52,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Se ejecuta automáticamente al detener el módulo.
-   * Cierra la conexión con Redis para liberar recursos.
+   * Cierra la conexión con Redis al detener el módulo, para liberar recursos.
    */
   async ping(): Promise<string> {
     return this.client.ping();

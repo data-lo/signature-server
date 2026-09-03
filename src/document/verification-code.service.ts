@@ -22,9 +22,9 @@ export class VerificationCodeService {
 
   /**
    * `manager` opcional: cuando se emite dentro de una transacción más grande (ver
-   * CreateDocumentSignatureFlowUseCase), pasar el `EntityManager` transaccional para que el INSERT
-   * corra en la misma transacción y participe del rollback si algo más falla después. Sin
-   * `manager`, usa el repositorio inyectado normal (comportamiento previo, sin cambios).
+   * `manager` es opcional: dentro de una transacción más grande, pasar el `EntityManager`
+   * transaccional hace que el INSERT participe del rollback si algo falla después. Sin él usa el
+   * repositorio inyectado normal.
    */
   async issue(
     documentId: string,
@@ -104,16 +104,13 @@ export class VerificationCodeService {
   }
 
   /**
-   * Código que ese firmante efectivamente consumió, o `null` si no consumió ninguno.
+   * Devuelve el código que ese firmante efectivamente consumió, o `null` si no consumió ninguno.
    *
-   * Lo usa la vista pública de verificación para el renglón "OTP Code" de cada firma simple (ver
-   * historia "Actualizar vista pública de verificación de documentos según estado y tipo de
-   * firma"): es la evidencia de con qué código se acreditó su identidad, el mismo dato que la
-   * plantilla de la hoja de firmas contempla.
+   * Lo usa la vista pública para el renglón "OTP Code" de cada firma simple: es la evidencia de con
+   * qué código se acreditó su identidad, el mismo dato que contempla la plantilla de la hoja.
    *
-   * Se toma el MÁS RECIENTE (`usedAt` descendente): un firmante puede haber pedido varios códigos
-   * —y consumido más de uno si un intento anterior no completó la firma—, y el que sustenta la
-   * firma registrada es el último.
+   * Toma el MÁS RECIENTE por `usedAt`: un firmante puede haber consumido varios si un intento
+   * anterior no completó la firma, y el que sustenta la firma registrada es el último.
    */
   async findConsumedCode(
     documentId: string,

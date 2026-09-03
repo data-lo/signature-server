@@ -40,16 +40,15 @@ const PNG_MAGIC_NUMBER = Buffer.from([
 const EMAIL_OTP_VERIFICATION_METHOD = 'EMAIL_OTP';
 
 /**
- * Manda a Seal Service la evidencia de un documento de FIRMA SIMPLE que quedó firmado por todos.
+ * Manda a Seal Service la evidencia de un documento de FIRMA SIMPLE firmado por todos.
  *
- * Es el hermano de `SealDocumentUseCase`, que hace lo propio para la firma avanzada, y la
- * separación no es cosmética: en firma avanzada la evidencia es criptográfica —el certificado del
- * SAT prueba quién firmó—, mientras que en firma simple la prueba de identidad son justamente
- * estos datos (quién es la persona, con qué código de un solo uso se acreditó y qué rúbrica
- * estampó), que sin este envío sólo existen en nuestra base.
+ * Es el hermano de `SealDocumentUseCase`, y la separación no es cosmética: en firma avanzada el
+ * certificado del SAT prueba quién firmó, mientras que en firma simple la prueba de identidad son
+ * justamente estos datos —quién es la persona, con qué código se acreditó y qué rúbrica estampó—,
+ * que sin este envío sólo existen en nuestra base.
  *
- * Corre una sola vez por documento, cuando el último firmante terminó: antes de eso el conjunto
- * está incompleto y mandarlo describiría un documento que todavía no existe.
+ * Corre una sola vez por documento, cuando terminó el último firmante: antes el conjunto está
+ * incompleto y describiría un documento que todavía no existe.
  */
 @Injectable()
 export class SendCompletedSimpleSignatureToSealUseCase {
@@ -164,7 +163,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
   }
 
   /**
-   * Las condiciones del disparador, en el orden en que descartan más rápido.
+   * Comprueba las condiciones del disparador, en el orden en que descartan más rápido.
    *
    * Ninguna es un error: un documento de firma avanzada, uno a medio firmar o uno que todavía no
    * tiene `signedHash` simplemente no son asunto de este flujo. Se distinguen así de los datos
@@ -264,13 +263,12 @@ export class SendCompletedSimpleSignatureToSealUseCase {
   }
 
   /**
-   * Código de un solo uso que este firmante consumió para firmar ESTE documento.
+   * Resuelve el código de un solo uso que este firmante consumió para firmar ESTE documento.
    *
-   * Se toma el más reciente por `used_at`: un firmante puede haber pedido varios códigos —y
-   * consumido más de uno si un intento anterior no completó la firma—, y el que sustenta la firma
-   * registrada es el último. Mismo criterio que `VerificationCodeService.findConsumedCode`, que
-   * alimenta la vista pública de verificación; si los dos difirieran, la evidencia que enviamos y
-   * la que mostramos no serían la misma.
+   * Toma el más reciente por `used_at`: un firmante puede haber consumido varios si un intento
+   * anterior no completó la firma, y el que la sustenta es el último. Mismo criterio que
+   * `VerificationCodeService.findConsumedCode`, que alimenta la vista pública; si difirieran, la
+   * evidencia enviada y la mostrada no serían la misma.
    */
   private async resolveVerificationData(
     documentId: string,
@@ -306,11 +304,9 @@ export class SendCompletedSimpleSignatureToSealUseCase {
   /**
    * Descarga de MinIO la rúbrica del firmante y la devuelve en Base64.
    *
-   * Se prefiere `signatureSnapshotObjectKey` —la copia inmutable tomada en el instante de firmar—
-   * sobre la firma en vivo del perfil: si el usuario reemplazó o desactivó su firma después de
-   * firmar, la evidencia que mandamos tiene que ser la que realmente se estampó en el PDF, no la
-   * que tenga hoy. La firma en vivo queda como respaldo para las filas anteriores a que existiera
-   * el snapshot.
+   * Prefiere `signatureSnapshotObjectKey` —la copia inmutable del instante de firmar— sobre la firma
+   * en vivo del perfil: la evidencia tiene que ser la que realmente se estampó en el PDF, no la que
+   * el usuario tenga hoy. La firma en vivo queda como respaldo para las filas anteriores al snapshot.
    */
   private async resolveSignatureImage(
     signer: CollaboratorEntity,

@@ -1,24 +1,15 @@
 import { ConservationRecordInfo } from '../conservation-record.util';
 /**
- * Datos de entrada para generar la hoja resumen (ver plantilla de referencia "Firmalo Hoja de
- * Firmas"). Deliberadamente desacoplado de DocumentEntity: el caller (p.ej. el flujo de
- * finalizeSignedDocument en document.service.ts) es quien arma este objeto a partir de la
- * entidad real, para que SummaryDocumentService no dependa de TypeORM ni de cómo se persiste
- * cada dato.
- */
-/**
- * Dos campos que esta hoja SÍ imprimía antes y hoy no, porque la plantilla de referencia vigente
- * no los contempla (historia "Estructura y diseño de las hojas de firma"):
+ * Datos de entrada para generar la hoja resumen (ver plantilla "Firmalo Hoja de Firmas").
  *
- *  - **Cifrado**: la copia cifrada del registro de auditoría. No se pierde nada al no imprimirla —
- *    sigue viviendo en `AuditChainEntity.chipher`, que es su fuente de verdad; la hoja solo la
- *    mostraba. Se dejó de calcular en `attachSignaturesSheet` para no gastar un cifrado que nadie
- *    lee.
- *  - **RFC del firmante**: la plantilla identifica al firmante por nombre; el RFC sigue en
- *    `CollaboratorEntity.rfc` y en la hoja avanzada aparece dentro del certificado del SAT.
+ * Desacoplado de DocumentEntity a propósito: el caller —el flujo de `finalizeSignedDocument`— arma
+ * este objeto a partir de la entidad, para que SummaryDocumentService no dependa de TypeORM ni de
+ * cómo se persiste cada dato.
  *
- * Si la omisión resulta ser un olvido de las plantillas, volver a imprimirlos es agregar el
- * renglón correspondiente: los datos siguen disponibles en su origen.
+ * No lleva el cifrado del registro de auditoría ni el RFC del firmante, porque la plantilla vigente
+ * no los contempla. Ninguno se pierde: el cifrado vive en `AuditChainEntity.chipher` y el RFC en
+ * `CollaboratorEntity.rfc` (y dentro del certificado en la hoja avanzada). Volver a imprimirlos es
+ * agregar el renglón; los datos siguen en su origen.
  */
 export interface SummaryDocumentInfo {
   /** DocumentEntity.id */
@@ -45,13 +36,12 @@ export interface SummaryDocumentInfo {
 }
 
 /**
- * La geolocalización se dejó de imprimir (historia "Ocultar geolocalización en hojas de firma
- * y vistas públicas"). El dato SIGUE registrándose y consultándose: vive en
- * `CollaboratorEntity.geoLoc` y en la cadena de auditoría, intacto. Lo que desapareció es su
- * camino hacia la presentación — por eso el campo se quitó de este contrato en vez de dejarlo
- * entrando sin usarse, que es como vuelve a colarse a una plantilla sin que nadie lo note.
+ * Un renglón de la sección "Firmas" por cada firmante del documento.
+ *
+ * No incluye geolocalización: el dato se sigue registrando en `CollaboratorEntity.geoLoc` y en la
+ * cadena de auditoría, pero se quitó de este contrato en vez de dejarlo entrar sin usarse, que es
+ * como vuelve a colarse a una plantilla sin que nadie lo note.
  */
-/** Un renglón de la sección "Firmas" por cada firmante del documento. */
 export interface SummaryDocumentSigner {
   /** Nombre completo del firmante. */
   name: string;

@@ -7,14 +7,14 @@ import { AccountMemberService } from '../account-member.service';
 import { AccountService } from '../account.service';
 
 /**
- * `DELETE /account-member/:id` y `DELETE /api/v1/organizations/members/:accountId`: saca a un
- * miembro de la organización.
+ * Saca a un miembro de la organización (`DELETE /account-member/:id` y
+ * `DELETE /api/v1/organizations/members/:accountId`).
  *
- * La baja es lógica: la fila queda referenciada desde los documentos que ese miembro creó o
- * firmó, y borrarla dejaría esas firmas sin dueño.
+ * La baja es lógica: la fila queda referenciada desde los documentos que ese miembro creó o firmó, y
+ * borrarla dejaría esas firmas sin dueño.
  *
- * Después se quita la organización del catálogo cacheado del afectado, para que el selector de
- * cuentas del frontend deje de ofrecerle un contexto al que ya no puede entrar.
+ * Después quita la organización del catálogo cacheado del afectado, para que el selector de cuentas
+ * deje de ofrecerle un contexto al que ya no puede entrar.
  */
 @Injectable()
 export class RevokeAccountAccessUseCase {

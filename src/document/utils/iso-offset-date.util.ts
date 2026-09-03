@@ -9,7 +9,7 @@
 const MEXICO_UTC_OFFSET_MINUTES = -6 * 60;
 
 /**
- * Fecha en ISO 8601 con el desfase explícito: `2026-08-28T19:01:46.123-06:00`.
+ * Formatea una fecha en ISO 8601 con el desfase explícito: `2026-08-28T19:01:46.123-06:00`.
  *
  * `toISOString()` no sirve aquí porque siempre normaliza a UTC (`...Z`), que es justo lo que
  * confundía al leer la hoja: la constancia decía las 01:01 del día siguiente para un sellado

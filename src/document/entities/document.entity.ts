@@ -15,7 +15,6 @@ import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { CollaboratorEntity } from './collaborator.entity';
 
-// document.entity.ts
 @Entity('documents')
 export class DocumentEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -118,13 +117,13 @@ export class DocumentEntity {
   /**
    * Desde cuándo este documento firmado espera su constancia de conservación NOM-151.
    *
-   * `null` es lo normal: o ya se selló, o no le corresponde (sólo se sellan los documentos con
-   * firma avanzada). Se marca cuando el sellado no pudo intentarse porque falta la evidencia OCSP
-   * de algún firmante — el respondedor del SAT se cae con frecuencia y bloquear la firma por eso
+   * `null` es lo normal: o ya se selló, o no le corresponde, porque sólo se sellan los documentos
+   * con firma avanzada. Se marca cuando el sellado no pudo intentarse por faltar la evidencia OCSP
+   * de algún firmante: el respondedor del SAT se cae con frecuencia, y bloquear la firma por eso
    * sería peor que diferir el sellado.
    *
-   * No es un `status` del documento a propósito: la firma está completa y el documento es válido;
-   * lo que falta es la constancia. Ver la migración `AddSealingPendingAtToDocuments`.
+   * No es un `status` a propósito: la firma está completa y el documento es válido; lo que falta es
+   * la constancia.
    */
   @Column({ name: 'sealing_pending_at', type: 'timestamptz', nullable: true })
   sealingPendingAt: Date | null;

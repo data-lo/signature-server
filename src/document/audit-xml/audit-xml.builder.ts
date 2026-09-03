@@ -7,17 +7,15 @@ import type {
 } from './audit-xml.types';
 
 /**
- * Serialización del XML de auditoría de un documento (historia "Habilitar descarga dinámica de XML
- * de auditoría en la vista pública").
+ * Serializa el XML de auditoría de un documento.
  *
  * Es una función pura: recibe la evidencia ya resuelta y devuelve el texto del archivo. No consulta
- * la base ni MinIO, y nada de lo que produce se guarda — el XML existe sólo mientras dura la
- * respuesta HTTP (ver `GetPublicDocumentAuditXmlUseCase`).
+ * la base ni MinIO, y nada de lo que produce se guarda —el XML existe sólo mientras dura la
+ * respuesta HTTP.
  *
- * **Una pieza ausente se declara, no se omite.** Un expediente de auditoría al que le falta algo
- * tiene que decir qué le falta: quien lo revise no puede distinguir "no existe" de "se nos olvidó"
- * si el nodo simplemente no está. Por eso los archivos y las rúbricas que no se pudieron leer
- * viajan con `available="false"` y su motivo, en vez de desaparecer.
+ * **Una pieza ausente se declara, no se omite.** Quien revise el expediente no puede distinguir "no
+ * existe" de "se nos olvidó" si el nodo simplemente falta, así que los archivos y rúbricas que no se
+ * pudieron leer viajan con `available="false"` y su motivo.
  */
 
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8"?>';
@@ -87,7 +85,7 @@ function documentNode(data: DocumentAuditXmlData): XmlNode {
 }
 
 /**
- * Un PDF del expediente en Base64, con el bucket y la llave de las que salió.
+ * Serializa un PDF del expediente en Base64, con el bucket y la llave de las que salió.
  *
  * `bucket` y `objectKey` no son adorno: son lo que permite a quien audite volver al almacenamiento
  * y comprobar que el archivo incluido es exactamente el que está guardado.
@@ -211,8 +209,8 @@ function simpleSignatureNode(signer: AuditXmlSigner): XmlNode {
 }
 
 /**
- * Ubicación declarada por el dispositivo del firmante al firmar. Cuando no existe se emite vacía
- * en vez de omitirse, por lo mismo que el resto: "no se capturó" es un dato de la auditoría.
+ * Emite la ubicación declarada por el dispositivo del firmante al firmar. Cuando no existe se emite
+ * vacía en vez de omitirse, por lo mismo que el resto: "no se capturó" es un dato de la auditoría.
  */
 function geoLocationNode(signer: AuditXmlSigner): XmlNode {
   const geo = signer.geoLocation;

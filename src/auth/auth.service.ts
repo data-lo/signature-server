@@ -33,8 +33,8 @@ export class AuthService {
   ) {}
 
   /**
-   * JWT de sesión. `sub`/`roles`/`nationalId` salen de `UserEntity` y no de `AccountEntity`:
-   * la cuenta es sólo una copia sincronizada de la credencial (decisión D6 del plan ER-V2), y
+   * Emite el JWT de sesión. `sub`/`roles`/`nationalId` salen de `UserEntity` y no de
+   * `AccountEntity`: la cuenta es sólo una copia sincronizada de la credencial (decisión D6), y
    * quien firma documentos es la persona.
    *
    * El `jti` es lo que hace posible cerrar una sesión concreta: sin identificador por token,
@@ -53,8 +53,8 @@ export class AuthService {
   }
 
   /**
-   * Token de un solo paso para el cambio de contraseña. Lleva `purpose` porque va firmado con
-   * el mismo secreto que los JWT de sesión: sin esa marca, un token de sesión cualquiera
+   * Emite el token de un solo paso para el cambio de contraseña. Lleva `purpose` porque va firmado
+   * con el mismo secreto que los JWT de sesión: sin esa marca, un token de sesión cualquiera
    * serviría para cambiar la contraseña de su dueño sin conocerla.
    */
   signPasswordResetToken(userId: string): string {
@@ -102,8 +102,8 @@ export class AuthService {
   }
 
   /**
-   * Momento (epoch en segundos) a partir del cual son válidos los tokens de un usuario, o
-   * `null` si nunca se invalidaron en bloque sus sesiones.
+   * Devuelve el momento (epoch en segundos) a partir del cual son válidos los tokens de un usuario,
+   * o `null` si nunca se invalidaron en bloque sus sesiones.
    */
   async getSessionsValidAfter(userId: string): Promise<number | null> {
     const raw = await this.redisService.get(tokenValidAfterKey(userId));

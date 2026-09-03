@@ -168,8 +168,8 @@ export class StartDiditVerificationUseCase {
   }
 
   /**
-   * Una sesión sólo se reutiliza si sigue abierta *y* vigente. Devolver una URL ya expirada
-   * dejaría al usuario en una pantalla muerta de Didit sin forma de reintentar.
+   * Reutiliza una sesión sólo si sigue abierta *y* vigente: devolver una URL ya expirada dejaría al
+   * usuario en una pantalla muerta de Didit sin forma de reintentar.
    */
   private findReusableSession(
     latest: IdentityVerificationEntity | null,

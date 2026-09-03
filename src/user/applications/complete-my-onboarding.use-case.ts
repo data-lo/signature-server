@@ -10,24 +10,20 @@ import { UpdateUserStatusDto } from '../dto/update-user-status.dto';
 import { UserService } from '../user.service';
 
 /**
- * `PATCH /api/v1/users/me/status`: consolida el onboarding (`isConfigured=true`).
+ * Consolida el onboarding marcando `isConfigured=true` (`PATCH /api/v1/users/me/status`).
  *
- * @deprecated Sin consumidor. El frontend lo llamaba de forma automática para poder abrir la
- * pantalla de creación de documentos; ese bloqueo desapareció —crear un documento ya no depende
- * de nada— y firmar depende de `signingCredentialStatus`, que este endpoint no toca. Se
- * mantiene vivo para no romper a ningún cliente que todavía lo llame, pero la bandera que
- * escribe no habilita ninguna acción.
+ * @deprecated Sin consumidor. El frontend lo llamaba para poder abrir la pantalla de creación de
+ * documentos; ese bloqueo desapareció, y firmar depende de `signingCredentialStatus`, que este
+ * endpoint no toca. Se mantiene vivo para no romper a ningún cliente que todavía lo llame, pero la
+ * bandera que escribe no habilita ninguna acción.
  *
- * Es un disparador de un solo sentido, no un toggle genérico de estado: por eso el valor que
- * llega en el DTO se ignora a propósito. Lo único que decide el resultado es si el usuario
- * cumple realmente las dos condiciones.
+ * Es un disparador de un solo sentido y no un toggle genérico: por eso el valor del DTO se ignora, y
+ * lo único que decide el resultado es si el usuario cumple las dos condiciones.
  *
- * Bug corregido (ver README, Historia 2): este endpoint confiaba al cien por ciento en que el
- * frontend sólo lo llamara cuando `personalConfigured` y `signatureConfigured` estuvieran de
- * verdad en true — no validaba nada del lado del servidor, así que cualquier petición
- * autenticada marcaba `isConfigured=true` sin importar el estado real de los datos. Las dos
- * condiciones se recalculan acá, con el mismo criterio que el frontend usa en `auth.slice.ts`:
- * teléfono más correo secundario, y `signatureId` presente.
+ * Esas condiciones se recalculan acá, con el mismo criterio que el frontend usa en `auth.slice.ts`
+ * —teléfono más correo secundario, y `signatureId` presente—: mientras el endpoint confiaba en que el
+ * frontend sólo lo llamara cuando ya se cumplían, cualquier petición autenticada marcaba
+ * `isConfigured=true` sin importar el estado real de los datos.
  */
 @Injectable()
 export class CompleteMyOnboardingUseCase {

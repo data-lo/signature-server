@@ -10,19 +10,17 @@ import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
 import { OrganizationInvitationService } from '../organization-invitation.service';
 
 /**
- * `POST /api/v1/organizations/invite`: invita a alguien por correo a la organización activa
- * (ver historia [STORY] Eventos Kafka, Email (SendGrid) y Miembros (/join)).
+ * Invita a alguien por correo a la organización activa (`POST /api/v1/organizations/invite`):
+ * valida quién invita, persiste la invitación y publica el evento de Kafka que dispara el correo.
  *
- * La secuencia completa —validar quién invita, persistir la invitación y publicar el evento de
- * Kafka que dispara el correo— vive acá. Antes estaba repartida entre el controller y
- * `AccountService.inviteMember`, y ese reparto existía sólo para esquivar una dependencia
- * circular: `OrganizationInvitationService` ya depende de `AccountService` para refrescar el
- * catálogo de Redis al aceptar, así que el sentido contrario no podía existir. Como caso de uso
- * el problema desaparece: éste depende de los dos servicios y ninguno de los dos depende de él.
+ * La secuencia vive junta acá. Estaba repartida entre el controller y `AccountService.inviteMember`
+ * sólo para esquivar una dependencia circular —`OrganizationInvitationService` ya depende de
+ * `AccountService` para refrescar el catálogo al aceptar—, y como caso de uso el problema
+ * desaparece: depende de ambos servicios y ninguno depende de él.
  *
- * El `accountId` que llega en `X-Account-Id` es la fila de membresía del propio llamador, no la
- * organización: el `organizationId` real se resuelve a partir de ella. Son cosas distintas y
- * confundirlas dejaría invitar a una organización con el identificador de otra.
+ * El `accountId` de `X-Account-Id` es la fila de membresía del llamador, no la organización: el
+ * `organizationId` se resuelve a partir de ella, y confundirlos dejaría invitar a una organización
+ * con el identificador de otra.
  */
 @Injectable()
 export class InviteOrganizationMemberUseCase {

@@ -12,12 +12,14 @@ import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 import { buildAttachmentDisposition } from './content-disposition.util';
 
 /**
- * Los metadatos de un objeto viajan como cabeceras HTTP `x-amz-meta-*`, que solo admiten ASCII
- * imprimible. Un nombre como "José Pérez" se enviaría en latin1 y llegaría corrupto, y un
- * carácter fuera de latin1 (una comilla tipográfica pegada desde Word, por ejemplo) haría que
- * Node rechazara la petición con ERR_INVALID_CHAR — es decir, tumbaría la subida del PDF firmado,
- * que es lo último que puede fallar en el flujo de firma. Se codifican solo los caracteres
- * problemáticos, así que el valor sigue siendo legible y se recupera con `decodeURIComponent`.
+ * Codifica un valor para que pueda viajar como metadato de objeto.
+ *
+ * Los metadatos van en cabeceras HTTP `x-amz-meta-*`, que sólo admiten ASCII imprimible: "José
+ * Pérez" se enviaría en latin1 y llegaría corrupto, y un carácter fuera de latin1 —una comilla
+ * tipográfica pegada desde Word— haría que Node rechazara la petición con ERR_INVALID_CHAR,
+ * tumbando la subida del PDF firmado, lo último que puede fallar en el flujo. Codifica sólo los
+ * caracteres problemáticos, así que el valor sigue siendo legible y se recupera con
+ * `decodeURIComponent`.
  */
 export function toHeaderSafeValue(value: string): string {
   // eslint-disable-next-line no-control-regex
@@ -90,20 +92,16 @@ export class MinioService {
       secretKey: process.env.MINIO_SECRET_KEY,
     });
 
-    // `region` explícita, igual que en el cliente privado. Sin ella, el SDK resuelve la región del
-    // bucket con una llamada de red real (`getBucketLocation`) en la PRIMERA operación que la
-    // necesite, usando el protocolo de ESTE cliente: con useSSL=true contra un MinIO que responde
-    // en HTTP plano (cualquier despliegue donde el TLS lo termine un proxy delante), eso revienta
-    // con "EPROTO ... packet length too long" y tumba con un 500 toda vista que necesite un
-    // secureUrl.
+    // `region` explícita, igual que en el cliente privado. Sin ella el SDK la resuelve con una
+    // llamada de red real (`getBucketLocation`) en la PRIMERA operación que la necesite, usando el
+    // protocolo de ESTE cliente: con useSSL=true contra un MinIO que responde en HTTP plano
+    // —cualquier despliegue donde el TLS lo termine un proxy delante— eso revienta con
+    // "EPROTO ... packet length too long" y tumba con un 500 toda vista que necesite un secureUrl.
     //
-    // Hoy el fallo está disimulado por el orden de las llamadas: en `getFile`, bucketExists y
-    // statObject corren antes de firmar y dejan la región cacheada. Es incidental — cualquier
+    // El fallo está disimulado por el orden de las llamadas: en `getFile`, `bucketExists` y
+    // `statObject` corren antes de firmar y dejan la región cacheada. Es incidental —cualquier
     // reordenamiento, o una firma que sea la primera operación del proceso sobre ese bucket, lo
     // vuelve a exponer.
-    //
-    // La había agregado el commit 171e43a ("Resolve MinIO region resolution and SSL issues for
-    // public client") y la quitó 8649093 junto con sus comentarios; se restaura acá.
     this.minioPublicClient = new Minio.Client({
       endPoint: process.env.MINIO_PUBLIC_HOST,
       port: Number(process.env.MINIO_PUBLIC_PORT),
@@ -152,17 +150,15 @@ export class MinioService {
   /**
    * Garantiza que el bucket exista antes de escribir en él, creándolo si hace falta.
    *
-   * Bug corregido: acá se llamaba `bucketExists(bucket, callback)`. minio-js devuelve una promesa
-   * y no invoca ese callback, así que el `throw` de adentro era código muerto: un bucket
-   * inexistente no se detectaba y el flujo seguía hasta reventar en `putObject` con un
-   * `NoSuchBucket` crudo. Se notaba justo al agregar un bucket nuevo (`finalized_documents`),
-   * porque este proyecto no provisiona buckets en ningún lado —no hay job de `mc mb` en el
-   * docker-compose— y el error aparecía en el último paso del flujo de firma.
+   * Con `bucketExists(bucket, callback)` el `throw` de adentro era código muerto: minio-js devuelve
+   * una promesa y nunca invoca ese callback, así que un bucket inexistente no se detectaba y el
+   * flujo seguía hasta reventar en `putObject` con un `NoSuchBucket` crudo. Se notaba al agregar un
+   * bucket nuevo, porque el proyecto no provisiona buckets en ningún lado.
    *
-   * Crear el bucket es idempotente y tolera la carrera entre dos finalizaciones simultáneas:
-   * MinIO responde `BucketAlreadyOwnedByYou` y eso se trata como éxito. Si las credenciales no
-   * tienen permiso para crearlo (típico en producción, donde los buckets los aprovisiona
-   * infraestructura), el error lo dice explícitamente en vez de dejar un `NoSuchBucket` suelto.
+   * Crear el bucket es idempotente y tolera la carrera entre dos finalizaciones simultáneas: MinIO
+   * responde `BucketAlreadyOwnedByYou` y eso se trata como éxito. Si las credenciales no pueden
+   * crearlo —lo típico en producción, donde los aprovisiona infraestructura—, el error lo dice en vez
+   * de dejar un `NoSuchBucket` suelto.
    */
   private async ensureBucketExists(
     client: any,
@@ -363,17 +359,15 @@ export class MinioService {
   }
 
   /**
-   * URL prefirmada de lectura.
+   * Genera una URL prefirmada de lectura.
    *
-   * `downloadFileName` cambia el nombre con el que el navegador guarda el archivo: sin él, el
-   * nombre que ve el usuario es el del objeto en el bucket —un UUID—, que no le dice nada y expone
-   * un identificador interno. Se manda como `response-content-disposition`, un parámetro que S3
-   * (y MinIO) permite sobreescribir en la propia URL firmada y que viaja DENTRO de la firma, así
-   * que nadie puede alterarlo después.
+   * `downloadFileName` cambia el nombre con el que el navegador guarda el archivo: sin él, el usuario
+   * ve el nombre del objeto en el bucket —un UUID— que no le dice nada y expone un identificador
+   * interno. Viaja como `response-content-disposition`, que S3 y MinIO permiten sobreescribir en la
+   * propia URL y que va DENTRO de la firma, así que nadie puede alterarlo después.
    *
-   * Sin el parámetro la URL sale exactamente como antes. Eso importa porque el visor usa esta
-   * misma ruta: forzar `attachment` para todos haría que el PDF se descargue en vez de mostrarse
-   * dentro de la pantalla de detalle.
+   * Sin el parámetro la URL sale exactamente igual que antes, y eso importa porque el visor usa esta
+   * misma ruta: forzar `attachment` para todos haría que el PDF se descargue en vez de mostrarse.
    */
   async getFile(
     fileId: string, // OBJECT KEY,

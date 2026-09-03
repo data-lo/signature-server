@@ -6,14 +6,13 @@ import { OrganizationInvitationPreviewData } from '../interfaces/response/organi
 import { OrganizationInvitationService } from '../organization-invitation.service';
 
 /**
- * `GET /api/v1/organizations/invitations/:token`: qué hay detrás de un enlace de invitación.
+ * Expone a qué organización invita un enlace (`GET /api/v1/organizations/invitations/:token`).
  *
- * Es público a propósito: quien llega desde el correo todavía no tiene sesión, y necesita ver a
- * qué organización lo invitan antes de decidir si se registra o entra con su cuenta.
+ * Es público a propósito: quien llega desde el correo aún no tiene sesión y necesita ver a qué lo
+ * invitan antes de decidir si se registra o entra con su cuenta.
  *
- * Devuelve el estado sin exigir que siga pendiente —a diferencia de aceptarla—: si la
- * invitación venció o ya se usó, `/join` puede decirlo con claridad en vez de mostrar un error
- * suelto.
+ * Devuelve el estado sin exigir que la invitación siga pendiente —a diferencia de aceptarla— para
+ * que `/join` pueda decir con claridad que venció o ya se usó.
  */
 @Injectable()
 export class GetOrganizationInvitationPreviewUseCase {

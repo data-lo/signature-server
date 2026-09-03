@@ -2,25 +2,23 @@
  * Contrato de los webhooks de Didit y su validación.
  *
  * Vive en `webhooks` y no en `identity-verification`, y es una función pura y no un caso de uso,
- * porque no decide nada sobre la identidad de nadie: sólo responde si el cuerpo que llegó tiene
- * la forma que Didit documenta. Es la segunda puerta de la recepción —después de la firma HMAC—
- * y existe para que un cuerpo auténtico pero deforme (un cambio de contrato del proveedor, un
- * evento de otro producto apuntado a nuestra URL) no llegue nunca al dominio a medio interpretar.
+ * porque no decide nada sobre la identidad de nadie: sólo responde si el cuerpo que llegó tiene la
+ * forma que Didit documenta. Es la segunda puerta de la recepción, después de la firma HMAC, y
+ * existe para que un cuerpo auténtico pero deforme —un cambio de contrato del proveedor, un evento
+ * de otro producto apuntado a nuestra URL— no llegue nunca al dominio a medio interpretar.
  *
- * **Nunca incluye valores del cuerpo en los mensajes de error**, salvo el `status`, que es
- * vocabulario del proveedor y no un dato del titular: los motivos terminan en `webhook_events.error`
- * y en los logs.
+ * **Nunca incluye valores del cuerpo en los mensajes de error**, salvo el `status`, que es vocabulario
+ * del proveedor y no un dato del titular: los motivos terminan en `webhook_events.error` y en los logs.
  */
 
 /**
- * Estados que este servidor sabe interpretar. Cualquier otro se rechaza en la puerta.
+ * Estados que este servidor sabe interpretar; cualquier otro se rechaza en la puerta.
  *
- * **Tiene que cubrir exactamente lo mismo que `DIDIT_STATUS_MAP`** (en
- * ProcessDiditVerificationResultUseCase). Cuando esta lista se quedaba corta, el efecto no era
- * "se ignora el evento" sino un 400 al proveedor: Didit da la entrega por fallida y la reintenta
- * en bucle, y la fila queda en `webhook_events` como payload inválido pese a ser un cuerpo
- * legítimo. `Not Started` y `Kyc Expired` llegaban de verdad y caían justo ahí, aunque el
- * dominio ya sabía traducirlos.
+ * **Tiene que cubrir exactamente lo mismo que `DIDIT_STATUS_MAP`.** Cuando esta lista se queda corta
+ * el efecto no es "se ignora el evento" sino un 400 al proveedor: Didit da la entrega por fallida y la
+ * reintenta en bucle, y la fila queda en `webhook_events` como payload inválido pese a ser legítimo.
+ * `Not Started` y `Kyc Expired` llegaban de verdad y caían justo ahí, aunque el dominio ya sabía
+ * traducirlos.
  */
 export const DIDIT_WEBHOOK_STATUSES = [
   'Not Started',

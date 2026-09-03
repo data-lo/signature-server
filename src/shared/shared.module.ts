@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 
-// Services
 import { OTPService } from './otp/otp.service';
 import { HashService } from './hash/hash.service';
 import { EmailService } from './email/email.service';

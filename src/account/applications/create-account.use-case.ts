@@ -10,15 +10,13 @@ import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
 import { AccountData } from '../interfaces/response/account-response';
 
 /**
- * `POST /account`: creación genérica de cuenta.
+ * Crea una cuenta genérica (`POST /account`).
  *
- * Sin consumidor real en el frontend hoy —que usa `POST /api/v1/organizations` para
- * organizaciones y el registro para la cuenta personal—; se mantiene funcional y correcta
- * contra el modelo fusionado, sin pulir más allá de eso.
+ * Sin consumidor real en el frontend, que usa `POST /api/v1/organizations` y el registro: se
+ * mantiene funcional contra el modelo fusionado, sin pulir más allá de eso.
  *
- * A diferencia de `CreateOrganizationUseCase`, acá la organización y la cuenta no van en una
- * transacción: es el comportamiento que ya tenía este endpoint y cambiarlo queda fuera de esta
- * refactorización.
+ * A diferencia de `CreateOrganizationUseCase`, no envuelve la organización y la cuenta en una
+ * transacción: es el comportamiento que ya tenía el endpoint.
  */
 @Injectable()
 export class CreateAccountUseCase {

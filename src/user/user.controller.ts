@@ -1,4 +1,3 @@
-// NestJS core
 import {
   Body,
   Controller,
@@ -10,24 +9,19 @@ import {
   Query,
 } from '@nestjs/common';
 
-// Swagger
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Auth
 import { Public } from 'src/auth/decorators/public.decorator';
 
-// Use cases
 import { CreateUserUseCase } from './applications/create-user.use-case';
 import { ListUsersUseCase } from './applications/list-users.use-case';
 import { GetUserUseCase } from './applications/get-user.use-case';
 import { UpdateUserUseCase } from './applications/update-user.use-case';
 import { DeleteUserUseCase } from './applications/delete-user.use-case';
 
-// DTOs
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-// Docs
 import { ApiCreateUser } from './docs/api-create-user.docs';
 import { ApiGetUsers } from './docs/api-get-users.docs';
 import { ApiGetUser } from './docs/api-get-user.docs';

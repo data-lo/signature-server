@@ -3,16 +3,15 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { AuditService } from '../audit.service';
 
 /**
- * `GET /audit/document/:documentId`: la cadena de auditoría completa de un documento, en el
- * orden en que ocurrieron los eventos.
+ * Devuelve la cadena de auditoría completa de un documento en orden cronológico
+ * (`GET /audit/document/:documentId`).
  *
- * Se devuelve descifrada porque el sentido de esta consulta es poder auditar: un `cipher` opaco
- * no le sirve a nadie para comprobar qué pasó. Los hashes viajan junto al contenido para que
- * quien reciba la respuesta pueda rehacer la verificación por su cuenta.
+ * La devuelve descifrada porque el sentido de la consulta es auditar: un `cipher` opaco no sirve
+ * para comprobar qué pasó. Los hashes viajan junto al contenido para que quien reciba la respuesta
+ * pueda rehacer la verificación por su cuenta.
  *
- * Un documento sin registros es 404 y no una lista vacía: si se pide la traza de un documento
- * que no dejó ninguna, lo que hay que decir es que no existe esa traza, no insinuar que el
- * documento existió y no hizo nada.
+ * Un documento sin registros responde 404 y no una lista vacía: lo que hay que decir es que esa
+ * traza no existe, no insinuar que el documento existió y no hizo nada.
  */
 @Injectable()
 export class GetDocumentAuditTrailUseCase {

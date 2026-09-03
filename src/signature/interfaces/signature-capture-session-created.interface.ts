@@ -4,12 +4,12 @@ import { SIGNATURE_CAPTURE_SESSION_STATUS_ENUM } from '../enums/signature-captur
 /**
  * Lo que recibe la PC al abrir una captura.
  *
- * `token` y `qrUrl` son la **única** vez que el token en claro sale del servidor: en base sólo
- * queda su hash, así que no hay forma de volver a emitirlo. Si el usuario pierde el QR, lo que
- * corresponde es abrir otra sesión, no recuperar ésta.
+ * `token` y `qrUrl` son la **única** vez que el token en claro sale del servidor: en base sólo queda
+ * su hash, así que no hay forma de volver a emitirlo. Si el usuario pierde el QR, lo que corresponde
+ * es abrir otra sesión.
  *
- * En el canal DESKTOP ambos llegan en `null`: esa captura no necesita token porque la hace el
- * mismo navegador autenticado que la creó, operando sobre la sesión por su `id`.
+ * En el canal DESKTOP ambos llegan en `null`: esa captura no necesita token porque la hace el mismo
+ * navegador autenticado que la creó, operando sobre la sesión por su `id`.
  */
 export interface SignatureCaptureSessionCreated {
   id: string;

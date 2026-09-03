@@ -129,14 +129,14 @@ export class RegisterWebhookEventUseCase {
   /**
    * Deja constancia de una entrega que no llegó a ejecutar dominio.
    *
-   * Sin `provider_event_id` ni `payload`: en el caso habitual —firma inválida— el cuerpo no es
+   * Va sin `provider_event_id` ni `payload`: en el caso habitual —firma inválida— el cuerpo no es
    * confiable, así que no se almacena ni se lee para extraer identificadores. Queda sólo lo que
-   * sí sabemos de primera mano: quién decía ser, cuándo llegó y por qué se rechazó.
+   * sabemos de primera mano: quién decía ser, cuándo llegó y por qué se rechazó.
    *
-   * `signatureValid` es parámetro y no una constante porque hay un segundo motivo de rechazo que
-   * no es un impostor: un cuerpo **auténtico** que no cumple el contrato del proveedor. Marcarlo
-   * como firma inválida borraría justo la distinción que hace útil a esta tabla — un ataque y un
-   * cambio de contrato de Didit se investigan de formas opuestas.
+   * `signatureValid` es parámetro y no una constante porque hay un segundo motivo de rechazo que no es
+   * un impostor: un cuerpo **auténtico** que no cumple el contrato del proveedor. Marcarlo como firma
+   * inválida borraría justo la distinción que hace útil a esta tabla: un ataque y un cambio de
+   * contrato de Didit se investigan de formas opuestas.
    */
   async recordRejectedDelivery(
     provider: WEBHOOK_PROVIDER_ENUM,

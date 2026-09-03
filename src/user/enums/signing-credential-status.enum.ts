@@ -1,19 +1,19 @@
 /**
- * Avance de la credencial de firma del usuario: el estado global que decide qué puede hacer
- * a continuación.
+ * Avance de la credencial de firma del usuario: el estado global que decide qué puede hacer a
+ * continuación.
  *
  * Es **una sola variable** (`users.signing_credential_status`) y no una combinación de banderas
- * sueltas: antes había que cruzar "¿tiene identidad aprobada?" con "¿tiene firma PNG?" en cada
- * módulo que necesitara decidir, y cada uno podía equivocarse distinto. Acá el avance está
- * explícito y ordenado, y sólo se escribe desde `UpdateSigningCredentialStatusUseCase`.
+ * sueltas: mientras había que cruzar "¿tiene identidad aprobada?" con "¿tiene firma PNG?" en cada
+ * módulo que necesitara decidir, cada uno podía equivocarse distinto. Acá el avance está explícito y
+ * ordenado, y sólo se escribe desde `UpdateSigningCredentialStatusUseCase`.
  *
- * El frontend **lee** este estado para habilitar o deshabilitar pantallas; nunca lo escribe. La
- * bandera de conveniencia que consumía antes se deriva:
+ * El frontend lo **lee** para habilitar o deshabilitar pantallas, nunca lo escribe, y la bandera de
+ * conveniencia que consumía antes se deriva:
  *
  *     signingCredentialConfigured = signingCredentialStatus === CONFIGURED
  *
- * No se confunde con `users.is_configured`, que marca el fin del onboarding general (datos
- * personales) y no sabe nada de identidad validada.
+ * No se confunde con `users.is_configured`, que marca el fin del onboarding general y no sabe nada de
+ * identidad validada.
  */
 export enum SIGNING_CREDENTIAL_STATUS_ENUM {
   /** Estado inicial de todo usuario: nunca inició una verificación de identidad. */

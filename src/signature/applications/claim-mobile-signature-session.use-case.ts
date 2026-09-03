@@ -16,15 +16,15 @@ import { SIGNING_CREDENTIAL_BLOCK_REASON } from '../constants/signing-credential
 import { SignatureCaptureSessionService } from '../signature-capture-session.service';
 
 /**
- * `POST /api/v1/signature-capture-sessions/claim`: el teléfono canjea el token del QR.
+ * Canjea desde el teléfono el token del QR (`POST /api/v1/signature-capture-sessions/claim`).
  *
- * Es el paso que ata el intento a un dispositivo concreto, y donde se comprueba la regla que
- * hace seguro todo el flujo PC ↔ teléfono: **quien escanea tiene que estar autenticado como el
- * mismo usuario que generó el código**. El token por sí solo no basta, justamente porque un QR
- * en pantalla es visible para cualquiera que pase por ahí y fotografiable sin dejar rastro.
+ * Es el paso que ata el intento a un dispositivo concreto y donde se comprueba la regla que hace
+ * seguro el flujo PC ↔ teléfono: **quien escanea tiene que estar autenticado como el mismo usuario
+ * que generó el código**. El token por sí solo no basta, porque un QR en pantalla es visible para
+ * cualquiera que pase y fotografiable sin dejar rastro.
  *
- * Reclamar es de un solo uso por construcción, sin borrar nada: la sesión sale de PENDING y
- * PENDING es el único estado desde el que se puede reclamar.
+ * Reclamar es de un solo uso por construcción y sin borrar nada: la sesión sale de PENDING, que es el
+ * único estado desde el que se puede reclamar.
  */
 @Injectable()
 export class ClaimMobileSignatureSessionUseCase {

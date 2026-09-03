@@ -8,16 +8,13 @@ import { UserService } from 'src/user/user.service';
 import { RegisterDto } from '../dto/register.dto';
 
 /**
- * `POST /auth/register`: alta pública de una cuenta.
+ * Da de alta una cuenta pública (`POST /auth/register`) y la deja en pre-registro
+ * (`isEmailVerified=false`); quien la activa es `VerifyRegistrationOtpUseCase` con el código que
+ * sale por correo desde acá.
  *
- * El registro deja al usuario en pre-registro (`isEmailVerified=false`); quien lo activa es
- * `VerifyRegistrationOtpUseCase` con el código que sale por correo desde acá.
- *
- * Camino B de la historia [STORY] Eventos Kafka, Email (SendGrid) y Miembros (/join): cuando el
- * registro viene de `/signup?...&token=...`, `dto.invitationToken` llega presente y el usuario
- * recién creado se une automáticamente a esa organización. Sin ese paso, "completar el registro
- * y unirse a la organización" (Escenario 4) quedaría a medias: el usuario tendría cuenta pero
- * nunca la membresía.
+ * Cuando el registro viene de `/signup?...&token=...`, `dto.invitationToken` llega presente y el
+ * usuario se une automáticamente a esa organización: sin ese paso tendría cuenta pero nunca la
+ * membresía.
  */
 @Injectable()
 export class RegisterUseCase {

@@ -29,15 +29,14 @@ const CREDENTIAL_ERROR_TYPES = [
 const CATALOG_PAGE_SIZE = 100;
 
 /**
- * Adaptador hacia Stripe: el único archivo del módulo que conoce su SDK.
+ * Adapta el SDK de Stripe: es el único archivo del módulo que lo conoce.
  *
- * No es el servicio de dominio de `payments`. No decide qué se puede comprar ni qué significa
- * una suscripción activa; traduce entre el vocabulario de Stripe (productos, precios, sesiones
- * de Checkout) y el nuestro. Si mañana entra un segundo proveedor, se agrega otro adaptador y
- * los casos de uso no cambian.
+ * No es el servicio de dominio de `payments` —no decide qué se puede comprar ni qué significa una
+ * suscripción activa—; traduce entre el vocabulario de Stripe (productos, precios, sesiones de
+ * Checkout) y el nuestro, para que un segundo proveedor sea otro adaptador y no un cambio en los
+ * casos de uso.
  *
- * La llave secreta vive sólo aquí y nunca sale hacia el cliente: al frontend únicamente le
- * llega la URL hospedada de Checkout.
+ * La llave secreta vive sólo acá: al frontend únicamente le llega la URL hospedada de Checkout.
  */
 @Injectable()
 export class StripePaymentService {
@@ -70,13 +69,12 @@ export class StripePaymentService {
   }
 
   /**
-   * Una línea al arrancar que dice con qué clase de llave quedó configurado el despliegue.
+   * Registra al arrancar con qué clase de llave quedó configurado el despliegue.
    *
-   * Existe por un caso real: el catálogo se veía vacío o daba error en el servidor y no en local,
-   * y desde afuera no había forma de saber si el entorno apuntaba a otra cuenta de Stripe, al
-   * modo equivocado, o usaba una *restricted key* sin permisos. Se registra sólo el prefijo
-   * —jamás la llave, ni siquiera truncada— porque es lo único que hace falta para responder esa
-   * pregunta.
+   * Existe por un caso real: el catálogo se veía vacío en el servidor y no en local, y desde afuera
+   * no había forma de saber si el entorno apuntaba a otra cuenta, al modo equivocado o a una
+   * *restricted key* sin permisos. Registra sólo el prefijo —jamás la llave, ni truncada—, que es lo
+   * único que hace falta para responder esa pregunta.
    */
   private logKeyKind(secretKey: string): void {
     const isRestricted = secretKey.startsWith('rk_');
@@ -91,16 +89,14 @@ export class StripePaymentService {
   }
 
   /**
-   * Planes públicos: los precios activos de Stripe cuyo producto es un plan visible.
+   * Lista los planes públicos: los precios activos cuyo producto es un plan visible.
    *
-   * Se consulta por precios y no por productos porque el precio es lo que se compra: un
-   * producto sin precio activo no es vendible, y uno con dos precios (mensual y anual) son dos
-   * tarjetas distintas. `expand: product` evita una llamada por cada precio para leer su
-   * nombre, imagen y metadata.
+   * Consulta por precios y no por productos porque el precio es lo que se compra —un producto sin
+   * precio activo no es vendible, y uno con precio mensual y anual son dos tarjetas—. `expand:
+   * product` evita una llamada por precio para leer nombre, imagen y metadata.
    *
-   * El filtro por metadata se aplica acá, sobre la respuesta ya recibida, porque `prices.list()`
-   * no acepta condiciones sobre la metadata del producto: es una limitación del proveedor y por
-   * eso vive en su adaptador, no en el caso de uso.
+   * Filtra por metadata sobre la respuesta ya recibida porque `prices.list()` no acepta condiciones
+   * sobre la metadata del producto: es una limitación del proveedor y por eso vive en su adaptador.
    */
   async listPublicPlans(): Promise<PaymentService[]> {
     try {
@@ -119,14 +115,13 @@ export class StripePaymentService {
   }
 
   /**
-   * @param priceId Precio ya validado contra el catálogo por el caso de uso: este método no
-   *   vuelve a comprobarlo, sólo crea la sesión.
+   * @param priceId Precio ya validado contra el catálogo por el caso de uso: acá sólo se crea la
+   *   sesión.
    * @returns El `cs_...` de la sesión y su URL hospedada, temporal por definición.
    *
-   * Devuelve el `sessionId` además de la URL —antes sólo la URL— porque es la llave con la que
-   * `checkout_orders` se reconcilia después: `checkout.session.completed` sólo trae el id de la
-   * sesión, así que sin guardarlo al crearla no habría forma de encontrar la orden pendiente que
-   * le corresponde.
+   * Devuelve el `sessionId` además de la URL porque es la llave con la que `checkout_orders` se
+   * reconcilia después: `checkout.session.completed` sólo trae el id de la sesión, así que sin
+   * guardarlo al crearla no habría forma de encontrar la orden pendiente que le corresponde.
    */
   async createCheckoutSession(input: {
     priceId: string;
@@ -170,8 +165,8 @@ export class StripePaymentService {
   }
 
   /**
-   * Producto completo por su id. Lo necesita la sincronización de catálogo: el payload de un
-   * evento `price.*` trae `product` como id suelto, y toda la metadata que decide a qué tabla
+   * Trae el producto completo por su id, que la sincronización de catálogo necesita: el payload de
+   * un evento `price.*` trae `product` como id suelto, y toda la metadata que decide a qué tabla
    * local pertenece el precio vive en el producto.
    */
   async retrieveProduct(productId: string): Promise<Stripe.Product> {
@@ -202,15 +197,13 @@ export class StripePaymentService {
   }
 
   /**
-   * Un precio entra al catálogo público si su producto vino expandido, está activo y su metadata
-   * lo declara plan visible. Se filtra acá y no en el caso de uso porque son particularidades
-   * del catálogo de Stripe (qué trae la respuesta, cómo se marca un producto), no reglas de
-   * negocio nuestras.
+   * Decide si un precio entra al catálogo público: producto expandido, activo y declarado visible en
+   * su metadata. Filtra acá y no en el caso de uso porque son particularidades del catálogo de
+   * Stripe —qué trae la respuesta, cómo se marca un producto—, no reglas de negocio nuestras.
    *
-   * `visibility` se compara contra la cadena `'true'`, no contra un booleano: la metadata de
-   * Stripe son siempre strings, la escribe una persona en el dashboard, y cualquier otro valor
-   * —`'false'`, vacío, ausente— deja el producto fuera. Es la misma convención con la que
-   * `CatalogSyncService` lee `catalogType`.
+   * Compara `visibility` contra la cadena `'true'` y no contra un booleano: la metadata de Stripe
+   * son siempre strings escritos por una persona en el dashboard, y cualquier otro valor deja el
+   * producto fuera. Misma convención con la que `CatalogSyncService` lee `catalogType`.
    */
   private isPublicPlan(price: Stripe.Price): boolean {
     const product = price.product;
@@ -249,14 +242,13 @@ export class StripePaymentService {
   }
 
   /**
-   * Traduce un fallo de Stripe a la excepción que le corresponde, y lo registra una sola vez.
+   * Traduce un fallo de Stripe a la excepción que le corresponde y lo registra una sola vez.
    *
-   * La distinción que hace este método es la que faltaba: **credenciales rechazadas no es lo
-   * mismo que proveedor caído**. Antes las tres llamadas devolvían 502 pasara lo que pasara, así
-   * que una llave equivocada en el despliegue se presentaba como "Stripe no está disponible" y
-   * mandaba a buscar el problema al lado del proveedor, donde no estaba.
+   * Distingue credenciales rechazadas de proveedor caído: mientras todo devolvía 502, una llave
+   * equivocada en el despliegue se presentaba como "Stripe no está disponible" y mandaba a buscar el
+   * problema del lado del proveedor, donde no estaba.
    *
-   * @param action Qué se estaba intentando, para que el log diga cuál de las tres llamadas falló.
+   * @param action Qué se estaba intentando, para que el log diga cuál llamada falló.
    */
   private translateError(error: unknown, action: string): Error {
     if (this.isCredentialError(error)) {
@@ -275,10 +267,10 @@ export class StripePaymentService {
   }
 
   /**
-   * Se mira `type` —el discriminador que el propio SDK pone en sus errores— y no `instanceof`:
-   * las clases de error de Stripe no son estables entre versiones del paquete y `instanceof`
-   * falla en cuanto conviven dos copias del módulo, un caso nada exótico en un monorepo.
-   * `statusCode` cubre el error genérico que no trae `type`.
+   * Mira `type` —el discriminador que el propio SDK pone en sus errores— y no `instanceof`: las
+   * clases de error de Stripe no son estables entre versiones del paquete y `instanceof` falla en
+   * cuanto conviven dos copias del módulo, un caso nada exótico en un monorepo. `statusCode` cubre
+   * el error genérico que no trae `type`.
    */
   private isCredentialError(error: unknown): boolean {
     const stripeError = error as { type?: string; statusCode?: number };

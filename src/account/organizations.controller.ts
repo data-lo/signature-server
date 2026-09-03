@@ -1,4 +1,3 @@
-// NestJS core
 import {
   Body,
   Controller,
@@ -9,15 +8,12 @@ import {
   Post,
 } from '@nestjs/common';
 
-// Swagger
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Auth
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 
-// Use cases
 import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
@@ -26,13 +22,11 @@ import { RevokeAccountAccessUseCase } from './applications/revoke-account-access
 import { GetMemberPermissionsUseCase } from 'src/organization-permissions/applications/get-member-permissions.use-case';
 import { AssignMemberPermissionsUseCase } from 'src/organization-permissions/applications/assign-member-permissions.use-case';
 
-// DTOs
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
 import { AssignMemberPermissionsDto } from 'src/organization-permissions/dto/assign-member-permissions.dto';
 
-// Docs
 import { ApiCreateOrganization } from './docs/api-create-organization.docs';
 import { ApiInviteOrganizationMember } from './docs/api-invite-organization-member.docs';
 import { ApiGetOrganizationMemberList } from './docs/api-get-organization-member-list.docs';

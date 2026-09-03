@@ -5,17 +5,15 @@ export interface TsaCertificateInfo {
   serialNumber: string;
   issuedAt: Date;
   /**
-   * Nombre común (CN) del **titular** del certificado: la Autoridad de Sellado de Tiempo que
-   * emitió la constancia. Es lo que la tabla NOM-151 imprime como "Certificado (TSA)".
+   * Nombre común (CN) del **titular** del certificado: la Autoridad de Sellado de Tiempo que emitió
+   * la constancia, que es lo que la tabla NOM-151 imprime como "Certificado (TSA)".
    *
-   * Se toma del `subject` y no del `issuer` a propósito. En una evidencia real de PSC CODEX el
-   * subject es «Autoridad CCMD de PSC CODEX TUL» —quien sella— mientras que el issuer es
-   * «Autoridad Certificadora Raiz Segunda de Secretaria de Economia», la CA raíz que acredita al
-   * PSC. Poner el issuer haría que la hoja nombrara a la Secretaría de Economía como si hubiera
-   * sellado el documento.
+   * Sale del `subject` y no del `issuer`: en una evidencia real de PSC CODEX el subject es
+   * «Autoridad CCMD de PSC CODEX TUL» —quien sella— mientras que el issuer es la CA raíz que
+   * acredita al PSC, así que usar el issuer haría que la hoja nombrara a la Secretaría de Economía
+   * como si hubiera sellado el documento.
    *
-   * Opcional porque un DN puede no traer CN —admite otras combinaciones de atributos— y eso no
-   * debe invalidar la serie ni la fecha, que sí se obtuvieron.
+   * Opcional porque un DN puede no traer CN, y eso no debe invalidar la serie ni la fecha.
    */
   subjectCommonName?: string;
 }
@@ -24,17 +22,14 @@ export interface TsaCertificateInfo {
 const COMMON_NAME_OID = '2.5.4.3';
 
 /**
- * Extrae el número de serie y `notBefore` del certificado del PSC embebido en la evidencia
- * NOM-151 (`integrityEvidence.fileBase64`): un CMS SignedData —el mismo envoltorio que un sello
- * de tiempo RFC 3161— cuyo campo `certificates` trae el certificado que firmó la evidencia.
- * Sigue el flujo Base64 → bytes → ASN.1 (la cadena hexadecimal intermedia es solo para
- * inspección manual con un parser ASN.1; decodificar a bytes ya da lo mismo que necesita
- * `fromBER`).
+ * Extrae el número de serie y el `notBefore` del certificado del PSC embebido en la evidencia
+ * NOM-151: un CMS SignedData —el mismo envoltorio que un sello de tiempo RFC 3161— cuyo campo
+ * `certificates` trae el certificado que la firmó. Va de Base64 a bytes y de ahí a ASN.1; la cadena
+ * hexadecimal intermedia existe sólo para inspección manual.
  *
- * Devuelve `null` ante cualquier estructura que no reconozca en vez de lanzar: una evidencia
- * histórica puede no traer el certificado embebido, o el archivo puede no ser el CMS esperado, y
- * eso no debe tumbar ni la creación del sello ni la vista pública — solo dejar el certificado sin
- * mostrar.
+ * Devuelve `null` ante cualquier estructura que no reconozca, en vez de lanzar: una evidencia
+ * histórica puede no traer el certificado embebido, y eso no debe tumbar ni la creación del sello ni
+ * la vista pública, sólo dejar el certificado sin mostrar.
  */
 export function extractTsaCertificateInfo(
   fileBase64: string,
@@ -91,15 +86,15 @@ export function extractTsaCertificateInfo(
 /**
  * Localiza el `ContentInfo` de tipo SignedData dentro de la evidencia, venga desnudo o envuelto.
  *
- * **Los PSC no entregan todos la misma envoltura.** PSC CODEX responde un `TimeStampResp` de
- * RFC 3161 —`SEQUENCE { PKIStatusInfo, TimeStampToken }`—, donde el CMS es el SEGUNDO elemento;
- * otras evidencias llegan como el `ContentInfo` a secas. Asumir sólo lo segundo es lo que hacía
- * que la extracción devolviera `null` contra la evidencia real de producción, y con ella que la
- * tabla NOM-151 saliera vacía: el certificado estaba ahí, pero se buscaba un nivel más arriba.
+ * **Los PSC no entregan todos la misma envoltura**: PSC CODEX responde un `TimeStampResp` de RFC
+ * 3161 —`SEQUENCE { PKIStatusInfo, TimeStampToken }`—, donde el CMS es el SEGUNDO elemento, mientras
+ * que otras evidencias llegan como el `ContentInfo` a secas. Asumir sólo lo segundo hacía que la
+ * extracción devolviera `null` contra la evidencia real de producción y que la tabla NOM-151 saliera
+ * vacía: el certificado estaba ahí, un nivel más abajo.
  *
- * Se intenta primero la forma desnuda y después la envuelta, en vez de mirar la estructura para
- * decidir: `ContentInfo` ya valida el esquema y lanza si no encaja, así que probar es más fiable
- * que reimplementar esa comprobación.
+ * Prueba primero la forma desnuda y después la envuelta en vez de inspeccionar la estructura:
+ * `ContentInfo` ya valida el esquema y lanza si no encaja, así que probar es más fiable que
+ * reimplementar esa comprobación.
  */
 function toSignedDataContentInfo(asn1: unknown): ContentInfo | null {
   const candidates = [asn1, ...childrenOf(asn1)];
@@ -127,7 +122,7 @@ function childrenOf(asn1: unknown): unknown[] {
 }
 
 /**
- * CN del titular (`subject`) del certificado: la autoridad que selló.
+ * Extrae el CN del titular (`subject`) del certificado: la autoridad que selló.
  *
  * Se busca el atributo por su OID y no por posición: el orden de los componentes de un DN no está
  * garantizado, así que tomar el primero daría el país o la organización según el PSC.
