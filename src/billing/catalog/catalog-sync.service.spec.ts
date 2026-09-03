@@ -132,26 +132,23 @@ describe('CatalogSyncService', () => {
 
       expect(planRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          code: 'pro',
+          planType: 'pro',
           name: 'Plan Pro',
-          active: true,
+          isActive: true,
+          creationSource: 'STRIPE',
           stripeProductId: 'prod_pro',
-          monthlyDocumentLimit: 1,
-          allowSimpleSignature: true,
-          allowAdvancedSignature: false,
+          documentsIncluded: 1,
         }),
       );
     });
 
     it('sincroniza nombre/activo/stripeProductId SIN tocar los límites comerciales de una fila existente', async () => {
       const existingPlan = {
-        code: 'pro',
+        planType: 'pro',
         name: 'Plan Pro (viejo)',
         active: true,
         stripeProductId: null,
-        monthlyDocumentLimit: 500,
-        allowSimpleSignature: true,
-        allowAdvancedSignature: true,
+        documentsIncluded: 500,
       };
       // Primera búsqueda (por stripeProductId): no encontrada, todavía no está enlazado.
       // Segunda búsqueda (por code, tomado de la metadata): sí encontrada.
@@ -172,18 +169,16 @@ describe('CatalogSyncService', () => {
         where: { stripeProductId: 'prod_pro' },
       });
       expect(planRepository.findOne).toHaveBeenNthCalledWith(2, {
-        where: { code: 'pro' },
+        where: { planType: 'pro' },
       });
       expect(planRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          code: 'pro',
+          planType: 'pro',
           name: 'Plan Pro',
-          active: true,
+          isActive: true,
           stripeProductId: 'prod_pro',
           // Estos tres NO vienen del producto de Stripe — deben quedar exactamente como estaban.
-          monthlyDocumentLimit: 500,
-          allowSimpleSignature: true,
-          allowAdvancedSignature: true,
+          documentsIncluded: 500,
         }),
       );
     });
@@ -213,7 +208,7 @@ describe('CatalogSyncService', () => {
       );
 
       expect(planRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ code: 'pro' }),
+        expect.objectContaining({ planType: 'pro' }),
       );
     });
 
@@ -322,7 +317,7 @@ describe('CatalogSyncService', () => {
    */
   describe('price.created / price.updated — plan', () => {
     it('crea la fila de plan_prices con el importe, la moneda y la periodicidad del precio', async () => {
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       planPriceRepository.findOne.mockResolvedValue(null);
 
       await service.syncPriceUpserted(
@@ -332,15 +327,36 @@ describe('CatalogSyncService', () => {
 
       expect(planPriceRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          planCode: 'pro',
+          planType: 'pro',
           stripePriceId: 'price_pro_mensual',
           amount: 49900,
           currency: 'mxn',
           interval: BILLING_INTERVAL_ENUM.MONTH,
           intervalCount: 1,
-          active: true,
+          isActive: true,
           effectiveTo: null,
         }),
+      );
+    });
+
+    it('crea el precio si un reintento de price.updated aún no tiene fila local', async () => {
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
+      planPriceRepository.findOne.mockResolvedValue(null);
+
+      await service.syncPriceUpserted(
+        buildStripePrice({ id: 'price_pro_nuevo', unit_amount: 59900 }),
+        buildPlanProduct(),
+      );
+
+      expect(planPriceRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          planType: 'pro',
+          stripePriceId: 'price_pro_nuevo',
+          amount: 59900,
+        }),
+      );
+      expect(planPriceRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ stripePriceId: 'price_pro_nuevo' }),
       );
     });
 
@@ -352,7 +368,7 @@ describe('CatalogSyncService', () => {
       await service.syncPriceUpserted(buildStripePrice(), buildPlanProduct());
 
       expect(planRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ code: 'pro', stripeProductId: 'prod_pro' }),
+        expect.objectContaining({ planType: 'pro', stripeProductId: 'prod_pro' }),
       );
       expect(planPriceRepository.save).toHaveBeenCalled();
     });
@@ -363,7 +379,7 @@ describe('CatalogSyncService', () => {
      * `price.created`, así que un id desconocido siempre es una versión nueva.
      */
     it('un precio nuevo releva al vigente: lo desactiva con su fecha de cierre y agrega una fila', async () => {
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       planPriceRepository.findOne.mockResolvedValue(null);
 
       await service.syncPriceUpserted(
@@ -373,20 +389,20 @@ describe('CatalogSyncService', () => {
 
       const [criterio, cambios] = planPriceRepository.update.mock.calls[0];
       expect(criterio).toEqual({
-        planCode: 'pro',
+        planType: 'pro',
         currency: 'mxn',
         interval: BILLING_INTERVAL_ENUM.MONTH,
         intervalCount: 1,
-        active: true,
+        isActive: true,
       });
-      expect(cambios.active).toBe(false);
+      expect(cambios.isActive).toBe(false);
       expect(cambios.effectiveTo).toBeInstanceOf(Date);
 
       expect(planPriceRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           stripePriceId: 'price_pro_v2',
           amount: 59900,
-          active: true,
+          isActive: true,
         }),
       );
     });
@@ -397,7 +413,7 @@ describe('CatalogSyncService', () => {
      * histórica apuntara a un importe que nunca se cobró.
      */
     it('no reescribe ni borra la fila del precio anterior', async () => {
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       planPriceRepository.findOne.mockResolvedValue(null);
 
       await service.syncPriceUpserted(
@@ -413,7 +429,7 @@ describe('CatalogSyncService', () => {
 
     /** El mensual y el anual del mismo plan conviven: publicar uno no puede dar de baja al otro. */
     it('sólo releva a los precios de la misma periodicidad y moneda', async () => {
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       planPriceRepository.findOne.mockResolvedValue(null);
 
       await service.syncPriceUpserted(
@@ -431,7 +447,7 @@ describe('CatalogSyncService', () => {
     });
 
     it('un precio archivado no releva a nadie: sólo se guarda inactivo', async () => {
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       planPriceRepository.findOne.mockResolvedValue(null);
 
       await service.syncPriceUpserted(
@@ -443,22 +459,61 @@ describe('CatalogSyncService', () => {
       expect(planPriceRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           stripePriceId: 'price_pro_v3',
-          active: false,
+          isActive: false,
         }),
       );
     });
 
-    /** `price.updated` sobre un id conocido: lo único que Stripe cambia es archivar/reactivar. */
-    it('archivar un precio existente lo desactiva y cierra su vigencia, sin tocar el importe', async () => {
+    it('crea una nueva versión si price.updated trae otro importe con el mismo stripePriceId', async () => {
       const existente = {
         id: 'row-1',
-        planCode: 'pro',
+        planType: 'pro',
         stripePriceId: 'price_pro_mensual',
         amount: 49900,
-        active: true,
+        currency: 'mxn',
+        interval: BILLING_INTERVAL_ENUM.MONTH,
+        intervalCount: 1,
+        isActive: true,
         effectiveTo: null,
       };
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
+      planPriceRepository.findOne.mockResolvedValue(existente);
+
+      await service.syncPriceUpserted(
+        buildStripePrice({ unit_amount: 59900 }),
+        buildPlanProduct(),
+      );
+
+      expect(planPriceRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'row-1', isActive: false }),
+      );
+      expect(existente.effectiveTo).toBeInstanceOf(Date);
+      expect(planPriceRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stripePriceId: 'price_pro_mensual',
+          amount: 59900,
+          isActive: true,
+        }),
+      );
+      expect(planPriceRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stripePriceId: 'price_pro_mensual',
+          amount: 59900,
+          isActive: true,
+        }),
+      );
+    });
+
+    it('archivar un precio existente cierra su versión activa sin crear otra', async () => {
+      const existente = {
+        id: 'row-1',
+        planType: 'pro',
+        stripePriceId: 'price_pro_mensual',
+        amount: 49900,
+        isActive: true,
+        effectiveTo: null,
+      };
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       planPriceRepository.findOne.mockResolvedValue(existente);
 
       await service.syncPriceUpserted(
@@ -471,7 +526,7 @@ describe('CatalogSyncService', () => {
           id: 'row-1',
           stripePriceId: 'price_pro_mensual',
           amount: 49900,
-          active: false,
+          isActive: false,
         }),
       );
       expect(existente.effectiveTo).toBeInstanceOf(Date);
@@ -479,11 +534,11 @@ describe('CatalogSyncService', () => {
     });
 
     /**
-     * Idempotencia: la reentrega del mismo `price.created` encuentra la fila por
-     * `stripe_price_id` y no crea una segunda.
+     * Idempotencia: la reentrega del mismo evento encuentra la versión activa por
+     * `stripe_price_id` y no crea una segunda si sus datos comerciales no cambiaron.
      */
     it('procesar el mismo price.created dos veces no duplica la fila', async () => {
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       planPriceRepository.findOne.mockResolvedValueOnce(null);
       const price = buildStripePrice();
 
@@ -547,7 +602,7 @@ describe('CatalogSyncService', () => {
           stripePriceId: 'price_pack_50',
           name: 'Paquete de 50 documentos',
           documentsGranted: 50,
-          eligiblePlanCode: null,
+          eligiblePlanType: null,
           amount: 19900,
           currency: 'mxn',
           active: true,
@@ -560,7 +615,7 @@ describe('CatalogSyncService', () => {
      * combinación paquete + plan + precio es su propia fila, todas bajo el mismo producto.
      */
     it('registra una oferta por plan elegible, sin pisar la del otro plan', async () => {
-      planRepository.findOne.mockResolvedValue({ code: 'pro' });
+      planRepository.findOne.mockResolvedValue({ planType: 'pro' });
       documentPackOfferRepository.findOne.mockResolvedValue(null);
 
       await service.syncPriceUpserted(
@@ -576,7 +631,7 @@ describe('CatalogSyncService', () => {
         expect.objectContaining({
           stripeProductId: 'prod_pack',
           stripePriceId: 'price_pack_50_pro',
-          eligiblePlanCode: 'pro',
+          eligiblePlanType: 'pro',
           amount: 14900,
         }),
       );

@@ -3,6 +3,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -12,20 +13,23 @@ import { BILLING_INTERVAL_ENUM } from '../enums/billing-interval.enum';
 import { PlanEntity } from './plan.entity';
 
 @Entity('plan_prices')
+@Index('IDX_plan_prices_stripe_price_id', ['stripePriceId'])
 @Check('CHK_plan_prices_amount', '"amount" >= 0')
 @Check('CHK_plan_prices_interval_count', '"interval_count" > 0')
 export class PlanPriceEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'plan_code', length: 64 })
-  planCode: string;
+  @Column({ name: 'plan_type', length: 64 })
+  planType: string;
 
   @ManyToOne(() => PlanEntity, (plan) => plan.prices, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'plan_code', referencedColumnName: 'code' })
+  @JoinColumn({ name: 'plan_type', referencedColumnName: 'planType' })
   plan: PlanEntity;
 
-  @Column({ name: 'stripe_price_id', unique: true })
+  // No es único: una edición del precio puede conservar el mismo `price_...` y cada versión
+  // local debe permanecer disponible para órdenes e facturas históricas.
+  @Column({ name: 'stripe_price_id' })
   stripePriceId: string;
 
   @Column({ type: 'integer' })
@@ -40,8 +44,8 @@ export class PlanPriceEntity {
   @Column({ name: 'interval_count', type: 'integer', default: 1 })
   intervalCount: number;
 
-  @Column({ default: true })
-  active: boolean;
+  @Column({ name: 'is_active', default: true })
+  isActive: boolean;
 
   @Column({ name: 'effective_from', type: 'timestamptz', nullable: true })
   effectiveFrom: Date | null;

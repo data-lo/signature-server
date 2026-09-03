@@ -17,14 +17,14 @@ import { PlanEntity } from './plan.entity';
 export class DocumentPackOfferEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
-  @Column({ name: 'eligible_plan_code', nullable: true, length: 64 })
-  eligiblePlanCode: string | null;
+  @Column({ name: 'eligible_plan_type', nullable: true, length: 64 })
+  eligiblePlanType: string | null;
 
   @ManyToOne(() => PlanEntity, (plan) => plan.documentPackOffers, {
     nullable: true,
     onDelete: 'CASCADE',
   })
-  @JoinColumn({ name: 'eligible_plan_code', referencedColumnName: 'code' })
+  @JoinColumn({ name: 'eligible_plan_type', referencedColumnName: 'planType' })
   eligiblePlan: PlanEntity | null;
 
   @Column({ name: 'documents_granted', type: 'integer' })
@@ -41,7 +41,7 @@ export class DocumentPackOfferEntity {
    * se sincronice — o si el paquete no se modela como producto propio en Stripe.
    *
    * **No es único**, a diferencia de `stripePriceId`: un mismo paquete se vende a distinto
-   * importe según el plan del comprador (`eligiblePlanCode`) y en distintos tamaños, y cada una
+   * importe según el plan del comprador (`eligiblePlanType`) y en distintos tamaños, y cada una
    * de esas combinaciones es una fila con su propio `price_...` bajo el mismo `prod_...`. Lo que
    * identifica a la oferta es el precio, no el producto.
    */

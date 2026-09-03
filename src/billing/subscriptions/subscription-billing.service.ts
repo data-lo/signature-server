@@ -103,7 +103,7 @@ export class SubscriptionBillingService {
       stripeCustomerId: this.toId(session.customer) ?? profile.stripeCustomerId,
       stripeSubscriptionId:
         this.toId(session.subscription) ?? profile.stripeSubscriptionId,
-      currentPlanCode: session.metadata?.planCode ?? profile.currentPlanCode,
+      currentPlanType: session.metadata?.planType ?? profile.currentPlanType,
       /**
        * INCOMPLETE y no ACTIVE: la sesión terminó, pero la activación la da el cobro
        * (`invoice.paid`). Sólo se retrocede desde INCOMPLETE — si `invoice.paid` ya llegó
@@ -188,7 +188,7 @@ export class SubscriptionBillingService {
 
       await this.rolloverPreviousPeriod(manager, locked.id);
 
-      const issued = planPrice.plan.monthlyDocumentLimit;
+      const issued = planPrice.plan.documentsIncluded;
       const lot = await creditLotRepository.save(
         creditLotRepository.create({
           billingProfileId: locked.id,
@@ -204,7 +204,7 @@ export class SubscriptionBillingService {
 
       await manager.update(BillingProfileEntity, locked.id, {
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-        currentPlanCode: planPrice.planCode,
+        currentPlanType: planPrice.planType,
         stripeSubscriptionId:
           stripeSubscriptionId ?? locked.stripeSubscriptionId,
         currentPeriodStart: periodStart,
@@ -212,7 +212,7 @@ export class SubscriptionBillingService {
       });
 
       this.logger.log(
-        `Perfil ${locked.id} ACTIVE con el plan ${planPrice.planCode}; lote ${lot.id} de ${issued} documentos emitido por la factura ${invoice.id}.`,
+        `Perfil ${locked.id} ACTIVE con el plan ${planPrice.planType}; lote ${lot.id} de ${issued} documentos emitido por la factura ${invoice.id}.`,
       );
     });
   }
@@ -280,7 +280,7 @@ export class SubscriptionBillingService {
     await this.billingProfileRepository.update(profile.id, {
       status: this.toProfileStatus(subscription.status),
       stripeSubscriptionId: subscription.id,
-      ...(planPrice ? { currentPlanCode: planPrice.planCode } : {}),
+      ...(planPrice ? { currentPlanType: planPrice.planType } : {}),
       ...(periodStart ? { currentPeriodStart: periodStart } : {}),
       ...(periodEnd ? { currentPeriodEnd: periodEnd } : {}),
     });

@@ -5,9 +5,6 @@ import { InternalServerErrorException } from '@nestjs/common';
  * `metadata.planType` — el único dato que dice a qué fila de `plans` corresponde, porque esa
  * tabla usa `code` como llave primaria y no un UUID que se pudiera generar solo.
  *
- * 500 a propósito, no un log-y-seguir: sin el tipo de plan no hay forma de sincronizar el
- * producto sin adivinar, y Stripe reintenta la entrega durante varios días — tiempo de sobra
- * para corregir la metadata del producto en el dashboard sin perder el evento.
  */
 export class MissingPlanTypeMetadataException extends InternalServerErrorException {
   constructor(stripeProductId: string) {

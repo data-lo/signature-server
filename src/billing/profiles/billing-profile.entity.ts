@@ -37,11 +37,11 @@ export class BillingProfileEntity {
   @JoinColumn({ name: 'organization_id' })
   organization: OrganizationEntity | null;
 
-  @Column({ name: 'current_plan_code', nullable: true })
-  currentPlanCode: string | null;
+  @Column({ name: 'current_plan_type', nullable: true })
+  currentPlanType: string | null;
 
   @ManyToOne(() => PlanEntity, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'current_plan_code', referencedColumnName: 'code' })
+  @JoinColumn({ name: 'current_plan_type', referencedColumnName: 'planType' })
   currentPlan: PlanEntity | null;
 
   @Column({ name: 'stripe_customer_id', nullable: true, unique: true })

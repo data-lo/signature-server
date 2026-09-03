@@ -8,32 +8,14 @@ import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CheckoutOrderService } from './checkout-order.service';
 
-/**
- * A dónde vuelve el usuario cuando Stripe termina. `{CHECKOUT_SESSION_ID}` lo sustituye Stripe al
- * redirigir; sirve para acusar recibo en la pantalla, no para dar el pago por bueno — quien
- * confirma la suscripción es el webhook firmado.
- */
-const SUCCESS_PATH =
-  '/dashboard/subscriptions?payment=success&session_id={CHECKOUT_SESSION_ID}';
+
+const SUCCESS_PATH = '/dashboard/subscriptions?payment=success&session_id={CHECKOUT_SESSION_ID}';
 const CANCEL_PATH = '/dashboard/subscriptions?payment=cancel';
 
 export interface SubscriptionCheckoutResponse {
   checkoutUrl: string;
 }
 
-/**
- * Abre una sesión de Checkout recurrente para el propietario facturable de la cuenta activa y
- * deja registrada la orden pendiente.
- *
- * El orden de los pasos importa y no es casual: la orden se registra DESPUÉS de que Stripe
- * devuelve la sesión, porque su `stripe_checkout_session_id` es NOT NULL y único — es justamente
- * la llave con la que el webhook la vuelve a encontrar. Registrarla antes obligaría a inventar un
- * identificador provisional y a limpiarlo si Stripe fallara.
- *
- * Este caso de uso NO concede documentos ni activa nada: aquí sólo se abre la puerta al pago. La
- * activación económica ocurre en `invoice.paid` (ver `SubscriptionBillingService`), con el dinero
- * ya cobrado.
- */
 @Injectable()
 export class CreateSubscriptionCheckoutUseCase {
   private readonly logger = new Logger(CreateSubscriptionCheckoutUseCase.name);
@@ -45,7 +27,7 @@ export class CreateSubscriptionCheckoutUseCase {
     private readonly billingCatalogService: BillingCatalogService,
     private readonly checkoutOrderService: CheckoutOrderService,
     private readonly paymentGateway: StripePaymentService,
-  ) {}
+  ) { }
 
   async execute(input: {
     userId: string;
@@ -82,7 +64,7 @@ export class CreateSubscriptionCheckoutUseCase {
          */
         metadata: {
           billingProfileId: profile.id,
-          planCode: planPrice.planCode,
+          planType: planPrice.planType,
           planPriceId: planPrice.id,
           accountId: input.accountId,
         },
@@ -97,7 +79,7 @@ export class CreateSubscriptionCheckoutUseCase {
     });
 
     this.logger.log(
-      `Checkout de suscripción abierto para el perfil ${profile.id} (plan ${planPrice.planCode}).`,
+      `Checkout de suscripción abierto para el perfil ${profile.id} (plan ${planPrice.planType}).`,
     );
 
     return { checkoutUrl };

@@ -71,11 +71,19 @@ export class StripeWebhookService {
         break;
       }
       case 'product.created':
-      case 'product.updated':
+      case 'product.updated': {
+        const product = event.data.object as Stripe.Product;
+        this.logger.log(
+          `Webhook ${event.type} recibido para el producto ${product.id} (${product.name}).`,
+        );
         await this.catalogSyncService.syncProductUpserted(
-          event.data.object as Stripe.Product,
+          product,
+        );
+        this.logger.log(
+          `Producto ${product.id} sincronizado tras ${event.type}.`,
         );
         break;
+      }
       case 'product.deleted':
         await this.catalogSyncService.syncProductDeleted(
           event.data.object as Stripe.Product,
@@ -90,9 +98,15 @@ export class StripeWebhookService {
       case 'price.created':
       case 'price.updated': {
         const price = event.data.object as Stripe.Price;
+        this.logger.log(
+          `Webhook ${event.type} recibido para el precio ${price.id} (active=${price.active}).`,
+        );
         await this.catalogSyncService.syncPriceUpserted(
           price,
           await this.resolvePriceProduct(price),
+        );
+        this.logger.log(
+          `Precio ${price.id} sincronizado tras ${event.type}.`,
         );
         break;
       }
