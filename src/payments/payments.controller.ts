@@ -5,7 +5,7 @@ import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { CreateSubscriptionCheckoutUseCase } from 'src/billing/checkout/create-subscription-checkout.use-case';
-import { GetPaymentServicesUseCase } from './applications/get-payment-services.use-case';
+import { GetPublicStripePlansUseCase } from './applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
 import { CheckoutSessionResponse } from './interfaces/checkout-session-response.interface';
@@ -26,18 +26,23 @@ import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs'
 @Controller('payments')
 export class PaymentsController {
   constructor(
-    private readonly getPaymentServices: GetPaymentServicesUseCase,
+    private readonly getPublicStripePlans: GetPublicStripePlansUseCase,
     private readonly createSubscriptionCheckout: CreateSubscriptionCheckoutUseCase,
     private readonly getSubscriptionState: GetSubscriptionStateUseCase,
   ) {}
 
+  /**
+   * Catálogo público de planes. Conserva la ruta `services` que ya consume el frontend: lo que
+   * cambió es qué devuelve —sólo productos marcados como plan visible en Stripe— y que la
+   * respuesta se sirve desde Redis mientras el TTL siga vigente.
+   */
   @Get('services')
   @ApiGetPaymentServices()
   async services(): Promise<BaseResponse<PaymentServiceResponse[]>> {
     return {
       success: true,
-      message: 'Servicios obtenidos correctamente',
-      data: await this.getPaymentServices.execute(),
+      message: 'Planes obtenidos correctamente',
+      data: await this.getPublicStripePlans.execute(),
     };
   }
 

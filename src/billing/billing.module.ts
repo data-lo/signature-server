@@ -26,7 +26,7 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
  * `plans → plan_prices`) revientan al construir el grafo si alguna falta, aunque nadie la inyecte.
  *
  * `forwardRef` con `PaymentsModule`: ambos se necesitan mutuamente. Billing usa el adaptador de
- * Stripe (`StripePaymentGatewayService`) para abrir el checkout, y payments usa los handlers de
+ * Stripe (`StripePaymentService`) para abrir el checkout, y payments usa los handlers de
  * billing desde su router de webhooks. La alternativa —sacar el adaptador a un tercer módulo— es
  * una reorganización mayor de `payments` que no toca a esta historia.
  */
