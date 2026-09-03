@@ -6,6 +6,7 @@ import { AccountSubscriptionEntity } from '../entities/account-subscription.enti
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
+import { StripePaymentService } from './stripe-payment.service';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 
 /**
@@ -31,6 +32,7 @@ export class StripeWebhookService {
     @InjectRepository(AccountSubscriptionEntity)
     private readonly subscriptionRepository: Repository<AccountSubscriptionEntity>,
     private readonly catalogSyncService: CatalogSyncService,
+    private readonly paymentGateway: StripePaymentService,
     private readonly subscriptionBillingService: SubscriptionBillingService,
   ) {}
 
@@ -79,9 +81,39 @@ export class StripeWebhookService {
           event.data.object as Stripe.Product,
         );
         break;
+      /**
+       * `price.created` y `price.updated` mantienen `plan_prices` y `document_pack_offers`.
+       *
+       * `plan.created` NO se maneja: es el objeto heredado que Stripe reemplazó por `price`, y
+       * atenderlo duplicaría cada alta de precio en el catálogo local.
+       */
+      case 'price.created':
+      case 'price.updated': {
+        const price = event.data.object as Stripe.Price;
+        await this.catalogSyncService.syncPriceUpserted(
+          price,
+          await this.resolvePriceProduct(price),
+        );
+        break;
+      }
       default:
         this.logger.log(`Evento de Stripe sin manejar: ${event.type}`);
     }
+  }
+
+  /**
+   * El producto del precio, que es donde vive la metadata que enruta el evento. En el payload de
+   * un webhook `product` llega como id (Stripe no expande nada en los eventos), así que hay que
+   * ir a buscarlo; si alguna vez llegara ya expandido, se usa tal cual y se ahorra la llamada.
+   */
+  private async resolvePriceProduct(
+    price: Stripe.Price,
+  ): Promise<Stripe.Product> {
+    if (typeof price.product !== 'string') {
+      return price.product as Stripe.Product;
+    }
+
+    return this.paymentGateway.retrieveProduct(price.product);
   }
 
   private async handleCheckoutSessionCompleted(

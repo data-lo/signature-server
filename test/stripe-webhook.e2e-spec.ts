@@ -13,7 +13,7 @@ import { StripeWebhookSignatureVerifierService } from './../src/webhooks/stripe/
 import { WebhookEventEntity } from './../src/webhooks/entities/webhook-event.entity';
 import { WEBHOOK_PROCESSING_STATUS_ENUM } from './../src/webhooks/enums/webhook-processing-status.enum';
 import { StripeWebhookService } from './../src/payments/stripe/stripe-webhook.service';
-import { StripePaymentGatewayService } from './../src/payments/stripe/stripe-payment-gateway.service';
+import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
 import { AccountSubscriptionEntity } from './../src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './../src/billing/subscriptions/subscription-billing.service';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
@@ -219,7 +219,7 @@ describe('Webhook de Stripe (e2e)', () => {
         RegisterWebhookEventUseCase,
         StripeWebhookSignatureVerifierService,
         StripeWebhookService,
-        StripePaymentGatewayService,
+        StripePaymentService,
         SubscriptionBillingService,
         BillingCatalogService,
         CatalogSyncService,

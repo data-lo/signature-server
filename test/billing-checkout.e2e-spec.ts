@@ -11,9 +11,9 @@ import * as request from 'supertest';
 
 import { applyGlobalApiPrefix } from './../src/shared/constants/api-prefix.constants';
 import { PaymentsController } from './../src/payments/payments.controller';
-import { GetPaymentServicesUseCase } from './../src/payments/applications/get-payment-services.use-case';
+import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';
-import { StripePaymentGatewayService } from './../src/payments/stripe/stripe-payment-gateway.service';
+import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
@@ -172,11 +172,11 @@ describe('Checkout de suscripción (e2e)', () => {
         CheckoutOrderService,
         { provide: APP_GUARD, useClass: FakeAuthGuard },
         {
-          provide: StripePaymentGatewayService,
+          provide: StripePaymentService,
           useValue: { createCheckoutSession, createCustomer },
         },
         {
-          provide: GetPaymentServicesUseCase,
+          provide: GetPublicStripePlansUseCase,
           useValue: { execute: jest.fn().mockResolvedValue([]) },
         },
         {
