@@ -39,8 +39,9 @@ export class BillingCatalogService {
     stripePriceId: string,
   ): Promise<PlanPriceEntity> {
     const price = await this.planPriceRepository.findOne({
-      where: { stripePriceId },
+      where: { stripePriceId, isActive: true },
       relations: { plan: true },
+      order: { effectiveFrom: 'DESC' },
     });
 
     if (!price) {
@@ -51,16 +52,16 @@ export class BillingCatalogService {
       throw new SubscriptionPriceNotAvailableException();
     }
 
-    if (!price.active) {
+    if (!price.isActive) {
       this.logger.warn(
         `Se pidió suscribir al precio ${stripePriceId}, archivado en el catálogo local.`,
       );
       throw new SubscriptionPriceNotAvailableException();
     }
 
-    if (!price.plan?.active) {
+    if (!price.plan?.isActive) {
       this.logger.warn(
-        `Se pidió suscribir al precio ${stripePriceId}, cuyo plan '${price.planCode}' está dado de baja.`,
+          `Se pidió suscribir al precio ${stripePriceId}, cuyo plan '${price.planType}' está dado de baja.`,
       );
       throw new SubscriptionPriceNotAvailableException();
     }
@@ -90,6 +91,7 @@ export class BillingCatalogService {
     return this.planPriceRepository.findOne({
       where: { stripePriceId },
       relations: { plan: true },
+      order: { effectiveFrom: 'DESC' },
     });
   }
 

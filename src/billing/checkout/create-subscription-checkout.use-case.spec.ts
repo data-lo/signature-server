@@ -11,12 +11,12 @@ import { SubscriptionPriceNotAvailableException } from '../exceptions/billing.ex
 
 const PLAN_PRICE = {
   id: 'plan-price-1',
-  planCode: 'pro',
+  planType: 'pro',
   stripePriceId: 'price_pro_mensual',
   amount: 49900,
   currency: 'mxn',
   interval: BILLING_INTERVAL_ENUM.MONTH,
-  plan: { code: 'pro', active: true, monthlyDocumentLimit: 100 },
+  plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
 };
 
 describe('CreateSubscriptionCheckoutUseCase', () => {
@@ -96,7 +96,7 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
         customerId: 'cus_1',
         metadata: {
           billingProfileId: 'profile-1',
-          planCode: 'pro',
+          planType: 'pro',
           planPriceId: 'plan-price-1',
           accountId: 'account-1',
         },

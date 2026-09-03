@@ -18,9 +18,9 @@ const PERIOD_END = 1896134400; // 2030-02-01T00:00:00Z
 
 const PLAN_PRICE = {
   id: 'plan-price-1',
-  planCode: 'pro',
+  planType: 'pro',
   stripePriceId: 'price_pro_mensual',
-  plan: { code: 'pro', active: true, monthlyDocumentLimit: 100 },
+  plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
 };
 
 function buildInvoice(overrides: Record<string, unknown> = {}): Stripe.Invoice {
@@ -119,7 +119,7 @@ describe('SubscriptionBillingService', () => {
       customer: 'cus_1',
       subscription: 'sub_1',
       payment_intent: 'pi_1',
-      metadata: { billingProfileId: 'profile-1', planCode: 'pro' },
+      metadata: { billingProfileId: 'profile-1', planType: 'pro' },
     } as unknown as Stripe.Checkout.Session;
 
     it('guarda customer, subscription y plan en el perfil, y cierra la orden', async () => {
@@ -135,7 +135,7 @@ describe('SubscriptionBillingService', () => {
         expect.objectContaining({
           stripeCustomerId: 'cus_1',
           stripeSubscriptionId: 'sub_1',
-          currentPlanCode: 'pro',
+          currentPlanType: 'pro',
           status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
         }),
       );
@@ -203,7 +203,7 @@ describe('SubscriptionBillingService', () => {
         'profile-1',
         expect.objectContaining({
           status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-          currentPlanCode: 'pro',
+          currentPlanType: 'pro',
           stripeSubscriptionId: 'sub_1',
           currentPeriodStart: new Date(PERIOD_START * 1000),
           currentPeriodEnd: new Date(PERIOD_END * 1000),
@@ -378,7 +378,7 @@ describe('SubscriptionBillingService', () => {
         expect.objectContaining({
           status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
           stripeSubscriptionId: 'sub_1',
-          currentPlanCode: 'pro',
+          currentPlanType: 'pro',
           currentPeriodStart: new Date(PERIOD_START * 1000),
           currentPeriodEnd: new Date(PERIOD_END * 1000),
         }),

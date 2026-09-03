@@ -80,9 +80,9 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
 
     planPriceRepository.findOne.mockResolvedValue({
       id: 'plan-price-1',
-      planCode: 'pro',
+      planType: 'pro',
       stripePriceId: 'price_pro_mensual',
-      plan: { code: 'pro', active: true, monthlyDocumentLimit: 100 },
+      plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
     });
 
     creditLotRepository.findOne.mockResolvedValue(null);
@@ -192,7 +192,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         payment_intent: 'pi_1',
         metadata: {
           billingProfileId: 'profile-1',
-          planCode: 'pro',
+          planType: 'pro',
           accountId: 'account-1',
         },
       },
@@ -229,7 +229,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         expect.objectContaining({
           stripeCustomerId: 'cus_1',
           stripeSubscriptionId: 'sub_1',
-          currentPlanCode: 'pro',
+          currentPlanType: 'pro',
         }),
       );
       expect(checkoutOrderRepository.update).toHaveBeenCalledWith(

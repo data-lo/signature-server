@@ -8,16 +8,16 @@ import { SubscriptionPriceNotAvailableException } from '../exceptions/billing.ex
 function buildPlanPrice(overrides: Record<string, unknown> = {}) {
   return {
     id: 'plan-price-1',
-    planCode: 'pro',
+    planType: 'pro',
     stripePriceId: 'price_pro_mensual',
     amount: 49900,
     currency: 'mxn',
     interval: BILLING_INTERVAL_ENUM.MONTH,
     intervalCount: 1,
-    active: true,
+    isActive: true,
     effectiveFrom: null,
     effectiveTo: null,
-    plan: { code: 'pro', active: true, monthlyDocumentLimit: 100 },
+    plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
     ...overrides,
   };
 }
@@ -52,8 +52,9 @@ describe('BillingCatalogService', () => {
       ).resolves.toBe(price);
 
       expect(planPriceRepository.findOne).toHaveBeenCalledWith({
-        where: { stripePriceId: 'price_pro_mensual' },
+        where: { stripePriceId: 'price_pro_mensual', isActive: true },
         relations: { plan: true },
+        order: { effectiveFrom: 'DESC' },
       });
     });
 
@@ -71,7 +72,7 @@ describe('BillingCatalogService', () => {
 
     it('rechaza un precio archivado', async () => {
       planPriceRepository.findOne.mockResolvedValue(
-        buildPlanPrice({ active: false }),
+        buildPlanPrice({ isActive: false }),
       );
 
       await expect(
@@ -81,7 +82,7 @@ describe('BillingCatalogService', () => {
 
     it('rechaza un precio cuyo plan está dado de baja', async () => {
       planPriceRepository.findOne.mockResolvedValue(
-        buildPlanPrice({ plan: { code: 'pro', active: false } }),
+        buildPlanPrice({ plan: { planType: 'pro', isActive: false } }),
       );
 
       await expect(
@@ -117,8 +118,8 @@ describe('BillingCatalogService', () => {
   describe('findPriceForInvoice', () => {
     it('devuelve el precio aunque esté archivado y su plan dado de baja', async () => {
       const price = buildPlanPrice({
-        active: false,
-        plan: { code: 'pro', active: false, monthlyDocumentLimit: 100 },
+        isActive: false,
+        plan: { planType: 'pro', isActive: false, documentsIncluded: 100 },
       });
       planPriceRepository.findOne.mockResolvedValue(price);
 
