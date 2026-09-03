@@ -4,7 +4,7 @@ import {
   BadGatewayException,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { StripePaymentGatewayService } from './stripe-payment-gateway.service';
+import { StripePaymentService } from './stripe-payment.service';
 
 const mockPricesList = jest.fn();
 const mockProductsRetrieve = jest.fn();
@@ -33,13 +33,14 @@ function precio(overrides: Record<string, unknown> = {}) {
       description: 'Firma ilimitada',
       active: true,
       images: ['https://files.stripe.com/plan-pro.png'],
+      metadata: { catalogType: 'plan', visibility: 'true', planType: 'pro' },
     },
     ...overrides,
   };
 }
 
-describe('StripePaymentGatewayService', () => {
-  let service: StripePaymentGatewayService;
+describe('StripePaymentService', () => {
+  let service: StripePaymentService;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -47,7 +48,7 @@ describe('StripePaymentGatewayService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        StripePaymentGatewayService,
+        StripePaymentService,
         {
           provide: ConfigService,
           useValue: { get: jest.fn().mockReturnValue('sk_test_123') },
@@ -55,12 +56,12 @@ describe('StripePaymentGatewayService', () => {
       ],
     }).compile();
 
-    service = module.get(StripePaymentGatewayService);
+    service = module.get(StripePaymentService);
   });
 
-  describe('catálogo', () => {
+  describe('catálogo público de planes', () => {
     it('normaliza precio y producto en un servicio del dominio', async () => {
-      await expect(service.listActiveServices()).resolves.toEqual([
+      await expect(service.listPublicPlans()).resolves.toEqual([
         {
           priceId: 'price_mensual',
           productId: 'prod_1',
@@ -76,7 +77,7 @@ describe('StripePaymentGatewayService', () => {
     });
 
     it('pide sólo precios activos y expande el producto en la misma llamada', async () => {
-      await service.listActiveServices();
+      await service.listPublicPlans();
 
       expect(mockPricesList).toHaveBeenCalledWith(
         expect.objectContaining({ active: true, expand: ['data.product'] }),
@@ -88,20 +89,44 @@ describe('StripePaymentGatewayService', () => {
         data: [precio({ recurring: null })],
       });
 
-      const [servicio] = await service.listActiveServices();
+      const [servicio] = await service.listPublicPlans();
 
       expect(servicio.interval).toBeNull();
       expect(servicio.intervalCount).toBeNull();
     });
 
-    describe('descarta lo que no es vendible', () => {
+    /**
+     * El filtro por metadata se aplica sobre la respuesta ya recibida porque `prices.list()` no
+     * acepta condiciones sobre la metadata del producto: es una limitación de Stripe, y por eso
+     * se prueba en su adaptador y no en el caso de uso.
+     */
+    describe('descarta lo que no es un plan público', () => {
       it.each([
         ['el producto está inactivo', { ...precio().product, active: false }],
         ['el producto está borrado', { id: 'prod_1', deleted: true }],
+        [
+          'el producto no es del catálogo de planes',
+          {
+            ...precio().product,
+            metadata: { catalogType: 'document_pack', visibility: 'true' },
+          },
+        ],
+        [
+          'el producto está oculto',
+          {
+            ...precio().product,
+            metadata: { catalogType: 'plan', visibility: 'false' },
+          },
+        ],
+        [
+          'el producto no declara visibilidad',
+          { ...precio().product, metadata: { catalogType: 'plan' } },
+        ],
+        ['el producto no trae metadata', { ...precio().product, metadata: {} }],
       ])('%s', async (_caso, product) => {
         mockPricesList.mockResolvedValue({ data: [precio({ product })] });
 
-        await expect(service.listActiveServices()).resolves.toEqual([]);
+        await expect(service.listPublicPlans()).resolves.toEqual([]);
       });
 
       it('el producto no vino expandido', async () => {
@@ -109,8 +134,30 @@ describe('StripePaymentGatewayService', () => {
           data: [precio({ product: 'prod_1' })],
         });
 
-        await expect(service.listActiveServices()).resolves.toEqual([]);
+        await expect(service.listPublicPlans()).resolves.toEqual([]);
       });
+    });
+
+    /** La metadata la teclea una persona en el dashboard de Stripe, no otro sistema. */
+    it('tolera espacios y mayúsculas en la metadata', async () => {
+      mockPricesList.mockResolvedValue({
+        data: [
+          precio({
+            product: {
+              ...precio().product,
+              metadata: { catalogType: ' Plan ', visibility: ' TRUE ' },
+            },
+          }),
+        ],
+      });
+
+      await expect(service.listPublicPlans()).resolves.toHaveLength(1);
+    });
+
+    it('deja fuera al plan gratuito, que no se administra en Stripe', async () => {
+      mockPricesList.mockResolvedValue({ data: [] });
+
+      await expect(service.listPublicPlans()).resolves.toEqual([]);
     });
 
     it('traduce un fallo del proveedor a 502, sin filtrar su error', async () => {
@@ -118,7 +165,7 @@ describe('StripePaymentGatewayService', () => {
         new Error('Stripe: no such api key sk_test_123'),
       );
 
-      await expect(service.listActiveServices()).rejects.toBeInstanceOf(
+      await expect(service.listPublicPlans()).rejects.toBeInstanceOf(
         BadGatewayException,
       );
     });
@@ -229,10 +276,10 @@ describe('StripePaymentGatewayService', () => {
       async (_caso, fields) => {
         mockPricesList.mockRejectedValue(stripeError(fields));
 
-        await expect(service.listActiveServices()).rejects.toBeInstanceOf(
+        await expect(service.listPublicPlans()).rejects.toBeInstanceOf(
           InternalServerErrorException,
         );
-        await expect(service.listActiveServices()).rejects.not.toBeInstanceOf(
+        await expect(service.listPublicPlans()).rejects.not.toBeInstanceOf(
           BadGatewayException,
         );
       },
@@ -243,7 +290,7 @@ describe('StripePaymentGatewayService', () => {
         stripeError({ type: 'StripeConnectionError', statusCode: 503 }),
       );
 
-      await expect(service.listActiveServices()).rejects.toBeInstanceOf(
+      await expect(service.listPublicPlans()).rejects.toBeInstanceOf(
         BadGatewayException,
       );
     });
@@ -283,7 +330,7 @@ describe('StripePaymentGatewayService', () => {
     await expect(
       Test.createTestingModule({
         providers: [
-          StripePaymentGatewayService,
+          StripePaymentService,
           {
             provide: ConfigService,
             useValue: { get: jest.fn().mockReturnValue(undefined) },

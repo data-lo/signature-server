@@ -6,7 +6,7 @@ import { AccountSubscriptionEntity } from '../entities/account-subscription.enti
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
-import { StripePaymentGatewayService } from './stripe-payment-gateway.service';
+import { StripePaymentService } from './stripe-payment.service';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 
 /**
@@ -32,7 +32,7 @@ export class StripeWebhookService {
     @InjectRepository(AccountSubscriptionEntity)
     private readonly subscriptionRepository: Repository<AccountSubscriptionEntity>,
     private readonly catalogSyncService: CatalogSyncService,
-    private readonly paymentGateway: StripePaymentGatewayService,
+    private readonly paymentGateway: StripePaymentService,
     private readonly subscriptionBillingService: SubscriptionBillingService,
   ) {}
 

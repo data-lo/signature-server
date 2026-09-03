@@ -3,11 +3,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { BillingModule } from 'src/billing/billing.module';
 import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
-import { StripePaymentGatewayService } from './stripe/stripe-payment-gateway.service';
+import { StripePaymentService } from './stripe/stripe-payment.service';
 import { StripeWebhookService } from './stripe/stripe-webhook.service';
-import { GetPaymentServicesUseCase } from './applications/get-payment-services.use-case';
+import { GetPublicStripePlansUseCase } from './applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { PaymentsController } from './payments.controller';
+import { SharedModule } from 'src/shared/shared.module';
 
 /**
  * Dominio de pagos: catálogo de servicios, compra y estado de la suscripción.
@@ -15,7 +16,7 @@ import { PaymentsController } from './payments.controller';
  * Sustituye al antiguo `StripeModule`. El cambio no es sólo de nombre: Stripe pasa de dar
  * nombre al módulo a ser un proveedor dentro de él (`payments/stripe`), y toda la orquestación
  * baja a casos de uso en `applications/`. El único archivo que conoce el SDK del proveedor es
- * `StripePaymentGatewayService`, así que un segundo proveedor se agrega al lado sin tocar los
+ * `StripePaymentService`, así que un segundo proveedor se agrega al lado sin tocar los
  * casos de uso.
  *
  * La recepción del webhook ya NO vive aquí: el módulo central `webhooks` recibe la entrega en
@@ -31,14 +32,16 @@ import { PaymentsController } from './payments.controller';
     // `forwardRef`: billing necesita el adaptador de Stripe de este módulo para abrir el
     // checkout, y este módulo necesita los handlers de billing en su router de webhooks.
     forwardRef(() => BillingModule),
+    // `SharedModule` por `RedisService`: el catálogo público se cachea 10 minutos.
+    SharedModule,
   ],
   controllers: [PaymentsController],
   providers: [
-    StripePaymentGatewayService,
+    StripePaymentService,
     StripeWebhookService,
-    GetPaymentServicesUseCase,
+    GetPublicStripePlansUseCase,
     GetSubscriptionStateUseCase,
   ],
-  exports: [StripePaymentGatewayService, StripeWebhookService],
+  exports: [StripePaymentService, StripeWebhookService],
 })
 export class PaymentsModule {}

@@ -973,6 +973,67 @@ describe('casos de uso de documentos', () => {
         );
       });
     });
+
+    /**
+     * Historia "Reordenar y ajustar datos en las tablas de documentos": la columna "Fecha de
+     * firma" del listado necesita `document.signedAt`, que solo se fija cuando la última firma
+     * cierra el flujo. El listado ya filtraba por esa fecha, pero no la devolvía.
+     */
+    describe('fecha de firma', () => {
+      function listWithDocument(overrides: Record<string, unknown>) {
+        const qb = createMockQueryBuilder(
+          [
+            {
+              id: 'doc-1',
+              fileName: 'contrato.pdf',
+              fileType: 'application/pdf',
+              totalPages: 1,
+              status: DOCUMENT_STATUS_ENUM.PENDING,
+              createdAt: new Date('2026-03-15T23:55:00.000Z'),
+              collaborators: [],
+              requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+              ...overrides,
+            },
+          ],
+          1,
+        );
+        documentRepository.createQueryBuilder.mockReturnValue(qb);
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          organizationId: null,
+        });
+
+        return getDocuments.execute('user-1', 'account-1', query);
+      }
+
+      it('devuelve `signedAt` del documento firmado por todos', async () => {
+        const signedAt = new Date('2026-05-10T09:30:00.000Z');
+
+        const result = await listWithDocument({
+          status: DOCUMENT_STATUS_ENUM.SIGNED,
+          signedAt,
+        });
+
+        expect(result.data[0]).toEqual(expect.objectContaining({ signedAt }));
+      });
+
+      it('devuelve `signedAt` en null mientras el flujo de firma sigue abierto', async () => {
+        const result = await listWithDocument({ signedAt: null });
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signedAt: null }),
+        );
+      });
+
+      /** Documentos viejos cuya columna nunca se escribió: null explícito, nunca `undefined`. */
+      it('normaliza a null la fecha ausente', async () => {
+        const result = await listWithDocument({});
+
+        expect(result.data[0]).toEqual(
+          expect.objectContaining({ signedAt: null }),
+        );
+      });
+    });
   });
 
   describe('sign', () => {

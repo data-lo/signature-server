@@ -20,7 +20,7 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * identidad o cómo cambia una suscripción; eso vive en `identity-verification` y en `payments`.
  *
  * `PaymentsModule` se importa por dos piezas que pertenecen al dominio de pagos:
- * `StripePaymentGatewayService` (el cliente ya configurado, con el que se verifica la firma) y
+ * `StripePaymentService` (el cliente ya configurado, con el que se verifica la firma) y
  * `StripeWebhookService` (el destinatario de la delegación). La dependencia va en un solo
  * sentido: `payments` no conoce a `webhooks`.
  *

@@ -37,8 +37,8 @@ const SUPPORTED_INTERVALS: Record<string, BILLING_INTERVAL_ENUM> = {
 /**
  * Sincroniza el catálogo comercial local (`plans`, `plan_prices`, `document_pack_offers`) con los
  * productos y precios de Stripe. Vive separado de `StripeWebhookService` (que sólo enruta el
- * evento ya autenticado) y de `StripePaymentGatewayService` (que atiende el checkout): esto no es
- * un efecto de un pago, es mantenimiento de catálogo — un admin puede crear/renombrar/desactivar un
+ * evento ya autenticado) y de `StripePaymentService` (que atiende el checkout): esto no es un
+ * efecto de un pago, es mantenimiento de catálogo — un admin puede crear/renombrar/desactivar un
  * producto en el dashboard de Stripe sin que nadie compre nada, y aun así el catálogo local se
  * tiene que enterar.
  *

@@ -8,7 +8,7 @@ import { StripeWebhookSignatureVerifierService } from 'src/webhooks/stripe/strip
 import { WebhookEventEntity } from 'src/webhooks/entities/webhook-event.entity';
 import { WEBHOOK_PROCESSING_STATUS_ENUM } from 'src/webhooks/enums/webhook-processing-status.enum';
 import { StripeWebhookService } from 'src/payments/stripe/stripe-webhook.service';
-import { StripePaymentGatewayService } from 'src/payments/stripe/stripe-payment-gateway.service';
+import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './subscription-billing.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
@@ -123,7 +123,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         // El router solo lo usa para expandir el producto de un evento `price.*`, que este
         // flujo no ejercita; se provee para poder construir la cadena real.
         {
-          provide: StripePaymentGatewayService,
+          provide: StripePaymentService,
           useValue: { retrieveProduct: jest.fn() },
         },
         {

@@ -43,6 +43,14 @@ export class DocumentGetData {
   createdAt: Date;
 
   @ApiProperty({
+    example: '2026-05-20T18:02:11.400Z',
+    nullable: true,
+    description:
+      'Fecha en que el documento quedó firmado por todos sus firmantes. Null mientras el flujo de firma no se haya completado.',
+  })
+  signedAt: Date | null;
+
+  @ApiProperty({
     example:
       'http://31.97.132.137:9010/created-documents/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...',
     description: 'URL segura y prefirmada para acceder al documento en MinIO',

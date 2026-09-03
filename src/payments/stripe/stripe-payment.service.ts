@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe = require('stripe');
+import { CATALOG_TYPE_ENUM } from 'src/billing/enums/catalog-type.enum';
 import { PaymentService } from '../interfaces/payment-service.interface';
 import {
   PaymentGatewayMisconfiguredException,
@@ -39,8 +40,8 @@ const CATALOG_PAGE_SIZE = 100;
  * llega la URL hospedada de Checkout.
  */
 @Injectable()
-export class StripePaymentGatewayService {
-  private readonly logger = new Logger(StripePaymentGatewayService.name);
+export class StripePaymentService {
+  private readonly logger = new Logger(StripePaymentService.name);
 
   /**
    * Se expone porque la verificación de firma del webhook usa `client.webhooks.constructEvent`,
@@ -90,14 +91,18 @@ export class StripePaymentGatewayService {
   }
 
   /**
-   * Catálogo de servicios activos, armado desde los precios activos de Stripe.
+   * Planes públicos: los precios activos de Stripe cuyo producto es un plan visible.
    *
    * Se consulta por precios y no por productos porque el precio es lo que se compra: un
    * producto sin precio activo no es vendible, y uno con dos precios (mensual y anual) son dos
    * tarjetas distintas. `expand: product` evita una llamada por cada precio para leer su
-   * nombre e imagen.
+   * nombre, imagen y metadata.
+   *
+   * El filtro por metadata se aplica acá, sobre la respuesta ya recibida, porque `prices.list()`
+   * no acepta condiciones sobre la metadata del producto: es una limitación del proveedor y por
+   * eso vive en su adaptador, no en el caso de uso.
    */
-  async listActiveServices(): Promise<PaymentService[]> {
+  async listPublicPlans(): Promise<PaymentService[]> {
     try {
       const prices = await this.client.prices.list({
         active: true,
@@ -106,10 +111,10 @@ export class StripePaymentGatewayService {
       });
 
       return prices.data
-        .filter((price) => this.isSellable(price))
+        .filter((price) => this.isPublicPlan(price))
         .map((price) => this.toPaymentService(price));
     } catch (error) {
-      throw this.translateError(error, 'leer el catálogo de servicios');
+      throw this.translateError(error, 'leer el catálogo de planes');
     }
   }
 
@@ -197,11 +202,17 @@ export class StripePaymentGatewayService {
   }
 
   /**
-   * Un precio sin producto expandido, con el producto inactivo o borrado no es vendible. Se
-   * filtra acá y no en el caso de uso porque es una particularidad del catálogo de Stripe, no
-   * una regla de negocio nuestra.
+   * Un precio entra al catálogo público si su producto vino expandido, está activo y su metadata
+   * lo declara plan visible. Se filtra acá y no en el caso de uso porque son particularidades
+   * del catálogo de Stripe (qué trae la respuesta, cómo se marca un producto), no reglas de
+   * negocio nuestras.
+   *
+   * `visibility` se compara contra la cadena `'true'`, no contra un booleano: la metadata de
+   * Stripe son siempre strings, la escribe una persona en el dashboard, y cualquier otro valor
+   * —`'false'`, vacío, ausente— deja el producto fuera. Es la misma convención con la que
+   * `CatalogSyncService` lee `catalogType`.
    */
-  private isSellable(price: Stripe.Price): boolean {
+  private isPublicPlan(price: Stripe.Price): boolean {
     const product = price.product;
 
     /**
@@ -212,7 +223,13 @@ export class StripePaymentGatewayService {
       return false;
     }
 
-    return product.active === true;
+    const metadata = product.metadata ?? {};
+
+    return (
+      product.active === true &&
+      metadata.catalogType?.trim().toLowerCase() === CATALOG_TYPE_ENUM.PLAN &&
+      metadata.visibility?.trim().toLowerCase() === 'true'
+    );
   }
 
   private toPaymentService(price: Stripe.Price): PaymentService {

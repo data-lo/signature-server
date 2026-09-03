@@ -5,7 +5,7 @@ import { AccountSubscriptionEntity } from '../entities/account-subscription.enti
 import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
-import { StripePaymentGatewayService } from './stripe-payment-gateway.service';
+import { StripePaymentService } from './stripe-payment.service';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 import Stripe = require('stripe');
 
@@ -63,7 +63,7 @@ describe('StripeWebhookService', () => {
           useValue: subscriptionRepository,
         },
         { provide: CatalogSyncService, useValue: catalogSyncService },
-        { provide: StripePaymentGatewayService, useValue: paymentGateway },
+        { provide: StripePaymentService, useValue: paymentGateway },
         {
           provide: SubscriptionBillingService,
           useValue: subscriptionBillingService,
