@@ -25,10 +25,12 @@ import { UploadSignatureImageUseCase } from 'src/signature/applications/upload-s
 import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availability.use-case';
 import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
 import { UpdateMyPersonalInformationUseCase } from './applications/update-my-personal-information.use-case';
+import { ChangeMyPasswordUseCase } from './applications/change-my-password.use-case';
 import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
 
 // DTOs
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
+import { ChangeMyPasswordDto } from './dto/change-my-password.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { CreateSignatureDto } from 'src/signature/dto/create-signature.dto';
 
@@ -36,6 +38,7 @@ import { CreateSignatureDto } from 'src/signature/dto/create-signature.dto';
 import { ApiCheckRfcAvailability } from './docs/api-check-rfc-availability.docs';
 import { ApiGetMyProfile } from './docs/api-get-my-profile.docs';
 import { ApiUpdateMyPersonalInformation } from './docs/api-update-my-personal-information.docs';
+import { ApiChangeMyPassword } from './docs/api-change-my-password.docs';
 import { ApiRegisterMySignature } from './docs/api-register-my-signature.docs';
 import { ApiCompleteMyOnboarding } from './docs/api-complete-my-onboarding.docs';
 
@@ -47,6 +50,7 @@ export class UsersController {
     private readonly checkRfcAvailability: CheckRfcAvailabilityUseCase,
     private readonly getMyProfile: GetMyProfileUseCase,
     private readonly updateMyPersonalInformation: UpdateMyPersonalInformationUseCase,
+    private readonly changeMyPassword: ChangeMyPasswordUseCase,
     private readonly uploadSignatureImage: UploadSignatureImageUseCase,
     private readonly completeMyOnboarding: CompleteMyOnboardingUseCase,
   ) {}
@@ -71,6 +75,15 @@ export class UsersController {
     @Body() dto: UpdatePersonalInformationDto,
   ) {
     return this.updateMyPersonalInformation.execute(user.sub, dto);
+  }
+
+  @Put('me/password')
+  @ApiChangeMyPassword()
+  updatePassword(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ChangeMyPasswordDto,
+  ) {
+    return this.changeMyPassword.execute(user.sub, dto);
   }
 
   /**

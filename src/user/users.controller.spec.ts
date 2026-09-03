@@ -6,12 +6,14 @@ import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availabili
 import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
 import { UpdateMyPersonalInformationUseCase } from './applications/update-my-personal-information.use-case';
 import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
+import { ChangeMyPasswordUseCase } from './applications/change-my-password.use-case';
 
 describe('UsersController', () => {
   let controller: UsersController;
   let checkRfcAvailability: { execute: jest.Mock };
   let getMyProfile: { execute: jest.Mock };
   let updateMyPersonalInformation: { execute: jest.Mock };
+  let changeMyPassword: { execute: jest.Mock };
   let completeMyOnboarding: { execute: jest.Mock };
   let uploadSignatureImage: { execute: jest.Mock };
 
@@ -27,6 +29,7 @@ describe('UsersController', () => {
     checkRfcAvailability = { execute: jest.fn() };
     getMyProfile = { execute: jest.fn() };
     updateMyPersonalInformation = { execute: jest.fn() };
+    changeMyPassword = { execute: jest.fn() };
     completeMyOnboarding = { execute: jest.fn() };
     uploadSignatureImage = { execute: jest.fn() };
 
@@ -42,6 +45,7 @@ describe('UsersController', () => {
           provide: UpdateMyPersonalInformationUseCase,
           useValue: updateMyPersonalInformation,
         },
+        { provide: ChangeMyPasswordUseCase, useValue: changeMyPassword },
         {
           provide: CompleteMyOnboardingUseCase,
           useValue: completeMyOnboarding,
@@ -54,6 +58,19 @@ describe('UsersController', () => {
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
+  });
+
+  /** El id del usuario sale del JWT, nunca del body: nadie cambia la contraseña de otro. */
+  it('delega el cambio de contraseña con el id del token', () => {
+    const dto = {
+      currentPassword: 'actual',
+      newPassword: 'nuevaSegura1',
+      confirmPassword: 'nuevaSegura1',
+    };
+
+    controller.updatePassword(user, dto);
+
+    expect(changeMyPassword.execute).toHaveBeenCalledWith('user-1', dto);
   });
 
   it('should be defined', () => {
