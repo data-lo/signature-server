@@ -18,8 +18,9 @@ import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { PlanEntity } from '../catalog/plan.entity';
-import { PlanPriceEntity } from '../catalog/plan-price.entity';
-import { DocumentPackOfferEntity } from '../catalog/document-pack-offer.entity';
+import { CatalogItemEntity } from '../catalog/catalog-item.entity';
+import { CatalogPriceEntity } from '../catalog/catalog-price.entity';
+import { DocumentCreditPackEntity } from '../catalog/document-credit-pack.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
@@ -54,7 +55,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
   let billingProfileRepository: ReturnType<typeof createMockRepository>;
   let checkoutOrderRepository: ReturnType<typeof createMockRepository>;
   let creditLotRepository: ReturnType<typeof createMockRepository>;
-  let planPriceRepository: ReturnType<typeof createMockRepository>;
+  let catalogPriceRepository: ReturnType<typeof createMockRepository>;
   let verifier: { verify: jest.Mock };
   let rolloverExecute: jest.Mock;
 
@@ -63,7 +64,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
     billingProfileRepository = createMockRepository();
     checkoutOrderRepository = createMockRepository();
     creditLotRepository = createMockRepository();
-    planPriceRepository = createMockRepository();
+    catalogPriceRepository = createMockRepository();
 
     webhookEventRepository.findOne.mockResolvedValue(null);
     webhookEventRepository.save.mockImplementation(async (data) => ({
@@ -78,11 +79,13 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
       stripeCustomerId: 'cus_1',
     });
 
-    planPriceRepository.findOne.mockResolvedValue({
-      id: 'plan-price-1',
-      planType: 'pro',
+    catalogPriceRepository.findOne.mockResolvedValue({
+      id: 'catalog-price-1',
       stripePriceId: 'price_pro_mensual',
-      plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
+      catalogItem: {
+        isActive: true,
+        plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
+      },
     });
 
     creditLotRepository.findOne.mockResolvedValue(null);
@@ -151,15 +154,19 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
           useValue: creditLotRepository,
         },
         {
-          provide: getRepositoryToken(PlanPriceEntity),
-          useValue: planPriceRepository,
+          provide: getRepositoryToken(CatalogPriceEntity),
+          useValue: catalogPriceRepository,
         },
         {
           provide: getRepositoryToken(PlanEntity),
           useValue: createMockRepository(),
         },
         {
-          provide: getRepositoryToken(DocumentPackOfferEntity),
+          provide: getRepositoryToken(CatalogItemEntity),
+          useValue: createMockRepository(),
+        },
+        {
+          provide: getRepositoryToken(DocumentCreditPackEntity),
           useValue: createMockRepository(),
         },
       ],
@@ -240,6 +247,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         expect.objectContaining({
           status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
           stripePaymentIntentId: 'pi_1',
+          stripeSubscriptionId: 'sub_1',
         }),
       );
       // Lo importante de este evento: NO concede saldo.
@@ -256,6 +264,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
           issued: 100,
           remaining: 100,
           stripeInvoiceId: 'in_1',
+          stripeSubscriptionId: 'sub_1',
         }),
       );
       expect(webhookEventRepository.update).toHaveBeenCalledWith(
@@ -314,7 +323,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
     it('un fallo de sincronización deja la entrega FAILED y propaga para que Stripe reintente', async () => {
       // El precio de la factura no está en el catálogo local: no hay forma de saber cuántos
       // documentos conceder, así que se falla ruidosamente en vez de conceder cero.
-      planPriceRepository.findOne.mockResolvedValue(null);
+      catalogPriceRepository.findOne.mockResolvedValue(null);
 
       await expect(deliver(invoicePaidEvent)).rejects.toThrow();
 

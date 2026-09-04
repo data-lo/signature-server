@@ -20,13 +20,14 @@ import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.
 import { CheckoutOrderService } from './../src/billing/checkout/checkout-order.service';
 import { BillingProfileEntity } from './../src/billing/profiles/billing-profile.entity';
 import { CheckoutOrderEntity } from './../src/billing/checkout/checkout-order.entity';
-import { PlanPriceEntity } from './../src/billing/catalog/plan-price.entity';
+import { CatalogPriceEntity } from './../src/billing/catalog/catalog-price.entity';
 import { AccountEntity } from './../src/account/entities/account.entity';
 import { ACCOUNT_TYPE_ENUM } from './../src/account/enums/account-type.enum';
 import { BILLING_INTERVAL_ENUM } from './../src/billing/enums/billing-interval.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from './../src/billing/enums/billing-profile-status.enum';
 import { CHECKOUT_KIND_ENUM } from './../src/billing/enums/checkout-kind.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from './../src/billing/enums/checkout-order-status.enum';
+import { CATALOG_PRICE_BILLING_MODE_ENUM } from './../src/billing/enums/catalog-price-billing-mode.enum';
 import {
   createInMemoryRepository,
   InMemoryRepository,
@@ -42,8 +43,8 @@ const ORGANIZATION_ID = 'organizacion-1';
 const AJENA_ACCOUNT_ID = 'cuenta-de-otro';
 
 const PRICE_ID = 'price_planPro';
-const PLAN_PRICE_ID = 'precio-1';
-const PLAN_CODE = 'pro';
+const CATALOG_PRICE_ID = 'precio-1';
+const PLAN_TYPE = 'pro';
 const CHECKOUT_URL = 'https://checkout.stripe.com/c/pay/cs_e2e';
 const SESSION_ID = 'cs_e2e';
 
@@ -124,36 +125,38 @@ describe('Checkout de suscripción (e2e)', () => {
     checkoutOrders = createInMemoryRepository();
 
     const plan = {
-      code: PLAN_CODE,
+      planType: PLAN_TYPE,
       name: 'Plan Pro',
-      active: true,
-      monthlyDocumentLimit: 50,
+      isActive: true,
+      documentsIncluded: 50,
     };
 
-    const planPrices = createInMemoryRepository([
+    const catalogPrices = createInMemoryRepository([
       {
-        id: PLAN_PRICE_ID,
-        planCode: PLAN_CODE,
+        id: CATALOG_PRICE_ID,
         stripePriceId: PRICE_ID,
         amount: 49900,
         currency: 'mxn',
+        billingMode: CATALOG_PRICE_BILLING_MODE_ENUM.RECURRING,
         interval: BILLING_INTERVAL_ENUM.MONTH,
-        active: true,
+        intervalCount: 1,
+        isActive: true,
         effectiveFrom: null,
         effectiveTo: null,
-        plan,
+        catalogItem: { isActive: true, plan, scopes: [] },
       },
       {
         id: 'precio-archivado',
-        planCode: PLAN_CODE,
         stripePriceId: 'price_archivado',
         amount: 39900,
         currency: 'mxn',
+        billingMode: CATALOG_PRICE_BILLING_MODE_ENUM.RECURRING,
         interval: BILLING_INTERVAL_ENUM.MONTH,
-        active: false,
+        intervalCount: 1,
+        isActive: false,
         effectiveFrom: null,
         effectiveTo: null,
-        plan,
+        catalogItem: { isActive: true, plan, scopes: [] },
       },
     ] as never[]);
 
@@ -192,7 +195,7 @@ describe('Checkout de suscripción (e2e)', () => {
           provide: getRepositoryToken(CheckoutOrderEntity),
           useValue: checkoutOrders,
         },
-        { provide: getRepositoryToken(PlanPriceEntity), useValue: planPrices },
+        { provide: getRepositoryToken(CatalogPriceEntity), useValue: catalogPrices },
       ],
     }).compile();
 
@@ -222,8 +225,7 @@ describe('Checkout de suscripción (e2e)', () => {
 
       expect(checkoutOrders.rows).toHaveLength(1);
       expect(checkoutOrders.rows[0]).toMatchObject({
-        planPriceId: PLAN_PRICE_ID,
-        documentPackOfferId: null,
+        catalogPriceId: CATALOG_PRICE_ID,
         kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
         stripeCheckoutSessionId: SESSION_ID,
         status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
@@ -248,8 +250,8 @@ describe('Checkout de suscripción (e2e)', () => {
           customerId: 'cus_e2e',
           metadata: {
             billingProfileId: perfil.id,
-            planCode: PLAN_CODE,
-            planPriceId: PLAN_PRICE_ID,
+            planType: PLAN_TYPE,
+            catalogPriceId: CATALOG_PRICE_ID,
             accountId: PERSONAL_ACCOUNT_ID,
           },
         }),

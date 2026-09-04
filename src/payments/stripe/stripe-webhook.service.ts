@@ -90,7 +90,8 @@ export class StripeWebhookService {
         );
         break;
       /**
-       * `price.created` y `price.updated` mantienen `plan_prices` y `document_pack_offers`.
+       * `price.created` y `price.updated` mantienen `catalog_prices` y aseguran el detalle del
+       * ítem (plan o paquete de créditos) antes de registrar la oferta.
        *
        * `plan.created` NO se maneja: es el objeto heredado que Stripe reemplazó por `price`, y
        * atenderlo duplicaría cada alta de precio en el catálogo local.

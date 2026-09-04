@@ -20,7 +20,8 @@ export class DocumentPackOfferEntity {
   @Column({ name: 'eligible_plan_type', nullable: true, length: 64 })
   eligiblePlanType: string | null;
 
-  @ManyToOne(() => PlanEntity, (plan) => plan.documentPackOffers, {
+  /** Entidad heredada: checkout nuevo usa catalog_prices. */
+  @ManyToOne(() => PlanEntity, {
     nullable: true,
     onDelete: 'CASCADE',
   })

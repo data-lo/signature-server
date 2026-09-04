@@ -6,6 +6,7 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -20,6 +21,7 @@ import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
   'remaining',
   'periodEnd',
 ])
+@Index('IDX_credit_lots_stripe_subscription', ['stripeSubscriptionId'])
 @Check('CHK_credit_lots_issued', '"issued" > 0')
 @Check(
   'CHK_credit_lots_remaining',
@@ -36,15 +38,9 @@ export class CreditLotEntity {
   @JoinColumn({ name: 'billing_profile_id' })
   billingProfile: BillingProfileEntity;
 
-  @Column({ name: 'checkout_order_id', nullable: true, unique: true })
-  checkoutOrderId: string | null;
-
-  @ManyToOne(() => CheckoutOrderEntity, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  @JoinColumn({ name: 'checkout_order_id' })
-  checkoutOrder: CheckoutOrderEntity | null;
+  /** Las órdenes señalan el slot que acreditan; un periodo puede recibir varias compras. */
+  @OneToMany(() => CheckoutOrderEntity, (order) => order.creditSlot)
+  checkoutOrders: CheckoutOrderEntity[];
 
   @Column({ type: 'enum', enum: CREDIT_LOT_ORIGIN_ENUM })
   origin: CREDIT_LOT_ORIGIN_ENUM;
@@ -63,6 +59,10 @@ export class CreditLotEntity {
 
   @Column({ name: 'stripe_payment_intent_id', nullable: true, unique: true })
   stripePaymentIntentId: string | null;
+
+  /** La suscripción cuyo periodo emitió este slot; permite enlazar la orden aunque los webhooks lleguen fuera de orden. */
+  @Column({ name: 'stripe_subscription_id', nullable: true })
+  stripeSubscriptionId: string | null;
 
   @Column({ name: 'period_start', type: 'timestamptz', nullable: true })
   periodStart: Date | null;

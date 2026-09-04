@@ -23,7 +23,8 @@ export class PlanPriceEntity {
   @Column({ name: 'plan_type', length: 64 })
   planType: string;
 
-  @ManyToOne(() => PlanEntity, (plan) => plan.prices, { onDelete: 'CASCADE' })
+  /** Entidad heredada: checkout nuevo usa catalog_prices. */
+  @ManyToOne(() => PlanEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'plan_type', referencedColumnName: 'planType' })
   plan: PlanEntity;
 
