@@ -98,7 +98,7 @@ function checkoutCompletedEvent() {
         payment_intent: 'pi_e2e',
         metadata: {
           billingProfileId: PROFILE_ID,
-          planCode: PLAN_CODE,
+          planType: PLAN_CODE,
           accountId: 'cuenta-1',
         },
       },
@@ -163,7 +163,7 @@ describe('Webhook de Stripe (e2e)', () => {
         organizationId: null,
         stripeCustomerId: CUSTOMER_ID,
         stripeSubscriptionId: null,
-        currentPlanCode: null,
+        currentPlanType: null,
         status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
       },
     ] as never[]);
@@ -182,23 +182,23 @@ describe('Webhook de Stripe (e2e)', () => {
     creditLots = createInMemoryRepository();
     plans = createInMemoryRepository([
       {
-        code: PLAN_CODE,
+        planType: PLAN_CODE,
         name: 'Plan Pro',
-        active: true,
+        isActive: true,
         stripeProductId: null,
-        monthlyDocumentLimit: MONTHLY_DOCUMENT_LIMIT,
+        documentsIncluded: MONTHLY_DOCUMENT_LIMIT,
       },
     ] as never[]);
 
     const planPrices = createInMemoryRepository([
       {
         id: 'precio-1',
-        planCode: PLAN_CODE,
+        planType: PLAN_CODE,
         stripePriceId: PRICE_ID,
         amount: 49900,
         currency: 'mxn',
         interval: BILLING_INTERVAL_ENUM.MONTH,
-        active: true,
+        isActive: true,
         effectiveFrom: null,
         effectiveTo: null,
         plan: plans.rows[0],
@@ -358,7 +358,7 @@ describe('Webhook de Stripe (e2e)', () => {
       expect(response.status).toBe(200);
       expect(billingProfiles.rows[0]).toMatchObject({
         stripeSubscriptionId: SUBSCRIPTION_ID,
-        currentPlanCode: PLAN_CODE,
+        currentPlanType: PLAN_CODE,
         status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
       });
       expect(checkoutOrders.rows[0]).toMatchObject({
@@ -374,7 +374,7 @@ describe('Webhook de Stripe (e2e)', () => {
       expect(response.status).toBe(200);
       expect(billingProfiles.rows[0]).toMatchObject({
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-        currentPlanCode: PLAN_CODE,
+        currentPlanType: PLAN_CODE,
       });
       expect(creditLots.rows).toHaveLength(1);
       expect(creditLots.rows[0]).toMatchObject({
@@ -443,7 +443,7 @@ describe('Webhook de Stripe (e2e)', () => {
       expect(plans.rows[0]).toMatchObject({
         name: 'Plan Pro (renombrado)',
         stripeProductId: 'prod_e2e',
-        active: true,
+        isActive: true,
       });
     });
 
@@ -459,7 +459,7 @@ describe('Webhook de Stripe (e2e)', () => {
       );
 
       expect(plans.rows[0]).toMatchObject({
-        monthlyDocumentLimit: MONTHLY_DOCUMENT_LIMIT,
+        documentsIncluded: MONTHLY_DOCUMENT_LIMIT,
       });
     });
 
@@ -484,7 +484,7 @@ describe('Webhook de Stripe (e2e)', () => {
         productEvent('product.created', {
           id: 'prod_ajeno',
           name: 'Otro producto de la cuenta de Stripe',
-          active: true,
+          isActive: true,
           metadata: {},
         }),
       );

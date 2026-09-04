@@ -124,33 +124,33 @@ describe('Checkout de suscripción (e2e)', () => {
     checkoutOrders = createInMemoryRepository();
 
     const plan = {
-      code: PLAN_CODE,
+      planType: PLAN_CODE,
       name: 'Plan Pro',
-      active: true,
-      monthlyDocumentLimit: 50,
+      isActive: true,
+      documentsIncluded: 50,
     };
 
     const planPrices = createInMemoryRepository([
       {
         id: PLAN_PRICE_ID,
-        planCode: PLAN_CODE,
+        planType: PLAN_CODE,
         stripePriceId: PRICE_ID,
         amount: 49900,
         currency: 'mxn',
         interval: BILLING_INTERVAL_ENUM.MONTH,
-        active: true,
+        isActive: true,
         effectiveFrom: null,
         effectiveTo: null,
         plan,
       },
       {
         id: 'precio-archivado',
-        planCode: PLAN_CODE,
+        planType: PLAN_CODE,
         stripePriceId: 'price_archivado',
         amount: 39900,
         currency: 'mxn',
         interval: BILLING_INTERVAL_ENUM.MONTH,
-        active: false,
+        isActive: false,
         effectiveFrom: null,
         effectiveTo: null,
         plan,
@@ -248,7 +248,7 @@ describe('Checkout de suscripción (e2e)', () => {
           customerId: 'cus_e2e',
           metadata: {
             billingProfileId: perfil.id,
-            planCode: PLAN_CODE,
+            planType: PLAN_CODE,
             planPriceId: PLAN_PRICE_ID,
             accountId: PERSONAL_ACCOUNT_ID,
           },
