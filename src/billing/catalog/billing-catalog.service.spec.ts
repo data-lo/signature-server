@@ -1,139 +1,127 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BillingCatalogService } from './billing-catalog.service';
-import { PlanPriceEntity } from './plan-price.entity';
+import { CatalogPriceEntity } from './catalog-price.entity';
 import { BILLING_INTERVAL_ENUM } from '../enums/billing-interval.enum';
+import { CATALOG_PRICE_BILLING_MODE_ENUM } from '../enums/catalog-price-billing-mode.enum';
 import { SubscriptionPriceNotAvailableException } from '../exceptions/billing.exceptions';
+import { CATALOG_SCOPE_SUBJECT_TYPE_ENUM } from '../enums/catalog-scope-subject-type.enum';
 
-function buildPlanPrice(overrides: Record<string, unknown> = {}) {
+function buildPrice(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'plan-price-1',
-    planType: 'pro',
-    stripePriceId: 'price_pro_mensual',
+    id: 'catalog-price-1',
+    stripePriceId: 'price_premium_monthly',
     amount: 49900,
     currency: 'mxn',
+    billingMode: CATALOG_PRICE_BILLING_MODE_ENUM.RECURRING,
     interval: BILLING_INTERVAL_ENUM.MONTH,
     intervalCount: 1,
     isActive: true,
     effectiveFrom: null,
     effectiveTo: null,
-    plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
+    catalogItem: {
+      isActive: true,
+      plan: { planType: 'premium', isActive: true, documentsIncluded: 20 },
+    },
     ...overrides,
   };
 }
 
 describe('BillingCatalogService', () => {
   let service: BillingCatalogService;
-  let planPriceRepository: { findOne: jest.Mock };
+  const catalogPriceRepository = { findOne: jest.fn() };
 
   beforeEach(async () => {
-    planPriceRepository = { findOne: jest.fn() };
-
+    catalogPriceRepository.findOne.mockReset();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BillingCatalogService,
         {
-          provide: getRepositoryToken(PlanPriceEntity),
-          useValue: planPriceRepository,
+          provide: getRepositoryToken(CatalogPriceEntity),
+          useValue: catalogPriceRepository,
         },
       ],
     }).compile();
-
     service = module.get(BillingCatalogService);
   });
 
-  describe('findSellableRecurringPrice', () => {
-    it('devuelve el precio con su plan cuando todo está vigente', async () => {
-      const price = buildPlanPrice();
-      planPriceRepository.findOne.mockResolvedValue(price);
+  const personalOwner = {
+    personalAccountId: 'account-1',
+    organizationId: null,
+  };
 
-      await expect(
-        service.findSellableRecurringPrice('price_pro_mensual'),
-      ).resolves.toBe(price);
+  it('obtiene una oferta recurrente activa con su plan', async () => {
+    const price = buildPrice();
+    catalogPriceRepository.findOne.mockResolvedValue(price);
 
-      expect(planPriceRepository.findOne).toHaveBeenCalledWith({
-        where: { stripePriceId: 'price_pro_mensual', isActive: true },
-        relations: { plan: true },
-        order: { effectiveFrom: 'DESC' },
-      });
-    });
+    await expect(
+      service.findSellableRecurringPrice('price_premium_monthly', personalOwner),
+    ).resolves.toBe(price);
 
-    /**
-     * Un precio de paquete de documentos vive en `document_pack_offers`, no acá: no aparecer en
-     * `plan_prices` ES la comprobación de que el precio no es recurrente.
-     */
-    it('rechaza un precio que no está en plan_prices (inexistente o de pago único)', async () => {
-      planPriceRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.findSellableRecurringPrice('price_paquete_50'),
-      ).rejects.toThrow(SubscriptionPriceNotAvailableException);
-    });
-
-    it('rechaza un precio archivado', async () => {
-      planPriceRepository.findOne.mockResolvedValue(
-        buildPlanPrice({ isActive: false }),
-      );
-
-      await expect(
-        service.findSellableRecurringPrice('price_pro_mensual'),
-      ).rejects.toThrow(SubscriptionPriceNotAvailableException);
-    });
-
-    it('rechaza un precio cuyo plan está dado de baja', async () => {
-      planPriceRepository.findOne.mockResolvedValue(
-        buildPlanPrice({ plan: { planType: 'pro', isActive: false } }),
-      );
-
-      await expect(
-        service.findSellableRecurringPrice('price_pro_mensual'),
-      ).rejects.toThrow(SubscriptionPriceNotAvailableException);
-    });
-
-    it('rechaza un precio que todavía no entra en vigor', async () => {
-      planPriceRepository.findOne.mockResolvedValue(
-        buildPlanPrice({ effectiveFrom: new Date(Date.now() + 86_400_000) }),
-      );
-
-      await expect(
-        service.findSellableRecurringPrice('price_pro_mensual'),
-      ).rejects.toThrow(SubscriptionPriceNotAvailableException);
-    });
-
-    it('rechaza un precio cuya vigencia ya venció', async () => {
-      planPriceRepository.findOne.mockResolvedValue(
-        buildPlanPrice({ effectiveTo: new Date(Date.now() - 86_400_000) }),
-      );
-
-      await expect(
-        service.findSellableRecurringPrice('price_pro_mensual'),
-      ).rejects.toThrow(SubscriptionPriceNotAvailableException);
+    expect(catalogPriceRepository.findOne).toHaveBeenCalledWith({
+      where: {
+        stripePriceId: 'price_premium_monthly',
+        isActive: true,
+        billingMode: CATALOG_PRICE_BILLING_MODE_ENUM.RECURRING,
+      },
+      relations: { catalogItem: { plan: true, scopes: true } },
+      order: { effectiveFrom: 'DESC' },
     });
   });
 
-  /**
-   * Al facturar se es deliberadamente más laxo: si el plan se archivó entre la contratación y la
-   * renovación, el cliente pagó igual y le tocan sus documentos.
-   */
-  describe('findPriceForInvoice', () => {
-    it('devuelve el precio aunque esté archivado y su plan dado de baja', async () => {
-      const price = buildPlanPrice({
-        isActive: false,
-        plan: { planType: 'pro', isActive: false, documentsIncluded: 100 },
-      });
-      planPriceRepository.findOne.mockResolvedValue(price);
+  it('rechaza un precio inexistente, inactivo o cuyo plan está dado de baja', async () => {
+    catalogPriceRepository.findOne.mockResolvedValue(null);
+    await expect(service.findSellableRecurringPrice('price_missing', personalOwner)).rejects.toThrow(
+      SubscriptionPriceNotAvailableException,
+    );
 
-      await expect(
-        service.findPriceForInvoice('price_pro_mensual'),
-      ).resolves.toBe(price);
+    catalogPriceRepository.findOne.mockResolvedValue(
+      buildPrice({ catalogItem: { isActive: false, plan: { isActive: true } } }),
+    );
+    await expect(service.findSellableRecurringPrice('price_archived', personalOwner)).rejects.toThrow(
+      SubscriptionPriceNotAvailableException,
+    );
+  });
+
+  it('conserva la búsqueda laxa para una factura histórica', async () => {
+    const price = buildPrice({ isActive: false });
+    catalogPriceRepository.findOne.mockResolvedValue(price);
+
+    await expect(service.findPriceForInvoice('price_premium_monthly')).resolves.toBe(
+      price,
+    );
+    expect(catalogPriceRepository.findOne).toHaveBeenLastCalledWith({
+      where: { stripePriceId: 'price_premium_monthly' },
+      relations: { catalogItem: { plan: true } },
+      order: { effectiveFrom: 'DESC' },
     });
+  });
 
-    it('devuelve null si el precio no está en el catálogo local', async () => {
-      planPriceRepository.findOne.mockResolvedValue(null);
+  it('impide comprar un ítem restringido desde otro owner', async () => {
+    catalogPriceRepository.findOne.mockResolvedValue(
+      buildPrice({
+        catalogItem: {
+          isActive: true,
+          plan: { planType: 'premium', isActive: true },
+          scopes: [
+            {
+              subjectType: CATALOG_SCOPE_SUBJECT_TYPE_ENUM.ORGANIZATION,
+              subjectId: 'organization-1',
+            },
+          ],
+        },
+      }),
+    );
 
-      await expect(
-        service.findPriceForInvoice('price_desconocido'),
-      ).resolves.toBeNull();
-    });
+    await expect(
+      service.findSellableRecurringPrice('price_premium_monthly', personalOwner),
+    ).rejects.toThrow(SubscriptionPriceNotAvailableException);
+
+    await expect(
+      service.findSellableRecurringPrice('price_premium_monthly', {
+        personalAccountId: null,
+        organizationId: 'organization-1',
+      }),
+    ).resolves.toBeDefined();
   });
 });

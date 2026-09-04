@@ -10,13 +10,15 @@ import { BILLING_INTERVAL_ENUM } from '../enums/billing-interval.enum';
 import { SubscriptionPriceNotAvailableException } from '../exceptions/billing.exceptions';
 
 const PLAN_PRICE = {
-  id: 'plan-price-1',
-  planType: 'pro',
+  id: 'catalog-price-1',
   stripePriceId: 'price_pro_mensual',
   amount: 49900,
   currency: 'mxn',
   interval: BILLING_INTERVAL_ENUM.MONTH,
-  plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
+  catalogItem: {
+    isActive: true,
+    plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
+  },
 };
 
 describe('CreateSubscriptionCheckoutUseCase', () => {
@@ -97,7 +99,7 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
         metadata: {
           billingProfileId: 'profile-1',
           planType: 'pro',
-          planPriceId: 'plan-price-1',
+          catalogPriceId: 'catalog-price-1',
           accountId: 'account-1',
         },
       }),
@@ -115,7 +117,7 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
       checkoutOrderService.registerPendingSubscription,
     ).toHaveBeenCalledWith({
       billingProfileId: 'profile-1',
-      planPriceId: 'plan-price-1',
+      catalogPriceId: 'catalog-price-1',
       stripeCheckoutSessionId: 'cs_1',
       amount: 49900,
       currency: 'mxn',

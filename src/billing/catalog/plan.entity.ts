@@ -3,19 +3,30 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  OneToMany,
+  JoinColumn,
+  OneToOne,
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { PlanPriceEntity } from './plan-price.entity';
-import { DocumentPackOfferEntity } from './document-pack-offer.entity';
 import { PLAN_CREATION_SOURCE_ENUM } from '../enums/plan-creation-source.enum';
+import { CatalogItemEntity } from './catalog-item.entity';
 
 @Entity('plans')
 @Check('CHK_plans_documents_included', '"documents_included" > 0')
 export class PlanEntity {
   @PrimaryColumn({ name: 'plan_type', type: 'varchar', length: 64 })
   planType: string;
+
+  /** La identidad comercial común; planType sigue siendo la llave de beneficios vigente. */
+  @Column({ name: 'catalog_item_id', nullable: true, unique: true })
+  catalogItemId: string | null;
+
+  @OneToOne(() => CatalogItemEntity, (item) => item.plan, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'catalog_item_id' })
+  catalogItem: CatalogItemEntity | null;
 
   @Column({ length: 120 })
   name: string;
@@ -54,10 +65,4 @@ export class PlanEntity {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
-
-  @OneToMany(() => PlanPriceEntity, (price) => price.plan)
-  prices: PlanPriceEntity[];
-
-  @OneToMany(() => DocumentPackOfferEntity, (offer) => offer.eligiblePlan)
-  documentPackOffers: DocumentPackOfferEntity[];
 }

@@ -33,7 +33,7 @@ export class MissingDocumentPackMetadataException extends InternalServerErrorExc
 
 /**
  * La metadata restringe el paquete a un plan que no existe en `plans`. Guardarlo igual violaría
- * la llave foránea de `document_pack_offers.eligible_plan_code`; dejarlo en null convertiría una
+ * la llave foránea de `catalog_prices.eligible_plan_type`; dejarlo en null convertiría una
  * oferta restringida en una para todo el mundo, que es peor que no sincronizarla.
  */
 export class UnknownEligiblePlanMetadataException extends InternalServerErrorException {
