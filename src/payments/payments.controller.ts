@@ -5,6 +5,10 @@ import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { CreateSubscriptionCheckoutUseCase } from 'src/billing/checkout/create-subscription-checkout.use-case';
+import {
+  GetBillingStateUseCase,
+  type BillingStateResponse,
+} from 'src/billing/profiles/get-billing-state.use-case';
 import { GetPublicStripePlansUseCase } from './applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
@@ -14,6 +18,7 @@ import { UserSubscriptionState } from './interfaces/user-subscription-state.inte
 import { ApiGetPaymentServices } from './docs/api-get-payment-services.docs';
 import { ApiCreateCheckoutSession } from './docs/api-create-checkout-session.docs';
 import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs';
+import { ApiGetBillingState } from './docs/api-get-billing-state.docs';
 
 /**
  * Endpoints autenticados del catálogo y la compra.
@@ -29,6 +34,7 @@ export class PaymentsController {
     private readonly getPublicStripePlans: GetPublicStripePlansUseCase,
     private readonly createSubscriptionCheckout: CreateSubscriptionCheckoutUseCase,
     private readonly getSubscriptionState: GetSubscriptionStateUseCase,
+    private readonly getBillingState: GetBillingStateUseCase,
   ) {}
 
   /**
@@ -73,6 +79,36 @@ export class PaymentsController {
     };
   }
 
+  /**
+   * Estado de facturación de la cuenta activa: lo que el frontend consulta al entrar, al
+   * cambiar de cuenta y al volver de Checkout.
+   *
+   * Lleva `X-Account-Id` por el mismo motivo que el checkout, y no por simetría: un usuario con
+   * cuenta personal y organización tiene DOS estados de facturación distintos a la vez, y cuál
+   * de los dos se responde depende de en cuál esté trabajando. Sin el header no habría forma de
+   * saberlo — que es exactamente el defecto de `GET /subscription`, debajo.
+   */
+  @Get('billing-state')
+  @ApiGetBillingState()
+  async billingState(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+  ): Promise<BaseResponse<BillingStateResponse>> {
+    return {
+      success: true,
+      message: 'Estado de facturación obtenido correctamente',
+      data: await this.getBillingState.execute({
+        userId: user.sub,
+        accountId,
+      }),
+    };
+  }
+
+  /**
+   * @deprecated Lee `account_subscriptions` y resuelve la cuenta por la PRIMERA membresía activa
+   * del usuario, así que ignora en qué cuenta está trabajando. Sustituido por `billing-state`;
+   * se conserva hasta que no quede ningún consumidor.
+   */
   @Get('subscription')
   @ApiGetSubscriptionState()
   async subscription(

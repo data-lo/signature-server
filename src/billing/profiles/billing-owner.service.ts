@@ -116,7 +116,7 @@ export class BillingOwnerService {
    * lo correcto es justamente lo que ya ocurrió: el perfil existe.
    */
   async getOrCreateProfile(owner: BillingOwner): Promise<BillingProfileEntity> {
-    const existing = await this.findByOwner(owner);
+    const existing = await this.findProfileByOwner(owner);
     if (existing) {
       return existing;
     }
@@ -136,7 +136,7 @@ export class BillingOwnerService {
         throw error;
       }
 
-      const raced = await this.findByOwner(owner);
+      const raced = await this.findProfileByOwner(owner);
       if (!raced) {
         throw error;
       }
@@ -145,7 +145,20 @@ export class BillingOwnerService {
     }
   }
 
-  private async findByOwner(
+  /**
+   * Busca el perfil del propietario **sin crearlo**.
+   *
+   * Es la mitad de lectura de `getOrCreateProfile`, y es pública porque consultar el estado de
+   * facturación no debe dar de alta nada: preguntar "¿qué plan tengo?" desde una pantalla
+   * cualquiera acabaría insertando una fila en `billing_profiles` por cada cuenta que sólo
+   * miró, y `null` —que es lo que el consumidor necesita distinguir— dejaría de darse nunca.
+   *
+   * Qué columna se consulta es justamente la distinción del módulo: `organization_id` cuando el
+   * contexto es una organización (perfil compartido por todos sus miembros) y
+   * `personal_account_id` cuando es una cuenta personal. El `owner` ya viene resuelto por
+   * `resolveOwner`, así que acá no se vuelve a decidir de quién es el dinero.
+   */
+  async findProfileByOwner(
     owner: BillingOwner,
   ): Promise<BillingProfileEntity | null> {
     return this.billingProfileRepository.findOne({

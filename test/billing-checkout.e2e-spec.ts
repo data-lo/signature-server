@@ -15,6 +15,7 @@ import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-
 import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';
 import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
+import { GetBillingStateUseCase } from './../src/billing/profiles/get-billing-state.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
 import { CheckoutOrderService } from './../src/billing/checkout/checkout-order.service';
@@ -170,6 +171,8 @@ describe('Checkout de suscripción (e2e)', () => {
       controllers: [PaymentsController],
       providers: [
         CreateSubscriptionCheckoutUseCase,
+        // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e.
+        GetBillingStateUseCase,
         BillingOwnerService,
         BillingCatalogService,
         CheckoutOrderService,

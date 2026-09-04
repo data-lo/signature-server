@@ -261,6 +261,13 @@ describe('Webhook de Stripe (e2e)', () => {
           provide: getRepositoryToken(CheckoutOrderEntity),
           useValue: checkoutOrders,
         },
+        /**
+         * La MISMA instancia que recibe el stub de `DataSource`, no una copia: el servicio busca
+         * el lote del periodo por el repositorio inyectado (fuera de la transacción) y lo emite
+         * por el de la transacción. Con dos instancias distintas la guarda de idempotencia
+         * miraría un conjunto de filas y la inserción escribiría en otro.
+         */
+        { provide: getRepositoryToken(CreditLotEntity), useValue: creditLots },
         { provide: getRepositoryToken(CatalogPriceEntity), useValue: catalogPrices },
         { provide: getRepositoryToken(PlanEntity), useValue: plans },
         {
