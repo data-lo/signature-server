@@ -309,6 +309,90 @@ describe('Checkout de suscripción (e2e)', () => {
     });
   });
 
+  /**
+   * Una suscripción vigente por propietario. Lo que se comprueba acá y no en la prueba unitaria
+   * es el código HTTP que ve el frontend y —lo importante— que ni Stripe ni `checkout_orders`
+   * se tocan: una orden PENDING de más nunca se reconcilia, y una sesión de más es una segunda
+   * suscripción cobrándose en paralelo esperando a que el usuario la complete.
+   */
+  describe('suscripción ya activa', () => {
+    async function darDeAltaPerfil(
+      owner: {
+        personalAccountId: string | null;
+        organizationId: string | null;
+      },
+      status: BILLING_PROFILE_STATUS_ENUM,
+    ) {
+      await billingProfiles.save({
+        id: `perfil-${status}`,
+        ...owner,
+        stripeCustomerId: 'cus_anterior',
+        stripeSubscriptionId: 'sub_anterior',
+        status,
+      } as never);
+    }
+
+    const PERSONAL = {
+      personalAccountId: PERSONAL_ACCOUNT_ID,
+      organizationId: null,
+    };
+    const ORGANIZACION = {
+      personalAccountId: null,
+      organizationId: ORGANIZATION_ID,
+    };
+
+    it('responde 409 en una cuenta personal con el perfil ACTIVE', async () => {
+      await darDeAltaPerfil(PERSONAL, BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(409);
+      expect(response.body.message).toMatch(/suscripción activa/i);
+      expect(createCheckoutSession).not.toHaveBeenCalled();
+      expect(checkoutOrders.rows).toHaveLength(0);
+    });
+
+    /**
+     * El caso que sólo existe en organizaciones: el perfil es compartido, así que un segundo
+     * miembro que abra "Contratar" sin saber que la organización ya paga tiene que chocar con
+     * el mismo 409 aunque su fila de `accounts` sea distinta.
+     */
+    it('responde 409 en una cuenta de organización con el perfil ACTIVE', async () => {
+      await darDeAltaPerfil(ORGANIZACION, BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      const response = await openCheckout({
+        accountId: ORGANIZATION_ACCOUNT_ID,
+      });
+
+      expect(response.status).toBe(409);
+      expect(createCheckoutSession).not.toHaveBeenCalled();
+      expect(checkoutOrders.rows).toHaveLength(0);
+    });
+
+    it('no confunde propietarios: la cuenta personal puede contratar aunque la organización esté ACTIVE', async () => {
+      await darDeAltaPerfil(ORGANIZACION, BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(201);
+      expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
+      BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
+      BILLING_PROFILE_STATUS_ENUM.CANCELED,
+    ])('deja abrir un Checkout nuevo si el perfil está %s', async (status) => {
+      await darDeAltaPerfil(PERSONAL, status);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(201);
+      expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+      expect(checkoutOrders.rows).toHaveLength(1);
+    });
+  });
+
   describe('quién paga', () => {
     it('responde 400 si falta el header X-Account-Id', async () => {
       const response = await openCheckout({ accountId: null });

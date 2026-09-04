@@ -6,6 +6,8 @@ import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
+import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { ActiveSubscriptionAlreadyExistsException } from '../exceptions/billing.exceptions';
 import { CheckoutOrderService } from './checkout-order.service';
 
 const SUCCESS_PATH =
@@ -40,6 +42,19 @@ export class CreateSubscriptionCheckoutUseCase {
       input.accountId,
     );
     const profile = await this.billingOwnerService.getOrCreateProfile(owner);
+
+    /**
+     * Antes de tocar el catálogo y, sobre todo, antes de hablar con Stripe: el perfil es el
+     * mismo para toda la organización, así que esto también corta al segundo miembro que
+     * intenta contratar lo que la organización ya tiene.
+     */
+    if (profile.status === BILLING_PROFILE_STATUS_ENUM.ACTIVE) {
+      this.logger.warn(
+        `Checkout de suscripción rechazado: el perfil ${profile.id} ya está ACTIVE.`,
+      );
+
+      throw new ActiveSubscriptionAlreadyExistsException();
+    }
 
     const catalogPrice =
       await this.billingCatalogService.findSellableRecurringPrice(
