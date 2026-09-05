@@ -17,6 +17,7 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
 import { CheckoutOrderEntity } from 'src/billing/checkout/checkout-order.entity';
 import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from 'src/billing/credits/document-credit-consumption.entity';
+import { SubscriptionBillingHistoryEntity } from 'src/billing/subscriptions/subscription-billing-history.entity';
 import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
@@ -87,6 +88,8 @@ describe('WebhooksModule', () => {
       .overrideProvider(getRepositoryToken(CreditLotEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(DocumentCreditConsumptionEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(SubscriptionBillingHistoryEntity))
       .useValue(repositoryStub)
       .overrideProvider(RedisService)
       .useValue({ del: jest.fn() })

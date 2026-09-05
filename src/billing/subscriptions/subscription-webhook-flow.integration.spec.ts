@@ -11,6 +11,8 @@ import { StripeWebhookService } from 'src/payments/stripe/stripe-webhook.service
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './subscription-billing.service';
+import { RegisterSubscriptionBillingUseCase } from './register-subscription-billing.use-case';
+import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CatalogSyncService } from '../catalog/catalog-sync.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
@@ -22,6 +24,7 @@ import { CatalogItemEntity } from '../catalog/catalog-item.entity';
 import { CatalogPriceEntity } from '../catalog/catalog-price.entity';
 import { DocumentCreditPackEntity } from '../catalog/document-credit-pack.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 
@@ -56,6 +59,10 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
   let checkoutOrderRepository: ReturnType<typeof createMockRepository>;
   let creditLotRepository: ReturnType<typeof createMockRepository>;
   let catalogPriceRepository: ReturnType<typeof createMockRepository>;
+  let subscriptionBillingHistoryRepository: ReturnType<
+    typeof createMockRepository
+  >;
+  let managerUpdate: jest.Mock;
   let verifier: { verify: jest.Mock };
   let rolloverExecute: jest.Mock;
 
@@ -90,11 +97,34 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
 
     creditLotRepository.findOne.mockResolvedValue(null);
 
+    subscriptionBillingHistoryRepository = createMockRepository();
+    subscriptionBillingHistoryRepository.findOne.mockResolvedValue(null);
+
     rolloverExecute = jest.fn().mockResolvedValue({ affected: 0 });
+    managerUpdate = jest.fn();
     const manager = {
-      findOne: jest.fn().mockResolvedValue({ id: 'profile-1' }),
-      update: jest.fn(),
-      getRepository: jest.fn().mockReturnValue(creditLotRepository),
+      /**
+       * Por entidad, no un valor único: dentro de la transacción el caso de uso pide primero el
+       * perfil (para bloquearlo) y después el plan (para saber cuántos documentos concede), y
+       * devolverles lo mismo a los dos dejaría el lote sin `issued`.
+       */
+      findOne: jest.fn(async (entity: unknown) =>
+        entity === PlanEntity
+          ? { planType: 'pro', documentsIncluded: 100 }
+          : {
+              id: 'profile-1',
+              stripeCustomerId: 'cus_1',
+              stripeSubscriptionId: 'sub_1',
+            },
+      ),
+      update: managerUpdate,
+      getRepository: jest.fn((entity: unknown) =>
+        entity === SubscriptionBillingHistoryEntity
+          ? subscriptionBillingHistoryRepository
+          : entity === CheckoutOrderEntity
+            ? checkoutOrderRepository
+            : creditLotRepository,
+      ),
       createQueryBuilder: jest.fn().mockReturnValue({
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
@@ -119,6 +149,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         RegisterWebhookEventUseCase,
         StripeWebhookService,
         SubscriptionBillingService,
+        RegisterSubscriptionBillingUseCase,
         BillingCatalogService,
         CheckoutOrderService,
         CatalogSyncService,
@@ -152,6 +183,10 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         {
           provide: getRepositoryToken(CreditLotEntity),
           useValue: creditLotRepository,
+        },
+        {
+          provide: getRepositoryToken(SubscriptionBillingHistoryEntity),
+          useValue: subscriptionBillingHistoryRepository,
         },
         {
           provide: getRepositoryToken(CatalogPriceEntity),
@@ -213,6 +248,11 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
       object: {
         id: 'in_1',
         customer: 'cus_1',
+        currency: 'mxn',
+        amount_paid: 149900,
+        total: 149900,
+        payment_intent: 'pi_1',
+        status_transitions: { paid_at: PERIOD_START },
         parent: { subscription_details: { subscription: 'sub_1' } },
         lines: {
           data: [
@@ -267,6 +307,68 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
           stripeSubscriptionId: 'sub_1',
         }),
       );
+      expect(webhookEventRepository.update).toHaveBeenCalledWith(
+        'webhook-row-1',
+        expect.objectContaining({
+          processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.PROCESSED,
+        }),
+      );
+    });
+
+    /**
+     * El recorrido completo de esta historia: la entrega de Stripe acaba escribiendo un periodo
+     * con su origen, su dinero y sus ids de rastreo. Es lo que sobrevive a la próxima renovación,
+     * cuando el perfil ya diga otra cosa.
+     */
+    it('registra el periodo en el historial con origen STRIPE y el dinero cobrado', async () => {
+      await deliver(invoicePaidEvent);
+
+      expect(subscriptionBillingHistoryRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          billingProfileId: 'profile-1',
+          source: BILLING_SOURCE_ENUM.STRIPE,
+          planType: 'pro',
+          amount: 149900,
+          currency: 'mxn',
+          stripeInvoiceId: 'in_1',
+          stripeSubscriptionId: 'sub_1',
+          stripeCustomerId: 'cus_1',
+          stripePaymentIntentId: 'pi_1',
+          externalReference: null,
+          createdByUserId: null,
+        }),
+      );
+    });
+
+    it('deja el perfil con el plan y el periodo vigentes', async () => {
+      await deliver(invoicePaidEvent);
+
+      expect(managerUpdate).toHaveBeenCalledWith(
+        BillingProfileEntity,
+        'profile-1',
+        expect.objectContaining({
+          currentPlanType: 'pro',
+          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+          currentPeriodStart: new Date(PERIOD_START * 1000),
+          currentPeriodEnd: new Date(PERIOD_END * 1000),
+          stripeSubscriptionId: 'sub_1',
+        }),
+      );
+    });
+
+    /**
+     * El otro extremo del criterio de aceptación: una factura que no se puede asociar a ningún
+     * perfil deja un aviso con todos los ids y NO tumba el webhook. Un 5xx sólo conseguiría que
+     * Stripe reintentara durante días algo que ningún reintento arregla.
+     */
+    it('una factura sin perfil asociado avisa pero no falla la entrega', async () => {
+      billingProfileRepository.findOne.mockResolvedValue(null);
+
+      const result = await deliver(invoicePaidEvent);
+
+      expect(result).toEqual({ received: true, duplicate: false });
+      expect(creditLotRepository.save).not.toHaveBeenCalled();
+      expect(subscriptionBillingHistoryRepository.save).not.toHaveBeenCalled();
       expect(webhookEventRepository.update).toHaveBeenCalledWith(
         'webhook-row-1',
         expect.objectContaining({
