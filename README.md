@@ -1,6 +1,130 @@
 # Signature Server
 
-Backend en NestJS para una plataforma de firma electrónica de documentos: gestión de usuarios, credencial de firma (rúbrica + identificación oficial), creación y firma secuencial de documentos, cuentas/organizaciones con membresías, suscripciones (Stripe) y auditoría con cadena de integridad.
+Backend en NestJS de una plataforma de firma electrónica de documentos con validez legal en México.
+
+## Qué problema resuelve
+
+Firmar un documento entre varias personas suele terminar en una cadena de correos con PDFs adjuntos: nadie sabe quién falta por firmar, la versión buena se pierde entre respuestas, y no queda constancia de quién firmó, cuándo ni con qué se acreditó.
+
+Este servicio cubre ese flujo de punta a punta y, sobre todo, **produce la evidencia que lo sostiene legalmente**: cada acto queda encadenado en una bitácora de integridad, el PDF final lleva anexada una hoja con los datos de cada firmante, y el documento se sella ante un PSC (constancia NOM-151 más sello de tiempo RFC 3161).
+
+## Alcance funcional
+
+- **Identidad y credencial de firma** — registro con verificación por OTP, validación de identidad con INE y prueba de vida (Didit), y alta de la rúbrica manuscrita, subida como imagen o dibujada en el teléfono vía QR.
+- **Dos tipos de firma** — *simple*, sustentada en la rúbrica más un código OTP de un solo uso; y *avanzada* (FIEL), con la e.firma del SAT: validación del certificado, comprobación de revocación OCSP y firma criptográfica real.
+- **Ciclo de vida del documento** — creación con firmantes y observadores, colocación de las firmas sobre la página, envío a firma (secuencial o libre), avisos por correo, rechazo y cancelación.
+- **Evidencia y verificación** — hoja de firmas anexada al PDF, sellado ante el PSC, vista pública verificable por QR sin necesidad de cuenta, y descarga del expediente de auditoría en XML.
+- **Cuentas y organizaciones** — contexto personal u organizacional, invitación de miembros por correo, roles y permisos granulares (RBAC).
+- **Facturación** — suscripciones y paquetes de documentos con Stripe: catálogo, Checkout y webhooks.
+
+> Este repositorio es **sólo el backend**. El frontend es [`signature-app`](../signature-app) (Next.js) y el sellado ante el PSC lo hace [`seal-service`](../seal-service), un microservicio aparte.
+
+Para el detalle interno —flujo de firmado paso a paso, modelo de datos y endpoints— ver las secciones 1 a 4, más abajo.
+
+---
+
+## Puesta en marcha
+
+### Requisitos previos
+
+| Requisito | Versión | Por qué esa |
+|---|---|---|
+| Node.js | **22 LTS** | Es la del `Dockerfile` y la de CI. No hay campo `engines` en `package.json`, así que nada lo obliga; la 24 también funciona en local. |
+| npm | 10 o superior | CI y Docker usan `npm ci`, así que manda el `package-lock.json`. |
+| Docker + Docker Compose | v2 o superior | Levanta las cinco dependencias de infraestructura. Sin él habría que instalarlas a mano. |
+
+**Servicios de infraestructura** (los levanta `docker-compose.yml`, no hay que instalar nada):
+
+| Servicio | Para qué | Puerto en el host |
+|---|---|---|
+| PostgreSQL 15 | Dominio transaccional: usuarios, documentos, cuentas, facturación, RBAC | `5434` |
+| MongoDB 8 | Bitácora de auditoría append-only | `27018` |
+| Redis 7 | Sesiones invalidadas, caché de perfil y catálogo de cuentas | `6379` |
+| Kafka 3.9 (KRaft) | Eventos del ciclo de vida del documento | `9094` (UI en `8080`) |
+| MinIO | Documentos, rúbricas e identificaciones | `9010` (consola en `9011`) |
+
+**Servicios externos.** Ninguno impide arrancar, salvo Stripe. Cada uno apaga una parte del producto si falta su credencial:
+
+| Servicio | Para qué | Si falta |
+|---|---|---|
+| **Stripe** | Suscripciones y paquetes de documentos | **La aplicación no arranca**: el módulo de pagos falla al construirse. |
+| SendGrid | Correos de OTP, invitación y avisos de firma | El envío falla y se registra, pero ningún flujo se detiene. |
+| Didit | Validación de identidad (INE + prueba de vida) | Nadie puede pasar de "identidad pendiente" a registrar su rúbrica. |
+| Cloudflare Turnstile | CAPTCHA del registro | El registro se rechaza (falla cerrado). Hay una clave de prueba que siempre aprueba. |
+| `seal-service` | Sellado NOM-151 y sello de tiempo | El sellado falla y queda logueado; la firma del documento no se ve afectada. |
+
+### 1. Configurar el entorno
+
+```bash
+cp .env.example .env
+```
+
+`.env.example` trae valores locales listos para usar y marcadores `replace-me` en todo lo que es un secreto. Va primero porque `docker compose` también lee de ahí las credenciales de Postgres, Redis y MinIO.
+
+Lo mínimo para arrancar es poner una `STRIPE_SECRET_KEY` de modo test —sin ella la aplicación no levanta— y un `CIPHER_SECRET`, `JWT_SECRET`, `API_KEY` y `REDIS_PASSWORD` propios. El resto puede quedarse con los valores de ejemplo mientras no toques ese flujo. Ver [Variables de entorno](#variables-de-entorno) para el detalle de cada grupo.
+
+### 2. Levantar la infraestructura
+
+```bash
+docker compose up -d
+```
+
+Levanta Postgres, MongoDB, Redis, Kafka, la UI de Kafka y MinIO. Ninguno necesita configuración adicional.
+
+### 3. Instalar y arrancar
+
+```bash
+npm install
+npm run start:dev
+```
+
+`start:dev` queda en modo `--watch` y **aplica al arrancar las migraciones pendientes** (`migrationsRun: true`): una base vacía queda utilizable sin ningún paso manual. El esquema lo gobiernan las migraciones de `src/migrations/`, no la sincronización automática, que está apagada.
+
+### 4. Comprobar que quedó bien
+
+```bash
+curl http://localhost:3000/health
+# {"status":"ok","info":{"postgres":{"status":"up"},"mongodb":{"status":"up"},"redis":{"status":"up"}}}
+```
+
+Y la documentación interactiva de la API en <http://localhost:3000/api/v1/docs>.
+
+### Detalles que sorprenden la primera vez
+
+- **El puerto sale de `BACKEND_PORT` y su valor por defecto es `3000`.** El `Dockerfile` expone el `4000` y su healthcheck apunta ahí, así que un despliegue en contenedor **tiene que** fijar `BACKEND_PORT=4000` o el healthcheck lo marcará caído aunque la API responda.
+- **Todas las rutas cuelgan de `/api/v1`**, menos `/health` y `/`, que quedan fuera del prefijo a propósito (ver `api-prefix.constants.ts`).
+- **Los buckets de MinIO se crean solos** en la primera subida; no hay que darlos de alta en la consola.
+- **Una base que ya existía necesita un paso previo.** Si tu Postgres se creó cuando la aplicación corría con `synchronize: true`, sus tablas están al día pero el historial de migraciones no, y el arranque fallaría con `column "..." already exists`. Se alinea una sola vez con `npm run build && npm run migration:baseline:prod -- --confirm` (ver «Comandos disponibles»). Una base nueva no lo necesita.
+- **El seed de roles no es automático.** Para poblar el catálogo RBAC: `npm run seed:roles`.
+
+---
+
+## Comandos disponibles
+
+| Comando | Qué hace |
+|---|---|
+| `npm run start:dev` | Desarrollo con recarga en caliente; aplica las migraciones pendientes al arrancar. |
+| `npm run start:debug` | Igual, con el inspector de Node abierto. |
+| `npm run build` | Compila a `dist/` con `nest build`. |
+| `npm run start:prod` | Ejecuta lo compilado (requiere `npm run build` antes). |
+| `npm test` | Pruebas unitarias con Jest. No necesita infraestructura. |
+| `npm run test:watch` | Las mismas, en modo watch. |
+| `npm run test:cov` | Las mismas, con reporte de cobertura en `coverage/`. |
+| `npm run test:e2e` | Pruebas end-to-end. **Requieren la infraestructura levantada.** |
+| `npm run format` | Aplica Prettier sobre `src/` y `test/`. |
+| `npm run lint` | ESLint con `--fix`. Ojo: **modifica archivos** (ver nota abajo). |
+| `npm run migration:generate -- src/migrations/NombreDescriptivo` | Genera una migración a partir del diff entre entidades y base. |
+| `npm run migration:create -- src/migrations/NombreDescriptivo` | Crea una migración vacía, con `up`/`down` manuales. |
+| `npm run migration:run` / `migration:revert` | Aplica las pendientes / revierte la última. |
+| `npm run migration:baseline -- --confirm` | Marca las pendientes como aplicadas **sin ejecutarlas**. Sólo para adoptar las migraciones en una base que ya existía; sin `--confirm` únicamente lista. |
+| `npm run seed:roles` | Puebla el catálogo RBAC. Idempotente. |
+| `npm run seed:documents` | Documentos de prueba, uno por estatus, para ejercitar los filtros del frontend. Necesita el usuario fixture `PRIMARY_TEST_EMAIL` con su cuenta PERSONAL. |
+
+Los seeds y el baseline tienen variante `:prod` (`seed:roles:prod`, `migration:baseline:prod`) que corre el `.js` compilado sin `ts-node`, para usarlas dentro de la imagen de producción.
+
+**Sobre `npm run lint`:** hoy no sirve como filtro. El repositorio está guardado con CRLF y la configuración de Prettier espera LF, así que ESLint reporta unos **31 400 errores**, de los cuales **31 360 son `Delete ␍`** y sólo 33 son problemas de formato reales. Con ese ruido, un error auténtico es indistinguible. En CI pasa porque el checkout de Linux usa LF. Arreglarlo es añadir un `.gitattributes` con `* text eol=lf` y correr un `--fix` de una sola pasada.
+
+---
 
 ## 1. Proceso de firmado de documentos
 
@@ -182,7 +306,7 @@ Al estampar también se pinta la **zona de silencio**: un borde blanco de 4pt al
 
 **Cambio conceptual que no existía antes de ER-V2: ya no hay "una cuenta = un tenant único"**. Hoy hay dos claves de aislamiento distintas según el contexto: `AccountEntity.id` (única por usuario, sirve para contexto personal) y `OrganizationEntity.id`/`Document.organizationId` (agrupa a **todos** los miembros de una organización, porque una organización tiene N filas `Account`, una por miembro). Al leer o escribir lógica de aislamiento multi-tenant, hay que decidir cuál de las dos claves aplica según si el contexto es personal o de organización.
 
-> El esquema ya **no** se sincroniza automáticamente (`synchronize: false`). Hay un sistema de migraciones formal de TypeORM en `src/migrations/` (30 archivos) — ver sección 6 para los comandos y el flujo para aplicar cambios de entidad.
+> El esquema lo gobiernan las migraciones de TypeORM en `src/migrations/` (47 archivos), que la aplicación aplica sola al arrancar (`migrationsRun: true`). La sincronización automática está apagada (`synchronize: false`) — ver sección 6 para los comandos y para el paso de adopción en una base que ya existía.
 
 ---
 
@@ -506,23 +630,36 @@ Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 | SendGrid | Notificaciones transaccionales por correo |
 | pdf-lib / sharp | Manipulación y conformidad PDF/A de documentos / generación de PNG en blanco |
 
-### Variables de entorno relevantes
+### Variables de entorno
 
-`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `POSTGRES_DB_URL`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `FRONTEND_URL`, `MONGO_USERNAME`, `MONGO_PASSWORD`, `MONGO_DB_NAME`, `MONGO_DB_URL`, `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_*_BUCKET` (una por bucket), `CIPHER_SECRET`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ENTERPRISE`, `API_KEY`, `TURNSTILE_SECRET_KEY` (clave privada de Cloudflare Turnstile — solo acá, nunca en el frontend; su pareja pública `TURNSTILE_SITE_KEY` vive en el `.env` de `signature-app`).
+La plantilla completa y comentada es [`.env.example`](.env.example): trae valores locales listos para usar y marcadores `replace-me` en cada secreto. **Nunca hay valores reales en este repositorio.** Lo que sigue es el mapa por grupos.
 
-## 6. Levantar el proyecto
+| Grupo | Variables | Notas |
+|---|---|---|
+| **Servidor** | `BACKEND_PORT` | Por defecto `3000`. En contenedor hay que fijarla en `4000`, que es el puerto que expone y chequea el `Dockerfile`. |
+| **PostgreSQL** | `POSTGRES_DB_URL` | Es la única que lee la aplicación. `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` y `DB_NAME` sólo aprovisionan el contenedor de `docker-compose.yml`. |
+| **MongoDB** | `MONGO_DB_URL` | Igual: la app lee la cadena completa; `MONGO_USERNAME`, `MONGO_PASSWORD` y `MONGO_DB_NAME` son para el contenedor. |
+| **Redis** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | La contraseña también arma el `--requirepass` del contenedor: sin ella, `docker compose up redis` falla. |
+| **Kafka** | `KAFKA_BROKER`, `KAFKA_CLIENT_ID`, `KAFKA_CONSUMER_GROUP_ID`, `KAFKA_UI_PORT` | En local la app corre en el host, así que se conecta por el listener externo (`localhost:9094`), no por `kafka:9092`. |
+| **MinIO** | `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_REGION` | `ACCESS_KEY`/`SECRET_KEY` deben coincidir con las `ROOT_*` (o con una llave creada en la consola), o toda operación de archivos falla con error de autenticación aunque el contenedor arranque bien. `MINIO_REGION` es opcional y por defecto es `us-east-1`. |
+| **MinIO — cliente público** | `MINIO_PUBLIC_HOST`, `MINIO_PUBLIC_PORT`, `MINIO_PUBLIC_USE_SSL` | Es el cliente que firma las URLs que el navegador abre directo. En local debe ir con `USE_SSL=false`, porque el MinIO de compose habla HTTP plano. Si faltan, el servicio lanza al arrancar. |
+| **MinIO — buckets** | `MINIO_*_BUCKET` (ocho) | Uno por etapa del documento: creado, firmado, finalizado, vista previa parcial, cancelado, rechazado, identificaciones y rúbricas. Se crean solos en la primera subida. |
+| **Autenticación** | `JWT_SECRET`, `JWT_EXPIRES_IN`, `CIPHER_SECRET`, `API_KEY` | `CIPHER_SECRET` cifra la bitácora de auditoría: cambiarlo deja ilegible lo ya escrito. `API_KEY` es la que exige `ApiKeyGuard` en las rutas `@Public()`. |
+| **Frontend** | `FRONTEND_URL` | Origen de CORS y base de los enlaces que viajan por correo. Se normaliza sola, pero conviene escribirla sin diagonal final. |
+| **SendGrid** | `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` | El correo remitente debe estar verificado en SendGrid. |
+| **Stripe** | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Sin la primera **la aplicación no arranca**. Si usas una *restricted key*, necesita LECTURA de Products y Prices —de ahí sale el catálogo— además de escritura en Checkout, Customers y Subscriptions. Los antiguos `STRIPE_PRICE_ID_*` ya no se usan: el catálogo se lee en vivo. |
+| **Didit** | `DIDIT_API_KEY`, `DIDIT_WORKFLOW_ID`, `DIDIT_API_URL`, `DIDIT_WEBHOOK_SECRET_KEY` | La API key nunca sale del servidor: al frontend sólo le llega la URL hospedada. Sin el secreto del webhook se rechazan todas las entregas y ningún usuario avanza de "identidad pendiente". |
+| **Turnstile** | `TURNSTILE_SECRET_KEY` | Clave **privada**, sólo acá. Su pareja pública `TURNSTILE_SITE_KEY` vive en el `.env` de `signature-app`. Para desarrollo, Cloudflare publica una clave de prueba que siempre aprueba. |
+| **Seal Service** | `SEAL_SERVICE_URL`, `SEAL_SERVICE_API_KEY` | La API key tiene que ser idéntica a la `API_KEY` del `.env` de `seal-service`, o su guard responde 401. El puerto debe coincidir con el `PORT` de ese servicio: su valor por defecto es `3001`, que en local ya ocupa `signature-app`. |
 
-```bash
-docker compose up -d      # Postgres, MongoDB, Redis, Kafka, Kafka UI, MinIO
-npm install
-npm run start:dev         # aplica las migraciones pendientes automáticamente (migrationsRun: true) y levanta con --watch
-```
+## 6. Operación: migraciones, seeds y Docker
 
-Swagger disponible en `/api/v1/docs` una vez levantado (cuelga del mismo prefijo que documenta; ver «Prefijo global» en la sección 3).
+El arranque para desarrollo local está en [Puesta en marcha](#puesta-en-marcha), al principio de este
+README. Acá queda lo que hace falta al cambiar el esquema o al desplegar.
 
 ### Migraciones (TypeORM)
 
-El esquema ya no se gestiona con `synchronize: true`. `src/data-source.ts` es el `DataSource` que usa la CLI (independiente del `TypeOrmModule.forRootAsync` de `app.module.ts`, que sigue siendo lo que usa la app en tiempo de ejecución).
+`src/data-source.ts` es el `DataSource` que usa la CLI de TypeORM, independiente del `TypeOrmModule.forRootAsync` de `app.module.ts`, que es lo que usa la aplicación en tiempo de ejecución.
 
 ```bash
 npm run migration:generate -- src/migrations/NombreDescriptivo   # genera una migración a partir del diff entidades vs. DB
@@ -531,13 +668,21 @@ npm run migration:run                                            # aplica las mi
 npm run migration:revert                                         # revierte la última migración aplicada
 ```
 
-`migrationsRun: true` en `app.module.ts` significa que `npm run start:dev`/`start:prod` aplican automáticamente cualquier migración pendiente al arrancar — no hace falta correr `migration:run` a mano en el flujo normal, solo al generar una migración nueva para probarla antes de commitear.
+`migrationsRun: true` en `app.module.ts` hace que `start:dev`/`start:prod` apliquen cualquier migración pendiente al arrancar, así que en el flujo normal no hace falta correr `migration:run` a mano: sólo al generar una migración nueva y querer probarla antes de commitear.
 
-**30 migraciones en `src/migrations/` (esta auditoría)**. Las 8 más recientes no tenían ninguna mención en este README hasta esta ronda: `CreateAuditChain` (ledger global en Postgres), `RemovePositionFromUsers` (columna eliminada de `users`), `DecoupleLegacyAccountsTypeEnum`, `ArraySignatureCoordinates` (shape nuevo de coordenadas con ratios 0–1), `AddIsEmailVerifiedToUsers` + `CreateEmailVerificationCodes` (OTP de verificación de registro), `CreatePasswordResetCodes` (recuperación de contraseña), `CreateOrganizationPermissions` (catálogo administrativo de permisos, sección 3).
+> [!IMPORTANT]
+> **Una base creada cuando la aplicación usaba `synchronize: true` necesita adoptarse una sola vez.**
+> Sus tablas ya están al día, pero su tabla `migrations` se quedó atrás, así que las pendientes
+> intentarían crear objetos que ya existen y el arranque fallaría con `column "..." already exists`.
+> `npm run migration:baseline -- --confirm` las registra sin ejecutarlas y deja el historial alineado;
+> de ahí en adelante sólo se aplican las nuevas. Una base vacía no necesita nada: las 47 migraciones
+> corren solas en el primer arranque.
+
+**47 migraciones en `src/migrations/`**. Las 8 más recientes no tenían ninguna mención en este README hasta esta ronda: `CreateAuditChain` (ledger global en Postgres), `RemovePositionFromUsers` (columna eliminada de `users`), `DecoupleLegacyAccountsTypeEnum`, `ArraySignatureCoordinates` (shape nuevo de coordenadas con ratios 0–1), `AddIsEmailVerifiedToUsers` + `CreateEmailVerificationCodes` (OTP de verificación de registro), `CreatePasswordResetCodes` (recuperación de contraseña), `CreateOrganizationPermissions` (catálogo administrativo de permisos, sección 3).
 
 ### Seed en Docker (post-build)
 
-`npm run seed:roles`/`seed:documents` (ver sección 3) usan `ts-node` sobre `src/*.ts` — no sirven dentro de la imagen de producción, que solo tiene `dist/` compilado y `node_modules --omit=dev` (sin `ts-node`, ver `Dockerfile`). Para esos casos existen `seed:roles:prod`/`seed:documents:prod`, que corren el `.js` ya compilado directo con `node`:
+`seed:roles:prod`/`seed:documents:prod` corren el `.js` ya compilado directo con `node`, sin `ts-node`. Existen para la imagen de producción, que sólo lleva `dist/` y `node_modules --omit=dev` (ver `Dockerfile`), pero **hoy son también las únicas que funcionan en local**: las variantes de desarrollo fallan con `EntityMetadataNotFoundError` (ver la advertencia en «Comandos disponibles»).
 
 ```bash
 docker compose up -d              # o el compose real del entorno (staging/prod)
@@ -550,6 +695,43 @@ Correrlo **después** de que el contenedor de la API y el de la base de datos ya
 ---
 
 ## 7. Pendientes / trabajo futuro
+
+### Resuelto: los cuatro defectos detectados al documentar la puesta en marcha — 2026-09-03
+
+Aparecieron al verificar de punta a punta los pasos y comandos del arranque contra el stack local.
+Los cuatro quedaron corregidos y comprobados en la misma ronda.
+
+1. **El esquema lo gobiernan ahora las migraciones.** `app.module.ts` pasó de `synchronize: true`
+   —que derivaba el esquema de las entidades en cada arranque y dejaba las migraciones sin aplicar,
+   21 pendientes acumuladas— a `synchronize: false` más `migrations` + `migrationsRun: true`.
+
+   Al validarlo apareció el único hueco funcional real entre ambos mundos: el enum
+   `events_event_type_enum` no tenía `document.collaborator_signed`, que el código emite por cada
+   firmante, porque ninguna migración llegó a agregarlo y `synchronize` lo creaba solo. Lo añade
+   `AddCollaboratorSignedToEventType1784300000040`. El resto de la deriva que reportaba
+   `migration:generate` era renombrado de constraints e índices, sin efecto en runtime.
+
+   Para las bases que ya existían se agregó `npm run migration:baseline`, que registra las
+   pendientes sin ejecutarlas (ver la nota de la sección 6). Comprobado en los dos caminos: base
+   vacía —47 migraciones aplicadas solas al arrancar— y copia de la base de desarrollo con el
+   baseline aplicado; en ambos, `/health` responde 200 y el arranque no registra errores.
+
+2. **Los seeds de desarrollo funcionan.** `seed-roles.ts` y `seed-documents.ts` registraban las
+   entidades con `join(process.cwd(), 'dist', ...)` mientras importaban las clases desde `src/`:
+   bajo `ts-node` eran dos clases distintas y TypeORM fallaba con `EntityMetadataNotFoundError`. El
+   glob pasó a `join(__dirname, '..', '**', '*.entity{.ts,.js}')`, que es lo que su propio
+   comentario ya describía y sirve igual para `src/` y para `dist/`.
+
+3. **Las 4 suites e2e pasan** (38 pruebas). Fallaban 9 porque los fixtures nunca siguieron a las
+   migraciones `RefactorPlansToPlanType` y `RenamePlanPricesActiveToIsActive`: seguían usando
+   `planCode`, `active`, `currentPlanCode` y `monthlyDocumentLimit` donde las entidades ya declaran
+   `planType`, `isActive`, `currentPlanType` y `documentsIncluded`. Se dejaron intactas las
+   metadata de producto de Stripe, donde `planCode` sigue siendo un alias soportado a propósito
+   (ver `CatalogSyncService.resolvePlanType`).
+
+4. **El healthcheck de MinIO ya puede pasar.** Invocaba `curl`, que no existe en esa imagen, así que
+   el contenedor quedaba siempre `unhealthy` aunque respondiera 200. Ahora usa `mc ready local`, que
+   sí viene incluido. Verificado: el contenedor reporta `healthy`.
 
 ### Pendiente de configuración: revisar la llave de Stripe del entorno desplegado — 2026-08-24
 

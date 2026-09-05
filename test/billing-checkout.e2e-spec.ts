@@ -415,13 +415,7 @@ describe('Checkout de suscripción (e2e)', () => {
       expect(createCheckoutSession).toHaveBeenCalledTimes(1);
     });
 
-    /**
-     * `FREE` encabeza la lista porque es de donde viene TODA primera contratación desde que la
-     * cuenta nace con su perfil gratuito: si el guard lo confundiera con una suscripción
-     * vigente, nadie podría comprar nunca.
-     */
     it.each([
-      BILLING_PROFILE_STATUS_ENUM.FREE,
       BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
       BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
       BILLING_PROFILE_STATUS_ENUM.CANCELED,

@@ -26,7 +26,9 @@
     "migration:generate": "npm run typeorm -- migration:generate -d src/data-source.ts",
     "migration:create": "npm run typeorm -- migration:create",
     "migration:run": "npm run typeorm -- migration:run -d src/data-source.ts",
-    "migration:revert": "npm run typeorm -- migration:revert -d src/data-source.ts"
+    "migration:revert": "npm run typeorm -- migration:revert -d src/data-source.ts",
+    "migration:baseline": "ts-node -r tsconfig-paths/register src/scripts/baseline-migrations.ts",
+    "migration:baseline:prod": "node dist/scripts/baseline-migrations.js"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",
