@@ -13,7 +13,10 @@ services:
     command: server /data --console-address ":9001"
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://minio:9000/minio/health/ready"]
+      # `mc ready local` y no `curl`: la imagen de MinIO no incluye curl, así que este healthcheck
+      # fallaba siempre y dejaba el contenedor permanentemente `unhealthy` aunque el servicio
+      # respondiera. `mc` sí viene en la imagen, con su alias `local` ya configurado.
+      test: ["CMD", "mc", "ready", "local"]
       interval: 30s
       timeout: 20s
       retries: 5

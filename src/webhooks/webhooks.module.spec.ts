@@ -9,8 +9,10 @@ import { IdentityVerificationEntity } from 'src/identity-verification/entities/i
 import { UserEntity } from 'src/user/entities/user.entity';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { PlanEntity } from 'src/billing/catalog/plan.entity';
-import { PlanPriceEntity } from 'src/billing/catalog/plan-price.entity';
-import { DocumentPackOfferEntity } from 'src/billing/catalog/document-pack-offer.entity';
+import { CatalogItemEntity } from 'src/billing/catalog/catalog-item.entity';
+import { CatalogPriceEntity } from 'src/billing/catalog/catalog-price.entity';
+import { CatalogItemScopeEntity } from 'src/billing/catalog/catalog-item-scope.entity';
+import { DocumentCreditPackEntity } from 'src/billing/catalog/document-credit-pack.entity';
 import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entity';
 import { CheckoutOrderEntity } from 'src/billing/checkout/checkout-order.entity';
 import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
@@ -70,9 +72,13 @@ describe('WebhooksModule', () => {
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(PlanEntity))
       .useValue(repositoryStub)
-      .overrideProvider(getRepositoryToken(PlanPriceEntity))
+      .overrideProvider(getRepositoryToken(CatalogItemEntity))
       .useValue(repositoryStub)
-      .overrideProvider(getRepositoryToken(DocumentPackOfferEntity))
+      .overrideProvider(getRepositoryToken(CatalogPriceEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CatalogItemScopeEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(DocumentCreditPackEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(BillingProfileEntity))
       .useValue(repositoryStub)

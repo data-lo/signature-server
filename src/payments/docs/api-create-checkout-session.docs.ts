@@ -7,7 +7,7 @@ export function ApiCreateCheckoutSession() {
     ApiOperation({
       summary: 'Contratar un plan recurrente para la cuenta activa',
       description:
-        'Resuelve al propietario facturable de la cuenta activa (la cuenta personal, o la ORGANIZACIÓN completa si el contexto es una organización — los miembros comparten un solo perfil y un solo saldo), crea o recupera su perfil de facturación, valida que el precio sea un plan recurrente vendible del catálogo local, abre la sesión de Checkout en modo `subscription` y registra la orden local en estado PENDING. ' +
+        'Resuelve al propietario facturable de la cuenta activa (la cuenta personal, o la ORGANIZACIÓN completa si el contexto es una organización — los miembros comparten un solo perfil y un solo saldo), crea o recupera su perfil de facturación, rechaza con 409 si ese perfil ya está ACTIVE (una suscripción vigente por propietario), valida que el precio sea un plan recurrente vendible del catálogo local, abre la sesión de Checkout en modo `subscription` y registra la orden local en estado PENDING. ' +
         'Devuelve la URL temporal de Checkout. Al terminar, Stripe regresa al usuario a /dashboard/subscriptions con `payment=success` o `payment=cancel`: ese retorno NO confirma el pago. La suscripción se activa y los documentos del periodo se conceden cuando llega el webhook firmado `invoice.paid`.',
     }),
     ApiHeader({
@@ -32,6 +32,11 @@ export function ApiCreateCheckoutSession() {
       status: 404,
       description:
         'El precio no corresponde a ningún plan recurrente vendible del catálogo local.',
+    }),
+    ApiResponse({
+      status: 409,
+      description:
+        'El propietario facturable ya tiene una suscripción activa; hay que administrar la actual en vez de contratar otra.',
     }),
     ApiResponse({
       status: 502,

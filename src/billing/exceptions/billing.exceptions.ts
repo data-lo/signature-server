@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
@@ -35,6 +36,33 @@ export class SubscriptionPriceNotAvailableException extends NotFoundException {
 }
 
 /**
+ * El propietario facturable ya tiene una suscripción vigente (`billing_profile.status = ACTIVE`)
+ * y está pidiendo otra.
+ *
+ * Se corta ANTES de hablar con Stripe porque cada sesión de Checkout abierta es una suscripción
+ * potencial: si el usuario la completa (dos pestañas, un doble clic en "Contratar", o un
+ * miembro de la organización que no sabe que otro ya contrató), el propietario acaba con dos
+ * suscripciones cobrándose en paralelo por el mismo perfil, y `stripe_subscription_id` sólo
+ * puede apuntar a una — la otra quedaría cobrando sin conceder documentos y sin rastro local.
+ * De paso evita la basura de `checkout_orders` en PENDING que nunca se van a reconciliar.
+ *
+ * Sólo bloquea ACTIVE: INCOMPLETE (nunca llegó a pagar), PAST_DUE (el cobro falló y quiere
+ * arreglarlo) y CANCELED (quiere volver) son justamente los casos en los que hay que dejar
+ * abrir un Checkout nuevo.
+ *
+ * 409 y no 400: la petición está bien formada, lo que choca es el estado actual del recurso, y
+ * el frontend necesita distinguirlo para mandar al usuario al portal de facturación en vez de a
+ * pagar otra vez.
+ */
+export class ActiveSubscriptionAlreadyExistsException extends ConflictException {
+  constructor() {
+    super(
+      'Esta cuenta ya tiene una suscripción activa. Administra tu plan actual desde tu facturación en lugar de contratar uno nuevo.',
+    );
+  }
+}
+
+/**
  * Una cuenta de tipo ORGANIZATION sin `organization_id`. No es un error del usuario: es una fila
  * imposible según el propio modelo (ver `AccountEntity.organizationId`, NULL sólo en PERSONAL),
  * y facturar a ciegas elegiría mal el propietario del saldo.
@@ -65,7 +93,7 @@ export class BillingProfileNotFoundForInvoiceException extends InternalServerErr
 }
 
 /**
- * La factura pagada corresponde a un `stripe_price_id` que no está en `plan_prices`, así que no
+ * La factura pagada corresponde a un `stripe_price_id` que no está en `catalog_prices`, así que no
  * hay forma de saber cuántos documentos conceder.
  *
  * Mismo criterio que arriba: hubo cobro, así que se falla ruidosamente en vez de conceder un
@@ -74,6 +102,6 @@ export class BillingProfileNotFoundForInvoiceException extends InternalServerErr
 export class PlanNotFoundForInvoiceException extends InternalServerErrorException {
   constructor(stripePriceId: string | null) {
     super('No se encontró el plan correspondiente a la factura recibida.');
-    this.cause = `Sin plan_prices para el precio ${stripePriceId ?? '(desconocido)'}.`;
+    this.cause = `Sin catalog_prices para el precio ${stripePriceId ?? '(desconocido)'}.`;
   }
 }

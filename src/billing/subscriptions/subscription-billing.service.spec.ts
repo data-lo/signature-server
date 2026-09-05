@@ -6,6 +6,7 @@ import { SubscriptionBillingService } from './subscription-billing.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
+import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import {
@@ -17,10 +18,12 @@ const PERIOD_START = 1893456000; // 2030-01-01T00:00:00Z
 const PERIOD_END = 1896134400; // 2030-02-01T00:00:00Z
 
 const PLAN_PRICE = {
-  id: 'plan-price-1',
-  planType: 'pro',
+  id: 'catalog-price-1',
   stripePriceId: 'price_pro_mensual',
-  plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
+  catalogItem: {
+    isActive: true,
+    plan: { planType: 'pro', isActive: true, documentsIncluded: 100 },
+  },
 };
 
 function buildInvoice(overrides: Record<string, unknown> = {}): Stripe.Invoice {
@@ -49,7 +52,11 @@ describe('SubscriptionBillingService', () => {
     save: jest.Mock;
   };
   let billingCatalogService: { findPriceForInvoice: jest.Mock };
-  let checkoutOrderService: { markCompleted: jest.Mock };
+  let checkoutOrderService: {
+    markCompleted: jest.Mock;
+    linkCompletedSubscriptionToCreditSlot: jest.Mock;
+    linkCheckoutSessionToCreditSlot: jest.Mock;
+  };
   let manager: {
     findOne: jest.Mock;
     update: jest.Mock;
@@ -71,7 +78,11 @@ describe('SubscriptionBillingService', () => {
     billingCatalogService = {
       findPriceForInvoice: jest.fn().mockResolvedValue(PLAN_PRICE),
     };
-    checkoutOrderService = { markCompleted: jest.fn() };
+    checkoutOrderService = {
+      markCompleted: jest.fn(),
+      linkCompletedSubscriptionToCreditSlot: jest.fn(),
+      linkCheckoutSessionToCreditSlot: jest.fn(),
+    };
 
     rolloverExecute = jest.fn().mockResolvedValue({ affected: 0 });
     manager = {
@@ -103,6 +114,10 @@ describe('SubscriptionBillingService', () => {
         {
           provide: getRepositoryToken(BillingProfileEntity),
           useValue: billingProfileRepository,
+        },
+        {
+          provide: getRepositoryToken(CreditLotEntity),
+          useValue: creditLotRepository,
         },
         { provide: BillingCatalogService, useValue: billingCatalogService },
         { provide: CheckoutOrderService, useValue: checkoutOrderService },
@@ -142,6 +157,7 @@ describe('SubscriptionBillingService', () => {
       expect(checkoutOrderService.markCompleted).toHaveBeenCalledWith({
         stripeCheckoutSessionId: 'cs_1',
         stripePaymentIntentId: 'pi_1',
+        stripeSubscriptionId: 'sub_1',
       });
     });
 
@@ -179,6 +195,19 @@ describe('SubscriptionBillingService', () => {
 
       expect(billingProfileRepository.update).not.toHaveBeenCalled();
     });
+
+    it('enlaza la sesión al slot si invoice.paid llegó antes que Checkout', async () => {
+      creditLotRepository.findOne.mockResolvedValue({ id: 'lot-1' });
+
+      await service.handleCheckoutSessionCompleted(session);
+
+      expect(
+        checkoutOrderService.linkCheckoutSessionToCreditSlot,
+      ).toHaveBeenCalledWith({
+        stripeCheckoutSessionId: 'cs_1',
+        creditSlotId: 'lot-1',
+      });
+    });
   });
 
   describe('CA06 — invoice.paid activa el plan y emite el lote', () => {
@@ -193,6 +222,7 @@ describe('SubscriptionBillingService', () => {
           remaining: 100,
           priority: 100,
           stripeInvoiceId: 'in_1',
+          stripeSubscriptionId: 'sub_1',
           periodStart: new Date(PERIOD_START * 1000),
           periodEnd: new Date(PERIOD_END * 1000),
         }),
@@ -209,6 +239,13 @@ describe('SubscriptionBillingService', () => {
           currentPeriodEnd: new Date(PERIOD_END * 1000),
         }),
       );
+      expect(
+        checkoutOrderService.linkCompletedSubscriptionToCreditSlot,
+      ).toHaveBeenCalledWith({
+        billingProfileId: 'profile-1',
+        stripeSubscriptionId: 'sub_1',
+        creditSlotId: 'lot-1',
+      });
     });
 
     it('bloquea el perfil antes de tocar el saldo', async () => {

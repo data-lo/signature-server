@@ -34,10 +34,10 @@ describe('CheckoutOrderService', () => {
   });
 
   describe('registerPendingSubscription', () => {
-    it('registra la orden como SUBSCRIPTION/PENDING sin oferta de paquete', async () => {
+    it('registra la orden como SUBSCRIPTION/PENDING con una única oferta de catálogo', async () => {
       await service.registerPendingSubscription({
         billingProfileId: 'profile-1',
-        planPriceId: 'plan-price-1',
+        catalogPriceId: 'catalog-price-1',
         stripeCheckoutSessionId: 'cs_1',
         amount: 49900,
         currency: 'mxn',
@@ -45,10 +45,7 @@ describe('CheckoutOrderService', () => {
 
       expect(checkoutOrderRepository.save).toHaveBeenCalledWith({
         billingProfileId: 'profile-1',
-        planPriceId: 'plan-price-1',
-        // La tabla exige exactamente uno de los dos artículos según el `kind`
-        // (`CHK_checkout_orders_item_matches_kind`).
-        documentPackOfferId: null,
+        catalogPriceId: 'catalog-price-1',
         kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
         stripeCheckoutSessionId: 'cs_1',
         stripePaymentIntentId: null,
@@ -64,6 +61,7 @@ describe('CheckoutOrderService', () => {
       await service.markCompleted({
         stripeCheckoutSessionId: 'cs_1',
         stripePaymentIntentId: 'pi_1',
+        stripeSubscriptionId: 'sub_1',
       });
 
       expect(checkoutOrderRepository.update).toHaveBeenCalledWith(
@@ -74,6 +72,7 @@ describe('CheckoutOrderService', () => {
         expect.objectContaining({
           status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
           stripePaymentIntentId: 'pi_1',
+          stripeSubscriptionId: 'sub_1',
           completedAt: expect.any(Date),
         }),
       );
@@ -91,8 +90,39 @@ describe('CheckoutOrderService', () => {
         service.markCompleted({
           stripeCheckoutSessionId: 'cs_ya_cerrada',
           stripePaymentIntentId: null,
+          stripeSubscriptionId: null,
         }),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('vínculo con credit_slot', () => {
+    it('vincula la orden inicial por suscripción sin reemplazar un slot existente', async () => {
+      await service.linkCompletedSubscriptionToCreditSlot({
+        billingProfileId: 'profile-1',
+        stripeSubscriptionId: 'sub_1',
+        creditSlotId: 'lot-1',
+      });
+
+      expect(checkoutOrderRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          billingProfileId: 'profile-1',
+          stripeSubscriptionId: 'sub_1',
+          kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
+          status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
+        }),
+        { creditSlotId: 'lot-1' },
+      );
+    });
+
+    it('no busca vincular una orden si la factura no trae suscripción', async () => {
+      await service.linkCompletedSubscriptionToCreditSlot({
+        billingProfileId: 'profile-1',
+        stripeSubscriptionId: null,
+        creditSlotId: 'lot-1',
+      });
+
+      expect(checkoutOrderRepository.update).not.toHaveBeenCalled();
     });
   });
 });

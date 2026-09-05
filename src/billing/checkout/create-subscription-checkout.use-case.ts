@@ -6,9 +6,12 @@ import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
+import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { ActiveSubscriptionAlreadyExistsException } from '../exceptions/billing.exceptions';
 import { CheckoutOrderService } from './checkout-order.service';
 
-const SUCCESS_PATH = '/dashboard/subscriptions?payment=success&session_id={CHECKOUT_SESSION_ID}';
+const SUCCESS_PATH =
+  '/dashboard/subscriptions?payment=success&session_id={CHECKOUT_SESSION_ID}';
 const CANCEL_PATH = '/dashboard/subscriptions?payment=cancel';
 
 export interface SubscriptionCheckoutResponse {
@@ -26,7 +29,7 @@ export class CreateSubscriptionCheckoutUseCase {
     private readonly billingCatalogService: BillingCatalogService,
     private readonly checkoutOrderService: CheckoutOrderService,
     private readonly paymentGateway: StripePaymentService,
-  ) { }
+  ) {}
 
   async execute(input: {
     userId: string;
@@ -40,17 +43,36 @@ export class CreateSubscriptionCheckoutUseCase {
     );
     const profile = await this.billingOwnerService.getOrCreateProfile(owner);
 
-    const planPrice =
+    /**
+     * Antes de tocar el catálogo y, sobre todo, antes de hablar con Stripe: el perfil es el
+     * mismo para toda la organización, así que esto también corta al segundo miembro que
+     * intenta contratar lo que la organización ya tiene.
+     */
+    if (profile.status === BILLING_PROFILE_STATUS_ENUM.ACTIVE) {
+      this.logger.warn(
+        `Checkout de suscripción rechazado: el perfil ${profile.id} ya está ACTIVE.`,
+      );
+
+      throw new ActiveSubscriptionAlreadyExistsException();
+    }
+
+    const catalogPrice =
       await this.billingCatalogService.findSellableRecurringPrice(
         input.priceId,
+        owner,
       );
+    const plan = catalogPrice.catalogItem.plan;
+    if (!plan) {
+      // findSellableRecurringPrice ya lo descarta; mantiene el tipo seguro si cambia la consulta.
+      throw new Error(`El precio ${input.priceId} no tiene un plan asociado.`);
+    }
 
     const customerId = await this.resolveCustomerId(profile, input.email);
     const frontendUrl = frontendBaseUrl();
 
     const { sessionId, checkoutUrl } =
       await this.paymentGateway.createCheckoutSession({
-        priceId: planPrice.stripePriceId,
+        priceId: catalogPrice.stripePriceId as string,
         mode: 'subscription',
         customerId,
         successUrl: `${frontendUrl}${SUCCESS_PATH}`,
@@ -63,22 +85,22 @@ export class CreateSubscriptionCheckoutUseCase {
          */
         metadata: {
           billingProfileId: profile.id,
-          planType: planPrice.planType,
-          planPriceId: planPrice.id,
+          planType: plan.planType,
+          catalogPriceId: catalogPrice.id,
           accountId: input.accountId,
         },
       });
 
     await this.checkoutOrderService.registerPendingSubscription({
       billingProfileId: profile.id,
-      planPriceId: planPrice.id,
+      catalogPriceId: catalogPrice.id,
       stripeCheckoutSessionId: sessionId,
-      amount: planPrice.amount,
-      currency: planPrice.currency,
+      amount: catalogPrice.amount,
+      currency: catalogPrice.currency,
     });
 
     this.logger.log(
-      `Checkout de suscripción abierto para el perfil ${profile.id} (plan ${planPrice.planType}).`,
+      `Checkout de suscripción abierto para el perfil ${profile.id} (plan ${plan.planType}).`,
     );
 
     return { checkoutUrl };
