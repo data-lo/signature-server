@@ -1,25 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import Stripe = require('stripe');
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
+import { RegisterSubscriptionBillingUseCase } from './register-subscription-billing.use-case';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
-import {
-  BillingProfileNotFoundForInvoiceException,
-  PlanNotFoundForInvoiceException,
-} from '../exceptions/billing.exceptions';
-
-/**
- * Prioridad del lote del periodo vigente. Mayor que la de un lote de arrastre para que el consumo
- * gaste primero lo que caduca antes — el sobrante arrastrado ya sobrevivió a un periodo y no
- * tiene por qué competir con lo recién emitido. (El consumo en sí está fuera del alcance de esta
- * historia; el número se fija aquí para que el orden ya quede escrito en los datos.)
- */
-const CURRENT_PERIOD_LOT_PRIORITY = 100;
+import { PlanNotFoundForInvoiceException } from '../exceptions/billing.exceptions';
 
 /**
  * Traduce el estado de una suscripción de Stripe al del perfil local.
@@ -74,13 +65,13 @@ export class SubscriptionBillingService {
   private readonly logger = new Logger(SubscriptionBillingService.name);
 
   constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(BillingProfileEntity)
     private readonly billingProfileRepository: Repository<BillingProfileEntity>,
     @InjectRepository(CreditLotEntity)
     private readonly creditLotRepository: Repository<CreditLotEntity>,
     private readonly billingCatalogService: BillingCatalogService,
     private readonly checkoutOrderService: CheckoutOrderService,
+    private readonly registerSubscriptionBilling: RegisterSubscriptionBillingUseCase,
   ) {}
 
   /**
@@ -169,15 +160,19 @@ export class SubscriptionBillingService {
   }
 
   /**
-   * Activa el plan y emite el lote de documentos del periodo. Es el único punto donde se concede
-   * saldo por una suscripción.
+   * Adaptador de `invoice.paid`: traduce lo que manda Stripe y delega el efecto económico en
+   * `RegisterSubscriptionBillingUseCase`.
    *
-   * Idempotente por `credit_lots.stripe_invoice_id`: la comprobación va DENTRO de la transacción
-   * y después de bloquear el perfil, no antes. Comprobar fuera dejaría una ventana en la que dos
-   * entregas simultáneas de la misma factura (Stripe reintenta, y un reintento puede solaparse
-   * con el original) pasarían las dos la comprobación y emitirían dos lotes. Con el bloqueo, la
-   * segunda espera a que la primera termine y entonces sí ve el lote ya emitido. El índice único
-   * de la columna queda como última red.
+   * **Acá no se emite saldo ni se escribe historial.** Eso vive en el caso de uso porque un cobro
+   * manual tiene que producir exactamente lo mismo, y dos copias de esa lógica se separan a la
+   * primera corrección. Lo propio de este método es lo que sólo Stripe sabe: dónde viene el
+   * periodo, qué precio se cobró y con qué ids se rastrea.
+   *
+   * **Nada depende del orden de llegada.** Stripe no garantiza que `checkout.session.completed`
+   * preceda a `invoice.paid` ni que `customer.subscription.updated` llegue antes, así que el
+   * perfil se localiza por suscripción y, si eso falla, por cliente —que se graba desde antes de
+   * abrir el checkout— y el plan y el periodo salen de la propia factura en vez de leerse del
+   * perfil.
    */
   async handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
     const stripeSubscriptionId = this.toId(
@@ -185,10 +180,39 @@ export class SubscriptionBillingService {
     );
     const stripeCustomerId = this.toId(invoice.customer);
 
-    const profile = await this.findProfileForInvoice(
+    /**
+     * Sólo las facturas de suscripción llegan a este flujo. Un cobro suelto —un paquete de
+     * documentos— no abre un periodo ni renueva un plan, y registrarlo como tal dejaría el perfil
+     * diciendo que tiene una suscripción vigente que nadie contrató.
+     */
+    if (!stripeSubscriptionId) {
+      this.logger.debug(
+        `invoice.paid ${invoice.id} no corresponde a una suscripción; no abre periodo.`,
+      );
+      return;
+    }
+
+    const profile = await this.findProfile(
       stripeSubscriptionId,
       stripeCustomerId,
     );
+
+    /**
+     * **Se avisa y se devuelve 2xx en vez de fallar.** Un 5xx haría que Stripe reintentara la
+     * entrega durante días, y ninguno de esos reintentos encontraría el perfil: si no está
+     * vinculado ni por suscripción ni por cliente, el vínculo no aparece solo. Lo que arregla el
+     * caso es una intervención humana, y para eso el warning lleva TODOS los ids con los que
+     * buscar en Stripe y en la base. Reintentar sin parar sólo escondería el problema detrás de
+     * una alerta de webhooks fallidos.
+     */
+    if (!profile) {
+      this.logger.warn(
+        'invoice.paid sin perfil de facturación asociado; el cobro queda sin acreditar. ' +
+          `factura=${invoice.id ?? '(sin id)'} suscripción=${stripeSubscriptionId} ` +
+          `cliente=${stripeCustomerId ?? '(sin id)'}`,
+      );
+      return;
+    }
 
     const line = invoice.lines?.data?.[0];
     const stripePriceId = this.toId(line?.pricing?.price_details?.price);
@@ -196,77 +220,41 @@ export class SubscriptionBillingService {
       ? await this.billingCatalogService.findPriceForInvoice(stripePriceId)
       : null;
 
+    /**
+     * Ésta sí falla ruidosamente: hubo un cobro real y no sabemos cuántos documentos concede el
+     * plan. A diferencia del perfil ausente, esto SÍ se arregla solo en cuanto el catálogo se
+     * sincronice, así que los reintentos de Stripe trabajan a favor.
+     */
     if (!planPrice?.catalogItem.plan) {
       throw new PlanNotFoundForInvoiceException(stripePriceId);
     }
 
-    const periodStart = this.toDate(line?.period?.start);
-    const periodEnd = this.toDate(line?.period?.end);
-
-    await this.dataSource.transaction(async (manager) => {
-      const locked = await manager.findOne(BillingProfileEntity, {
-        where: { id: profile.id },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!locked) {
-        throw new BillingProfileNotFoundForInvoiceException(
-          `el perfil ${profile.id} desapareció durante la transacción`,
-        );
-      }
-
-      const creditLotRepository = manager.getRepository(CreditLotEntity);
-
-      if (invoice.id) {
-        const alreadyIssued = await creditLotRepository.findOne({
-          where: { stripeInvoiceId: invoice.id },
-        });
-
-        if (alreadyIssued) {
-          this.logger.log(
-            `invoice.paid ${invoice.id} ya tenía el lote ${alreadyIssued.id}; no se emite otro.`,
-          );
-          return;
-        }
-      }
-
-      await this.rolloverPreviousPeriod(manager, locked.id);
-
-      const issued = planPrice.catalogItem.plan.documentsIncluded;
-      const lot = await creditLotRepository.save(
-        creditLotRepository.create({
-          billingProfileId: locked.id,
-          origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
-          issued,
-          remaining: issued,
-          priority: CURRENT_PERIOD_LOT_PRIORITY,
-          stripeInvoiceId: invoice.id ?? null,
-          stripeSubscriptionId,
-          periodStart,
-          periodEnd,
-        }),
-      );
-
-      await manager.update(BillingProfileEntity, locked.id, {
-        status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-        currentPlanType: planPrice.catalogItem.plan.planType,
-        stripeSubscriptionId:
-          stripeSubscriptionId ?? locked.stripeSubscriptionId,
-        currentPeriodStart: periodStart,
-        currentPeriodEnd: periodEnd,
-      });
-
-      // Orden normal: Checkout ya guardó la suscripción. Vinculamos sólo la orden inicial que
-      // aún no tenga slot; en renovaciones no hay una orden de Checkout nueva que tocar.
-      await this.checkoutOrderService.linkCompletedSubscriptionToCreditSlot({
-        billingProfileId: locked.id,
-        stripeSubscriptionId,
-        creditSlotId: lot.id,
-      });
-
-      this.logger.log(
-        `Perfil ${locked.id} ACTIVE con el plan ${planPrice.catalogItem.plan.planType}; lote ${lot.id} de ${issued} documentos emitido por la factura ${invoice.id}.`,
-      );
+    await this.registerSubscriptionBilling.execute({
+      billingProfileId: profile.id,
+      source: BILLING_SOURCE_ENUM.STRIPE,
+      planType: planPrice.catalogItem.plan.planType,
+      /**
+       * `amount_paid` y no `total`: lo que de verdad entró. Difieren cuando la factura se liquida
+       * en parte con saldo del cliente o con un cupón, y el historial tiene que cuadrar con el
+       * dinero, no con lo que se pidió.
+       */
+      amount: invoice.amount_paid ?? invoice.total ?? 0,
+      currency: invoice.currency,
+      /**
+       * El periodo vive en la LÍNEA de la factura, no en la suscripción. Stripe lo movió ahí en
+       * la API de 2025: buscarlo en la suscripción —donde lo pone toda la documentación
+       * anterior— devuelve `undefined` en silencio.
+       */
+      periodStart: this.toDate(line?.period?.start),
+      periodEnd: this.toDate(line?.period?.end),
+      paidAt: this.toDate(invoice.status_transitions?.paid_at) ?? new Date(),
+      stripeCustomerId,
+      stripeSubscriptionId,
+      stripeInvoiceId: invoice.id ?? null,
+      stripePaymentIntentId: this.toId(
+        (invoice as { payment_intent?: string | { id: string } })
+          .payment_intent,
+      ),
     });
   }
 
@@ -372,53 +360,6 @@ export class SubscriptionBillingService {
     this.logger.log(
       `Perfil ${profile.id} CANCELED tras eliminarse la suscripción ${subscription.id}.`,
     );
-  }
-
-  /**
-   * Convierte en ROLLOVER el saldo vigente que quede sin gastar.
-   *
-   * Sólo los lotes con `remaining > 0`, tal como pide la regla de negocio: un lote agotado no
-   * arrastra nada y reetiquetarlo sólo ensuciaría el historial de cómo se consumió cada periodo.
-   */
-  private async rolloverPreviousPeriod(
-    manager: EntityManager,
-    billingProfileId: string,
-  ): Promise<void> {
-    const result = await manager
-      .createQueryBuilder()
-      .update(CreditLotEntity)
-      .set({ origin: CREDIT_LOT_ORIGIN_ENUM.ROLLOVER })
-      .where('billing_profile_id = :billingProfileId', { billingProfileId })
-      .andWhere('origin = :origin', {
-        origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
-      })
-      .andWhere('remaining > 0')
-      .execute();
-
-    if (result.affected) {
-      this.logger.log(
-        `${result.affected} lote(s) del periodo anterior pasaron a ROLLOVER en el perfil ${billingProfileId}.`,
-      );
-    }
-  }
-
-  /** Igual que `findProfile`, pero exigiendo resultado: hubo un cobro y no se puede ignorar. */
-  private async findProfileForInvoice(
-    stripeSubscriptionId: string | null,
-    stripeCustomerId: string | null,
-  ): Promise<BillingProfileEntity> {
-    const profile = await this.findProfile(
-      stripeSubscriptionId,
-      stripeCustomerId,
-    );
-
-    if (!profile) {
-      throw new BillingProfileNotFoundForInvoiceException(
-        `suscripción ${stripeSubscriptionId ?? '(ninguna)'} / cliente ${stripeCustomerId ?? '(ninguno)'}`,
-      );
-    }
-
-    return profile;
   }
 
   /**
