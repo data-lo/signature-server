@@ -1,60 +1,69 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { AccountEntity } from 'src/account/entities/account.entity';
-import { AccountSubscriptionEntity } from '../entities/account-subscription.entity';
+import { Injectable } from '@nestjs/common';
+import { BillingOwnerService } from 'src/billing/profiles/billing-owner.service';
+import { BILLING_PROFILE_STATUS_ENUM } from 'src/billing/enums/billing-profile-status.enum';
 import { UserSubscriptionState } from '../interfaces/user-subscription-state.interface';
 
+/** Cuenta sin perfil: nunca intentó pagar. No es un error, es un estado legítimo. */
+const SIN_SUSCRIPCION: UserSubscriptionState = {
+  hasActiveSubscription: false,
+  planType: null,
+  status: null,
+  currentPeriodStart: null,
+  currentPeriodEnd: null,
+};
+
 /**
- * Estado de la suscripción de la cuenta del usuario.
+ * Estado de la suscripción de la CUENTA ACTIVA, leído de `billing_profiles`.
  *
- * No estaba en el alcance del rediseño del catálogo, pero su endpoint se movió de `/stripe` a
- * `/api/v1/payments`, así que su orquestación baja a un caso de uso como el resto: el controller
- * queda delgado y la regla de "qué cuenta factura" vive en un solo sitio.
+ * **El cambio de fondo es de dónde sale la verdad.** Antes se leía `account_subscriptions`, y de
+ * ahí venía el síntoma que se reportó: quien acababa de pagar seguía viendo su suscripción
+ * inactiva. No era un fallo de la pantalla, era que miraba la tabla que ya no manda — el cobro
+ * lo confirma el webhook `invoice.paid` sobre `billing_profiles`, que es donde se pone
+ * `status = ACTIVE` y se emiten los documentos del periodo, mientras `account_subscriptions`
+ * sobrevive sólo por compatibilidad y no refleja esa activación.
+ *
+ * **El segundo cambio es a quién se describe.** La consulta anterior resolvía la cuenta con un
+ * `findOne` por `userId` y sin `accountId`, así que a un usuario con cuenta personal y
+ * organización le devolvía siempre el estado de una de las dos —la que la base sacara primero—
+ * sin importar en cuál estuviera trabajando. Ahora el propietario sale del `X-Account-Id` que el
+ * usuario tiene seleccionado, vía `resolveOwner`, que de paso comprueba que pertenezca de verdad
+ * a esa cuenta: sin esa validación, cambiar un valor de la petición dejaría leer la suscripción
+ * de una organización ajena.
+ *
+ * **No crea el perfil.** Es una consulta de lectura: preguntar "¿qué plan tengo?" no puede dar
+ * de alta filas de facturación. El perfil se crea al contratar.
  */
 @Injectable()
 export class GetSubscriptionStateUseCase {
-  constructor(
-    @InjectRepository(AccountSubscriptionEntity)
-    private readonly subscriptionRepository: Repository<AccountSubscriptionEntity>,
-    @InjectRepository(AccountEntity)
-    private readonly accountRepository: Repository<AccountEntity>,
-  ) {}
+  constructor(private readonly billingOwnerService: BillingOwnerService) {}
 
-  async execute(userId: string): Promise<UserSubscriptionState> {
-    const membership = await this.accountRepository.findOne({
-      where: { userId, isActive: true },
-    });
+  async execute(input: {
+    userId: string;
+    accountId: string;
+  }): Promise<UserSubscriptionState> {
+    const owner = await this.billingOwnerService.resolveOwner(
+      input.userId,
+      input.accountId,
+    );
 
-    if (!membership) {
-      throw new NotFoundException(
-        'El usuario no pertenece a ninguna cuenta activa',
-      );
-    }
+    const profile = await this.billingOwnerService.findProfileByOwner(owner);
 
-    const subscription = await this.subscriptionRepository.findOne({
-      where: { accountId: membership.id },
-    });
-
-    /**
-     * Sin fila todavía no es un error: es una cuenta que nunca intentó pagar. Devolver el
-     * estado "sin suscripción" evita que la pantalla tenga que distinguir entre 404 y
-     * "no contratado".
-     */
-    if (!subscription) {
-      return {
-        hasActiveSubscription: false,
-        planId: null,
-        status: null,
-        currentPeriodEnd: null,
-      };
+    if (!profile) {
+      return SIN_SUSCRIPCION;
     }
 
     return {
-      hasActiveSubscription: subscription.signingEnabled,
-      planId: subscription.planId,
-      status: subscription.status,
-      currentPeriodEnd: subscription.currentPeriodEnd,
+      /**
+       * Sólo ACTIVE. Los demás estados conservan su `planType` —sigue siendo el plan del que se
+       * habla— pero ninguno habilita lo que se paga: `INCOMPLETE` es un checkout sin cobrar,
+       * `PAST_DUE` un cobro que falló y `CANCELED` una baja.
+       */
+      hasActiveSubscription:
+        profile.status === BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+      planType: profile.currentPlanType,
+      status: profile.status,
+      currentPeriodStart: profile.currentPeriodStart,
+      currentPeriodEnd: profile.currentPeriodEnd,
     };
   }
 }

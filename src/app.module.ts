@@ -54,6 +54,18 @@ import { WebhooksModule } from './webhooks/webhooks.module';
         // corre sobre `src/`: `__dirname` apunta a la carpeta real en cada caso.
         migrations: [join(__dirname, 'migrations', '*{.ts,.js}')],
         migrationsRun: true,
+        /**
+         * Una transacción POR migración, igual que en `src/data-source.ts` y por el mismo motivo:
+         * `AddFreeBillingProfileStatus` declara `transaction = false` porque Postgres no deja usar
+         * un valor de enum recién creado dentro de la misma transacción (55P04).
+         *
+         * Hay que repetirlo aquí porque este arranque NO pasa por `data-source.ts`: es su propia
+         * configuración, y con el modo por defecto (`all`) TypeORM rechaza ese override antes de
+         * correr nada —"Migrations ... override the transaction mode, but the global transaction
+         * mode is all"— y la aplicación no levanta contra ninguna base que aún tenga esa migración
+         * pendiente.
+         */
+        migrationsTransactionMode: 'each' as const,
       }),
     }),
 

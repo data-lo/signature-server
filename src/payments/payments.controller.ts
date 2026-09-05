@@ -86,7 +86,7 @@ export class PaymentsController {
    * Lleva `X-Account-Id` por el mismo motivo que el checkout, y no por simetría: un usuario con
    * cuenta personal y organización tiene DOS estados de facturación distintos a la vez, y cuál
    * de los dos se responde depende de en cuál esté trabajando. Sin el header no habría forma de
-   * saberlo — que es exactamente el defecto de `GET /subscription`, debajo.
+   * saberlo.
    */
   @Get('billing-state')
   @ApiGetBillingState()
@@ -105,19 +105,27 @@ export class PaymentsController {
   }
 
   /**
-   * @deprecated Lee `account_subscriptions` y resuelve la cuenta por la PRIMERA membresía activa
-   * del usuario, así que ignora en qué cuenta está trabajando. Sustituido por `billing-state`;
-   * se conserva hasta que no quede ningún consumidor.
+   * Hermano detallado de `billing-state`: sale del MISMO `billing_profile` y coincide con él en
+   * `hasActiveSubscription`, pero añade el estado concreto y las fechas del periodo.
+   *
+   * Los dos existen a propósito y no por descuido. `billing-state` es la consulta ligera que la
+   * aplicación hace en todas partes —al entrar y al cambiar de cuenta— para saber si el servicio
+   * está habilitado; ésta es la que necesita la pantalla de suscripciones, que además tiene que
+   * decir bajo qué plan y hasta cuándo. Ver el docblock de `ApiGetSubscriptionState`.
    */
   @Get('subscription')
   @ApiGetSubscriptionState()
   async subscription(
     @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
   ): Promise<BaseResponse<UserSubscriptionState>> {
     return {
       success: true,
       message: 'Estado de suscripción obtenido correctamente',
-      data: await this.getSubscriptionState.execute(user.sub),
+      data: await this.getSubscriptionState.execute({
+        userId: user.sub,
+        accountId,
+      }),
     };
   }
 }
