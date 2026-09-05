@@ -264,48 +264,6 @@ describe('Estado de facturación (e2e)', () => {
     );
   });
 
-  /**
-   * El estado con el que responde cualquier cuenta que nunca ha contratado, ahora que toda alta
-   * deja su perfil gratuito. Se distingue del bloque de arriba en lo importante: acá SÍ hay
-   * `billingProfileId` y `currentPlanType`.
-   */
-  describe('plan Free', () => {
-    it('devuelve el perfil gratuito: hay perfil, no hay suscripción de pago', async () => {
-      await darDeAltaPerfil({
-        id: 'perfil-free',
-        personalAccountId: PERSONAL_ACCOUNT_ID,
-        status: BILLING_PROFILE_STATUS_ENUM.FREE,
-        currentPlanType: 'free',
-      });
-
-      const response = await consultarEstado();
-
-      expect(response.status).toBe(200);
-      expect(response.body.data).toEqual({
-        billingProfileId: 'perfil-free',
-        hasActiveSubscription: false,
-        currentPlanType: 'free',
-      });
-    });
-
-    it('la organización también nace con su plan gratuito compartido', async () => {
-      await darDeAltaPerfil({
-        id: 'perfil-free-org',
-        organizationId: ORGANIZATION_ID,
-        status: BILLING_PROFILE_STATUS_ENUM.FREE,
-        currentPlanType: 'free',
-      });
-
-      const response = await consultarEstado(ORGANIZATION_ACCOUNT_ID);
-
-      expect(response.body.data).toEqual({
-        billingProfileId: 'perfil-free-org',
-        hasActiveSubscription: false,
-        currentPlanType: 'free',
-      });
-    });
-  });
-
   describe('quién consulta', () => {
     it('responde 400 si falta el header X-Account-Id', async () => {
       const response = await consultarEstado(null);

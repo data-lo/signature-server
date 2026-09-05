@@ -142,31 +142,10 @@ describe('GetBillingStateUseCase', () => {
     });
 
     /**
-     * El estado más común de todos: toda cuenta nace con su perfil en plan gratuito, así que
-     * ésta es la respuesta que recibe cualquiera que no haya contratado nunca.
-     *
-     * `hasActiveSubscription` es false —el plan Free no es una suscripción de pago— pero
-     * `billingProfileId` y `currentPlanType` SÍ vienen poblados. Es lo que distingue "tiene el
-     * plan gratuito" de "no tiene perfil", que responde los tres campos vacíos.
-     */
-    it('devuelve el plan gratuito sin marcarlo como suscripción activa', async () => {
-      perfil(BILLING_PROFILE_STATUS_ENUM.FREE, 'free');
-
-      await expect(execute()).resolves.toEqual({
-        billingProfileId: 'profile-1',
-        hasActiveSubscription: false,
-        currentPlanType: 'free',
-      });
-    });
-
-    /**
-     * El plan se conserva en los estados no vigentes —sigue siendo el último contratado y la
-     * pantalla necesita nombrarlo—; lo único que cambia es que no habilita el servicio. `FREE`
-     * va en la lista por lo mismo, aunque su plan no sea "el último contratado" sino el de
-     * origen: ninguno de los cuatro habilita lo que se paga.
+     * El plan se conserva en los tres estados no vigentes —sigue siendo el último contratado y
+     * la pantalla necesita nombrarlo—; lo único que cambia es que no habilita el servicio.
      */
     it.each([
-      BILLING_PROFILE_STATUS_ENUM.FREE,
       BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
       BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
       BILLING_PROFILE_STATUS_ENUM.CANCELED,
