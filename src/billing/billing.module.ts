@@ -16,6 +16,7 @@ import { BillingCatalogService } from './catalog/billing-catalog.service';
 import { BillingOwnerService } from './profiles/billing-owner.service';
 import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
+import { GetBillingStateUseCase } from './profiles/get-billing-state.use-case';
 import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
 
 /**
@@ -57,6 +58,7 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
     BillingOwnerService,
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
+    GetBillingStateUseCase,
     SubscriptionBillingService,
   ],
   exports: [
@@ -65,6 +67,7 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
     BillingOwnerService,
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
+    GetBillingStateUseCase,
     SubscriptionBillingService,
   ],
 })

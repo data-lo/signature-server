@@ -1,6 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AccountEntity } from 'src/account/entities/account.entity';
 import { BillingModule } from 'src/billing/billing.module';
 import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
 import { StripePaymentService } from './stripe/stripe-payment.service';
@@ -28,7 +27,14 @@ import { SharedModule } from 'src/shared/shared.module';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AccountSubscriptionEntity, AccountEntity]),
+    /**
+     * `AccountEntity` ya no se registra acá: entró cuando `GetSubscriptionStateUseCase`
+     * resolvía la cuenta por su cuenta, y desde que esa resolución la hace `BillingOwnerService`
+     * ningún proveedor de este módulo inyecta ese repositorio. `AccountSubscriptionEntity` sí
+     * sigue: `StripeWebhookService` mantiene esa tabla por compatibilidad, aunque ya no sea la
+     * fuente de verdad del estado de suscripción.
+     */
+    TypeOrmModule.forFeature([AccountSubscriptionEntity]),
     // `forwardRef`: billing necesita el adaptador de Stripe de este módulo para abrir el
     // checkout, y este módulo necesita los handlers de billing en su router de webhooks.
     forwardRef(() => BillingModule),

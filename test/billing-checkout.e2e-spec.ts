@@ -15,6 +15,7 @@ import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-
 import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';
 import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
+import { GetBillingStateUseCase } from './../src/billing/profiles/get-billing-state.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
 import { CheckoutOrderService } from './../src/billing/checkout/checkout-order.service';
@@ -170,6 +171,8 @@ describe('Checkout de suscripción (e2e)', () => {
       controllers: [PaymentsController],
       providers: [
         CreateSubscriptionCheckoutUseCase,
+        // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e.
+        GetBillingStateUseCase,
         BillingOwnerService,
         BillingCatalogService,
         CheckoutOrderService,
@@ -232,6 +235,40 @@ describe('Checkout de suscripción (e2e)', () => {
         amount: 49900,
         currency: 'mxn',
       });
+    });
+
+    /**
+     * Desde que toda cuenta nace con su `billing_profile` en plan Free, ÉSTE es el camino normal
+     * de una primera contratación: quien pulsa "Contratar" ya tiene perfil, y viene en FREE.
+     *
+     * Antes el perfil se creaba aquí mismo, así que la prueba de arriba —que parte de una tabla
+     * vacía— era el caso real. Ahora es el excepcional (una cuenta anterior al plan gratuito),
+     * y hace falta cubrir el que de verdad va a ocurrir: el plan gratuito NO puede estorbar la
+     * compra, ni reutilizando su perfil ni bloqueando la sesión.
+     */
+    it('un perfil en plan Free puede contratar, reutilizando su perfil', async () => {
+      await billingProfiles.save({
+        id: 'perfil-free',
+        personalAccountId: PERSONAL_ACCOUNT_ID,
+        organizationId: null,
+        currentPlanType: 'free',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+      } as never);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(201);
+      expect(billingProfiles.rows).toHaveLength(1);
+      expect(createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            billingProfileId: 'perfil-free',
+          }),
+        }),
+      );
+      expect(checkoutOrders.rows).toHaveLength(1);
     });
 
     /**
@@ -306,6 +343,96 @@ describe('Checkout de suscripción (e2e)', () => {
       expect(createCheckoutSession).toHaveBeenCalledWith(
         expect.objectContaining({ customerId: 'cus_anterior' }),
       );
+    });
+  });
+
+  /**
+   * Una suscripción vigente por propietario. Lo que se comprueba acá y no en la prueba unitaria
+   * es el código HTTP que ve el frontend y —lo importante— que ni Stripe ni `checkout_orders`
+   * se tocan: una orden PENDING de más nunca se reconcilia, y una sesión de más es una segunda
+   * suscripción cobrándose en paralelo esperando a que el usuario la complete.
+   */
+  describe('suscripción ya activa', () => {
+    async function darDeAltaPerfil(
+      owner: {
+        personalAccountId: string | null;
+        organizationId: string | null;
+      },
+      status: BILLING_PROFILE_STATUS_ENUM,
+    ) {
+      await billingProfiles.save({
+        id: `perfil-${status}`,
+        ...owner,
+        stripeCustomerId: 'cus_anterior',
+        stripeSubscriptionId: 'sub_anterior',
+        status,
+      } as never);
+    }
+
+    const PERSONAL = {
+      personalAccountId: PERSONAL_ACCOUNT_ID,
+      organizationId: null,
+    };
+    const ORGANIZACION = {
+      personalAccountId: null,
+      organizationId: ORGANIZATION_ID,
+    };
+
+    it('responde 409 en una cuenta personal con el perfil ACTIVE', async () => {
+      await darDeAltaPerfil(PERSONAL, BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(409);
+      expect(response.body.message).toMatch(/suscripción activa/i);
+      expect(createCheckoutSession).not.toHaveBeenCalled();
+      expect(checkoutOrders.rows).toHaveLength(0);
+    });
+
+    /**
+     * El caso que sólo existe en organizaciones: el perfil es compartido, así que un segundo
+     * miembro que abra "Contratar" sin saber que la organización ya paga tiene que chocar con
+     * el mismo 409 aunque su fila de `accounts` sea distinta.
+     */
+    it('responde 409 en una cuenta de organización con el perfil ACTIVE', async () => {
+      await darDeAltaPerfil(ORGANIZACION, BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      const response = await openCheckout({
+        accountId: ORGANIZATION_ACCOUNT_ID,
+      });
+
+      expect(response.status).toBe(409);
+      expect(createCheckoutSession).not.toHaveBeenCalled();
+      expect(checkoutOrders.rows).toHaveLength(0);
+    });
+
+    it('no confunde propietarios: la cuenta personal puede contratar aunque la organización esté ACTIVE', async () => {
+      await darDeAltaPerfil(ORGANIZACION, BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(201);
+      expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * `FREE` encabeza la lista porque es de donde viene TODA primera contratación desde que la
+     * cuenta nace con su perfil gratuito: si el guard lo confundiera con una suscripción
+     * vigente, nadie podría comprar nunca.
+     */
+    it.each([
+      BILLING_PROFILE_STATUS_ENUM.FREE,
+      BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
+      BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
+      BILLING_PROFILE_STATUS_ENUM.CANCELED,
+    ])('deja abrir un Checkout nuevo si el perfil está %s', async (status) => {
+      await darDeAltaPerfil(PERSONAL, status);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(201);
+      expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+      expect(checkoutOrders.rows).toHaveLength(1);
     });
   });
 
