@@ -218,7 +218,7 @@ async function main() {
     // Docker/producción corre con `node` directo sobre dist/**/*.entity.js (ver DoD del
     // ticket de seeding post-build) — __dirname apunta a la carpeta real en ambos casos, así
     // que un solo glob cubre los dos entornos sin necesidad de una variable de entorno aparte.
-    entities: [join(process.cwd(), 'dist', '**', '*.entity.js')],
+    entities: [join(__dirname, '..', '**', '*.entity{.ts,.js}')],
     synchronize: false,
     logging: false,
   });

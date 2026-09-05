@@ -7,7 +7,11 @@ import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BILLING_INTERVAL_ENUM } from '../enums/billing-interval.enum';
-import { SubscriptionPriceNotAvailableException } from '../exceptions/billing.exceptions';
+import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import {
+  ActiveSubscriptionAlreadyExistsException,
+  SubscriptionPriceNotAvailableException,
+} from '../exceptions/billing.exceptions';
 
 const PLAN_PRICE = {
   id: 'catalog-price-1',
@@ -45,6 +49,7 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
       getOrCreateProfile: jest.fn().mockResolvedValue({
         id: 'profile-1',
         stripeCustomerId: 'cus_1',
+        status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
       }),
     };
     billingCatalogService = {
@@ -144,6 +149,83 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
     ).not.toHaveBeenCalled();
   });
 
+  describe('suscripción ya activa', () => {
+    const perfilConEstado = (status: BILLING_PROFILE_STATUS_ENUM) =>
+      billingOwnerService.getOrCreateProfile.mockResolvedValue({
+        id: 'profile-1',
+        stripeCustomerId: 'cus_1',
+        status,
+      });
+
+    it('responde 409 y no toca ni a Stripe ni a CheckoutOrderService si el perfil está ACTIVE', async () => {
+      perfilConEstado(BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      const fallo = await execute().catch((error: unknown) => error);
+
+      expect(fallo).toBeInstanceOf(ActiveSubscriptionAlreadyExistsException);
+      expect(
+        (fallo as ActiveSubscriptionAlreadyExistsException).getStatus(),
+      ).toBe(409);
+      expect(paymentGateway.createCheckoutSession).not.toHaveBeenCalled();
+      expect(paymentGateway.createCustomer).not.toHaveBeenCalled();
+      expect(
+        checkoutOrderService.registerPendingSubscription,
+      ).not.toHaveBeenCalled();
+    });
+
+    /**
+     * El corte va antes de la consulta al catálogo: abrir la sesión es lo caro y lo peligroso,
+     * y consultar el precio de algo que no se va a vender sólo añade una consulta inútil.
+     */
+    it('corta antes de consultar el catálogo', async () => {
+      perfilConEstado(BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      await expect(execute()).rejects.toThrow(
+        ActiveSubscriptionAlreadyExistsException,
+      );
+      expect(
+        billingCatalogService.findSellableRecurringPrice,
+      ).not.toHaveBeenCalled();
+    });
+
+    /**
+     * El perfil de una organización es uno solo y compartido: el propio `resolveOwner` ya
+     * traduce la membresía a `organization_id`, así que la guarda se aplica igual cuando quien
+     * pide el checkout es el segundo miembro de una organización que ya contrató.
+     */
+    it('bloquea igual cuando el propietario es una organización', async () => {
+      billingOwnerService.resolveOwner.mockResolvedValue({
+        personalAccountId: null,
+        organizationId: 'org-1',
+      });
+      perfilConEstado(BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      await expect(execute()).rejects.toThrow(
+        ActiveSubscriptionAlreadyExistsException,
+      );
+      expect(paymentGateway.createCheckoutSession).not.toHaveBeenCalled();
+      expect(
+        checkoutOrderService.registerPendingSubscription,
+      ).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
+      BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
+      BILLING_PROFILE_STATUS_ENUM.CANCELED,
+    ])('deja contratar si el perfil está %s', async (status) => {
+      perfilConEstado(status);
+
+      await expect(execute()).resolves.toEqual({
+        checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_1',
+      });
+      expect(paymentGateway.createCheckoutSession).toHaveBeenCalledTimes(1);
+      expect(
+        checkoutOrderService.registerPendingSubscription,
+      ).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('cliente de Stripe', () => {
     it('reutiliza el cliente ya asociado al perfil', async () => {
       await execute();
@@ -156,6 +238,7 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
       billingOwnerService.getOrCreateProfile.mockResolvedValue({
         id: 'profile-1',
         stripeCustomerId: null,
+        status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
       });
 
       await execute();

@@ -26,6 +26,8 @@ import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 // Services
 import { RolesService } from 'src/roles/roles.service';
+import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-profile-provisioning.service';
+import { toBillingOwner } from 'src/billing/profiles/billing-owner.util';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
@@ -60,6 +62,7 @@ export class AccountService {
 
     private redisService: RedisService,
     private rolesService: RolesService,
+    private billingProfileProvisioning: BillingProfileProvisioningService,
   ) {}
 
   /**
@@ -77,19 +80,37 @@ export class AccountService {
     roleId: string;
     user: UserEntity;
   }): Promise<AccountEntity> {
-    return this.accountRepository.save(
-      this.accountRepository.create({
-        userId: params.userId,
-        accountType: params.accountType,
-        organizationId: params.organizationId,
-        roleId: params.roleId,
-        status: ACCOUNT_STATUS_ENUM.ACTIVE,
-        email: params.user.email,
-        password: params.user.password,
-        isActive: true,
-        joinedAt: new Date(),
-      }),
-    );
+    /**
+     * La transacción es nueva y la trae esta historia: desde que toda cuenta nace con su
+     * `billing_profile`, guardar la fila sola dejaría una cuenta sin estado comercial si el
+     * perfil fallara — el hueco que este cambio existe para cerrar.
+     *
+     * Sigue quedando FUERA la organización que el caso de uso crea antes de llamar acá: ese
+     * reparto es el que ya tenía el endpoint (ver `CreateAccountUseCase`) y no lo toca esta
+     * historia.
+     */
+    return this.dataSource.transaction(async (manager) => {
+      const account = await manager.save(
+        manager.create(AccountEntity, {
+          userId: params.userId,
+          accountType: params.accountType,
+          organizationId: params.organizationId,
+          roleId: params.roleId,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          email: params.user.email,
+          password: params.user.password,
+          isActive: true,
+          joinedAt: new Date(),
+        }),
+      );
+
+      await this.billingProfileProvisioning.provisionFreeProfile(
+        manager,
+        toBillingOwner(account),
+      );
+
+      return account;
+    });
   }
 
   /** Alta de la fila `organizations` con el perfil que llega del formulario. */
@@ -230,6 +251,16 @@ export class AccountService {
       }),
     );
 
+    /**
+     * Con el MISMO `manager`, es decir dentro de la transacción de registro: un usuario que se
+     * da de alta sale de aquí con cuenta personal y perfil Free, o no sale con ninguna de las
+     * dos. Es el propietario naciendo completo, no un paso posterior que pueda quedarse a medias.
+     */
+    await this.billingProfileProvisioning.provisionFreeProfile(
+      manager,
+      toBillingOwner(account),
+    );
+
     return { account };
   }
 
@@ -284,6 +315,17 @@ export class AccountService {
           isActive: true,
           joinedAt: new Date(),
         }),
+      );
+
+      /**
+       * El propietario del dinero es la ORGANIZACIÓN, no la membresía de quien la creó: el
+       * perfil se ata a `organization_id` para que todos sus miembros compartan un solo estado
+       * comercial y un solo saldo. Va en la misma transacción que la organización y su
+       * administrador, por el mismo motivo que ellas van juntas.
+       */
+      await this.billingProfileProvisioning.provisionFreeProfile(
+        queryRunner.manager,
+        { personalAccountId: null, organizationId: organization.id },
       );
 
       await queryRunner.commitTransaction();

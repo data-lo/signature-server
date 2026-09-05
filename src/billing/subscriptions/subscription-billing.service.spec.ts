@@ -162,6 +162,29 @@ describe('SubscriptionBillingService', () => {
     });
 
     /**
+     * El caso normal desde que toda cuenta nace con perfil: quien contrata viene del plan
+     * gratuito, no de un INCOMPLETE previo. Si el perfil se quedara en FREE, entre el fin del
+     * checkout y el cobro diría "plan gratuito" cuando el usuario ya contrató.
+     */
+    it('avanza a INCOMPLETE el perfil que venía en plan Free', async () => {
+      billingProfileRepository.findOne.mockResolvedValue({
+        id: 'profile-1',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        currentPlanType: 'free',
+      });
+
+      await service.handleCheckoutSessionCompleted(session);
+
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({
+          status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
+          currentPlanType: 'pro',
+        }),
+      );
+    });
+
+    /**
      * CA12 al revés: si `invoice.paid` ganó la carrera y ya dejó el perfil en ACTIVE, esta
      * entrega no puede devolverlo a INCOMPLETE — eso le quitaría el acceso a alguien que ya pagó.
      */
@@ -169,6 +192,21 @@ describe('SubscriptionBillingService', () => {
       billingProfileRepository.findOne.mockResolvedValue({
         id: 'profile-1',
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+      });
+
+      await service.handleCheckoutSessionCompleted(session);
+
+      const changes = billingProfileRepository.update.mock.calls[0][1];
+      expect(changes).not.toHaveProperty('status');
+    });
+
+    it.each([
+      BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
+      BILLING_PROFILE_STATUS_ENUM.CANCELED,
+    ])('tampoco toca el estado de un perfil %s', async (status) => {
+      billingProfileRepository.findOne.mockResolvedValue({
+        id: 'profile-1',
+        status,
       });
 
       await service.handleCheckoutSessionCompleted(session);

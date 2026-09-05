@@ -22,6 +22,8 @@ const ORGANIZATION_ACCOUNT = {
   organizationId: 'organization-1',
 };
 
+import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+
 describe('BillingOwnerService', () => {
   let service: BillingOwnerService;
   let billingProfileRepository: {
@@ -128,6 +130,53 @@ describe('BillingOwnerService', () => {
       });
 
       expect(profile).toBe(existing);
+      expect(billingProfileRepository.save).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Desde que toda cuenta nace con su perfil en plan Free, el camino normal de este método ya
+     * NO es crear: es encontrarse el perfil Free que dejó el alta de la cuenta. Devolverlo tal
+     * cual —sin tocar su estado ni su plan— es lo que permite que el checkout arranque desde el
+     * plan gratuito en vez de duplicar el perfil o pisarlo.
+     */
+    it('reutiliza el perfil Free que dejó el alta de la cuenta', async () => {
+      const perfilFree = {
+        id: 'perfil-free-1',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        currentPlanType: 'free',
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+      };
+      billingProfileRepository.findOne.mockResolvedValue(perfilFree);
+
+      const profile = await service.getOrCreateProfile({
+        personalAccountId: 'account-personal-1',
+        organizationId: null,
+      });
+
+      expect(profile).toBe(perfilFree);
+      expect(profile.status).toBe(BILLING_PROFILE_STATUS_ENUM.FREE);
+      expect(profile.currentPlanType).toBe('free');
+      expect(billingProfileRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('reutiliza el perfil Free de una organización igual que el de una cuenta personal', async () => {
+      const perfilFree = {
+        id: 'perfil-free-org',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        currentPlanType: 'free',
+      };
+      billingProfileRepository.findOne.mockResolvedValue(perfilFree);
+
+      const profile = await service.getOrCreateProfile({
+        personalAccountId: null,
+        organizationId: 'organization-1',
+      });
+
+      expect(profile).toBe(perfilFree);
+      expect(billingProfileRepository.findOne).toHaveBeenCalledWith({
+        where: { organizationId: 'organization-1' },
+      });
       expect(billingProfileRepository.save).not.toHaveBeenCalled();
     });
 

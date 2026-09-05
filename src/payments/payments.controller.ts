@@ -113,11 +113,15 @@ export class PaymentsController {
   @ApiGetSubscriptionState()
   async subscription(
     @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
   ): Promise<BaseResponse<UserSubscriptionState>> {
     return {
       success: true,
       message: 'Estado de suscripción obtenido correctamente',
-      data: await this.getSubscriptionState.execute(user.sub),
+      data: await this.getSubscriptionState.execute({
+        userId: user.sub,
+        accountId,
+      }),
     };
   }
 }
