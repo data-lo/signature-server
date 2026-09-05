@@ -17,15 +17,14 @@ import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { DocumentService } from '../document.service';
 
 /**
- * `PATCH /document/:id/submit-for-authorization`: saca el documento a firmar.
+ * Saca el documento a firmar (`PATCH /document/:id/submit-for-authorization`).
  *
- * Es el punto de no retorno del borrador: a partir de acá el documento deja de poder editarse o
- * borrarse, porque lo que se les pide firmar a los invitados tiene que ser exactamente lo que
- * vieron.
+ * Es el punto de no retorno del borrador: a partir de acá el documento no se puede editar ni borrar,
+ * porque lo que se les pide firmar a los invitados tiene que ser exactamente lo que vieron.
  *
- * El correo al primer firmante es best-effort: la solicitud ya quedó registrada y visible en la
- * bandeja de quien tiene que firmar, así que un fallo de SendGrid no debe deshacer el envío ni
- * devolver un error a quien lo mandó.
+ * El correo al primer firmante es best-effort: la solicitud ya quedó registrada y visible en su
+ * bandeja, así que un fallo de SendGrid no debe deshacer el envío ni devolver un error a quien lo
+ * mandó.
  */
 @Injectable()
 export class SubmitDocumentForAuthorizationUseCase {

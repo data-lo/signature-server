@@ -4,14 +4,14 @@ import { Response } from 'express';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
 /**
- * @nestjs/platform-express ya envuelve los errores crudos de Multer en un HttpException
- * (PayloadTooLargeException/BadRequestException) — ver
- * node_modules/@nestjs/platform-express/multer/multer/multer.utils.js `transformException` —
- * pero reusa el `message` original de Multer, que siempre está en inglés (p.ej. "File too
- * large"), rompiendo la convención en español del resto de los mensajes de error de la API.
- * Este filtro detecta esos mensajes conocidos por texto exacto (no hay un código/enum
- * expuesto en el HttpException ya transformado) y los reemplaza por su equivalente en español,
- * delegando cualquier otra excepción al manejador default de Nest.
+ * Traduce al español los mensajes de error de Multer.
+ *
+ * `@nestjs/platform-express` ya envuelve los errores crudos en un HttpException, pero reusa el
+ * `message` original de Multer, que siempre está en inglés ("File too large") y rompe la convención
+ * del resto de la API.
+ *
+ * Los detecta por texto exacto porque el HttpException ya transformado no expone ningún código ni
+ * enum, y delega al manejador default de Nest cualquier otra excepción.
  */
 const MULTER_MESSAGE_TRANSLATIONS: Record<string, string> = {
   'File too large': `El archivo excede el tamaño máximo permitido por el servidor (${Math.floor(

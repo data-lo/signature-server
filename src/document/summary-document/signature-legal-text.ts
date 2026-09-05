@@ -1,17 +1,14 @@
 /**
- * Rótulos legales por tipo de firma: el "Tipo de Firma" y el "Sustentada" que identifican en qué
- * se apoya jurídicamente cada firma.
+ * Rótulos legales por tipo de firma: el "Tipo de Firma" y el "Sustentada" que identifican en qué se
+ * apoya jurídicamente cada una.
  *
- * Viven aquí, y no dentro de cada servicio de hoja, porque desde la historia "Actualizar vista
- * pública de verificación de documentos según estado y tipo de firma" tienen DOS consumidores: la
- * hoja de evidencia que se anexa al PDF (`SummaryDocumentService` / `AdvancedSummaryDocumentService`)
- * y la vista pública de verificación (`DocumentService.getPublicDocumentView`). Es texto legal: que
- * la pantalla y el documento impreso digan exactamente lo mismo no es cosmético, y dos copias del
- * mismo párrafo terminan divergiendo en cuanto alguien corrige una.
+ * Viven acá y no dentro de cada servicio de hoja porque tienen DOS consumidores: la hoja de
+ * evidencia anexada al PDF y la vista pública de verificación. Es texto legal, y que la pantalla y
+ * el documento impreso digan exactamente lo mismo no es cosmético: dos copias del mismo párrafo
+ * terminan divergiendo en cuanto alguien corrige una.
  *
- * Los textos salen de las plantillas de referencia ("Firmalo Hoja de Firmas" y su equivalente de
- * firma avanzada) y se transcriben tal cual, acentuación incluida — `Firma Electronica Avanzada`
- * va sin acento en la plantilla y así se conserva.
+ * Se transcriben tal cual de las plantillas de referencia, acentuación incluida —`Firma Electronica
+ * Avanzada` va sin acento en la plantilla y así se conserva.
  */
 
 /** Firma simple: rótulo del mecanismo en la tabla de cada firmante. */

@@ -3,10 +3,9 @@ import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
 
 /**
- * Único punto de verdad para "a quién le toca firmar": el colaborador (colaboratorType=SIGNER)
- * con el signingOrder más bajo que siga PENDING. Antes existían 4 implementaciones
- * independientes de esta misma regla (findWithFilters, findDetailForUser, sign/reject,
- * notifyNextSigner) que podían divergir con el tiempo; todas deben pasar por aquí.
+ * Resuelve a quién le toca firmar —el SIGNER con el `signingOrder` más bajo que siga PENDING— y es
+ * su único punto de verdad. Existían cuatro implementaciones independientes de esta misma regla que
+ * podían divergir con el tiempo; todas deben pasar por acá.
  */
 export function getNextPendingSigner(
   collaborators: CollaboratorEntity[],

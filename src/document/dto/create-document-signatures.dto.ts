@@ -45,13 +45,13 @@ export enum REQUIRES_DIFFERENT_SIGNATURES_ENUM {
 }
 
 /**
- * Multipart entrega documentData/collaborators como texto plano (JSON serializado). No basta
- * con JSON.parse: hay que construir instancias reales de la clase destino con
- * `plainToInstance` (mismo patrón que ya usaba `signatureCoordinates` en create-document.dto.ts)
- * — si el `@Transform` deja un objeto plano en vez de una instancia, `ValidationPipe` con
+ * Parsea el JSON que multipart entrega como texto plano y devuelve una INSTANCIA de la clase
+ * destino, no el objeto de `JSON.parse`.
+ *
+ * La instancia es imprescindible: si el `@Transform` deja un objeto plano, `ValidationPipe` con
  * `whitelist: true` no reconoce sus propiedades como parte del DTO anidado y las descarta en
- * silencio (bug real encontrado al probar contra un servidor corriendo: `documentData.fileName`
- * llegaba `null` al service pese a venir bien armado en el request).
+ * silencio —`documentData.fileName` llegaba `null` al service pese a venir bien armado en el
+ * request—. Mismo patrón que ya usaba `signatureCoordinates`.
  */
 function parseJson<T>(cls: new () => T) {
   return ({ value }: { value: unknown }): T | T[] | unknown => {

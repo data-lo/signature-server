@@ -22,7 +22,6 @@ import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UpdatePreRegistrationDto } from './dto/update-pre-registration.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 
-// Use cases
 import { RegisterUseCase } from './applications/register.use-case';
 import { LoginUseCase } from './applications/login.use-case';
 import { VerifyRegistrationOtpUseCase } from './applications/verify-registration-otp.use-case';
@@ -34,7 +33,6 @@ import { ResetPasswordUseCase } from './applications/reset-password.use-case';
 import { LogoutUseCase } from './applications/logout.use-case';
 import { GetAuthenticatedUserUseCase } from './applications/get-authenticated-user.use-case';
 
-// Docs
 import { ApiRegister } from './docs/api-register.docs';
 import { ApiLogin } from './docs/api-login.docs';
 import { ApiVerifyOtp } from './docs/api-verify-otp.docs';

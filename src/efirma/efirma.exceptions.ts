@@ -60,14 +60,14 @@ export class CertificadoRevocadoException extends Error {
 }
 
 /**
- * El respondedor OCSP del SAT no contestó (caído, lento o inalcanzable).
+ * El respondedor OCSP del SAT no contestó: caído, lento o inalcanzable.
  *
- * **503 y no un `Error` plano**, que Nest convertía en un 500 genérico: quien firma necesita
- * saber que el problema es del SAT y que reintentar más tarde tiene sentido, no leer "error
- * interno del servidor" sobre algo que no falló de nuestro lado.
+ * **503 y no un `Error` plano**, que Nest convertía en un 500 genérico: quien firma necesita saber
+ * que el problema es del SAT y que reintentar más tarde tiene sentido, no leer "error interno del
+ * servidor" sobre algo que no falló de nuestro lado.
  *
- * El detalle técnico se registra en el log, no se devuelve: al firmante no le sirve el mensaje de
- * la librería de OCSP, y puede exponer la topología del servicio.
+ * El detalle técnico queda en el log y no se devuelve: al firmante no le sirve, y puede exponer la
+ * topología del servicio.
  */
 export class OCSPNotAvailableException extends ServiceUnavailableException {
   constructor() {

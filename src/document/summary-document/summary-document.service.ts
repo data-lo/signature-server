@@ -53,15 +53,14 @@ const SIGNATURES_INTRO_TEXT =
   'mensaje de datos en términos de los artículos 89, 90 y 93 del Código de Comercio.';
 
 /**
- * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
+ * Arma la tabla de la Constancia de Conservación (NOM-151) con los renglones de la plantilla.
  *
- * La firma simple también se sella ante el PSC, con su propia evidencia (los datos de identidad y
- * el OTP de cada firmante, ver `SendCompletedSimpleSignatureToSealUseCase`). Estos renglones
- * salían siempre vacíos porque ese sellado corría DESPUÉS de armar la hoja, no porque no hubiera
- * constancia.
+ * La firma simple también se sella ante el PSC, con su propia evidencia —los datos de identidad y el
+ * OTP de cada firmante—: estos renglones salían siempre vacíos porque ese sellado corría DESPUÉS de
+ * armar la hoja, no porque no hubiera constancia.
  *
- * Se imprimen vacíos únicamente cuando el documento no llegó a sellarse —el sellado es
- * best-effort— porque la tabla es parte de la plantilla de referencia.
+ * Sólo quedan vacíos cuando el documento no llegó a sellarse, ya que el sellado es best-effort y la
+ * tabla es parte de la plantilla.
  */
 function buildConservationRecordRows(
   record: ConservationRecordInfo | null | undefined,

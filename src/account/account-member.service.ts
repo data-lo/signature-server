@@ -1,4 +1,3 @@
-// External dependencies
 import {
   ConflictException,
   ForbiddenException,
@@ -8,36 +7,30 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-// DTOs
 import { CreateAccountMemberDto } from './dto/create-account-member.dto';
 import { UpdateAccountMemberDto } from './dto/update-account-member.dto';
 
-// Entities
 import { AccountEntity } from './entities/account.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 
-// Services
 import { RolesService } from 'src/roles/roles.service';
 
-// Enums
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 
-// Interfaces
 import { OrganizationMemberData } from './interfaces/response/account-member-response';
 
 /**
- * Gestiona membresías de organización — desde la fusión Account/AccountMember (ver plan de
- * migración ER-V2, Fase 5) esto ya no es una entidad separada: una "membresía" es una fila más
- * de `accounts`, filtrada por `organizationId`. Este servicio queda enfocado en el flujo de
- * gestión explícita de acceso (otorgar/listar/actualizar/revocar), separado del flujo
- * transaccional de creación (`AccountService.saveOrganizationWithAdminAccount`/
+ * Gestiona el acceso explícito a una organización —otorgar, listar, actualizar y revocar—, separado
+ * del flujo transaccional de creación (`AccountService.saveOrganizationWithAdminAccount` /
  * `createDefaultPersonalAccount`).
  *
- * Los flujos de cada endpoint viven en `applications/`; acá sólo están las piezas que comparten.
+ * Desde la fusión Account/AccountMember una "membresía" no es una entidad aparte, sino una fila más
+ * de `accounts` filtrada por `organizationId`. Los flujos de cada endpoint viven en
+ * `applications/`; acá sólo están las piezas que comparten.
  */
 @Injectable()
 export class AccountMemberService {
@@ -72,9 +65,9 @@ export class AccountMemberService {
   }
 
   /**
-   * Membresía existente de un usuario en una organización, activa o no. Se mira sin filtrar
-   * por `isActive` a propósito: quien ya estuvo y fue dado de baja tiene fila, y volver a
-   * insertarla dejaría dos membresías del mismo usuario en la misma organización.
+   * Busca la membresía de un usuario en una organización, activa o no. No filtra por `isActive` a
+   * propósito: quien ya estuvo y fue dado de baja tiene fila, y volver a insertarla dejaría dos
+   * membresías del mismo usuario en la misma organización.
    */
   async findExistingMembership(
     organizationId: string,
@@ -97,9 +90,9 @@ export class AccountMemberService {
   }
 
   /**
-   * Alta de una fila de membresía. `email`/`password` se copian del invitado porque son la
-   * credencial única sincronizada (decisión D6): el login resuelve contra `accounts`, así que
-   * una membresía sin ellos no serviría para entrar en ese contexto.
+   * Da de alta una fila de membresía. Copia `email`/`password` del invitado porque son la
+   * credencial única sincronizada (decisión D6): el login resuelve contra `accounts`, así que una
+   * membresía sin ellos no serviría para entrar en ese contexto.
    *
    * `status` se deriva de `isActive` en vez de recibirse: son dos formas de decir lo mismo y
    * dejarlas entrar por separado permitiría guardar una membresía activa marcada como
@@ -139,22 +132,15 @@ export class AccountMemberService {
   }
 
   /**
-   * Shape delgado para la sección de gestión de miembros (ver historia [STORY] Gestión de
-   * Miembros: Listado, Edición de Roles y Eliminación en Organización) — email/rfc/rol/fecha de
-   * ingreso, en vez de la AccountEntity completa. `email` ya vive en `accounts` (sincronizado
-   * desde la credencial única del usuario, decisión D6 del plan ER-V2) así que no hace falta
-   * tocar `users` para eso; `rfc` sí requiere el join `accounts -> users -> personal_information`
-   * porque solo vive ahí. Solo devuelve miembros activos — un miembro eliminado (soft-delete) no
-   * debe reaparecer en la tabla de gestión.
-   */
-  /**
-   * Shape delgado para la sección de gestión de miembros (ver historia [STORY] Gestión de
-   * Miembros: Listado, Edición de Roles y Eliminación en Organización) — email/rfc/rol/fecha de
-   * ingreso, en vez de la AccountEntity completa. `email` ya vive en `accounts` (sincronizado
-   * desde la credencial única del usuario, decisión D6 del plan ER-V2) así que no hace falta
-   * tocar `users` para eso; `rfc` sí requiere el join `accounts -> users -> personal_information`
-   * porque solo vive ahí. Solo devuelve miembros activos — un miembro eliminado (soft-delete) no
-   * debe reaparecer en la tabla de gestión.
+   * Devuelve el shape delgado que consume la gestión de miembros —email, RFC, rol y fecha de
+   * ingreso— en vez de la AccountEntity completa.
+   *
+   * `email` ya vive en `accounts` (sincronizado desde la credencial única del usuario, decisión D6),
+   * así que no hace falta tocar `users`; `rfc` sí exige el join `accounts -> users ->
+   * personal_information` porque sólo vive ahí.
+   *
+   * Devuelve únicamente miembros activos: un miembro eliminado (soft-delete) no debe reaparecer en
+   * la tabla de gestión.
    */
   async listDetailedByOrganization(
     organizationId: string,
@@ -193,8 +179,8 @@ export class AccountMemberService {
   }
 
   /**
-   * Baja lógica de una membresía. La fila se conserva porque su id quedó referenciado desde
-   * los documentos que ese miembro creó o firmó dentro de la organización.
+   * Da de baja una membresía de forma lógica: conserva la fila porque su id quedó referenciado
+   * desde los documentos que ese miembro creó o firmó dentro de la organización.
    */
   async markMembershipRemoved(id: string): Promise<void> {
     await this.accountRepository.update(id, {
@@ -218,8 +204,8 @@ export class AccountMemberService {
   }
 
   /**
-   * Membresía de organización por id. Una cuenta personal se trata como inexistente: no es una
-   * membresía y no se gestiona por estos endpoints.
+   * Busca una membresía de organización por id. Trata una cuenta personal como inexistente: no es
+   * una membresía y no se gestiona por estos endpoints.
    */
   async findMembershipOrFail(id: string): Promise<AccountEntity> {
     const member = await this.findByIdOrFail(id);
@@ -244,11 +230,11 @@ export class AccountMemberService {
   }
 
   /**
-   * Solo un miembro activo con permiso ORGANIZATION:{action} puede otorgar/listar/actualizar/
-   * revocar membresías. Permiso granular vía `RolesService.hasPermission` en vez de comparar
-   * `role.name === 'ADMIN'` a mano — mismo criterio que `AccountService`
-   * (`assertHasOrganizationPermission`), duplicado aquí porque este servicio resuelve la
-   * membresía del llamador por `organizationId`, no por `accountId` propio.
+   * Exige que el llamador sea un miembro activo con permiso ORGANIZATION:{action} para otorgar,
+   * listar, actualizar o revocar membresías. Resuelve el permiso con `RolesService.hasPermission`
+   * en vez de comparar `role.name === 'ADMIN'` a mano —mismo criterio que `AccountService`,
+   * duplicado acá porque este servicio resuelve la membresía del llamador por `organizationId` y
+   * no por su `accountId` propio.
    */
   async assertHasOrganizationPermission(
     callerId: string,
@@ -269,13 +255,13 @@ export class AccountMemberService {
   }
 
   /**
-   * Protección del último administrador (ver historia [STORY] Gestión de Miembros, sección
-   * "Reglas de Negocio y Seguridad"): si `target` es hoy el único miembro ADMIN activo de la
-   * organización, ni degradar su rol ni desactivar su acceso está permitido — dejaría la
-   * organización sin nadie que pueda gestionarla. Se aplica sin importar si el llamador es el
-   * propio `target` u otro ADMIN, porque el riesgo es el mismo en ambos casos (el sistema no
-   * tiene un rol OWNER separado de ADMIN, así que "el último dueño" se traduce aquí como "el
-   * último ADMIN"). No-op si `target` no es ADMIN hoy (nada que proteger).
+   * Protege al último administrador: si `target` es hoy el único miembro ADMIN activo de la
+   * organización, ni degradar su rol ni desactivar su acceso está permitido, porque dejaría a la
+   * organización sin nadie que pueda gestionarla.
+   *
+   * Aplica sin importar si el llamador es el propio `target` u otro ADMIN, porque el riesgo es el
+   * mismo: el sistema no tiene un rol OWNER separado de ADMIN, así que "el último dueño" se traduce
+   * acá como "el último ADMIN". Es no-op si `target` no es ADMIN hoy.
    */
   async assertNotLastAdmin(
     organizationId: string,
@@ -300,12 +286,12 @@ export class AccountMemberService {
   }
 
   /**
-   * Check de tenant más laxo que assertHasOrganizationPermission: cualquier miembro activo de la
-   * cuenta (sin importar su rol) puede operar dentro de ese contexto — usado por módulos donde
-   * pertenecer a la cuenta basta (p. ej. crear o listar documentos scopeados por la cuenta
-   * activa), a diferencia de gestionar la membresía misma, que sigue siendo solo-ADMIN.
-   * Retorna la cuenta resuelta para que el llamador (p. ej. DocumentService) no tenga que
-   * volver a consultarla para saber su organizationId.
+   * Comprueba la pertenencia al tenant con un criterio más laxo que
+   * `assertHasOrganizationPermission`: cualquier miembro activo de la cuenta, sin importar su rol,
+   * puede operar dentro de ese contexto. Lo usan los módulos donde pertenecer basta —crear o listar
+   * documentos scopeados por la cuenta activa—, a diferencia de gestionar la membresía misma, que
+   * sigue siendo sólo-ADMIN. Devuelve la cuenta resuelta para que el llamador no tenga que volver a
+   * consultarla por su `organizationId`.
    */
   async assertIsActiveMember(
     userId: string,

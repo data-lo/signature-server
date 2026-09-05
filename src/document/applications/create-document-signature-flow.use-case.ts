@@ -81,23 +81,19 @@ export interface CreateDocumentSignaturesResult {
 }
 
 /**
- * Orquesta POST /api/v1/documents/signatures (ver historias "Backend: Orquestación para
- * Creación de Documento y Flujo de Firmas" + "Frontend: Carga de Documentos y Configuración de
- * Firmantes" — la segunda redefinió el contrato de la primera: un solo arreglo `collaborators`
- * con collaboratorType SIGNER/VIEWER, en vez de dos arreglos separados, y multipart con el
- * archivo real en vez de un objectKey pre-subido).
+ * Orquesta `POST /api/v1/documents/signatures`: crea Document → Collaborator (+ SimpleSignature por
+ * firmante, con su arreglo `signatures`) → Notification → verification_code dentro de UNA
+ * transacción, y publica los eventos de Kafka sólo si ésta hizo commit.
  *
- * Trata a todos los colaboradores como invitación por email (accountId siempre null) — no
- * intenta resolver si ese correo ya tiene cuenta en la plataforma.
+ * Recibe un único arreglo `collaborators` con `collaboratorType` SIGNER/VIEWER y el archivo real por
+ * multipart, no dos arreglos separados y un objectKey pre-subido.
  *
- * El tipo de firma es del documento, no de cada firmante (historia "Selección de tipo de firma al
- * crear documentos"): llega en `documentData.signatureType`, admite solo SIMPLE o ADVANCED, y se
- * copia igual a todos los SIGNER — no existe el documento con firmas de tipos distintos.
+ * Trata a todos los colaboradores como invitación por email (`accountId` siempre null): no intenta
+ * resolver si ese correo ya tiene cuenta en la plataforma.
  *
- * Crea Document -> Collaborator (+ SimpleSignature por firmante, con su arreglo `signatures` —
- * ver historia "Ubicación de firmas por usuario") -> Notification -> verification_code dentro de
- * UNA transacción; los eventos de Kafka (uno por notificación) solo se publican si la
- * transacción hizo commit.
+ * El tipo de firma es del documento y no de cada firmante: llega en `documentData.signatureType`,
+ * admite sólo SIMPLE o ADVANCED y se copia igual a todos los SIGNER —no existe el documento con
+ * firmas de tipos distintos.
  */
 @Injectable()
 export class CreateDocumentSignatureFlowUseCase {
@@ -410,15 +406,12 @@ export class CreateDocumentSignatureFlowUseCase {
       };
     });
 
-    // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
-    // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.
+    // Publica fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback
+    // ya ocurrió y esta línea nunca se alcanza, así que no se emite ningún evento.
     //
-    // Bug corregido: este endpoint nunca publicaba DOCUMENT_KAFKA_TOPICS.CREATED (solo el tópico
-    // de NotificationEventsProducer, uno por colaborador, para el envío de correo) — por lo que
-    // DocumentEventsConsumer.handleCreated() nunca corría para documentos creados por esta vía
-    // (la única que usa el frontend), y el ledger global de auditoría (AuditChainService, ver
-    // historia "Módulo de Auditoría e Integridad Global de BD") arrancaba su cadena directo en el
-    // primer evento de firma en vez de en la creación del documento.
+    // El evento CREATED es imprescindible: sin él `DocumentEventsConsumer.handleCreated()` no corre
+    // para los documentos creados por esta vía —la única que usa el frontend— y el ledger global de
+    // auditoría arranca su cadena en la primera firma en vez de en la creación del documento.
     this.documentEventsProducer.emitCreated({
       documentId: document.id,
       fileName: document.fileName,

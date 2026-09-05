@@ -1,4 +1,3 @@
-// dto/get-documents-query.dto.ts
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {

@@ -1,4 +1,3 @@
-// interfaces/verificacion.interface.ts
 export interface ResultadoVerificacion {
   esValida: boolean;
   hashCoincide: boolean;

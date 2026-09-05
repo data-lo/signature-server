@@ -15,16 +15,14 @@ const DIDIT_DEFAULT_API_URL = 'https://verification.didit.me';
 const DIDIT_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
- * Adaptador HTTP hacia la API de verificación de Didit.
+ * Adapta la API de verificación de Didit.
  *
- * No es el "servicio de dominio" del módulo: no decide nada sobre identidades ni conoce la
- * entidad local. Traduce entre nuestro dominio y el contrato del proveedor, y es el único
- * archivo que hay que tocar si Didit cambia su API. Los casos de uso dependen de él, nunca al
- * revés.
+ * No es el servicio de dominio del módulo: no decide nada sobre identidades ni conoce la entidad
+ * local. Traduce entre nuestro dominio y el contrato del proveedor, y es el único archivo que hay
+ * que tocar si Didit cambia su API. Los casos de uso dependen de él, nunca al revés.
  *
- * La API key vive sólo aquí: viaja en el header `x-api-key`, jamás se registra en logs ni se
- * persiste en `provider_metadata`, y nunca llega al frontend — el cliente sólo recibe la URL
- * hospedada.
+ * La API key vive sólo acá: viaja en el header `x-api-key`, jamás se registra en logs ni se persiste
+ * en `provider_metadata`, y nunca llega al frontend, que sólo recibe la URL hospedada.
  */
 @Injectable()
 export class DiditApiService {
@@ -98,9 +96,9 @@ export class DiditApiService {
   }
 
   /**
-   * Sin `session_id` o sin `url` la respuesta es inservible: el frontend no tendría a dónde
-   * mandar al usuario y el webhook no tendría con qué encontrar el intento. Mejor fallar acá,
-   * con un error explícito, que persistir una fila rota.
+   * Exige `session_id` y `url`: sin ellos la respuesta es inservible —el frontend no tendría a dónde
+   * mandar al usuario y el webhook no tendría con qué encontrar el intento—, y es mejor fallar acá
+   * con un error explícito que persistir una fila rota.
    */
   private toDiditSession(
     body: Record<string, unknown>,
@@ -127,8 +125,8 @@ export class DiditApiService {
 
   /**
    * `session_token` es una credencial de acceso a la sesión: quien la tiene puede operar el
-   * flujo del usuario. Se descarta antes de persistir para que no termine copiada en
-   * `provider_metadata` y, de ahí, en cualquier respaldo de la base.
+   * Descarta la clave antes de persistir, para que no termine copiada en `provider_metadata` y, de
+   * ahí, en cualquier respaldo de la base.
    */
   private withoutSecrets(
     body: Record<string, unknown>,

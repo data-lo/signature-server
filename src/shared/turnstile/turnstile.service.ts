@@ -34,16 +34,15 @@ interface SiteverifyResponse {
 }
 
 /**
- * Verificación de Cloudflare Turnstile: el CAPTCHA que el usuario resuelve en `/signup` genera un
- * token de un solo uso que este servicio canjea contra Siteverify antes de que el registro toque
- * la base de datos (ver historia "Implementar Cloudflare Turnstile en el registro de usuarios").
+ * Canjea contra Siteverify el token de un solo uso que Cloudflare Turnstile genera cuando el usuario
+ * resuelve el CAPTCHA en `/signup`, antes de que el registro toque la base de datos.
  *
- * Falla cerrado a propósito: si `TURNSTILE_SECRET_KEY` no está configurada, o Cloudflare no
- * responde, el registro se rechaza en vez de dejarse pasar. Un control anti-abuso que se
- * autodesactiva cuando algo va mal no protege de nada — y el modo "sin configurar" es justo el
- * que llegaría a producción por descuido.
+ * Falla cerrado a propósito: si `TURNSTILE_SECRET_KEY` no está configurada, o Cloudflare no responde,
+ * el registro se rechaza en vez de dejarse pasar. Un control anti-abuso que se autodesactiva cuando
+ * algo va mal no protege de nada, y el modo "sin configurar" es justo el que llegaría a producción
+ * por descuido.
  *
- * Ni la clave secreta ni el token entran nunca a los logs ni a la respuesta: de Siteverify solo se
+ * Ni la clave secreta ni el token entran nunca a los logs ni a la respuesta: de Siteverify sólo se
  * registran los `error-codes`, que no son sensibles.
  */
 @Injectable()

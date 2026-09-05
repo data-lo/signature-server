@@ -94,13 +94,12 @@ export class SealSignatureDto {
   certificate: SatCertificateDto;
 
   /**
-   * Opcional de verdad, no solo en la documentación. `EfirmaService.firmar` sí la produce hoy, pero
-   * las firmas guardadas ANTES de que existiera la verificación OCSP no la tienen, y Seal Service
-   * no la usa para construir el hash (ver `buildSignatureHash`: canonicaliza certificado,
-   * algoritmo, firma y fecha, nada más). Un documento viejo tiene que poder sellarse igual.
+   * Opcional de verdad y no sólo en la documentación: `EfirmaService.firmar` la produce hoy, pero
+   * las firmas guardadas antes de que existiera la verificación OCSP no la tienen, y Seal Service no
+   * la usa para construir el hash (`buildSignatureHash` canonicaliza certificado, algoritmo, firma y
+   * fecha). Un documento viejo tiene que poder sellarse igual.
    *
-   * Bug corregido: el docblock ya decía "opcional" y el decorador era `ApiPropertyOptional`, pero
-   * el tipo la declaraba obligatoria y le faltaba `@IsOptional()` — la intención documentada y la
+   * El tipo la declaraba obligatoria y le faltaba `@IsOptional()`: la intención documentada y la
    * validación real habían divergido.
    */
   @ApiPropertyOptional({

@@ -27,15 +27,11 @@ interface CreateInvitationParams {
 }
 
 /**
- * Historia [STORY] Eventos Kafka, Email (SendGrid) y Miembros (/join). El token de la
- * invitación ES la credencial de autorización de `acceptByRfc` — se acepta sin JWT a propósito
- * (el invitado puede no tener sesión iniciada todavía, ver Escenario 5 de la historia). La
- * identidad se resuelve por RFC, no por igualdad de email contra la invitación: el correo al
- * que se mandó la invitación es solo el canal de entrega, no necesariamente el email con el que
- * la persona ya tiene cuenta en la plataforma (decisión explícita del flujo de la historia, no
- * un descuido). Nota de seguridad: cualquiera que conozca el token (del correo) Y el RFC del
- * invitado (dato semi-público en México) puede consumar la invitación — es el tradeoff que la
- * propia historia especifica al no exigir contraseña en este paso.
+ * Gestiona el ciclo de vida de las invitaciones a organización.
+ *
+ * El token del correo ES la credencial que autoriza `acceptByRfc`, que se acepta sin JWT porque el
+ * invitado puede no tener sesión todavía; la identidad se resuelve por RFC y no por igualdad de
+ * correo. El detalle del tradeoff está en `AcceptOrganizationInvitationUseCase`.
  */
 @Injectable()
 export class OrganizationInvitationService {
@@ -109,9 +105,9 @@ export class OrganizationInvitationService {
   }
 
   /**
-   * Camino B de la historia (RFC nuevo) — llamado internamente por AuthService.register()
-   * justo después de crear la cuenta, cuando el registro vino de un enlace de invitación
-   * (ver RegisterDto.invitationToken). El usuario ya se conoce por id, no hace falta el RFC.
+   * Consuma la invitación de un usuario recién creado (camino B: RFC nuevo). La llama
+   * `AuthService.register()` justo después de crear la cuenta, cuando el registro vino de un enlace
+   * de invitación: el usuario ya se conoce por id, así que no hace falta el RFC.
    */
   async acceptForUser(token: string, userId: string): Promise<void> {
     const invitation = await this.resolveInvitation(token);

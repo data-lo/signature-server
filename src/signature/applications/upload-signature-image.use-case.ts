@@ -11,15 +11,15 @@ import { SIGNING_CREDENTIAL_BLOCK_REASON } from '../constants/signing-credential
 import { SignatureService } from '../signature.service';
 
 /**
- * `PUT /api/v1/users/me/signature`: registra la firma PNG del usuario.
+ * Registra la firma PNG del usuario (`PUT /api/v1/users/me/signature`).
  *
  * Acá vive la regla —sólo se acepta la firma en SIGNATURE_PENDING— y el cambio de estado a
- * CONFIGURED. El trabajo técnico (validar tamaños, subir a MinIO, persistir la fila y enlazarla
- * al usuario) sigue en `SignatureService`, que no decide nada sobre el avance del usuario.
+ * CONFIGURED. El trabajo técnico (validar tamaños, subir a MinIO, persistir la fila y enlazarla al
+ * usuario) sigue en `SignatureService`, que no decide nada sobre el avance del usuario.
  *
- * La comprobación va contra `users.signing_credential_status` y no contra la tabla de
- * verificaciones: es la variable global del flujo, y consultarla acá es lo que garantiza que
- * todos los módulos bloqueen por el mismo criterio.
+ * Comprueba contra `users.signing_credential_status` y no contra la tabla de verificaciones: es la
+ * variable global del flujo, y consultarla acá garantiza que todos los módulos bloqueen por el mismo
+ * criterio.
  */
 @Injectable()
 export class UploadSignatureImageUseCase {

@@ -29,36 +29,34 @@ import {
 
 // Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
 
-// Para ajustar los limites solo hayq ue modificar las tres constantes siguientes. Si la firma queda fuera de estos rangos, se normaliza a DEFAULT_SIGNATURE_SIZE.
-// Tamaño al que se normaliza la firma cuando está fuera de rango (puntos PDF)
+// Tamaño al que se normaliza la firma que cae fuera del rango [MIN, MAX] (puntos PDF).
 const DEFAULT_SIGNATURE_SIZE = { width: 200, height: 80 };
 
-// Umbral mínimo: firmas más pequeñas que esto se consideran demasiado chicas
 const MIN_SIGNATURE_SIZE = { width: 60, height: 24 };
 
-// Umbral máximo: firmas más grandes que esto se consideran demasiado grandes
 const MAX_SIGNATURE_SIZE = { width: 320, height: 128 };
 
 /**
- * Borde blanco que se dibuja alrededor de un código QR estampado ("zona de silencio").
+ * Borde blanco alrededor de un QR estampado ("zona de silencio"): la norma QR exige un margen libre
+ * y, medido, con el texto del documento pegado a 0pt el código no se decodifica a 150 DPI, mientras
+ * que con 2pt de separación sí.
  *
- * La norma QR exige un margen libre alrededor del código; sin él, el texto del documento pegado al
- * código impide leerlo — medido: con texto a 0pt el código NO se decodifica a 150 DPI, y con 2pt
- * de separación sí. El PNG se genera sin margen propio a propósito (así el código aprovecha todo
- * el lado de la caja y sus módulos quedan lo más grandes posible), de modo que el margen se pinta
- * acá, POR FUERA del código y no a costa de su tamaño.
+ * El PNG se genera sin margen propio para que sus módulos queden lo más grandes posible, así que el
+ * margen se pinta acá, POR FUERA del código y no a costa de su tamaño.
  */
 
 /**
  * Lado mínimo, en puntos, para que un QR estampado siga siendo escaneable.
  *
- * Medido con un decodificador real sobre la página rasterizada: a 80pt el código se lee a 150 y
- * 300 DPI; a 24pt (el mínimo que admite una caja de firma) no se lee a ninguna resolución, porque
- * sus módulos quedan en ~0.12mm. Por debajo de este umbral se registra una advertencia en vez de
- * estampar en silencio un código que nadie va a poder leer.
+ * Medido con un decodificador real sobre la página rasterizada: a 80pt el código se lee a 150 y 300
+ * DPI, y a 24pt —el mínimo que admite una caja de firma— no se lee a ninguna resolución, porque sus
+ * módulos quedan en ~0.12mm. Por debajo del umbral se advierte, en vez de estampar en silencio un
+ * código que nadie va a poder leer.
  */
 
-// Rutas donde puede encontrarse el perfil ICC sRGB (probadas en orden)
+// Rutas del perfil ICC sRGB, probadas en orden. Sin el perfil el PDF conserva los metadatos XMP
+// PDF/A-2B pero le falta el OutputIntent, así que no pasa un validador estricto: se descarga de
+// https://www.color.org/srgbprofiles.xalter y el build copia `*.icc` a `dist/` (ver nest-cli.json).
 const SRGB_ICC_PATHS = [
   path.join(__dirname, 'resources', 'sRGB2014.icc'),
   path.join(__dirname, 'resources', 'sRGB_v4_ICC_preference_displayclass.icc'),
@@ -73,7 +71,7 @@ function loadSrgbIccProfile(): Buffer | null {
     try {
       return fs.readFileSync(iccPath);
     } catch {
-      // siguiente ruta
+      // Prueba la siguiente ruta.
     }
   }
   return null;
@@ -100,51 +98,20 @@ export class PdfSignatureService {
   private readonly logger = new Logger(PdfSignatureService.name);
 
   /**
-   * Incrusta la imagen de firma en el documento PDF en las coordenadas indicadas
-   * y serializa el resultado como PDF/A-2B (ISO 19005-2, nivel B).
+   * Incrusta la imagen de firma en el PDF en las coordenadas indicadas y serializa el resultado como
+   * PDF/A-2B (ISO 19005-2, nivel B), que admite transparencias y por eso acepta firmas PNG con canal
+   * alfa.
    *
-   * PDF/A-2B permite transparencias, lo que es necesario para firmas PNG con canal alfa.
+   * @param pageIndex Página destino, 0-based. Por defecto la última, el mismo comportamiento previo
+   *                  al soporte multipágina.
+   * @param options   `preserveAspectRatio` encaja la imagen dentro de la caja sin deformarla,
+   *                  centrada: lo usa el QR de la firma avanzada, mientras que las rúbricas siguen
+   *                  ocupando la caja completa.
    *
-   *  1. Carga el PDF original desde el Buffer recibido para poder modificarlo en memoria.
-   *
-   *  2. Detecta el formato de la imagen (PNG) leyendo los primeros 4 bytes del Buffer,
-   *     ya que pdf-lib requiere llamar a métodos distintos según el formato.
-   *
-   *  3. Incrusta la imagen en el documento PDF, lo que la registra como recurso interno
-   *     del PDF antes de poder dibujarla en alguna página.
-   *
-   *  4. Selecciona la última página del documento como destino de la firma.
-   *
-   *  5. Resuelve el tamaño final de la firma: si width o height están fuera del rango
-   *     [MIN_SIGNATURE_SIZE, MAX_SIGNATURE_SIZE], se normaliza a DEFAULT_SIGNATURE_SIZE.
-   *
-   *  6. Dibuja la imagen de firma en las coordenadas (x, y) con el tamaño resuelto.
-   *     El origen (0,0) en PDF está en la esquina inferior izquierda.
-   *     Se aplica la opacidad indicada en coordinates.opacity (default 1.0 = opaco).
-   *
-   *  7. Aplica conformidad PDF/A-2B: agrega metadatos XMP con pdfaid:part=2 /
-   *     pdfaid:conformance=B y un OutputIntent con perfil ICC sRGB si está disponible.
-   *
-   *  8. Serializa el documento modificado a bytes y lo retorna como Buffer.
-   *     Se usa useObjectStreams:false para máxima compatibilidad con validadores PDF/A.
-   *
-   * @param documentBuffer  PDF original como Buffer de bytes.
-   * @param signatureBuffer Imagen de la firma (PNG) como Buffer de bytes.
-   * @param coordinates     Posición y tamaño donde incrustar la firma en la página.
-   * @param pageIndex       Página destino, 0-based (ver historia "Ubicación de firmas por
-   *                        usuario"). Por defecto la última página, mismo comportamiento que
-   *                        antes de que existiera soporte multipágina — ningún caller que no lo
-   *                        pase explícitamente cambia de comportamiento.
-   * @param options         `preserveAspectRatio` encaja la imagen dentro de la caja sin
-   *                        deformarla, centrada. Lo usa el QR de la firma avanzada (ver más
-   *                        abajo); las rúbricas siguen ocupando la caja completa, como siempre.
-   *
-   *                        `normalizeSize: false` respeta el tamaño recibido tal cual, saltándose
-   *                        el resize automático. Lo pasa el estampado por posición configurada:
-   *                        ahí el tamaño no es un dato suelto que pueda venir mal, es el de la
-   *                        caja que el usuario dibujó sobre la página, y sustituirlo por el
-   *                        tamaño por defecto movería la firma del lugar donde se la ve colocada.
-   * @returns               PDF firmado en formato PDF/A-2B como Buffer.
+   *                  `normalizeSize: false` respeta el tamaño recibido y se salta el resize
+   *                  automático. Lo pasa el estampado por posición configurada, donde el tamaño es el
+   *                  de la caja que el usuario dibujó sobre la página y sustituirlo por el tamaño por
+   *                  defecto movería la firma del lugar donde se la ve colocada.
    */
   async mergeSignatureIntoPdf(
     documentBuffer: Buffer,
@@ -153,21 +120,18 @@ export class PdfSignatureService {
     pageIndex?: number,
     options?: { preserveAspectRatio?: boolean; normalizeSize?: boolean },
   ): Promise<Buffer> {
-    // Paso 1: cargar el PDF original en memoria para poder modificarlo
     const pdfDoc: PDFDocument = await PDFDocument.load(documentBuffer);
 
-    // Paso 2: detectar el formato de la imagen mediante los bytes del Buffer
     let signatureImage: PDFImage;
     const signatureBytes: Uint8Array = new Uint8Array(signatureBuffer);
 
-    // Identificar PNG por su firma de bytes: 89 50 4E 47 (hexadecimal)
+    // Firma de bytes que identifica un PNG: 89 50 4E 47.
     const isPng: boolean =
       signatureBytes[0] === 0x89 &&
       signatureBytes[1] === 0x50 &&
       signatureBytes[2] === 0x4e &&
       signatureBytes[3] === 0x47;
 
-    // Paso 3: incrustar la imagen en el PDF según su formato detectado
     if (isPng) {
       signatureImage = await pdfDoc.embedPng(signatureBuffer);
     } else {
@@ -176,48 +140,41 @@ export class PdfSignatureService {
       );
     }
 
-    // Paso 4: seleccionar la página destino (por defecto la última, ver doc del parámetro)
     const pages = pdfDoc.getPages();
     const targetPage =
       pages[pageIndex ?? pages.length - 1] ?? pages[pages.length - 1];
 
     /**
-     * Paso 5: resolver el tamaño final de la firma.
+     * Resuelve el tamaño en el espacio VISIBLE, que es donde el usuario colocó la caja: en una hoja
+     * con `/Rotate` los lados del MediaBox están intercambiados, y medir ahí compararía el ancho de
+     * la rúbrica contra el alto de la página.
      *
-     * Se calcula en el espacio VISIBLE, que es donde el usuario colocó la caja: en una hoja con
-     * `/Rotate` los lados del MediaBox están intercambiados, y medir ahí compararía el ancho de la
-     * rúbrica contra el alto de la página.
-     *
-     * El resize automático es para los tamaños que llegan sin respaldo —coordenadas legacy en
-     * píxeles, el apilado por defecto—, donde un valor absurdo tiene que corregirse a algo
-     * dibujable. Una caja configurada por el usuario no es ese caso: su tamaño se derivó de las
-     * dimensiones de la página, se ve en pantalla antes de firmar, y normalizarla a
-     * `DEFAULT_SIGNATURE_SIZE` la movería a un tamaño que nadie eligió —justo lo que ocurre en una
-     * hoja muy ancha, donde el ancho de la caja supera el máximo sin que nada esté mal—.
+     * El resize automático corrige los tamaños que llegan sin respaldo —coordenadas legacy en
+     * píxeles, apilado por defecto—. Una caja configurada por el usuario no es ese caso: su tamaño se
+     * derivó de las dimensiones de la página y normalizarla a `DEFAULT_SIGNATURE_SIZE` la movería a
+     * un tamaño que nadie eligió, justo lo que ocurre en una hoja muy ancha donde el ancho supera el
+     * máximo sin que nada esté mal.
      */
     const drawSize =
       options?.normalizeSize === false
         ? { width: coordinates.width, height: coordinates.height }
         : this.resolveSignatureSize(coordinates);
 
-    // Paso 6: encajar la imagen en la caja, también en espacio visible — `preserveAspectRatio`
-    // centra el QR dentro de la caja, y "centrado" sólo significa algo respecto de los ejes que
-    // ve el usuario.
+    // Encaja la imagen también en espacio visible: `preserveAspectRatio` centra el QR dentro de la
+    // caja, y "centrado" sólo significa algo respecto de los ejes que ve el usuario.
     const visiblePlacement = options?.preserveAspectRatio
       ? this.fitPreservingAspectRatio(signatureImage, coordinates, drawSize)
       : { x: coordinates.x, y: coordinates.y, ...drawSize };
 
     /**
-     * Paso 7: traducir del espacio VISIBLE al espacio del CONTENIDO, que es el único que entiende
-     * `drawImage` (ver `page-geometry.ts`).
+     * Traduce del espacio VISIBLE al espacio del CONTENIDO, el único que entiende `drawImage` (ver
+     * `page-geometry.ts`).
      *
-     * La rotación se lee de la página destino, no la pasa el llamador: `/Rotate` es un dato del
-     * archivo, no de quien pide el estampado, y hacerlo aquí significa que TODOS los caminos
-     * —posiciones en ratios, coordenadas legacy en píxeles y el apilado automático— quedan
-     * corregidos a la vez, sin que ninguno tenga que acordarse de un parámetro.
+     * Lee la rotación de la página destino en vez de recibirla: `/Rotate` es un dato del archivo, no
+     * de quien pide el estampado, y resolverlo acá corrige a la vez todos los caminos —ratios,
+     * coordenadas legacy y apilado automático— sin que ninguno tenga que acordarse de un parámetro.
      *
-     * En una página sin `/Rotate` (todo documento vertical, y también las hojas apaisadas que ya
-     * traen el MediaBox ancho) la conversión es la identidad y `rotate` vale 0: el comportamiento
+     * En una página sin `/Rotate` la conversión es la identidad y `rotate` vale 0: el comportamiento
      * anterior se conserva byte por byte.
      */
     const rotation = normalizePageRotation(targetPage.getRotation().angle);
@@ -236,10 +193,9 @@ export class PdfSignatureService {
       opacity: coordinates.opacity ?? 1.0,
     });
 
-    // Paso 7: aplicar conformidad PDF/A-2B (XMP metadata + OutputIntent sRGB)
     this.applyPdfA2bConformance(pdfDoc);
 
-    // Paso 8: serializar sin object streams para máxima compatibilidad con validadores PDF/A
+    // Sin object streams: máxima compatibilidad con validadores PDF/A.
     const signedPdfBytes: Uint8Array = await pdfDoc.save({
       useObjectStreams: false,
     });
@@ -247,13 +203,11 @@ export class PdfSignatureService {
   }
 
   /**
-   * Agrega al documento los marcadores mínimos requeridos por PDF/A-2B:
-   *  - Stream de metadatos XMP en el catálogo (pdfaid:part=2, pdfaid:conformance=B)
-   *  - OutputIntent con perfil ICC sRGB (requerido para espacios de color dependientes del dispositivo)
+   * Agrega los marcadores mínimos que exige PDF/A-2B: metadatos XMP en el catálogo (pdfaid:part=2,
+   * pdfaid:conformance=B) y un OutputIntent con perfil ICC sRGB.
    *
-   * Si el perfil ICC no se encuentra, se emite una advertencia y se omite el OutputIntent.
-   * El documento seguirá teniendo los metadatos XMP correctos, pero no será completamente
-   * conforme hasta que se provea el perfil ICC.
+   * Si el perfil ICC no aparece, advierte y omite el OutputIntent: el documento conserva los
+   * metadatos XMP correctos pero no queda completamente conforme.
    */
   private applyPdfA2bConformance(pdfDoc: PDFDocument): void {
     const xmpBytes = Buffer.from(buildXmpMetadata(), 'utf-8');
@@ -304,26 +258,23 @@ export class PdfSignatureService {
   }
 
   /**
-   * Convierte una posición en ratios 0-1 (ver historia "Ubicación de firmas por usuario") a
-   * coordenadas absolutas en puntos, contra el tamaño REAL de la página destino — los ratios no
-   * sirven de nada sin saber el tamaño de ESA página, que puede variar entre páginas de un mismo
-   * documento.
+   * Convierte una posición en ratios 0-1 a coordenadas absolutas en puntos contra el tamaño real de
+   * la página destino: los ratios no significan nada sin el tamaño de ESA página, que puede variar
+   * entre páginas del mismo documento.
    *
-   * **El tamaño que importa es el de la página COMO SE VE, no el de su MediaBox.** El frontend
-   * mide el drop contra la hoja que pdf.js dibuja, y pdf.js ya aplicó el `/Rotate` de la página;
-   * una hoja apaisada escrita como "vertical + `/Rotate 90`" —lo que exporta Word y producen los
-   * escáneres— tiene un MediaBox de 595x842 y se ve de 842x595. Medir los ratios contra el
-   * MediaBox era el bug de las hojas horizontales: la firma salía en otro punto y de costado.
-   * `displayedPageSize` resuelve cuál de los dos tamaños corresponde (ver `page-geometry.ts`).
+   * **Mide contra la página COMO SE VE, no contra su MediaBox.** El frontend mide el drop sobre la
+   * hoja que dibuja pdf.js, que ya aplicó el `/Rotate`: una hoja apaisada escrita como "vertical +
+   * `/Rotate 90`" —lo que exportan Word y los escáneres— tiene un MediaBox de 595x842 y se ve de
+   * 842x595. Medir contra el MediaBox sacaba la firma de lugar y de costado en las hojas
+   * horizontales; `displayedPageSize` resuelve cuál de los dos tamaños corresponde.
    *
-   * Lo que se devuelve está en ese mismo espacio visible; `mergeSignatureIntoPdf` lo traduce al
-   * espacio del contenido justo antes de dibujar.
+   * Devuelve en ese mismo espacio visible: `mergeSignatureIntoPdf` traduce al espacio del contenido
+   * justo antes de dibujar.
    *
-   * `yRatio` se mide desde el borde SUPERIOR de la página (coincide con cómo el frontend mide la
-   * posición del drop en el DOM), de ahí la resta contra el alto.
+   * `yRatio` se mide desde el borde SUPERIOR, igual que el frontend mide la posición del drop en el
+   * DOM, de ahí la resta contra el alto.
    *
-   * `page` es 1-based; si viniera fuera de rango (no debería, ya validado al crear el
-   * documento) se usa la última página como fallback en vez de lanzar.
+   * `page` es 1-based; fuera de rango cae en la última página en vez de lanzar.
    */
   async resolveRatioPosition(
     documentBuffer: Buffer,
@@ -349,9 +300,8 @@ export class PdfSignatureService {
     const displayed = displayedPageSize(content, rotation);
     const orientation = pageOrientation(content, rotation);
 
-    // A nivel debug y sólo geometría (ningún dato del firmante): es lo primero que hace falta
-    // saber cuando alguien reporta una firma fuera de lugar, y no se puede deducir del PDF sin
-    // volver a abrirlo.
+    // Registra sólo geometría, ningún dato del firmante: es lo primero que hace falta cuando alguien
+    // reporta una firma fuera de lugar, y no se deduce del PDF sin volver a abrirlo.
     this.logger.debug(
       `Página ${position.page}: MediaBox ${content.width}x${content.height}, /Rotate ${rotation}, ` +
         `se ve ${displayed.width}x${displayed.height} (${orientation}).`,
@@ -361,17 +311,15 @@ export class PdfSignatureService {
   }
 
   /**
-   * Devuelve un PDF nuevo con las páginas de `documentBuffer` seguidas de las de `pagesBuffer`
-   * (historia "Anexar hoja existente de información de firmas al documento final").
+   * Devuelve un PDF nuevo con las páginas de `documentBuffer` seguidas de las de `pagesBuffer`.
    *
-   * Ninguno de los dos PDF de entrada se modifica: `copyPages` serializa las páginas del origen y
-   * las incrusta en un documento destino recién creado, así que el documento firmado y la hoja
-   * quedan intactos en sus buckets y esto solo produce una tercera copia. Tampoco se re-estampa ni
-   * se recalcula nada del contenido: las firmas ya dibujadas viajan tal cual dentro de las páginas
-   * copiadas, que es justo lo que pide el criterio de conservar la hoja con las firmas existentes.
+   * No modifica ninguno de los dos: `copyPages` serializa las páginas del origen dentro de un
+   * documento recién creado, así que el documento firmado y la hoja quedan intactos en sus buckets.
+   * Tampoco re-estampa ni recalcula nada: las firmas ya dibujadas viajan tal cual dentro de las
+   * páginas copiadas.
    *
-   * El resultado se serializa con la misma conformidad PDF/A-2B que el resto del servicio: la
-   * versión definitiva que ve el usuario no puede ser menos archivable que la que la originó.
+   * Serializa con la misma conformidad PDF/A-2B que el resto del servicio: la versión definitiva que
+   * ve el usuario no puede ser menos archivable que la que la originó.
    */
   async appendPdfPages(
     documentBuffer: Buffer,
@@ -412,14 +360,6 @@ export class PdfSignatureService {
     );
   }
 
-  /**
-   * Historia "Eliminar nombre al estampar firma simple": acá vivía `addSignerName`, que dibujaba
-   * el nombre del firmante como texto 20pt debajo de cada firma estampada. Se eliminó junto con
-   * su único llamador (`DocumentService.finalizeSignedDocument`): el estampado ahora es solo la
-   * imagen de la firma. El nombre del firmante sigue registrado en la hoja de firmas del resumen
-   * (`SummaryDocumentService`), que es donde corresponde la evidencia en texto.
-   */
-
   /** Estampa "RECHAZADO" en diagonal naranja semitransparente en todas las páginas del PDF. */
   async stampRejectedWatermark(documentBuffer: Buffer): Promise<Buffer> {
     return this.stampDiagonalWatermark(
@@ -429,10 +369,7 @@ export class PdfSignatureService {
     );
   }
 
-  /**
-   * Estampa texto diagonal centrado en cada página del PDF, escalado para cruzar de esquina a esquina.
-   * Aplica conformidad PDF/A-2B al resultado.
-   */
+  /** Estampa texto diagonal centrado, escalado para cruzar de esquina a esquina, con PDF/A-2B. */
   private async stampDiagonalWatermark(
     documentBuffer: Buffer,
     text: string,
@@ -451,7 +388,7 @@ export class PdfSignatureService {
       const fontSize = (diagonalLength * 0.75) / textWidthAt1;
       const textWidth = font.widthOfTextAtSize(text, fontSize);
 
-      // Centrar el texto rotado en el centro geométrico de la página
+      // Centra el texto rotado en el centro geométrico de la página.
       const cx =
         width / 2 -
         (textWidth / 2) * Math.cos(angleRad) +
@@ -478,13 +415,12 @@ export class PdfSignatureService {
   }
 
   /**
-   * Encaja la imagen dentro de la caja resuelta SIN deformarla, centrada en ella.
+   * Encaja la imagen dentro de la caja SIN deformarla, centrada en ella.
    *
-   * La caja de firma es un rectángulo apaisado (200x80 por defecto), pensado para una rúbrica
-   * manuscrita: estirar ahí una imagen cuadrada la deja el doble de ancha que de alta. Para una
-   * rúbrica eso es un detalle estético, pero el código QR de una firma avanzada deja de ser
-   * cuadrado y los lectores dejan de reconocer su patrón — por eso se escala al lado menor de la
-   * caja y se centra, en vez de rellenarla.
+   * La caja es un rectángulo apaisado (200x80 por defecto) pensado para una rúbrica manuscrita:
+   * estirar ahí una imagen cuadrada la deja el doble de ancha que de alta. En una rúbrica eso es
+   * estético, pero un QR deforme pierde su patrón y los lectores dejan de reconocerlo, así que se
+   * escala al lado menor de la caja y se centra en vez de rellenarla.
    */
   private fitPreservingAspectRatio(
     image: PDFImage,
@@ -506,10 +442,7 @@ export class PdfSignatureService {
     };
   }
 
-  /**
-   * Devuelve el tamaño final con el que se dibujará la firma.
-   * Si width o height están fuera del rango [MIN, MAX] se usa DEFAULT_SIGNATURE_SIZE.
-   */
+  /** Normaliza a `DEFAULT_SIGNATURE_SIZE` el tamaño que caiga fuera del rango [min, max]. */
   private resolveSignatureSize(
     coordinates: SignatureCoordinates,
     minSize = MIN_SIGNATURE_SIZE,
@@ -541,56 +474,3 @@ export class PdfSignatureService {
     }
   }
 }
-
-// EJEMPLO DE USO
-//
-// 1. Importar DocumentSigningModule en el módulo que lo necesite:
-//
-//    import { DocumentSigningModule } from 'src/shared/document-signing/document-signing.module';
-//
-//    @Module({
-//      imports: [DocumentSigningModule],
-//    })
-//    export class DocumentModule {}
-//
-// 2. Inyectar PdfSignatureService en el servicio o controlador destino:
-//
-//    import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
-//    import { SignatureCoordinates } from 'src/shared/document-signing/interfaces/signature-coordinates.interface';
-//
-//    @Injectable()
-//    export class DocumentService {
-//      constructor(private readonly pdfSignatureService: PdfSignatureService) {}
-//
-//      async signDocument(documentBuffer: Buffer, signatureBuffer: Buffer): Promise<Buffer> {
-//        const coordinates: SignatureCoordinates = {
-//          x: 60,       // distancia desde el borde izquierdo (puntos PDF)
-//          y: 40,       // distancia desde el borde inferior  (puntos PDF)
-//          width: 200,  // si queda fuera de [60–320], se aplica el DEFAULT (200x80)
-//          height: 80,
-//          opacity: 0.9, // opcional: 0.0 invisible, 1.0 completamente opaco (default)
-//        };
-//
-//        const signedPdf: Buffer = await this.pdfSignatureService.mergeSignatureIntoPdf(
-//          documentBuffer,
-//          signatureBuffer,
-//          coordinates,
-//        );
-//
-//        return signedPdf;
-//      }
-//    }
-//
-// UMBRALES DE TAMAÑO (puntos PDF):
-//   Demasiado chica  → width < 60  o height < 24
-//   Demasiado grande → width > 320 o height > 128
-//   Tamaño default   → 200 x 80
-//   Para cambiar estos valores, editar las constantes al inicio del archivo:
-//     DEFAULT_SIGNATURE_SIZE, MIN_SIGNATURE_SIZE, MAX_SIGNATURE_SIZE
-//
-// PERFIL ICC sRGB (requerido para conformidad PDF/A-2B completa):
-//   Descargar de: https://www.color.org/srgbprofiles.xalter
-//   Guardar como: src/shared/document-signing/resources/sRGB.icc
-//   El build de NestJS copia automáticamente *.icc a dist/ (configurado en nest-cli.json).
-//   Sin el perfil ICC, el documento tendrá metadatos XMP PDF/A-2B pero le faltará el
-//   OutputIntent, por lo que no pasará un validador estricto de PDF/A-2B.

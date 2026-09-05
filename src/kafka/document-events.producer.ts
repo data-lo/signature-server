@@ -83,9 +83,9 @@ export class DocumentEventsProducer {
   }
 
   /**
-   * A diferencia de emitSigned (solo cuando el ÚLTIMO firmante termina), esto se dispara por
-   * CADA colaborador que firma — alimenta el encadenamiento de DocumentTransaction (ver
-   * DocumentEventsConsumer.handleCollaboratorSigned).
+   * Emite por CADA colaborador que firma, a diferencia de `emitSigned`, que sólo se dispara cuando
+   * termina el ÚLTIMO. Alimenta el encadenamiento de DocumentTransaction (ver
+   * `DocumentEventsConsumer.handleCollaboratorSigned`).
    */
   emitCollaboratorSigned({
     documentId,

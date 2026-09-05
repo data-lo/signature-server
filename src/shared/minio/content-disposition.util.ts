@@ -54,12 +54,12 @@ export function sanitizeDownloadFileName(
  * Arma la cabecera `Content-Disposition` con la que MinIO responde la descarga.
  *
  * El nombre va DOS veces, como manda el RFC 6266: `filename` en ASCII para los clientes viejos y
- * `filename*` codificado en UTF-8 para los actuales, que es el que gana cuando están los dos. Sin
- * `filename*`, un documento llamado "Contrato de prestación de servicios.pdf" llegaría con la
- * acentuada rota —la cabecera sólo admite ASCII—, y en español ese es el caso normal, no el raro.
+ * `filename*` en UTF-8 para los actuales, que es el que gana cuando están los dos. Sin `filename*`,
+ * un documento llamado "Contrato de prestación de servicios.pdf" llegaría con la acentuada rota, y
+ * en español ese es el caso normal, no el raro.
  *
- * La versión ASCII no inventa un nombre distinto: descompone los acentos y conserva la letra base
- * (`ó` queda en `o`), así que "prestación" cae en "prestacion" y sigue leyéndose igual.
+ * La versión ASCII no inventa un nombre distinto: descompone los acentos y conserva la letra base,
+ * así que "prestación" cae en "prestacion" y sigue leyéndose igual.
  */
 export function buildAttachmentDisposition(
   fileName: string | null | undefined,

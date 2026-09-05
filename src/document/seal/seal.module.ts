@@ -15,15 +15,13 @@ import { SealApiService } from './services/seal-api.service';
 /**
  * Sellado de documentos contra Seal Service (sello de tiempo RFC 3161 + constancia NOM-151).
  *
- * Exporta `SealDocumentUseCase` porque el sellado ya no se dispara solo desde su controlador:
- * `DocumentService` lo invoca al completarse la firma avanzada de un documento (ver historia
- * "Completar flujo de firma avanzada e integración con Seal Service"). Exporta también
- * `SendCompletedSimpleSignatureToSealUseCase`, su equivalente para los documentos de firma
- * simple, que el mismo servicio invoca cuando firma el último firmante.
+ * Exporta `SealDocumentUseCase` y `SendCompletedSimpleSignatureToSealUseCase` porque el sellado ya
+ * no se dispara sólo desde su controlador: `DocumentService` invoca el primero al completarse una
+ * firma avanzada y el segundo cuando termina el último firmante de una firma simple.
  *
- * La dependencia va en un solo sentido —DocumentModule → SealModule— así que no hay ciclo: de
- * `DocumentModule` acá sólo entran entidades (clases, no providers), registradas con
- * `forFeature` para consultarlas sin depender de sus servicios.
+ * La dependencia va en un solo sentido —DocumentModule → SealModule—, así que no hay ciclo: de
+ * `DocumentModule` acá sólo entran entidades, registradas con `forFeature` para consultarlas sin
+ * depender de sus servicios.
  */
 @Module({
   imports: [

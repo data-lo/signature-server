@@ -24,7 +24,6 @@ import { AuditChainModule } from 'src/audit-chain/audit-chain.module';
 import { DocumentEventNotificationsService } from './document-event-notifications.service';
 import { DocumentEventAuditService } from './document-event-audit.service';
 
-// Use cases
 import { ProcessDocumentCreatedEventUseCase } from './applications/process-document-created-event.use-case';
 import { ProcessDocumentSentToSignEventUseCase } from './applications/process-document-sent-to-sign-event.use-case';
 import { ProcessDocumentCollaboratorSignedEventUseCase } from './applications/process-document-collaborator-signed-event.use-case';

@@ -63,17 +63,16 @@ export class UserEntity {
   signatureId: string | null;
 
   /**
-   * Estado global del avance de identidad y firma del usuario. Es la variable que los módulos
-   * posteriores consultan antes de permitir una acción (subir la firma PNG, firmar un
-   * documento), y la única fuente de verdad sobre ese avance.
+   * Estado global del avance de identidad y firma del usuario: la variable que los módulos consultan
+   * antes de permitir una acción —subir la firma PNG, firmar un documento— y la única fuente de
+   * verdad sobre ese avance.
    *
-   * Sólo la escribe `UpdateSigningCredentialStatusUseCase`, que valida la transición: ningún
-   * servicio, controller ni el frontend la tocan directamente. Los disparadores son eventos de
-   * Didit (webhook), acciones del usuario sobre su firma y la regla de máximo de intentos.
+   * Sólo la escribe `UpdateSigningCredentialStatusUseCase`, que valida la transición: ningún servicio,
+   * controller ni el frontend la tocan directamente. Los disparadores son eventos de Didit, acciones
+   * del usuario sobre su firma y la regla de máximo de intentos.
    *
-   * Es la única variable que decide si el usuario puede firmar con firma Simple. `isConfigured`
-   * no participa: marca el fin del onboarding general (datos personales) y no sabe nada de
-   * identidad validada.
+   * Es lo único que decide si el usuario puede firmar con firma Simple. `isConfigured` no participa:
+   * marca el fin del onboarding general y no sabe nada de identidad validada.
    */
   @Column({
     type: 'enum',

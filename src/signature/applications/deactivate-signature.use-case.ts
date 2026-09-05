@@ -6,14 +6,14 @@ import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
 import { SignatureService } from '../signature.service';
 
 /**
- * `PATCH /signature/:id/deactivate`: deja de usar una firma sin borrarla.
+ * Deja de usar una firma sin borrarla (`PATCH /signature/:id/deactivate`).
  *
- * La fila y el object key se conservan, y lo que cambia es el contenido del PNG: pasa a ser una
- * imagen transparente. Borrar el objeto rompería los documentos ya firmados que apuntan a él,
+ * Conserva la fila y el object key, y lo que cambia es el contenido del PNG, que pasa a ser una
+ * imagen transparente: borrar el objeto rompería los documentos ya firmados que apuntan a él,
  * mientras que vaciarlo deja de mostrar el trazo sin tocar el pasado.
  *
- * Desactivar una firma ya desactivada es un 400 y no un no-op silencioso: quien lo pide cree
- * que está haciendo algo, y responder éxito le haría pensar que había una firma activa.
+ * Desactivar una firma ya desactivada es un 400 y no un no-op silencioso: quien lo pide cree estar
+ * haciendo algo, y responder éxito le haría pensar que había una firma activa.
  */
 @Injectable()
 export class DeactivateSignatureUseCase {

@@ -11,28 +11,26 @@ const S = SIGNING_CREDENTIAL_STATUS_ENUM;
 /**
  * La máquina de estados completa, en un solo lugar.
  *
- * Se declara qué transiciones son posibles en vez de dejar que cada caso de uso escriba el
- * estado que le parezca: así una regresión ("aprobado vuelve a pendiente") es imposible por
- * construcción y no depende de que cada llamador se acuerde de comprobarla.
+ * Declara qué transiciones son posibles en vez de dejar que cada caso de uso escriba el estado que
+ * le parezca: así una regresión ("aprobado vuelve a pendiente") es imposible por construcción y no
+ * depende de que cada llamador se acuerde de comprobarla.
  *
  * **Esta tabla es también la autorización de los disparadores, no sólo una descripción.** Hay
- * llamadores que apuntan a un estado sin comprobar por su cuenta los requisitos —
- * `UpdateSignatureUseCase` pide CONFIGURED al reponer la rúbrica sin mirar la identidad— y
- * confían en que una transición ilegal quede en no-op. Por eso una arista nueva se agrega sólo si
- * es válida para TODOS los disparadores que puedan pedirla: abrir
- * PENDING/IN_PROGRESS/IN_REVIEW → CONFIGURED completaría la credencial de alguien sin identidad
- * aprobada con sólo volver a subir su firma. Cuando un disparador necesita llegar a un estado que
- * no es alcanzable en un salto, recorre los pasos legales (ver `applyApproval` en
- * ProcessDiditVerificationResultUseCase) en vez de ensanchar la tabla.
+ * llamadores que apuntan a un estado sin comprobar los requisitos por su cuenta
+ * —`UpdateSignatureUseCase` pide CONFIGURED al reponer la rúbrica sin mirar la identidad— y confían
+ * en que una transición ilegal quede en no-op. Por eso una arista nueva se agrega sólo si es válida
+ * para TODOS los disparadores que puedan pedirla: abrir PENDING/IN_PROGRESS/IN_REVIEW → CONFIGURED
+ * completaría la credencial de alguien sin identidad aprobada con sólo volver a subir su firma.
+ * Cuando un disparador necesita un estado no alcanzable en un salto, recorre los pasos legales (ver
+ * `applyApproval`) en vez de ensanchar la tabla.
  *
- * Notas sobre las aristas menos obvias:
- * - Desde SIGNATURE_PENDING y CONFIGURED se puede volver a RETRY_REQUIRED: si un intento
- *   aprobado expira o se revoca, la credencial tiene que dejar de valer por la misma vía por
- *   la que se otorgó.
- * - CONFIGURED → SIGNATURE_PENDING es el borrado de la firma PNG: la identidad sigue aprobada,
- *   lo que falta es el archivo.
+ * Aristas menos obvias:
+ * - SIGNATURE_PENDING y CONFIGURED pueden volver a RETRY_REQUIRED: si un intento aprobado expira o
+ *   se revoca, la credencial deja de valer por la misma vía por la que se otorgó.
+ * - CONFIGURED → SIGNATURE_PENDING es el borrado de la firma PNG: la identidad sigue aprobada y lo
+ *   que falta es el archivo.
  * - FAILED y MAX_ATTEMPTS_EXCEEDED son terminales para el usuario: sólo una intervención
- *   administrativa (fuera de este flujo) los saca de ahí.
+ *   administrativa los saca de ahí.
  */
 export const ALLOWED_SIGNING_CREDENTIAL_TRANSITIONS: Readonly<
   Record<
@@ -155,10 +153,10 @@ export class UpdateSigningCredentialStatusUseCase {
   /**
    * Aplica la transición sólo si es posible; si no lo es, la registra y sigue.
    *
-   * Es la variante para los disparadores que no pueden fallar hacia afuera: el webhook de Didit
-   * (un 500 haría que el proveedor reintentara para siempre por un evento fuera de orden) y las
-   * transiciones posteriores a una operación ya efectuada, como el borrado de la firma PNG —
-   * el archivo ya no está, romper después no lo devuelve.
+   * Es la variante para los disparadores que no pueden fallar hacia afuera: el webhook de Didit —un
+   * 500 haría que el proveedor reintentara para siempre por un evento fuera de orden— y las
+   * transiciones posteriores a una operación ya efectuada, como el borrado de la firma PNG, donde
+   * romper después no devuelve el archivo.
    *
    * @returns `true` si el estado quedó en `target`.
    */
@@ -212,14 +210,13 @@ export class UpdateSigningCredentialStatusUseCase {
   }
 
   /**
-   * `GET /api/v1/users/me` se sirve desde un snapshot en Redis cacheado por CURP. Sin invalidar
-   * esa key, el usuario aprobaría su identidad y subiría su firma pero seguiría viendo
-   * "Valida tu identidad" hasta que el cache se reconstruyera por otra vía.
+   * Invalida el snapshot de Redis que sirve `GET /api/v1/users/me`, cacheado por CURP: sin esto el
+   * usuario aprobaría su identidad y subiría su firma pero seguiría viendo "Valida tu identidad"
+   * hasta que el cache se reconstruyera por otra vía.
    *
-   * Se borra en lugar de reescribirse: `UserService.getMeFromCache` ya sabe rehidratar desde
-   * Postgres cuando la key no existe, así que borrar evita duplicar aquí la forma del snapshot
-   * (y evita que este módulo dependa de `UserModule`, que importa `SignatureModule`, que a su
-   * vez importa este módulo).
+   * Borra en lugar de reescribir porque `UserService.getMeFromCache` ya rehidrata desde Postgres
+   * cuando la key no existe: evita duplicar acá la forma del snapshot y que este módulo dependa de
+   * `UserModule`, que importa `SignatureModule`, que a su vez importa éste.
    */
   private async invalidateProfileCache(nationalId: string): Promise<void> {
     try {

@@ -9,16 +9,14 @@ export enum BUCKET_TYPES_ENUM {
    */
   FINALIZED_DOCUMENTS = 'finalized_documents',
   /**
-   * Vista previa del documento con las firmas registradas HASTA AHORA (ver historia "Actualizar
-   * el previsualizador con el avance de firmas"). Se regenera desde el original cada vez que
-   * alguien firma, así que solo existe mientras el documento está pendiente y al menos un
-   * firmante ya firmó.
+   * Vista previa del documento con las firmas registradas HASTA AHORA. Se regenera desde el original
+   * cada vez que alguien firma, así que sólo existe mientras el documento está pendiente y al menos
+   * un firmante ya firmó.
    *
-   * Es una copia desechable, no una pieza legal: no se le calcula hash, no se anexa la hoja de
-   * firmas y nada la referencia una vez que el documento queda SIGNED (a partir de ahí se sirve
-   * `finalized_documents`). Vive en su propio bucket justamente para que no pueda confundirse
-   * con `signed_documents`, cuyo contenido es el insumo de `signedHash` y no admite versiones
-   * intermedias.
+   * Es una copia desechable y no una pieza legal: no se le calcula hash, no se anexa la hoja de
+   * firmas y nada la referencia una vez que el documento queda SIGNED. Vive en su propio bucket para
+   * que no pueda confundirse con `signed_documents`, cuyo contenido es el insumo de `signedHash` y
+   * no admite versiones intermedias.
    */
   PARTIALLY_SIGNED_DOCUMENTS = 'partially_signed_documents',
   CANCELLED_DOCUMENTS = 'cancelled_documents',

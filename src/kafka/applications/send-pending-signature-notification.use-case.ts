@@ -1,9 +1,7 @@
-// Framework & third-party libraries
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-// Entities & Enums
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
@@ -11,7 +9,6 @@ import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 
-// Services
 import { EmailService } from 'src/shared/email/email.service';
 
 // Utilities
@@ -28,19 +25,18 @@ import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 import { NotificationEventPayload } from '../notification-events.topics';
 
 /**
- * `notification.created`: manda el correo de "tienes un documento por firmar" al colaborador de
- * esa notificación, si es que le toca.
+ * Manda el correo de "tienes un documento por firmar" al colaborador de la notificación, si es que
+ * le toca (`notification.created`).
  *
  * Todas las condiciones de abajo son razones para NO mandar nada, y ninguna es un error: la
- * notificación se persiste para cualquier colaborador, y este caso de uso es el que decide a
- * quién de ellos le corresponde además un correo.
+ * notificación se persiste para cualquier colaborador, y acá se decide a quién le corresponde además
+ * un correo.
  *
- *  - Sólo firmantes pendientes: a un observador no se le pide firmar, y a quien ya respondió
- *    tampoco.
- *  - En un documento no secuencial de firma simple no se manda nada: todos pueden firmar
- *    cuando quieran y el aviso sale por otra vía.
- *  - En un documento secuencial, sólo a quien está en turno: avisarle a los demás los mandaría
- *    a una pantalla donde todavía no pueden hacer nada.
+ *  - Sólo firmantes pendientes: a un observador no se le pide firmar, y a quien ya respondió tampoco.
+ *  - En un documento no secuencial de firma simple no se manda nada: todos pueden firmar cuando
+ *    quieran y el aviso sale por otra vía.
+ *  - En uno secuencial, sólo a quien está en turno: avisar a los demás los mandaría a una pantalla
+ *    donde todavía no pueden hacer nada.
  */
 @Injectable()
 export class SendPendingSignatureNotificationUseCase {

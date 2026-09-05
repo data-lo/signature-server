@@ -23,24 +23,19 @@ export interface RecordAuditEventParams {
 }
 
 /**
- * Módulo de Auditoría e Integridad Global de BD (ver diagrama ER-V2, entidad "audit"): a
- * diferencia de DocumentTransactionService (que encadena solo dentro de un mismo documento),
- * esto encadena sobre TODA la base de datos — el chainHash de cada fila nueva es el actualHash
- * de la fila con el MAX(id) GLOBAL anterior, sin importar el documento.
+ * Encadena eventos sobre TODA la base de datos: el `chainHash` de cada fila nueva es el
+ * `actualHash` de la fila con el MAX(id) global anterior, sin importar el documento —a diferencia
+ * de `DocumentTransactionService`, que encadena dentro de uno solo.
  *
- * `recordEvent` se invoca desde consumers de Kafka (ver DocumentEventsConsumer), nunca
- * síncronamente desde el flujo HTTP — así el cómputo/escritura de la cadena de auditoría nunca
- * agrega latencia a la respuesta al usuario ni puede tumbar la transacción principal.
+ * `recordEvent` se invoca desde consumers de Kafka y nunca síncronamente desde el flujo HTTP, para
+ * que la cadena no agregue latencia a la respuesta ni pueda tumbar la transacción principal.
  *
- * Procesamiento estrictamente secuencial (FIFO): "leer el MAX(id) actual, calcular el nuevo
- * hash, insertar" es una sección crítica clásica — sin serializarla, dos eventos casi
- * simultáneos (dos consumers, o dos particiones de Kafka procesando en paralelo) podrían leer
- * el mismo "último" registro y encadenar dos filas nuevas al mismo padre, bifurcando la cadena
- * en vez de mantenerla lineal. `pg_advisory_xact_lock` serializa esta sección crítica a nivel de
- * Postgres (no solo en memoria de este proceso), así que la garantía se sostiene incluso con
- * múltiples instancias del servidor corriendo contra la misma base de datos. El lock es
- * transaccional (`_xact_`): Postgres lo libera solo automáticamente al hacer commit/rollback,
- * sin necesidad de liberarlo manualmente ni riesgo de dejarlo tomado si el proceso truena.
+ * Procesa estrictamente en serie: "leer el MAX(id), calcular el hash, insertar" es una sección
+ * crítica, y sin serializarla dos eventos casi simultáneos —dos consumers, dos particiones—
+ * encadenarían al mismo padre y bifurcarían la cadena. `pg_advisory_xact_lock` la serializa en
+ * Postgres y no sólo en memoria de este proceso, así que la garantía se sostiene con varias
+ * instancias contra la misma base. Al ser transaccional, Postgres lo libera solo al commit o
+ * rollback, sin riesgo de dejarlo tomado si el proceso truena.
  */
 @Injectable()
 export class AuditChainService {

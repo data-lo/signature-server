@@ -18,14 +18,12 @@ import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 
 /**
- * Reemplaza a DocumentParticipantEntity (ver plan de migración ER-V2, Fase 3). Generaliza
- * "participante" a "colaborador": agrega el rol REVIEWER, permite invitar solo por email
- * (accountId nullable) sin que exista una cuenta de plataforma todavía, y suma comments/geoLoc/
- * cancellationReason/reminderPeriodicity/signatureType que no existían antes.
+ * Reemplaza a DocumentParticipantEntity generalizando "participante" a "colaborador": agrega el rol
+ * REVIEWER, permite invitar sólo por email (`accountId` nullable, sin cuenta de plataforma todavía)
+ * y suma `comments`, `geoLoc`, `cancellationReason`, `reminderPeriodicity` y `signatureType`.
  *
- * `accountId` reemplazó a `userId` (ver diagrama ER-V2 más reciente / migración
- * `RenameCollaboratorUserIdToAccountId`): apunta a la cuenta PERSONAL del colaborador, no
- * directamente a `UserEntity`, consistente con el resto del modelo multi-tenant.
+ * `accountId` apunta a la cuenta PERSONAL del colaborador y no directamente a `UserEntity`,
+ * consistente con el resto del modelo multi-tenant.
  */
 @Entity('collaborators')
 export class CollaboratorEntity {

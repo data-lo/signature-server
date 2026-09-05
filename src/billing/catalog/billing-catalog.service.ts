@@ -8,14 +8,14 @@ import { CATALOG_SCOPE_SUBJECT_TYPE_ENUM } from '../enums/catalog-scope-subject-
 import { BillingOwner } from '../profiles/billing-owner.service';
 
 /**
- * Consulta el catálogo comercial LOCAL (`catalog_items` + `catalog_prices`).
+ * Consulta el catálogo comercial LOCAL (`catalog_items` + `catalog_prices`) para el flujo de
+ * suscripción, en lugar de preguntárselo a Stripe en cada compra —que es lo que sigue haciendo
+ * `GetPaymentServicesUseCase` para pintar las tarjetas.
  *
- * Es el reemplazo, para el flujo de suscripción, de preguntarle el catálogo a Stripe en cada
- * compra (lo que sigue haciendo `GetPaymentServicesUseCase` para pintar las tarjetas). La razón
- * no es el ahorro de una llamada: es que el importe y los límites que se cobran tienen que salir
- * de una fila nuestra, versionada y auditable, y no de lo que el proveedor conteste en ese
- * instante. `plans.documents_included` —cuántos documentos concede el plan— no existe en
- * Stripe en absoluto, así que sin el catálogo local no habría de dónde sacarlo al facturar.
+ * No es por ahorrar una llamada: el importe y los límites que se cobran tienen que salir de una fila
+ * nuestra, versionada y auditable, y no de lo que el proveedor conteste en ese instante.
+ * `plans.documents_included` —cuántos documentos concede el plan— ni siquiera existe en Stripe, así
+ * que sin el catálogo local no habría de dónde sacarlo al facturar.
  */
 @Injectable()
 export class BillingCatalogService {
@@ -29,12 +29,13 @@ export class BillingCatalogService {
   /**
    * Busca un precio recurrente vendible por su `stripe_price_id`.
    *
-   * **Por qué no hay una comprobación explícita de "es recurrente":** la recurrencia es
-   * estructural, no un campo que validar. `catalog_prices.billing_mode=RECURRING` distingue una
-   * suscripción de una compra única; ambas usan la misma tabla sin perder su semántica.
+   * La recurrencia se filtra en el propio `WHERE` (`billing_mode = RECURRING`) y no con una
+   * comprobación aparte: desde que suscripciones y pagos únicos comparten `catalog_prices`, es esa
+   * columna la que los distingue. Un precio de pago único no se encuentra, así que cae por el mismo
+   * camino que uno inexistente y da el mismo error de cara al cliente.
    *
-   * @throws {SubscriptionPriceNotAvailableException} Si no existe, o si el precio o su plan
-   *   están dados de baja, o si está fuera de su ventana de vigencia.
+   * @throws {SubscriptionPriceNotAvailableException} Si no existe, si el precio o su plan están
+   *   dados de baja, o si está fuera de su ventana de vigencia.
    */
   async findSellableRecurringPrice(
     stripePriceId: string,
@@ -84,7 +85,7 @@ export class BillingCatalogService {
   }
 
   /**
-   * Como se resuelve el plan al FACTURAR (no al comprar): sin validar vigencia ni estado.
+   * Resuelve el plan al FACTURAR, no al comprar: sin validar vigencia ni estado.
    *
    * Es deliberado que sea más laxo que `findSellableRecurringPrice`. Aquí ya hubo un cobro real:
    * si el plan se archivó o el precio caducó entre la contratación y la renovación, el cliente

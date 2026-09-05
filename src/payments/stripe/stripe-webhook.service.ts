@@ -10,19 +10,18 @@ import { StripePaymentService } from './stripe-payment.service';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 
 /**
- * Router de los eventos de Stripe ya autenticados. Cada evento soportado tiene su propio handler
- * — para reaccionar a uno nuevo basta con agregar un case al switch de `process()`.
+ * Enruta los eventos de Stripe ya autenticados: cada evento soportado tiene su handler, y para
+ * reaccionar a uno nuevo basta agregar un case al switch de `process()`.
  *
- * **Conviven dos modelos de suscripción y los dos se atienden aquí.** Los handlers privados
- * mantienen `account_subscriptions`, el modelo anterior, del que todavía dependen
- * `GetSubscriptionStateUseCase` y la pantalla de suscripciones del frontend. Los servicios de
- * `billing` mantienen el modelo nuevo (`billing_profiles` + `credit_lots`), que además concede el
- * saldo de documentos. Se invocan los dos por evento, en ese orden, hasta que el modelo viejo se
- * retire: quitarlo ahora dejaría esa pantalla sin datos.
+ * **Conviven dos modelos de suscripción y los dos se atienden acá.** Los handlers privados mantienen
+ * `account_subscriptions`, el modelo anterior, del que todavía dependen `GetSubscriptionStateUseCase`
+ * y la pantalla de suscripciones; los servicios de `billing` mantienen el nuevo
+ * (`billing_profiles` + `credit_lots`), que además concede el saldo de documentos. Se invocan los
+ * dos por evento hasta que el viejo se retire: quitarlo ahora dejaría esa pantalla sin datos.
  *
- * Los efectos de `billing` van DESPUÉS del handler heredado a propósito. Si el nuevo falla, el
- * evento se propaga y Stripe reintenta la entrega completa; que el efecto heredado se haya
- * aplicado antes no estorba, porque todos los handlers de este archivo son idempotentes.
+ * Los efectos de `billing` van DESPUÉS del handler heredado: si el nuevo falla, el evento se propaga
+ * y Stripe reintenta la entrega completa, y que el heredado ya se hubiera aplicado no estorba porque
+ * todos los handlers de este archivo son idempotentes.
  */
 @Injectable()
 export class StripeWebhookService {
@@ -117,9 +116,9 @@ export class StripeWebhookService {
   }
 
   /**
-   * El producto del precio, que es donde vive la metadata que enruta el evento. En el payload de
-   * un webhook `product` llega como id (Stripe no expande nada en los eventos), así que hay que
-   * ir a buscarlo; si alguna vez llegara ya expandido, se usa tal cual y se ahorra la llamada.
+   * Resuelve el producto del precio, que es donde vive la metadata que enruta el evento. En el
+   * payload de un webhook `product` llega como id, porque Stripe no expande nada en los eventos, así
+   * que hay que ir a buscarlo; si alguna vez llegara expandido, se usa tal cual.
    */
   private async resolvePriceProduct(
     price: Stripe.Price,
@@ -222,15 +221,14 @@ export class StripeWebhookService {
   }
 
   /**
-   * Bug corregido: Stripe no garantiza el orden entre `checkout.session.completed` (que es
-   * quien primero graba `stripeSubscriptionId` en la fila local, ver `handleCheckoutSessionCompleted`)
-   * e `invoice.paid`/`customer.subscription.deleted`. Si `invoice.paid` llega primero, la fila
-   * local todavía tiene `stripeSubscriptionId = NULL` aunque el evento sí traiga uno — antes,
-   * la búsqueda por `stripeSubscriptionId` fallaba y el método se rendía ahí mismo sin probar
-   * `stripeCustomerId` (que sí coincide, porque `stripeCustomerId` se graba desde la creación
-   * del checkout), dejando la suscripción atascada en INCOMPLETE para siempre. Ahora cae al
-   * fallback por `stripeCustomerId` cuando la primera búsqueda no encuentra nada, no solo
-   * cuando `stripeSubscriptionId` viene vacío.
+   * Localiza la fila local por suscripción y, si no aparece, por cliente.
+   *
+   * Stripe no garantiza el orden entre `checkout.session.completed` —que es quien primero graba
+   * `stripeSubscriptionId`— e `invoice.paid`/`customer.subscription.deleted`. Si `invoice.paid` llega
+   * primero, la fila todavía tiene `stripeSubscriptionId = NULL` aunque el evento sí traiga uno:
+   * rendirse ahí dejaba la suscripción atascada en INCOMPLETE para siempre. El fallback por
+   * `stripeCustomerId` —que se graba desde la creación del checkout— entra cuando la primera
+   * búsqueda no encuentra nada, no sólo cuando el id viene vacío.
    */
   private async findByCustomerOrSubscription(
     stripeCustomerId: string | null,

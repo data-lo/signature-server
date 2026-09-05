@@ -5,8 +5,8 @@
  * calculan una sola vez en el servidor, y así no viaja nada del proveedor que la pantalla no
  * necesite.
  *
- * Nótese lo que NO está: ni el `productId`, ni las llaves de Stripe, ni una URL de pago. La
- * sesión de Checkout es temporal y se crea al pulsar "Comprar", no al listar el catálogo.
+ * No lleva `productId`, ni llaves de Stripe, ni una URL de pago: la sesión de Checkout es temporal y
+ * se crea al pulsar "Comprar", no al listar el catálogo.
  */
 export interface PaymentServiceResponse {
   /** `price_...`: es lo que el frontend devuelve al pedir la sesión de Checkout. */

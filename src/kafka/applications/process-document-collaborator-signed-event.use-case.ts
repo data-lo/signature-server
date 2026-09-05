@@ -14,19 +14,17 @@ import { DocumentEventNotificationsService } from '../document-event-notificatio
 import { DocumentCollaboratorSignedPayload } from '../document-events.topics';
 
 /**
- * `document.collaborator_signed`: se dispara por CADA firmante, y es el único punto donde se
- * decide qué entra a la cadena de `DocumentTransaction` según el tipo de firma:
+ * Procesa `document.collaborator_signed`, que se dispara por CADA firmante: es el único punto donde
+ * se decide qué entra a la cadena de `DocumentTransaction` según el tipo de firma.
  *
  *  - **Firma simple** → un registro encadenado por cada firma.
- *  - **Firma avanzada (FIEL)** → ningún registro por firmante; su evidencia criptográfica ya
- *    vive en `CollaboratorEntity.advancedSignature` (ver `EfirmaService`).
- *  - Cuando esta firma es la que completa el documento y hay al menos una firma avanzada, se
- *    agrega el registro final del documento.
+ *  - **Firma avanzada (FIEL)** → ningún registro por firmante; su evidencia criptográfica ya vive en
+ *    `CollaboratorEntity.advancedSignature`.
+ *  - Si esta firma completa el documento y hay al menos una avanzada, agrega el registro final.
  *
- * El registro final se resuelve acá y no al consumir `document.signed` a propósito: son tópicos
- * distintos —y `document.signed` se emite además ANTES que éste—, así que Kafka no garantiza en
- * qué orden se consumen y la cadena podía cerrarse antes de encadenar la última firma simple.
- * Acá ambas cosas ocurren en secuencia dentro del mismo caso de uso.
+ * El registro final se resuelve acá y no al consumir `document.signed` porque son tópicos distintos
+ * —y `document.signed` se emite antes—, así que Kafka no garantiza el orden y la cadena podía
+ * cerrarse antes de encadenar la última firma simple. Acá ambas cosas ocurren en secuencia.
  */
 @Injectable()
 export class ProcessDocumentCollaboratorSignedEventUseCase {

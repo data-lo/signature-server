@@ -27,15 +27,14 @@ const OUTCOME_BY_PROVIDER_VALUE: Record<string, IDENTITY_CHECK_OUTCOME_ENUM> = {
 };
 
 /**
- * Nombres con los que Didit ha publicado cada bloque del veredicto. Se prueban en orden y gana
- * el primero que exista: así un renombre del proveedor no rompe la pantalla mientras alguno de
- * los alias siga vivo.
+ * Nombres con los que Didit ha publicado cada bloque del veredicto. Se prueban en orden y gana el
+ * primero que exista, así que un renombre del proveedor no rompe la pantalla mientras algún alias
+ * siga vivo.
  *
- * Los plurales (`id_verifications`, `liveness_checks`, `face_matches`) son la forma de la
- * respuesta V3, donde cada bloque es un **arreglo**: un workflow puede pedir dos documentos, o
- * reintentar el liveness, y entonces hay varias comprobaciones del mismo tipo. Van primero
- * porque son el contrato vigente; los singulares se conservan para los veredictos V2 ya
- * guardados en `identity_verifications.decision`, que se siguen mostrando en pantalla.
+ * Los plurales son la forma de la respuesta V3, donde cada bloque es un **arreglo** —un workflow
+ * puede pedir dos documentos o reintentar el liveness—, y van primero por ser el contrato vigente.
+ * Los singulares se conservan para los veredictos V2 ya guardados en
+ * `identity_verifications.decision`, que se siguen mostrando en pantalla.
  */
 const DECISION_SECTIONS = {
   documentReading: [
@@ -64,13 +63,13 @@ const OUTCOME_SEVERITY: Record<IDENTITY_CHECK_OUTCOME_ENUM, number> = {
 /**
  * Reduce el veredicto crudo de Didit al resumen que ve el usuario.
  *
- * Función pura y sin dependencias: se puede probar contra cuerpos reales del proveedor sin
- * levantar nada. Vive junto al adaptador HTTP porque, igual que él, su única razón de cambio es
- * que Didit cambie su contrato.
+ * Función pura y sin dependencias: se puede probar contra cuerpos reales del proveedor sin levantar
+ * nada. Vive junto al adaptador HTTP porque, igual que él, su única razón de cambio es que Didit
+ * cambie su contrato.
  *
- * **Es la frontera de datos personales del módulo.** Sólo puede devolver valores del enum de
- * resultados: no copia ni deriva ningún campo del veredicto, así que aunque Didit agregue mañana
- * el CURP o una foto al payload, eso no puede llegar al navegador por esta vía.
+ * **Es la frontera de datos personales del módulo**: sólo puede devolver valores del enum de
+ * resultados, así que aunque Didit agregue mañana el CURP o una foto al payload, eso no puede llegar
+ * al navegador por esta vía.
  *
  * @returns `null` si no se pudo leer ninguna comprobación, para que la pantalla muestre "no
  *   disponible" en lugar de tres renglones vacíos que parecen un error.
@@ -96,10 +95,10 @@ export function summarizeDiditDecision(
 }
 
 /**
- * Cada bloque puede venir como arreglo de comprobaciones (V3: `id_verifications: [{...}]`), como
- * objeto (`{ status: 'match', score: 97 }`) o directamente como cadena (`face_match: 'match'`).
- * Se aceptan las tres formas y se ignora todo lo demás del bloque —las puntuaciones y los
- * recortes del documento incluidos—, que no se expone.
+ * Lee un bloque del veredicto, que puede venir como arreglo de comprobaciones
+ * (V3: `id_verifications: [{...}]`), como objeto (`{ status: 'match', score: 97 }`) o como cadena
+ * (`face_match: 'match'`). Acepta las tres formas e ignora todo lo demás del bloque, puntuaciones y
+ * recortes del documento incluidos.
  */
 function readSection(
   decision: Record<string, unknown>,

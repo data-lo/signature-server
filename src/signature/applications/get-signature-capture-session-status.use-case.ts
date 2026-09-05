@@ -6,15 +6,15 @@ import { SignatureCaptureSessionStatus } from '../interfaces/signature-capture-s
 import { SignatureCaptureSessionService } from '../signature-capture-session.service';
 
 /**
- * `GET /api/v1/signature-capture-sessions/:id`: en qué va el intento.
+ * Informa en qué va el intento (`GET /api/v1/signature-capture-sessions/:id`).
  *
- * Es el endpoint que la PC consulta en bucle mientras el usuario firma en el teléfono, y lo que
- * hace que la pantalla pase sola a "firma registrada" sin reiniciar el flujo. Por eso la
- * respuesta trae también `signingCredentialStatus`: con una sola petición, la PC sabe que el
- * intento terminó y que la credencial del usuario ya quedó CONFIGURED.
+ * Es el endpoint que la PC consulta en bucle mientras el usuario firma en el teléfono, y lo que hace
+ * que la pantalla pase sola a "firma registrada" sin reiniciar el flujo. Por eso la respuesta trae
+ * también `signingCredentialStatus`: con una sola petición la PC sabe que el intento terminó y que
+ * la credencial ya quedó CONFIGURED.
  *
- * Consultar también materializa el vencimiento (ver `SignatureCaptureSessionService`), así que
- * la PC se entera de que su QR caducó por el mismo sondeo con el que espera la firma.
+ * Consultar además materializa el vencimiento, así que la PC se entera de que su QR caducó por el
+ * mismo sondeo con el que espera la firma.
  */
 @Injectable()
 export class GetSignatureCaptureSessionStatusUseCase {

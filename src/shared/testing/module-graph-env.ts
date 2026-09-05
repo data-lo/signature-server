@@ -1,18 +1,16 @@
 /**
- * Variables de entorno mínimas para poder instanciar el grafo de Nest en una prueba.
+ * Define las variables de entorno mínimas para instanciar el grafo de Nest en una prueba.
  *
- * Varios servicios de infraestructura (`HashService`, `MinioService`) validan su configuración
- * en el constructor y lanzan si falta: es lo correcto en producción —mejor no arrancar que
- * arrancar sin poder cifrar ni guardar archivos—, pero significa que cualquier prueba que
- * compile un módulo de verdad necesita estos valores presentes.
+ * Varios servicios de infraestructura (`HashService`, `MinioService`) validan su configuración en el
+ * constructor y lanzan si falta: es lo correcto en producción, pero significa que cualquier prueba
+ * que compile un módulo de verdad necesita estos valores presentes.
  *
- * Antes cada prueba de grafo dependía, sin decirlo, de que `hash.service.spec.ts` o
- * `minio.service.spec.ts` se hubieran ejecutado antes en el mismo worker de Jest y hubieran
- * dejado las variables puestas en `process.env`. Eso hacía que agregar o quitar suites
- * cambiara el reparto entre workers y rompiera pruebas que no se habían tocado.
+ * Sin esto, cada prueba de grafo dependía en silencio de que `hash.service.spec.ts` o
+ * `minio.service.spec.ts` se hubieran ejecutado antes en el mismo worker de Jest: agregar o quitar
+ * suites cambiaba el reparto entre workers y rompía pruebas que nadie había tocado.
  *
- * Se usa `??=` para no pisar lo que el entorno ya traiga: si alguien corre las pruebas contra
- * una configuración real, esa gana.
+ * Usa `??=` para no pisar lo que el entorno ya traiga: si alguien corre las pruebas contra una
+ * configuración real, esa gana.
  */
 export function setTestModuleGraphEnv(): void {
   process.env.CIPHER_SECRET ??= 'test-cipher-secret';

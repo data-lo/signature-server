@@ -25,20 +25,17 @@ export class SealMapper {
       documentId: dto.documentId,
       signatureHash: response.hashHex,
       /**
-       * El XML canónico que devolvió el proveedor: la preimagen literal de `hashHex`. Con él
-       * guardado, verificar el sello no requiere reimplementar la canonicalización de Seal Service
-       * ni conservar el request original — basta recomputar `sha256(canonicalPayload)` y comparar
-       * contra `signature_hash`.
+       * El XML canónico que devolvió el proveedor: la preimagen literal de `hashHex`. Guardarlo
+       * permite verificar el sello recomputando `sha256(canonicalPayload)` contra `signature_hash`,
+       * sin reimplementar la canonicalización de Seal Service ni conservar el request original.
        *
-       * **Se decodifica el Base64 en el que viaja.** Seal Service lo transporta codificado (su
-       * propio contrato lo documenta como "XML canónico […] codificado en base64"), pero lo que
-       * se hashea es el XML en claro: guardarlo tal como llega dejaba una columna cuyo `sha256`
-       * NO reproduce `signature_hash`, rompiendo en silencio la verificación que este campo
-       * existe para permitir. Decodificar aquí es además lo que hace que la descarga del XML
-       * canónico entregue un archivo XML de verdad, sin transformarlo.
+       * **Decodifica el Base64 en el que viaja.** Seal Service lo transporta codificado, pero lo que
+       * se hashea es el XML en claro: guardarlo tal como llega dejaba una columna cuyo `sha256` no
+       * reproduce `signature_hash`, rompiendo en silencio la verificación que este campo existe para
+       * permitir. Decodificar acá es además lo que hace que la descarga entregue un XML de verdad.
        *
-       * Las ENTRADAS de ese XML tampoco se pierden: siguen en `collaborators.advanced_signature`
-       * de este mismo documento, así que la evidencia se puede auditar de punta a punta.
+       * Las entradas de ese XML siguen en `collaborators.advanced_signature` del mismo documento,
+       * así que la evidencia se puede auditar de punta a punta.
        */
       canonicalPayload: SealMapper.decodeCanonicalXml(response.canonicalString),
       /**

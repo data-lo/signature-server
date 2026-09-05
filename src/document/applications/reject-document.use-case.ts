@@ -26,14 +26,14 @@ import { isSignerTurn } from '../utils/next-signer.util';
 import { DocumentService } from '../document.service';
 
 /**
- * `PATCH /document/:id/reject`: el firmante autenticado se niega a firmar, si es su turno.
+ * Registra que el firmante autenticado se niega a firmar, si es su turno
+ * (`PATCH /document/:id/reject`).
  *
- * Rechazar cierra el documento para todos y no sólo para quien rechazó: un documento que
- * necesita todas las firmas ya no puede completarse, y dejarlo abierto haría que los demás
- * siguieran recibiendo recordatorios de algo que nunca va a cerrarse.
+ * Rechazar cierra el documento para todos y no sólo para quien rechazó: uno que necesita todas las
+ * firmas ya no puede completarse, y dejarlo abierto haría que los demás siguieran recibiendo
+ * recordatorios de algo que nunca va a cerrarse.
  *
- * Al creador se le avisa con el motivo, que es lo único que le permite decidir qué hacer
- * después: rehacer el documento, hablar con quien rechazó, o dejarlo así.
+ * Al creador se le avisa con el motivo, que es lo único que le permite decidir qué hacer después.
  */
 @Injectable()
 export class RejectDocumentUseCase {

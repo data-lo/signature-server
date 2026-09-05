@@ -1,4 +1,3 @@
-// External dependencies
 import {
   Controller,
   Get,
@@ -21,7 +20,6 @@ import {
 } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// DTOs
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
 import { VerifyCodeDto } from './dto/verify-code.dto';
@@ -29,7 +27,6 @@ import { SignDocumentDto } from './dto/sign-document.dto';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 
-// Use cases
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
@@ -49,21 +46,17 @@ import { ConfirmDocumentCancellationUseCase } from './applications/confirm-docum
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 
-// Enums
 import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
 import { IpInterceptor } from 'src/ip/ip.interceptor';
 import { ClientIp } from 'src/ip/ip.decorator';
 
-// Decorators
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 
-// Interfaces
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
-// Docs
 import { ApiGetDocumentFileUrl } from './docs/api-get-document-file-url.docs';
 import { ApiGetPublicDocument } from './docs/api-get-public-document.docs';
 import { ApiGetPublicAdvancedSignature } from './docs/api-get-public-advanced-signature.docs';

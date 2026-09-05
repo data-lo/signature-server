@@ -12,14 +12,15 @@ import { ACTOR_TYPE_ENUM } from '../enum/actor-type.enum';
 import { NOTIFICATION_CHANNEL_ENUM } from '../enum/notification-channel.enum';
 
 /**
- * Persiste lo que hasta la Fase 6 era fire-and-forget (ver plan de migración ER-V2): un envío
- * de correo del ciclo de vida del documento (EmailService) ya ocurría, pero nunca quedaba
- * registro de que había ocurrido. Se escribe desde DocumentEventsConsumer (Kafka), no desde
- * document.service.ts directamente — el envío inline por EmailService se mantiene intacto por
- * inmediatez; esta tabla es solo el registro/auditoría de esos envíos, no el mecanismo de envío.
+ * Registra los envíos de correo del ciclo de vida del documento, que hasta la Fase 6 eran
+ * fire-and-forget: ya ocurrían, pero no quedaba constancia de que hubieran ocurrido.
  *
- * `collaboratorId` es nullable: algunos avisos (p. ej. rechazo) van al creador del documento,
- * que no siempre tiene una fila de Collaborator (si él mismo no es firmante/watcher/reviewer).
+ * Se escribe desde `DocumentEventsConsumer` (Kafka) y no desde `document.service.ts`: el envío
+ * inline por `EmailService` se mantiene por inmediatez, y esta tabla es sólo su registro, no el
+ * mecanismo de envío.
+ *
+ * `collaboratorId` es nullable porque algunos avisos van al creador del documento, que no siempre
+ * tiene fila de Collaborator.
  */
 @Entity('notifications')
 export class NotificationEntity {

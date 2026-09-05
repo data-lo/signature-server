@@ -15,14 +15,13 @@ import {
 import * as path from 'path';
 
 /**
- * Plomería compartida por las dos hojas de evidencia (firma simple y firma avanzada): tipografías,
- * logo, render a Buffer, y las piezas de layout que ambas plantillas de referencia tienen
- * idénticas — encabezado, pie de página y tablas informativas.
+ * Plomería compartida por las dos hojas de evidencia: tipografías, logo, render a Buffer y las
+ * piezas de layout que ambas plantillas tienen idénticas —encabezado, pie de página y tablas
+ * informativas.
  *
- * Acá vive lo que NO distingue a una hoja de la otra. Los textos legales, qué secciones se
- * imprimen y qué renglones lleva cada firmante son propios de cada servicio a propósito: la firma
- * simple y la avanzada se apoyan en artículos distintos del Código de Comercio y su evidencia va a
- * seguir evolucionando por separado.
+ * Acá vive lo que NO distingue a una hoja de la otra. Los textos legales, qué secciones se imprimen
+ * y qué renglones lleva cada firmante son propios de cada servicio: la firma simple y la avanzada se
+ * apoyan en artículos distintos del Código de Comercio y su evidencia evoluciona por separado.
  *
  * Este archivo vive junto a `fonts/` y `assets/` porque `__dirname` es lo que resuelve sus rutas
  * tanto en `src/` como en `dist/` (nest-cli.json las copia al build).
@@ -38,14 +37,13 @@ const MONO_BANNER_WIDTH = 70;
 const LABEL_COLUMN_WIDTH = 115;
 
 /**
- * Tipografías de las plantillas de referencia:
- *  - **Lato** para el texto corrido: párrafos legales, títulos de sección y pie de página.
- *  - **JetBrains Mono** para el contenido de las tablas informativas y los separadores de guiones,
- *    que dependen del ancho fijo por carácter para alinearse.
+ * Tipografías de las plantillas de referencia: **Lato** para el texto corrido y **JetBrains Mono**
+ * para las tablas informativas y los separadores de guiones, que dependen del ancho fijo por
+ * carácter para alinearse.
  *
- * Los .ttf viven en este módulo (no en node_modules) y nest-cli.json los copia a dist/. Se
- * declaran las cuatro variantes de cada familia porque pdfmake exige el diccionario completo:
- * pedir `bold: true` sobre una familia que solo declara `normal` revienta en runtime.
+ * Los .ttf viven en este módulo y no en node_modules, y nest-cli.json los copia a `dist/`. Declara
+ * las cuatro variantes de cada familia porque pdfmake exige el diccionario completo: pedir
+ * `bold: true` sobre una familia que sólo declara `normal` revienta en runtime.
  */
 export const SHEET_FONT_DESCRIPTORS: TFontDictionary = {
   Lato: {
@@ -117,9 +115,9 @@ export const SHEET_PAGE_MARGINS: [number, number, number, number] = [
 ];
 
 /**
- * Encabezado de las dos plantillas: logo a la izquierda y el tipo de firma a la derecha, en
- * monoespaciada. Se declara como `header` de pdfmake y no como contenido para que se repita en
- * todas las páginas — la hoja crece con el número de firmantes.
+ * Arma el encabezado de las dos plantillas: logo a la izquierda y el tipo de firma a la derecha, en
+ * monoespaciada. Se declara como `header` de pdfmake y no como contenido para que se repita en todas
+ * las páginas, porque la hoja crece con el número de firmantes.
  */
 export function buildSheetHeader(signatureTypeLabel: string): ContentColumns {
   return {
@@ -146,8 +144,8 @@ const FOOTER_LEGAL_TEXT =
 const FOOTER_XML_NOTE = 'Este documento es una representación visual de un XML';
 
 /**
- * Pie de las dos plantillas: código QR a la pantalla pública de verificación del documento, la
- * leyenda legal sobre la descarga de los archivos oficiales, y la marca.
+ * Arma el pie de las dos plantillas: código QR a la pantalla pública de verificación, la leyenda
+ * legal sobre la descarga de los archivos oficiales, y la marca.
  *
  * El QR apunta a `verificationUrl` —la vista pública del documento, la única consultable sin
  * sesión— para que quien tenga la hoja impresa pueda comprobar su integridad y descargar los
@@ -183,8 +181,8 @@ export function buildSheetFooter(verificationUrl: string): ContentColumns {
 }
 
 /**
- * Columna con una imagen de marca. pdfmake acepta imágenes como columna, pero su tipo `Column`
- * publicado no las contempla — de ahí la conversión, acotada a este único lugar en vez de
+ * Arma una columna con una imagen de marca. pdfmake acepta imágenes como columna, pero su tipo
+ * `Column` publicado no las contempla: de ahí la conversión, acotada a este único lugar en vez de
  * repartida por cada uso.
  */
 function brandColumn(image: string, fit: [number, number]): Column {
@@ -192,9 +190,9 @@ function brandColumn(image: string, fit: [number, number]): Column {
 }
 
 /**
- * Tabla informativa de dos columnas (etiqueta / valor) con el borde fino de las plantillas. Es el
- * formato de las tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que
- * les da su separación visual.
+ * Arma una tabla informativa de dos columnas (etiqueta / valor) con el borde fino de las plantillas.
+ * Es el formato de las tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo
+ * que les da su separación visual.
  */
 export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
   return {

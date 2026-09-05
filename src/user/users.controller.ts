@@ -1,4 +1,3 @@
-// NestJS core
 import {
   Body,
   Controller,
@@ -11,16 +10,13 @@ import {
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 
-// Swagger
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Auth
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 
-// Use cases
 import { UploadSignatureImageUseCase } from 'src/signature/applications/upload-signature-image.use-case';
 import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availability.use-case';
 import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
@@ -28,13 +24,11 @@ import { UpdateMyPersonalInformationUseCase } from './applications/update-my-per
 import { ChangeMyPasswordUseCase } from './applications/change-my-password.use-case';
 import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
 
-// DTOs
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
 import { ChangeMyPasswordDto } from './dto/change-my-password.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { CreateSignatureDto } from 'src/signature/dto/create-signature.dto';
 
-// Docs
 import { ApiCheckRfcAvailability } from './docs/api-check-rfc-availability.docs';
 import { ApiGetMyProfile } from './docs/api-get-my-profile.docs';
 import { ApiUpdateMyPersonalInformation } from './docs/api-update-my-personal-information.docs';

@@ -1,4 +1,3 @@
-// External dependencies
 import {
   ConflictException,
   Injectable,
@@ -8,20 +7,16 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 
-// DTOs
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
 
-// Entities
 import { UserEntity } from './entities/user.entity';
 import { PersonalInformationEntity } from './entities/personal-information.entity';
 
-// Enums
 import { UserRoles } from './enums/user-roles';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from './enums/signing-credential-status.enum';
 
-// Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { SignatureService } from 'src/signature/signature.service';
 import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
@@ -56,13 +51,12 @@ export class UserService {
   ) {}
 
   /**
-   * Alta transaccional de un usuario junto con su fila de información personal. Las dos van en
-   * la misma transacción porque `users.personal_information_id` es obligatorio: si el segundo
-   * save fallara con el primero ya confirmado, quedaría una fila de información personal
-   * huérfana que nadie volvería a referenciar.
+   * Da de alta al usuario junto con su fila de información personal en una sola transacción:
+   * `users.personal_information_id` es obligatorio, y si el segundo save fallara con el primero ya
+   * confirmado quedaría una fila de información personal huérfana.
    *
-   * La normalización a mayúsculas/minúsculas se hace acá y no en el caso de uso porque es la
-   * forma canónica con la que la columna se consulta después (ver `isRfcRegistered`).
+   * Normaliza mayúsculas/minúsculas acá y no en el caso de uso porque ésa es la forma canónica con
+   * la que la columna se consulta después (ver `isRfcRegistered`).
    */
   async saveNewUser(createUserDto: CreateUserDto): Promise<UserEntity> {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -178,12 +172,12 @@ export class UserService {
   }
 
   /**
-   * Perfil de un usuario activo, con la información personal aplanada al primer nivel y, si se
-   * piden, las URLs prefirmadas de firma y credencial oficial.
+   * Devuelve el perfil de un usuario activo con la información personal aplanada al primer nivel y,
+   * si se piden, las URLs prefirmadas de firma y credencial oficial.
    *
-   * Lo comparten `GET /user/:id` y `GET /auth/me`: los dos publican exactamente el mismo perfil
-   * y sólo cambia de dónde sale el identificador, así que la lectura vive acá y el envoltorio
-   * de respuesta en cada caso de uso.
+   * Lo comparten `GET /user/:id` y `GET /auth/me`: publican el mismo perfil y sólo cambia de dónde
+   * sale el identificador, así que la lectura vive acá y el envoltorio de respuesta en cada caso de
+   * uso.
    */
   async getActiveUserProfile(
     id: string,
@@ -252,9 +246,9 @@ export class UserService {
       secondaryEmail: personalInformation?.secondaryEmail ?? null,
       rfc: personalInformation?.rfc ?? null,
       /**
-       * Derivada explícita, igual que en el snapshot de `GET /users/me`: el frontend decide con
-       * ella si habilita las acciones de firma Simple, y calcularla de este lado evita que cada
-       * pantalla vuelva a comparar contra el enum y se equivoque distinto.
+       * Derivada explícita, igual que en el snapshot de `GET /users/me`: el frontend decide con ella
+       * si habilita las acciones de firma Simple, y calcularla acá evita que cada pantalla vuelva a
+       * comparar contra el enum y se equivoque distinto.
        */
       signingCredentialConfigured:
         user.signingCredentialStatus ===
@@ -310,7 +304,10 @@ export class UserService {
     return this.userRepository.findOne({ where: { email, isDeleted: false } });
   }
 
-  /** Actualiza el hash de contraseña de UserEntity (ver historia "Recuperación de Contraseña mediante Código de Verificación OTP" — AuthService.resetPassword). No sincroniza AccountEntity: ver AccountService.updatePasswordForUser. */
+  /**
+   * Actualiza el hash de contraseña de UserEntity. No sincroniza AccountEntity: de eso se encarga
+   * `AccountService.updatePasswordForUser`, contra la que `login()` autentica.
+   */
   async updatePassword(userId: string, hashedPassword: string): Promise<void> {
     await this.userRepository.update(userId, { password: hashedPassword });
   }
@@ -504,17 +501,16 @@ export class UserService {
   }
 
   /**
-   * Corrige los datos de un registro que todavía no verifica su correo (ver AuthService
-   * .updatePreRegistration, que es quien valida la contraseña antes de llamar aquí).
+   * Corrige los datos de un registro que todavía no verifica su correo (`AuthService
+   * .updatePreRegistration` valida la contraseña antes de llamar acá).
    *
-   * Existe porque un error de dedo en el correo dejaba la cuenta imposible de activar: el código
-   * de verificación se iba a una dirección inexistente y volver a registrarse tampoco servía —
-   * el CURP ya estaba tomado por ese mismo pre-registro, así que `createFromSignup` entraba por
-   * su "Caso A" y reenviaba el código *otra vez al correo equivocado*, en un bucle sin salida.
+   * Existe porque un error de dedo en el correo dejaba la cuenta imposible de activar: el código se
+   * iba a una dirección inexistente y volver a registrarse tampoco servía —el CURP ya estaba tomado
+   * por ese pre-registro, así que `createFromSignup` entraba por su "Caso A" y reenviaba el código
+   * otra vez al correo equivocado, en un bucle sin salida.
    *
-   * Cuando el correo cambia se emite un código nuevo y se manda a la dirección corregida. Los
-   * códigos anteriores no se invalidan explícitamente porque `verifyAndConsume` solo mira el
-   * último emitido sin usar, y los previos caducan solos a los 15 minutos.
+   * Al cambiar el correo emite un código nuevo a la dirección corregida. No invalida los anteriores:
+   * `verifyAndConsume` sólo mira el último emitido sin usar, y los previos caducan a los 15 minutos.
    */
   async updatePreRegistration(
     user: UserEntity,
@@ -724,9 +720,9 @@ export class UserService {
   }
 
   /**
-   * Construye el snapshot estable del perfil unificado del usuario que se
-   * cachea en Redis. Deliberadamente excluye URLs prefirmadas de MinIO
-   * (secureUrl/expiresIn) porque expiran y quedarían obsoletas en el cache.
+   * Construye el snapshot estable del perfil unificado que se cachea en Redis. Excluye las URLs
+   * prefirmadas de MinIO (`secureUrl`/`expiresIn`) a propósito: expiran y quedarían obsoletas en el
+   * cache.
    */
   buildProfileSnapshot(
     user: UserEntity,
@@ -761,9 +757,8 @@ export class UserService {
   }
 
   /**
-   * Cachea en Redis DB 0, bajo la key del CURP, el snapshot del perfil
-   * unificado del usuario. Un fallo de Redis nunca debe tumbar la operación
-   * que lo dispara.
+   * Cachea en Redis DB 0, bajo la key del CURP, el snapshot del perfil unificado. Un fallo de Redis
+   * nunca debe tumbar la operación que lo dispara.
    */
   async refreshCurpCache(
     user: UserEntity,
@@ -782,9 +777,8 @@ export class UserService {
   }
 
   /**
-   * Snapshot del perfil cacheado en Redis DB 0 bajo la key del CURP, o `null` si no hay nada
-   * guardado. Devolver `null` en vez de reconstruirlo es lo que permite que quien llama decida
-   * qué hacer con un cache frío.
+   * Lee el snapshot cacheado bajo la key del CURP, o `null` si no hay nada guardado. Devolver
+   * `null` en vez de reconstruirlo deja que quien llama decida qué hacer con un cache frío.
    */
   async readCachedProfile(curp: string): Promise<unknown | null> {
     const raw = await this.redisService.get(curp);
@@ -793,10 +787,9 @@ export class UserService {
   }
 
   /**
-   * Refresca el cache de Redis por CURP con el estado actual del usuario en
-   * PostgreSQL. Se usa desde operaciones ajenas a este servicio (p. ej. subir
-   * la firma digital) que modifican datos incluidos en el snapshot cacheado
-   * pero no pasan por `updatePersonalInformation`/`updateStatus`.
+   * Refresca el cache por CURP con el estado actual en PostgreSQL. Lo usan las operaciones ajenas a
+   * este servicio —subir la firma digital, por ejemplo— que cambian datos del snapshot sin pasar por
+   * `updatePersonalInformation`/`updateStatus`.
    */
   async refreshCurpCacheForUser(userId: string): Promise<void> {
     const user = await this.userRepository.findOne({
@@ -829,8 +822,8 @@ export class UserService {
   }
 
   /**
-   * Si algún registro de información personal ya usa ese RFC. Se normaliza a mayúsculas porque
-   * la columna guarda el RFC en su forma canónica y una consulta en minúsculas no encontraría
+   * Comprueba si algún registro de información personal ya usa ese RFC. Normaliza a mayúsculas
+   * porque la columna lo guarda en su forma canónica y una consulta en minúsculas no encontraría
    * nada.
    */
   async isRfcRegistered(rfc: string): Promise<boolean> {

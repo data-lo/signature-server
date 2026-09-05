@@ -26,15 +26,14 @@ import { VerificationCodeService } from '../verification-code.service';
 import { AdvancedSignatureInput, DocumentService } from '../document.service';
 
 /**
- * `PATCH /document/:id/sign`: registra la firma del usuario autenticado.
+ * Registra la firma del usuario autenticado (`PATCH /document/:id/sign`).
  *
- * Es la acción central del producto y su orden importa: se valida la e.firma antes de reclamar
- * el turno, se reclama el turno con un UPDATE condicionado antes de tocar MinIO, y se estampa
- * el PDF antes de dar la firma por buena. Cada uno de esos límites existe para que un fallo a
- * media operación no deje al firmante marcado como que ya firmó sin una firma detrás.
+ * Es la acción central del producto y su orden importa: valida la e.firma antes de reclamar el
+ * turno, reclama el turno antes de tocar MinIO y estampa el PDF antes de dar la firma por buena.
+ * Cada límite existe para que un fallo a media operación no deje al firmante marcado como que ya
+ * firmó sin una firma detrás.
  *
- * Si soy el último firmante pendiente, acá mismo se finaliza el documento: se estampa, se sella
- * y se avisa a todos.
+ * Si es el último firmante pendiente, acá mismo finaliza el documento: estampa, sella y avisa.
  */
 @Injectable()
 export class SignDocumentUseCase {
@@ -134,13 +133,11 @@ export class SignDocumentUseCase {
       }
     }
 
-    // Claim atómico (bug corregido): un UPDATE condicionado a status=PENDING es lo único que
-    // realmente cierra la ventana de carrera entre dos peticiones casi simultáneas para el
-    // mismo firmante (doble clic, dos pestañas, reintento por timeout) — la validación en
-    // memoria de arriba (`myParticipant.status !== PENDING`) no alcanza porque ambas peticiones
-    // pueden pasarla antes de que cualquiera escriba. Si `affected !== 1`, alguien más ya ganó
-    // la carrera; se aborta aquí, antes de tocar MinIO/estampado/correos, así que no hay
-    // estampado duplicado, correos duplicados a todos los colaboradores, ni auditoría duplicada.
+    // Reclama el turno con un UPDATE condicionado a status=PENDING: es lo único que cierra la
+    // ventana de carrera entre dos peticiones casi simultáneas del mismo firmante (doble clic, dos
+    // pestañas, reintento por timeout), porque la validación en memoria de arriba la pasan ambas
+    // antes de que cualquiera escriba. Con `affected !== 1` alguien ya ganó y se aborta antes de
+    // tocar MinIO, el estampado y los correos, así que nada se duplica.
     const claim = await this.collaboratorRepository.update(
       { id: myParticipant.id, status: SIGNEE_STATUS_ENUM.PENDING },
       { status: SIGNEE_STATUS_ENUM.SIGNED, signedAt: new Date() },
@@ -160,37 +157,30 @@ export class SignDocumentUseCase {
       // privada ni la contraseña, ver docblock de `CollaboratorEntity.advancedSignature`.
       myParticipant.advancedSignature = advancedSignatureResult;
     } else {
-      // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
-      // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()
-      // (que corre después, cuando firma el ÚLTIMO firmante) volvería a leer la firma EN VIVO de
-      // cada colaborador, y un firmante que desactivó su firma entre que firmó y que el último
-      // terminó quedaría con un PNG en blanco estampado en el PDF legal final, sin ningún error.
-      // Se toma después del claim a propósito: si el claim se pierde, no se desperdicia esta
-      // llamada a MinIO.
+      // Toma el snapshot inmutable AHORA, en el momento real de la firma (ver el docblock de
+      // `signatureSnapshotObjectKey`). Sin él, `finalizeSignedDocument()` —que corre cuando firma el
+      // ÚLTIMO— releería la firma EN VIVO de cada colaborador, y quien la hubiera desactivado entre
+      // medias quedaría con un PNG en blanco estampado en el PDF legal, sin ningún error. Va después
+      // del claim para no desperdiciar la llamada a MinIO si el claim se pierde.
       myParticipant.signatureSnapshotObjectKey =
         await this.documentService.snapshotSignatureImage(
           myParticipant.account!.user as UserEntity,
         );
 
       /**
-       * Se persiste ACÁ y no en el `save` del final del método.
+       * Persiste el snapshot ACÁ y no en el `save` del final del método.
        *
        * El sellado de firma simple corre dentro de `finalizeSignedDocument` —antes de ese save— y
-       * RELEE los firmantes de la base para armar la evidencia que manda al PSC
-       * (`SendCompletedSimpleSignatureToSealUseCase.findDocumentWithSigners`). Con el snapshot
-       * todavía sin escribir, el del último firmante llegaba en NULL y el caso de uso caía a la
-       * firma EN VIVO de su perfil.
+       * RELEE los firmantes de la base para armar la evidencia del PSC. Con el snapshot sin escribir,
+       * el del último firmante llegaba en NULL y el caso de uso caía a la firma EN VIVO de su perfil,
+       * mientras que el estampado sí lo veía por referencia en memoria: el PDF quedaba firmado con el
+       * snapshot y la evidencia sellada con otra rúbrica, justo lo que el snapshot existe para
+       * impedir. Coinciden mientras el usuario no cambie su firma, así que la divergencia no daba
+       * error, sólo una evidencia que podía no corresponder al documento.
        *
-       * El estampado, en cambio, sí veía el snapshot: recibe el arreglo de colaboradores por
-       * referencia y lee el valor en memoria. Es decir que el PDF se firmaba con el snapshot y la
-       * evidencia se sellaba con la firma en vivo — dos rúbricas que el snapshot existe justamente
-       * para garantizar que sean la misma. Coinciden mientras el usuario no cambie su firma, así
-       * que la divergencia no se manifestaba como error sino como una evidencia que podía no
-       * corresponder al documento.
-       *
-       * Un UPDATE puntual en vez de adelantar el `save` completo: ese save persiste además la
-       * geolocalización y, en firma avanzada, la firma electrónica, y moverlo entero cambiaría
-       * cuándo se escriben cosas que no tienen nada que ver con esto.
+       * Un UPDATE puntual en vez de adelantar el `save` completo: ése persiste además la
+       * geolocalización y, en firma avanzada, la firma electrónica, y moverlo entero cambiaría cuándo
+       * se escriben cosas ajenas a esto.
        */
       await this.collaboratorRepository.update(myParticipant.id, {
         signatureSnapshotObjectKey: myParticipant.signatureSnapshotObjectKey,
@@ -241,14 +231,12 @@ export class SignDocumentUseCase {
     // valor no tiene efecto.
     await this.collaboratorRepository.save(myParticipant);
 
-    // Bug corregido: este evento alimenta el encadenamiento de DocumentTransaction y del ledger
-    // global de auditoría (ver Kafka -> DocumentEventsConsumer) — se dispara AQUÍ, después de
-    // que el snapshot de la firma ya quedó tomado y persistido, no justo tras el claim atómico.
-    // Si se disparara antes y `snapshotSignatureImage` (llamada a MinIO) fallara, el evento ya
-    // publicado dejaría un registro de "firmado" en ambas cadenas para una firma cuyo
-    // signatureSnapshotObjectKey nunca se llegó a guardar — y el firmante, al reintentar, se
-    // encontraría bloqueado por el claim atómico ("ya respondiste") sin poder corregirlo. Se
-    // dispara por CADA firmante (no solo el último, a diferencia de emitSigned más abajo).
+    // Emite DESPUÉS de que el snapshot de la firma quedó tomado y persistido, no justo tras el claim
+    // atómico: este evento alimenta el encadenamiento de DocumentTransaction y del ledger de
+    // auditoría, y emitirlo antes dejaría un registro de "firmado" en ambas cadenas para una firma
+    // cuyo `signatureSnapshotObjectKey` nunca llegó a guardarse si MinIO fallaba —con el firmante
+    // bloqueado por el claim atómico al reintentar. Se emite por CADA firmante, a diferencia de
+    // `emitSigned` más abajo.
     this.documentEventsProducer.emitCollaboratorSigned({
       documentId,
       fileName: document.fileName,

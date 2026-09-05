@@ -1,17 +1,13 @@
-// Core NestJS
 import { Module } from '@nestjs/common';
 import { join } from 'path';
 
-// Config & Database
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 
-// App
 import { AppService } from './app.service';
 import { AppController } from './app.controller';
 
-// Modules
 import { UserModule } from './user/user.module';
 import { AuthModule } from './auth/auth.module';
 import { MongooseModule } from '@nestjs/mongoose';

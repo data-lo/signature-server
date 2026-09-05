@@ -94,8 +94,8 @@ export class AuditService {
   }
 
   /**
-   * Registros de un documento, en orden de encadenamiento. Devuelve la lista cruda (cifrada):
-   * quién puede leerla y qué se hace si está vacía lo decide el caso de uso.
+   * Devuelve los registros de un documento en orden de encadenamiento, crudos y cifrados: quién
+   * puede leerlos y qué hacer si la lista está vacía lo decide el caso de uso.
    */
   async findByDocumentId(documentId: string): Promise<AuditRecord[]> {
     return this.auditModel
@@ -112,8 +112,8 @@ export class AuditService {
   }
 
   /**
-   * Página de registros más recientes primero, junto con el total que cumple el filtro. El
-   * filtro y el tamaño de página los arma quien llama: acá sólo se ejecuta la consulta.
+   * Devuelve una página de registros, del más reciente al más antiguo, junto con el total que
+   * cumple el filtro. El filtro y el tamaño de página los arma quien llama.
    */
   async findPage(
     filter: Record<string, any>,

@@ -12,22 +12,20 @@ import { DiditWebhookController } from './didit-webhook.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
 
 /**
- * Punto de entrada único de los webhooks de proveedores externos.
+ * Punto de entrada único de los webhooks de proveedores externos: recibe el cuerpo crudo, verifica
+ * la firma del proveedor, registra la entrega de forma idempotente en `webhook_events` y delega al
+ * caso de uso del dominio correspondiente.
  *
- * Responsabilidades del módulo: recibir el cuerpo crudo, verificar la firma del proveedor,
- * registrar la entrega de forma idempotente en `webhook_events` y delegar al caso de uso del
- * dominio correspondiente. Nada más — no hay aquí una sola regla sobre cuándo se aprueba una
- * identidad o cómo cambia una suscripción; eso vive en `identity-verification` y en `payments`.
+ * Acá no hay una sola regla sobre cuándo se aprueba una identidad o cómo cambia una suscripción; eso
+ * vive en `identity-verification` y en `payments`.
  *
- * `PaymentsModule` se importa por dos piezas que pertenecen al dominio de pagos:
- * `StripePaymentService` (el cliente ya configurado, con el que se verifica la firma) y
- * `StripeWebhookService` (el destinatario de la delegación). La dependencia va en un solo
- * sentido: `payments` no conoce a `webhooks`.
+ * Importa `PaymentsModule` por dos piezas del dominio de pagos: `StripePaymentService` —el cliente ya
+ * configurado con el que se verifica la firma— y `StripeWebhookService`, el destinatario de la
+ * delegación. Importa `IdentityVerificationModule` por `ProcessDiditVerificationResultUseCase`, que
+ * interpreta el resultado de una sesión de Didit y mueve el estado del usuario.
  *
- * `IdentityVerificationModule` se importa por `ProcessDiditVerificationResultUseCase`, que es
- * quien interpreta el resultado de una sesión de Didit y mueve el estado del usuario. La
- * dependencia va también en un solo sentido: `identity-verification` no conoce a `webhooks` — no
- * tiene controller de webhooks ni verificación de firma, por diseño.
+ * Las dos dependencias van en un solo sentido: ni `payments` ni `identity-verification` conocen a
+ * `webhooks`, y ninguno tiene controller de webhooks ni verificación de firma, por diseño.
  */
 @Module({
   imports: [

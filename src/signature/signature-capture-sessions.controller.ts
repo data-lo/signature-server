@@ -1,4 +1,3 @@
-// External dependencies
 import {
   Body,
   Controller,
@@ -11,31 +10,25 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-// Decorators
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 
-// Interfaces
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
 import { SignatureCaptureSessionCreated } from './interfaces/signature-capture-session-created.interface';
 import { SignatureCaptureSessionStatus } from './interfaces/signature-capture-session-status.interface';
 
-// Use cases
 import { CreateSignatureCaptureSessionUseCase } from './applications/create-signature-capture-session.use-case';
 import { ClaimMobileSignatureSessionUseCase } from './applications/claim-mobile-signature-session.use-case';
 import { SaveHandwrittenSignatureUseCase } from './applications/save-handwritten-signature.use-case';
 import { GetSignatureCaptureSessionStatusUseCase } from './applications/get-signature-capture-session-status.use-case';
 import { CancelSignatureCaptureSessionUseCase } from './applications/cancel-signature-capture-session.use-case';
 
-// DTOs
 import { CreateSignatureCaptureSessionDto } from './dto/create-signature-capture-session.dto';
 import { ClaimSignatureCaptureSessionDto } from './dto/claim-signature-capture-session.dto';
 
-// Constants
 import { SIGNATURE_CAPTURE_FILE_FIELD } from './constants/signature-capture.constants';
 
-// Docs
 import { ApiCreateSignatureCaptureSession } from './docs/api-create-signature-capture-session.docs';
 import { ApiClaimSignatureCaptureSession } from './docs/api-claim-signature-capture-session.docs';
 import { ApiGetSignatureCaptureSession } from './docs/api-get-signature-capture-session.docs';
@@ -45,14 +38,14 @@ import { ApiCancelSignatureCaptureSession } from './docs/api-cancel-signature-ca
 /**
  * Captura de la firma manuscrita, en la PC o en el teléfono.
  *
- * **Ningún endpoint acá es público.** El flujo cruza dos dispositivos, y lo que impide que el
- * segundo sea el de un desconocido es precisamente que el teléfono tenga que autenticarse como
- * el mismo usuario antes de tocar la sesión. Un endpoint de reclamo abierto "porque ya lleva un
- * token secreto" convertiría cualquier QR fotografiado en una firma ajena.
+ * **Ningún endpoint acá es público.** El flujo cruza dos dispositivos, y lo que impide que el segundo
+ * sea el de un desconocido es que el teléfono tenga que autenticarse como el mismo usuario antes de
+ * tocar la sesión. Un endpoint de reclamo abierto "porque ya lleva un token secreto" convertiría
+ * cualquier QR fotografiado en una firma ajena.
  *
  * El `userId` sale siempre de `@CurrentUser()`, nunca del cuerpo, del path ni del QR.
  *
- * El controller sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
+ * Sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
  */
 @ApiTags('Signature Capture')
 @ApiBearerAuth('access-token')

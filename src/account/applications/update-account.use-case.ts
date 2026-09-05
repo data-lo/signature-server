@@ -9,16 +9,14 @@ import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
 import { AccountData } from '../interfaces/response/account-response';
 
 /**
- * `PATCH /account/:id`: edita el perfil de la organización detrás de una cuenta.
+ * Edita el perfil de la organización detrás de una cuenta (`PATCH /account/:id`).
  *
- * Lo que se escribe vive en `organizations`, no en `accounts`: la cuenta es la membresía y no
- * tiene nombre ni domicilio propios. Por eso una cuenta personal no cambia nada aunque el DTO
- * traiga campos de organización.
+ * Escribe en `organizations`, no en `accounts`: la cuenta es la membresía y no tiene nombre ni
+ * domicilio propios, así que una cuenta personal no cambia aunque el DTO traiga esos campos.
  *
- * Al final se refresca el catálogo cacheado de **todos** los miembros activos, no sólo el de
- * quien editó: el nombre de la organización aparece en el selector de cuentas de cada uno, y si
- * sólo se refrescara el del editor los demás seguirían viendo el nombre viejo hasta que su key
- * de Redis se reconstruyera por otro motivo.
+ * Refresca el catálogo cacheado de **todos** los miembros activos, no sólo el de quien editó: el
+ * nombre aparece en el selector de cuentas de cada uno, y los demás seguirían viendo el viejo hasta
+ * que su key de Redis se reconstruyera por otro motivo.
  */
 @Injectable()
 export class UpdateAccountUseCase {

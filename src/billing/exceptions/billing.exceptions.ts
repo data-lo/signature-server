@@ -19,17 +19,15 @@ export class MissingActiveAccountException extends BadRequestException {
 }
 
 /**
- * El precio pedido no existe en el catálogo local de planes recurrentes, o existe pero no se
- * puede vender ahora mismo (precio archivado, plan dado de baja, o fuera de su ventana de
- * vigencia).
+ * El precio pedido no existe en el catálogo local de planes recurrentes, o existe pero no se puede
+ * vender ahora (archivado, plan dado de baja, o fuera de su ventana de vigencia).
  *
- * Es la guarda que impide abrir una sesión de pago por algo que no ofrecemos: sin ella,
- * cualquier usuario autenticado podría mandar un `price_...` de otro producto, archivado con un
- * importe viejo, o de un paquete de documentos (que no es una suscripción), y obtener una URL de
- * pago perfectamente válida.
+ * Es la guarda que impide abrir una sesión de pago por algo que no ofrecemos: sin ella cualquier
+ * usuario autenticado podría mandar un `price_...` ajeno, archivado con un importe viejo, o de un
+ * paquete, y obtener una URL de pago válida.
  *
- * 404 y no 400: desde fuera es indistinguible "ese precio no existe" de "ese precio ya no se
- * ofrece", y responder distinto permitiría sondear el catálogo interno.
+ * Responde 404 y no 400: desde fuera "ese precio no existe" y "ya no se ofrece" son
+ * indistinguibles, y responder distinto permitiría sondear el catálogo interno.
  */
 export class SubscriptionPriceNotAvailableException extends NotFoundException {
   constructor() {

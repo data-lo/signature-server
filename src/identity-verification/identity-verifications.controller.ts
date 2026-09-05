@@ -15,11 +15,11 @@ import { ApiGetCurrentIdentityVerification } from './docs/api-get-current-identi
  * Endpoints autenticados de la pantalla "Identidad y firma".
  *
  * Acá NO se recibe el resultado de Didit: el veredicto llega por webhook firmado a
- * `POST /api/v1/webhooks/didit`, en el módulo `webhooks`. El callback del navegador sólo
- * devuelve al usuario a la aplicación, y por eso no existe un endpoint de callback en el
- * backend — si lo hubiera, cualquiera podría llamarlo para "aprobarse" a sí mismo.
+ * `POST /api/v1/webhooks/didit`. El callback del navegador sólo devuelve al usuario a la
+ * aplicación, y por eso no existe un endpoint de callback en el backend —si lo hubiera, cualquiera
+ * podría llamarlo para "aprobarse" a sí mismo.
  *
- * El controller sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
+ * Sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
  */
 @ApiTags('Identity Verification')
 @ApiBearerAuth('access-token')

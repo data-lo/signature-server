@@ -1,15 +1,13 @@
 /**
  * Contrato de `POST /seal/simple-signature`: qué mandamos a Seal Service cuando un documento de
- * firma simple queda firmado por todos sus firmantes.
+ * firma simple queda firmado por todos.
  *
- * Interfaces y no clases con `class-validator`, a diferencia de `SealDocumentDto`: ese DTO
- * también entra por HTTP (`POST /seal` en `SealController`) y por eso se valida; éste es
- * únicamente de salida. Quien garantiza que ningún campo obligatorio viaje vacío es
- * `SendCompletedSimpleSignatureToSealUseCase`, que falla con el dato y el firmante señalados
- * antes de tocar la red.
+ * Son interfaces y no clases con `class-validator`, a diferencia de `SealDocumentDto`: ése también
+ * entra por HTTP y por eso se valida, mientras que éste es únicamente de salida. Quien garantiza que
+ * ningún campo obligatorio viaje vacío es `SendCompletedSimpleSignatureToSealUseCase`, que falla
+ * señalando el dato y el firmante antes de tocar la red.
  *
- * Todas las fechas son ISO 8601 en UTC (`Date.toISOString()`), el mismo formato que ya usa el
- * sellado de firma avanzada.
+ * Todas las fechas son ISO 8601 en UTC, el mismo formato que usa el sellado de firma avanzada.
  */
 export interface SimpleSignatureDTO {
   documentId: string;

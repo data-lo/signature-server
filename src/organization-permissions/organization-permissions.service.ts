@@ -7,29 +7,25 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 
-// Entities
 import { OrganizationPermissionEntity } from './entities/organization-permission.entity';
 import { AccountPermissionEntity } from './entities/account-permission.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 
-// Services
 import { RolesService } from 'src/roles/roles.service';
 
-// Enums
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 /**
- * Capacidades sobre el catálogo administrativo de permisos por organización y su asignación
- * directa a un miembro (`accounts.id`).
+ * Gestiona el catálogo administrativo de permisos por organización y su asignación directa a un
+ * miembro (`accounts.id`).
  *
- * Deliberadamente independiente del motor de RBAC (`RolesService`), del que sólo se reutiliza el
- * mecanismo "¿el llamador es ADMIN activo de esta organización?" para proteger estos endpoints
- * — ver `assertHasOrganizationPermission` en `AccountMemberService`/`AccountService`, duplicado
- * aquí por el mismo motivo que en esos dos servicios: cada uno resuelve la membresía del
- * llamador de forma distinta.
+ * Es independiente del motor de RBAC (`RolesService`), del que sólo reutiliza el mecanismo "¿el
+ * llamador es ADMIN activo de esta organización?" para proteger estos endpoints. Está duplicado
+ * respecto de `AccountMemberService`/`AccountService` por el mismo motivo que entre ellos dos: cada
+ * uno resuelve la membresía del llamador de forma distinta.
  *
- * Los flujos de cada endpoint viven en `applications/`; acá sólo están las piezas que comparten.
+ * Los flujos de cada endpoint viven en `applications/`; acá sólo las piezas que comparten.
  */
 @Injectable()
 export class OrganizationPermissionsService {
@@ -94,9 +90,9 @@ export class OrganizationPermissionsService {
   }
 
   /**
-   * Reemplazo total y transaccional: borra las asignaciones actuales del miembro e inserta las
-   * nuevas dentro de la misma transacción, para que "guardar" nunca deje al miembro con una
-   * lista de permisos parcial si algo falla a medio camino.
+   * Reemplaza por completo los permisos del miembro dentro de una transacción: borra las
+   * asignaciones actuales e inserta las nuevas a la vez, para que "guardar" nunca lo deje con una
+   * lista parcial si algo falla a medio camino.
    */
   async replaceMemberPermissions(
     accountId: string,
@@ -146,8 +142,8 @@ export class OrganizationPermissionsService {
 
   /**
    * `organization_permissions` tiene un `@Unique(['organizationId', 'name'])` — sin este check
-   * previo, un nombre repetido llega a violar la constraint en la base de datos y termina como
-   * un 500 genérico (QueryFailedError sin capturar) en vez de un error claro para el usuario.
+   * previo, un nombre repetido llega a violar la constraint en la base de datos y termina como un
+   * 500 genérico (QueryFailedError sin capturar) en vez de un error claro para el usuario.
    */
   async assertNameNotTaken(
     organizationId: string,
@@ -205,9 +201,9 @@ export class OrganizationPermissionsService {
   }
 
   /**
-   * Solo un miembro activo con permiso ORGANIZATION:{action} (rol ADMIN) puede gestionar el
-   * catálogo de permisos o la asignación de un miembro — mismo criterio y mismo texto que
-   * `AccountMemberService.assertHasOrganizationPermission`, duplicado aquí porque este servicio
+   * Exige que el llamador sea un miembro activo con permiso ORGANIZATION:{action} (rol ADMIN) para
+   * gestionar el catálogo de permisos o la asignación de un miembro. Mismo criterio y mismo texto
+   * que `AccountMemberService.assertHasOrganizationPermission`, duplicado acá porque este servicio
    * resuelve la membresía del llamador de forma independiente.
    */
   async assertHasOrganizationPermission(

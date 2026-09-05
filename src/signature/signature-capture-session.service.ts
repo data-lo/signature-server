@@ -16,14 +16,14 @@ import { SIGNATURE_CAPTURE_SESSION_TTL_MINUTES } from './constants/signature-cap
 import { hashSignatureCaptureToken } from './utils/signature-capture-token.util';
 
 /**
- * Mecánica compartida de las sesiones de captura: buscarlas, materializar su vencimiento y
- * comprobar de quién son.
+ * Mecánica compartida de las sesiones de captura: buscarlas, materializar su vencimiento y comprobar
+ * de quién son.
  *
- * Es el equivalente de `SignatureService` para esta tabla — trabajo técnico, ninguna regla de
- * negocio. Quién puede abrir una captura, qué exige cada canal y qué significa completarla vive
- * en los casos de uso de `applications/`; acá sólo está lo que los cinco necesitan hacer igual,
- * que es precisamente lo que no puede divergir: si un endpoint materializara el vencimiento y
- * otro no, el mismo QR estaría vencido o vivo según por dónde se lo mirara.
+ * Es el equivalente de `SignatureService` para esta tabla: trabajo técnico, ninguna regla de negocio.
+ * Quién puede abrir una captura, qué exige cada canal y qué significa completarla vive en
+ * `applications/`; acá sólo lo que los cinco casos de uso necesitan hacer igual, que es precisamente
+ * lo que no puede divergir: si un endpoint materializara el vencimiento y otro no, el mismo QR
+ * estaría vencido o vivo según por dónde se lo mirara.
  */
 @Injectable()
 export class SignatureCaptureSessionService {

@@ -9,16 +9,14 @@ import { VerificationCodeService } from '../verification-code.service';
 import { DocumentService } from '../document.service';
 
 /**
- * `POST /document/:id/verification-codes`: emite y envía por correo un código de verificación para que el firmante autenticado pueda
- * firmar un documento con `requiresVerification=true`.
+ * Emite y envía por correo el código de verificación con el que el firmante autenticado puede firmar
+ * un documento con `requiresVerification=true` (`POST /document/:id/verification-codes`).
  *
- * Bug corregido: el envío del correo se hacía sin protección después de persistir el código, así
- * que una caída del proveedor (SendGrid) tumbaba toda la petición con un 500 — el código ya
- * estaba emitido en la base, pero la pantalla de firma nunca llegaba a mostrar el campo para
- * capturarlo y el firmante quedaba sin poder firmar *ni rechazar*. El registro de usuarios ya
- * trataba este mismo fallo como no fatal (ver `UserService`: advierte y continúa); acá se
- * unifica ese criterio: el resultado del envío se reporta en `emailDelivered` para que la
- * interfaz pueda avisar y ofrecer el reenvío, en vez de dejar al usuario sin salida.
+ * El envío es best-effort y su resultado viaja en `emailDelivered`, para que la interfaz pueda
+ * avisar y ofrecer el reenvío. Sin esa protección, una caída de SendGrid tumbaba la petición con un
+ * 500 aunque el código ya estuviera emitido: la pantalla nunca mostraba el campo para capturarlo y
+ * el firmante quedaba sin poder firmar *ni rechazar*. Es el mismo criterio que ya aplica el registro
+ * de usuarios.
  */
 @Injectable()
 export class RequestDocumentVerificationCodeUseCase {

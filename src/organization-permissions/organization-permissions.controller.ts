@@ -15,13 +15,11 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { CreateOrganizationPermissionDto } from './dto/create-organization-permission.dto';
 import { UpdateOrganizationPermissionDto } from './dto/update-organization-permission.dto';
 
-// Use cases
 import { GetOrganizationPermissionsUseCase } from './applications/get-organization-permissions.use-case';
 import { CreateOrganizationPermissionUseCase } from './applications/create-organization-permission.use-case';
 import { UpdateOrganizationPermissionUseCase } from './applications/update-organization-permission.use-case';
 import { DeleteOrganizationPermissionUseCase } from './applications/delete-organization-permission.use-case';
 
-// Docs
 import { ApiGetOrganizationPermissions } from './docs/api-get-organization-permissions.docs';
 import { ApiCreateOrganizationPermission } from './docs/api-create-organization-permission.docs';
 import { ApiUpdateOrganizationPermission } from './docs/api-update-organization-permission.docs';

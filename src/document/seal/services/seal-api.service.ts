@@ -31,16 +31,14 @@ export class SealApiService {
   constructor(private readonly configService: ConfigService) {}
 
   /**
-   * Envía a Seal Service el arreglo de firmas del documento y devuelve su respuesta (hash
-   * canónico + sello de tiempo + constancia NOM-151), que el caso de uso persiste.
+   * Envía a Seal Service el arreglo de firmas del documento y devuelve su respuesta —hash canónico,
+   * sello de tiempo y constancia NOM-151—, que el caso de uso persiste.
    *
-   * La autenticación es por API key en el header `x-api-key`, contra la variable `API_KEY` de
-   * Seal Service. La clave sale de `SEAL_SERVICE_API_KEY` (ver `.env.example`) y nunca se registra
-   * en los logs.
+   * Autentica por API key en el header `x-api-key`, tomada de `SEAL_SERVICE_API_KEY` y nunca
+   * registrada en los logs.
    *
-   * Un 401 del proveedor (clave equivocada o ausente) se traduce a `SealProviderResponseException`
-   * como cualquier otro error HTTP suyo: el sellado no ocurre, queda logueado, y la firma del
-   * documento no se ve afectada (ver `DocumentService.sealAdvancedSignatures`).
+   * Un 401 del proveedor se traduce a `SealProviderResponseException` como cualquier otro error
+   * HTTP suyo: el sellado no ocurre, queda logueado, y la firma del documento no se ve afectada.
    */
   async generateDocumentSeals(
     dto: SealDocumentDto,
@@ -96,16 +94,14 @@ export class SealApiService {
   /**
    * Envía a Seal Service las firmas simples de un documento ya completo.
    *
-   * El cuerpo lleva datos personales del firmante y su rúbrica en Base64, así que —a diferencia
-   * de `generateDocumentSeals`— acá no se registra ni un fragmento del DTO: ni al enviarlo ni al
-   * fallar. De la respuesta de error del proveedor sólo se toma el código HTTP, porque un cuerpo
-   * de error suele venir con un eco de lo que se le mandó.
+   * El cuerpo lleva datos personales del firmante y su rúbrica en Base64, así que —a diferencia de
+   * `generateDocumentSeals`— no registra ni un fragmento del DTO, ni al enviarlo ni al fallar. De la
+   * respuesta de error sólo toma el código HTTP, porque su cuerpo suele traer un eco de lo enviado.
    *
-   * **Devuelve la constancia igual que el sellado avanzado.** La respuesta trae la misma forma
+   * **Devuelve la constancia igual que el sellado avanzado**: la respuesta trae la misma forma
    * (`hashHex`, `canonicalString`, `sealedAt`, `timeStamp` y `nom151`), así que el llamador la
-   * persiste con el mismo `SealMapper`. Antes se declaraba `void` y se descartaba, bajo la idea de
-   * que este envío no producía evidencia: no era cierto, y por eso los documentos de firma simple
-   * se quedaban sin fila en `document_seals` y con la tabla NOM-151 vacía en su hoja.
+   * persiste con el mismo `SealMapper`. Mientras se declaraba `void` y se descartaba, los documentos
+   * de firma simple se quedaban sin fila en `document_seals` y con la tabla NOM-151 vacía.
    *
    * Falla lanzando, con las mismas excepciones que el resto del servicio.
    */
@@ -186,8 +182,8 @@ export class SealApiService {
   }
 
   /**
-   * Todo lo que se valida acá termina en una columna NOT NULL de `document_seals`: sin esta
-   * comprobación, una respuesta incompleta del proveedor no falla en la frontera HTTP sino más
+   * Exige que la respuesta traiga todo lo que termina en columnas NOT NULL de `document_seals`: sin
+   * esta comprobación, una respuesta incompleta del proveedor no falla en la frontera HTTP sino más
    * tarde, como un error de constraint de Postgres que no dice nada del origen real.
    *
    * También es la red que atrapa un cambio de contrato del proveedor: si Seal Service renombrara

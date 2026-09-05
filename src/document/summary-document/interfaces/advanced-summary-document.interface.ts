@@ -1,15 +1,14 @@
 import { ConservationRecordInfo } from '../conservation-record.util';
 
 /**
- * Datos de entrada para generar la hoja de evidencia de FIRMA AVANZADA (ver documento de
- * referencia "Hoja de evidencia de firma avanzada"). Igual que su equivalente de firma simple,
- * está deliberadamente desacoplado de DocumentEntity: el caller (`attachSignaturesSheet` en
- * document.service.ts) arma este objeto a partir de la entidad real.
+ * Datos de entrada para generar la hoja de evidencia de FIRMA AVANZADA.
  *
- * Es un tipo aparte y no una extensión de `SummaryDocumentInfo` a propósito: la hoja avanzada NO
- * imprime "Cifrado" (su integridad se sostiene en la firma criptográfica y en la constancia
- * NOM-151, no en el encadenamiento de auditoría), y las dos hojas tienen que poder divergir sin
- * arrastrarse campos entre sí.
+ * Igual que su equivalente de firma simple, está desacoplado de DocumentEntity: el caller
+ * (`attachSignaturesSheet`) arma este objeto a partir de la entidad real.
+ *
+ * Es un tipo aparte y no una extensión de `SummaryDocumentInfo`: la hoja avanzada no imprime
+ * "Cifrado" —su integridad se sostiene en la firma criptográfica y en la constancia NOM-151, no en
+ * el encadenamiento de auditoría— y ambas hojas tienen que poder divergir sin arrastrarse campos.
  */
 export interface AdvancedSummaryDocumentInfo {
   /** DocumentEntity.id */

@@ -39,21 +39,16 @@ export interface LegacySignatureCoordinates {
 }
 
 /**
- * Coordenadas de firma por colaborador (ver plan de migración ER-V2, Fase 4). Reemplaza el
- * ancla única `Document.signatureCoordinates` + apilado automático por índice: un colaborador
- * puede tener sus propias posiciones explícitas (un arreglo, una por página/zona donde las
- * colocó); si no tiene fila de SimpleSignature asignada (simpleSignatureId null),
- * `finalizeSignedDocument` cae al apilado automático (mismo comportamiento de hoy) como
- * fallback — ver document.service.ts. Un arreglo vacío (`signatureCoordinates: []`) es distinto
- * de "sin fila asignada": significa que el colaborador sí pasó por el flujo de ubicación de
- * firmas pero no colocó ninguna, y no debe estampar nada visualmente al firmar.
+ * Coordenadas de firma por colaborador, en reemplazo del ancla única
+ * `Document.signatureCoordinates` más apilado automático por índice.
  *
- * `verificationCode` obtuvo su FK real en la Fase 7, al crearse verification_codes.
+ * Un colaborador puede tener sus propias posiciones explícitas —un arreglo, una por página o zona
+ * donde las colocó—; sin fila asignada (`simpleSignatureId` null), `finalizeSignedDocument` cae al
+ * apilado automático. Un arreglo vacío es distinto de "sin fila asignada": significa que sí pasó por
+ * el flujo de ubicación pero no colocó ninguna, y no debe estampar nada visualmente al firmar.
  *
- * Vive en el módulo `signature` (no en `document`, ver diagrama ER-V2 más reciente) — el tipo
- * de firma es un concepto del dominio de firmas, aunque su único consumidor hoy siga siendo
- * `CollaboratorEntity`/`document.service.ts` (import cruzado entre módulos, mismo patrón que ya
- * usa `SignatureModule` al registrar `UserEntity`).
+ * Vive en el módulo `signature` y no en `document` porque el tipo de firma es un concepto del
+ * dominio de firmas, aunque su único consumidor hoy sea `CollaboratorEntity`/`document.service.ts`.
  */
 @Entity('simple_signatures')
 export class SimpleSignatureEntity {

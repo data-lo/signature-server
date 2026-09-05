@@ -135,15 +135,14 @@ export class SignatureService {
     }
 
     /**
-     * Se rechaza el alta sólo si el usuario tiene una firma CON IMAGEN, no por el mero hecho de
-     * apuntar a una fila.
+     * Rechaza el alta sólo si el usuario tiene una firma CON IMAGEN, no por el mero hecho de apuntar
+     * a una fila.
      *
-     * Bug corregido: `deleteSignatureImage` borra la fila —y con ella `users.signature_id`—
-     * únicamente cuando la INE también está vacía (ver `clearFieldOrDeleteRow`); si el usuario
-     * tenía INE, la fila sobrevive con `signature_object_key` en null y el usuario sigue
-     * apuntándole. Este guard leía sólo `signatureId`, así que confundía esa fila sin imagen con
-     * una firma vigente: quien borraba su firma y volvía a dibujarla recibía "ya tiene una firma
-     * registrada" y quedaba bloqueado de forma permanente, sin manera de salir desde la app.
+     * `deleteSignatureImage` borra la fila —y con ella `users.signature_id`— únicamente cuando la INE
+     * también está vacía (ver `clearFieldOrDeleteRow`): con INE presente, la fila sobrevive con
+     * `signature_object_key` en null y el usuario sigue apuntándole. Leer sólo `signatureId` confundía
+     * esa fila sin imagen con una firma vigente, así que quien borraba su firma y volvía a dibujarla
+     * recibía "ya tiene una firma registrada" y quedaba bloqueado sin salida desde la app.
      */
     const existingSignature = user.signatureId
       ? await this.signatureRepository.findOne({
@@ -319,19 +318,19 @@ export class SignatureService {
   }
 
   /**
-   * Bug corregido: `deleteSignatureImage`/`deleteOfficialFile` cada uno leía `signature` por su
-   * cuenta al inicio del método y decidía "¿el OTRO campo también está vacío?" contra esa
-   * lectura. Si ambos se ejecutaban casi al mismo tiempo (dos pestañas, doble clic en cada
-   * botón), ambas lecturas veían todavía el otro campo presente → ambos tomaban la rama
-   * "solo limpiar mi campo" → los dos archivos quedaban borrados de MinIO pero NINGUNA
-   * limpiaba `user.signatureId`, dejando una fila `signatures` "vacía" a la que el usuario
-   * seguía apuntando — `create()` la rechaza para siempre con "ya tienes una firma registrada",
-   * sin intervención manual en BD.
+   * Limpia un campo de la firma o borra la fila entera si el otro también quedó vacío, bajo lock
+   * pesimista.
    *
-   * El lock pesimista (`SELECT ... FOR UPDATE`) serializa las dos llamadas sobre la misma fila:
-   * la segunda transacción espera a que la primera confirme, y entonces lee el estado YA
-   * actualizado por la primera — así que la decisión "¿limpiar solo mi campo, o borrar toda la
-   * fila?" siempre se toma sobre datos frescos, nunca sobre una lectura obsoleta.
+   * `deleteSignatureImage` y `deleteOfficialFile` leían `signature` cada uno por su cuenta y decidían
+   * "¿el OTRO campo también está vacío?" contra esa lectura. Ejecutándose casi a la vez —dos
+   * pestañas, doble clic en cada botón— ambas veían todavía el otro campo presente, así que las dos
+   * tomaban la rama "sólo limpiar mi campo": los dos archivos quedaban borrados de MinIO pero ninguna
+   * limpiaba `user.signatureId`, dejando una fila vacía a la que el usuario seguía apuntando y que
+   * `create()` rechazaba para siempre, sin arreglo posible desde la app.
+   *
+   * El `SELECT ... FOR UPDATE` serializa las dos llamadas sobre la misma fila: la segunda espera al
+   * commit de la primera y lee el estado ya actualizado, así que la decisión siempre se toma sobre
+   * datos frescos.
    */
   async clearFieldOrDeleteRow(
     id: string,

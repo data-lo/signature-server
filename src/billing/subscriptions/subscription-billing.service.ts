@@ -43,18 +43,17 @@ const STRIPE_STATUS_MAP: Record<
 };
 
 /**
- * Efectos de dominio de una suscripción recurrente: qué le pasa al perfil de facturación y al
- * saldo de documentos cuando Stripe informa de un cobro, un fallo o una cancelación.
+ * Aplica los efectos de dominio de una suscripción recurrente: qué le pasa al perfil de facturación
+ * y al saldo de documentos cuando Stripe informa de un cobro, un fallo o una cancelación.
  *
- * **La división del trabajo entre los dos eventos del alta es deliberada.**
- * `checkout.session.completed` sólo RELACIONA (guarda cliente, suscripción y plan, deja el perfil
- * en INCOMPLETE); `invoice.paid` es el que ACTIVA y concede documentos. Se separan porque una
- * sesión completada todavía no es dinero cobrado —un débito puede fallar después—, y conceder el
- * saldo ahí regalaría un mes de documentos a quien nunca llegó a pagar.
+ * **Reparte el alta entre dos eventos a propósito.** `checkout.session.completed` sólo RELACIONA
+ * —guarda cliente, suscripción y plan, y deja el perfil en INCOMPLETE—; `invoice.paid` es el que
+ * ACTIVA y concede documentos. Una sesión completada todavía no es dinero cobrado, y conceder saldo
+ * ahí regalaría un mes de documentos a quien nunca llegó a pagar.
  *
- * **Nada aquí depende del orden de llegada.** Stripe no garantiza que
- * `checkout.session.completed` preceda a `invoice.paid`, así que el perfil se localiza por
- * suscripción y, si eso falla, por cliente (que se graba desde antes de abrir el checkout).
+ * **No depende del orden de llegada**: Stripe no garantiza que `checkout.session.completed` preceda
+ * a `invoice.paid`, así que el perfil se localiza por suscripción y, si eso falla, por cliente, que
+ * se graba desde antes de abrir el checkout.
  */
 @Injectable()
 export class SubscriptionBillingService {
@@ -149,15 +148,13 @@ export class SubscriptionBillingService {
   }
 
   /**
-   * Activa el plan y emite el lote de documentos del periodo. Es el único punto donde se concede
-   * saldo por una suscripción.
+   * Activa el plan y emite el lote de documentos del periodo: es el único punto donde una
+   * suscripción concede saldo.
    *
-   * Idempotente por `credit_lots.stripe_invoice_id`: la comprobación va DENTRO de la transacción
-   * y después de bloquear el perfil, no antes. Comprobar fuera dejaría una ventana en la que dos
-   * entregas simultáneas de la misma factura (Stripe reintenta, y un reintento puede solaparse
-   * con el original) pasarían las dos la comprobación y emitirían dos lotes. Con el bloqueo, la
-   * segunda espera a que la primera termine y entonces sí ve el lote ya emitido. El índice único
-   * de la columna queda como última red.
+   * Idempotente por `credit_lots.stripe_invoice_id`, con la comprobación DENTRO de la transacción y
+   * después de bloquear el perfil. Comprobar fuera dejaría una ventana en la que dos entregas
+   * simultáneas de la misma factura la pasarían ambas y emitirían dos lotes; con el bloqueo, la
+   * segunda espera y ve el lote ya emitido. El índice único queda como última red.
    */
   async handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
     const stripeSubscriptionId = this.toId(

@@ -29,6 +29,19 @@ const SUPPORTED_INTERVALS: Record<string, BILLING_INTERVAL_ENUM> = {
  * Mantiene el catálogo local a partir de los eventos de Stripe. El producto crea el ítem de
  * catálogo y su detalle (plan o paquete); el precio crea/versiona la oferta cobrable. Así el
  * modelo local también admite ítems MANUAL sin ids de Stripe.
+ *
+ * Vive separado de `StripeWebhookService`, que sólo enruta el evento ya autenticado, y de
+ * `StripePaymentService`, que atiende el checkout: esto no es efecto de un pago sino mantenimiento
+ * de catálogo, y un admin puede renombrar o desactivar un producto en el dashboard sin que nadie
+ * compre nada.
+ *
+ * **Enruta por la metadata del PRODUCTO, no por nombre**: un producto de Stripe no dice si es plan o
+ * paquete (ver `CATALOG_TYPE_ENUM`). Los eventos de precio se enrutan igual, y por eso
+ * `syncPriceUpserted` recibe el producto ya resuelto: el payload de `price.*` sólo trae su id.
+ *
+ * **Nada se borra**: ni `product.deleted` ni un cambio de precio destruyen filas, se marcan
+ * inactivas. `checkout_orders` apunta a `catalog_prices` con `ON DELETE RESTRICT`, así que el
+ * importe cobrado tiene que seguir existiendo tal cual para las facturas y órdenes históricas.
  */
 @Injectable()
 export class CatalogSyncService {

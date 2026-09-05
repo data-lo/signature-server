@@ -30,31 +30,24 @@ export interface AdvancedSignatureQrData {
 }
 
 /**
- * Genera el código QR que representa visualmente a una firma avanzada (historias "Generar código
- * QR para firmas avanzadas" y "Actualizar contenido del código QR en firma avanzada").
+ * Genera el código QR que representa visualmente a una firma avanzada.
  *
- * Existe porque la firma avanzada (e.firma) no produce ninguna imagen: su evidencia es
- * criptográfica y hasta ahora no se dibujaba nada en el documento, así que el lugar reservado
- * para esa firma quedaba vacío. El QR ocupa ese lugar y cumple la misma función que la rúbrica de
+ * Existe porque la e.firma no produce ninguna imagen —su evidencia es criptográfica— y el lugar
+ * reservado para esa firma quedaba vacío. El QR lo ocupa y cumple la misma función que la rúbrica de
  * una firma simple: dejar constancia visible de quién firmó.
  *
- * **El contenido es ÚNICAMENTE la URL de la vista pública del documento, con esta firma
- * señalada.** Antes era texto plano con el nombre, el RFC, la IP y la fecha, y el enlace como
- * última línea. Eso tenía dos problemas: publicaba datos del firmante a cualquiera que escaneara
- * una copia impresa, sin pasar por ningún control sobre qué se expone; y un QR de varias líneas
- * de texto no es un enlace para el lector del teléfono, que muestra el texto en vez de abrir la
- * verificación. Con la URL sola, escanear el código abre el documento.
+ * **Codifica ÚNICAMENTE la URL de la vista pública, con esta firma señalada.** El formato anterior
+ * —texto plano con nombre, RFC, IP y fecha, más el enlace al final— publicaba datos del firmante a
+ * cualquiera que escaneara una copia impresa, y un QR de varias líneas no es un enlace para el
+ * lector del teléfono, que muestra el texto en vez de abrir la verificación.
  *
- * Se pierde a cambio la lectura sin red que aquel formato permitía. Es la decisión de la historia
- * "Redirigir QR de firma avanzada a la vista pública": la constancia legible sin conexión ya vive
- * en la hoja de firmas anexada al PDF, que imprime nombre, certificado y fecha de cada firmante.
+ * Se pierde a cambio la lectura sin red: la constancia legible sin conexión vive en la hoja de
+ * firmas anexada al PDF, que imprime nombre, certificado y fecha de cada firmante. Los QR ya
+ * estampados conservan su contenido original —son parte del PDF y no se regeneran— y la pantalla a
+ * la que apuntaban sigue existiendo.
  *
- * Los QR ya estampados conservan el contenido con el que se generaron —son parte del PDF y no se
- * regeneran—, así que la pantalla a la que apuntaban sigue existiendo.
- *
- * Devuelve un PNG para que el estampado sea exactamente el mismo camino que el de una rúbrica
- * (`DocumentSigningService.mergeSignatureIntoPdf`): el QR no necesita un mecanismo de posicionado
- * propio, usa el que ya coloca las firmas en sus coordenadas.
+ * Devuelve un PNG para que el estampado siga exactamente el mismo camino que una rúbrica: el QR no
+ * necesita un mecanismo de posicionado propio.
  */
 @Injectable()
 export class SignatureQrService {
@@ -66,7 +59,7 @@ export class SignatureQrService {
   }
 
   /**
-   * Lo que lee el escáner: la URL a secas.
+   * Devuelve lo que lee el escáner: la URL a secas.
    *
    * Sin etiquetas ni renglones adicionales a propósito. Un QR cuyo contenido es exactamente una
    * URL lo reconocen como enlace la cámara nativa y el lector del teléfono, y ofrecen abrirlo; en
@@ -77,8 +70,8 @@ export class SignatureQrService {
   }
 
   /**
-   * PNG del código QR con el contenido dado. Con corrección de errores media (M): el código se
-   * imprime y puede fotocopiarse o escanearse en papel, donde parte del patrón se degrada.
+   * Genera el PNG del código QR con el contenido dado, con corrección de errores media (M): el
+   * código se imprime y puede fotocopiarse o escanearse en papel, donde parte del patrón se degrada.
    */
   async generatePngBuffer(content: string): Promise<Buffer> {
     return QRCode.toBuffer(content, {

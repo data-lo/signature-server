@@ -1,12 +1,11 @@
 /**
- * Estado de un intento de verificación de identidad.
+ * Estado de un intento de verificación de identidad, en el vocabulario propio del dominio y no en el
+ * de Didit: el mapeo desde los estados del proveedor vive en
+ * `ProcessDiditVerificationResultUseCase`, así que cuando Didit renombre un estado o entre un
+ * segundo proveedor cambia el mapeo y no la tabla ni el frontend.
  *
- * Es el vocabulario propio del dominio, no el de Didit: el mapeo desde los estados del
- * proveedor vive en `ProcessDiditVerificationResultUseCase`. Así, cuando Didit renombre un
- * estado o entre un segundo proveedor, cambia el mapeo y no la tabla ni el frontend.
- *
- * Sólo APPROVED habilita subir la firma PNG. Todos los demás — incluido IN_REVIEW — son
- * estados en los que el usuario todavía no puede firmar.
+ * Sólo APPROVED habilita subir la firma PNG: en todos los demás —IN_REVIEW incluido— el usuario
+ * todavía no puede firmar.
  */
 export enum IDENTITY_VERIFICATION_STATUS_ENUM {
   /** Intento creado localmente; la sesión de Didit todavía no se abrió. */

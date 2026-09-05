@@ -62,20 +62,18 @@ export class GetDocumentsUseCase {
     } = query;
 
     /**
-     * Bug corregido ("las solicitudes FIEL sin 2FA no aparecen en Por firmar"): este listado era
-     * el único punto del flujo que comparaba correos con `=` exacto. `users.email` se guarda
-     * siempre en minúsculas (ver UserService), pero `collaborators.email` conserva tal cual lo
-     * que tecleó quien invitó — así que a un firmante invitado como "Juan.Perez@mail.com" el
-     * listado no le mostraba nada, aunque el detalle (`resolveMyCollaborator`), la vinculación
-     * (`linkPendingCollaboratorAccount`) y `sign()`/`reject()` sí lo reconocen (todos comparan
-     * sin distinguir mayúsculas).
+     * Compara correos sin distinguir mayúsculas, como el resto del flujo.
      *
-     * El síntoma se veía solo en documentos FIEL sin 2FA porque en todos los demás casos algo
-     * termina vinculando la cuenta al colaborador y el emparejamiento pasa a hacerse por
-     * `users.email` (ya normalizado): la firma SIMPLE siempre exige 2FA, y pedir el código
-     * (`requestVerificationCode` → `findMySignerCollaborator`) vincula la cuenta antes de firmar.
-     * Sin 2FA no existe ese paso previo, así que la fila se queda sin `accountId` y el documento
-     * permanece invisible en "Por firmar" hasta que el firmante entra por el enlace del correo.
+     * `users.email` se guarda siempre en minúsculas, pero `collaborators.email` conserva lo que
+     * tecleó quien invitó: con `=` exacto, a un firmante invitado como "Juan.Perez@mail.com" el
+     * listado no le mostraba nada, aunque el detalle, la vinculación y `sign()`/`reject()` sí lo
+     * reconocieran.
+     *
+     * El síntoma sólo se veía en documentos FIEL sin 2FA porque en los demás casos algo termina
+     * vinculando la cuenta y el emparejamiento pasa a hacerse por `users.email`, ya normalizado: la
+     * firma SIMPLE siempre exige 2FA, y pedir el código vincula la cuenta antes de firmar. Sin ese
+     * paso previo la fila se queda sin `accountId` y el documento permanece invisible en "Por
+     * firmar" hasta que el firmante entra por el enlace del correo.
      */
     const participantEmail = participantEmailRaw?.toLowerCase();
     const email = emailRaw?.toLowerCase();

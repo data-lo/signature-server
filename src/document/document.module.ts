@@ -19,7 +19,6 @@ import { SealModule } from './seal/seal.module';
 import { SummaryDocumentModule } from './summary-document/summary-document.module';
 import { SignatureQrService } from './services/signature-qr.service';
 
-// Use cases
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';

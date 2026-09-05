@@ -3,13 +3,12 @@ import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credentia
 /**
  * Por qué el usuario todavía no puede tocar su firma manuscrita, según su estado global.
  *
- * Se explica el motivo en vez de devolver un 403 seco: un "no puedes subir tu firma" sin decir
- * que la verificación sigue en revisión deja al usuario sin saber qué hacer a continuación.
+ * Explica el motivo en vez de devolver un 403 seco: un "no puedes subir tu firma" sin decir que la
+ * verificación sigue en revisión deja al usuario sin saber qué hacer.
  *
  * Vive fuera de los casos de uso porque son dos los que aplican la misma regla —subir el PNG
- * directamente (`UploadSignatureImageUseCase`) y abrir una sesión de captura por canvas o QR
- * (`CreateSignatureCaptureSessionUseCase`)—: con una copia en cada uno, el día que cambie el
- * texto o se agregue un estado, uno de los dos se quedaría atrás y el usuario recibiría
+ * directamente y abrir una sesión de captura por canvas o QR—: con una copia en cada uno, el día que
+ * cambie el texto o se agregue un estado uno de los dos se quedaría atrás y el usuario recibiría
  * explicaciones distintas según por dónde entrara.
  *
  * SIGNATURE_PENDING no tiene motivo porque es justamente el estado que habilita la operación.
