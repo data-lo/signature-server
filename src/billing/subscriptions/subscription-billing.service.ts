@@ -56,6 +56,19 @@ const STRIPE_STATUS_MAP: Record<
  * `checkout.session.completed` preceda a `invoice.paid`, así que el perfil se localiza por
  * suscripción y, si eso falla, por cliente (que se graba desde antes de abrir el checkout).
  */
+/**
+ * Estados desde los que `checkout.session.completed` puede dejar el perfil en INCOMPLETE.
+ *
+ * Son los que aún no representan una suscripción de pago: el plan gratuito con el que nace toda
+ * cuenta, y un checkout anterior que tampoco llegó a cobrarse. Los demás (ACTIVE, PAST_DUE,
+ * CANCELED) ya los mueve el cobro, y retrocederlos desde acá perdería lo que el webhook de la
+ * factura ya confirmó.
+ */
+const ADMITE_CHECKOUT_PENDIENTE = new Set<BILLING_PROFILE_STATUS_ENUM>([
+  BILLING_PROFILE_STATUS_ENUM.FREE,
+  BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
+]);
+
 @Injectable()
 export class SubscriptionBillingService {
   private readonly logger = new Logger(SubscriptionBillingService.name);
@@ -110,10 +123,17 @@ export class SubscriptionBillingService {
       currentPlanType: session.metadata?.planType ?? profile.currentPlanType,
       /**
        * INCOMPLETE y no ACTIVE: la sesión terminó, pero la activación la da el cobro
-       * (`invoice.paid`). Sólo se retrocede desde INCOMPLETE — si `invoice.paid` ya llegó
-       * primero y dejó el perfil ACTIVE, esta entrega no puede desactivarlo.
+       * (`invoice.paid`). Y sólo se avanza desde un estado que todavía no tiene suscripción de
+       * pago: si `invoice.paid` ya llegó primero y dejó el perfil ACTIVE, esta entrega no puede
+       * desactivarlo.
+       *
+       * `FREE` entra en esa condición desde que toda cuenta nace con su perfil gratuito. Antes
+       * el perfil lo creaba `getOrCreateProfile` y llegaba acá ya en INCOMPLETE, así que esto
+       * era un no-op que sólo lo preservaba; ahora llega en FREE y hay una transición REAL que
+       * hacer. Sin ella el perfil se quedaría diciendo "plan gratuito" entre el fin del checkout
+       * y el cobro, cuando lo cierto es que ya contrató y falta confirmar el pago.
        */
-      ...(profile.status === BILLING_PROFILE_STATUS_ENUM.INCOMPLETE
+      ...(ADMITE_CHECKOUT_PENDIENTE.has(profile.status)
         ? { status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE }
         : {}),
     });

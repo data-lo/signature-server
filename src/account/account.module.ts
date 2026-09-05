@@ -16,6 +16,7 @@ import { SharedModule } from 'src/shared/shared.module';
 import { RolesModule } from 'src/roles/roles.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
 import { OrganizationPermissionsModule } from 'src/organization-permissions/organization-permissions.module';
+import { BillingProvisioningModule } from 'src/billing/billing-provisioning.module';
 
 // Use cases
 import { CreateAccountUseCase } from './applications/create-account.use-case';
@@ -46,6 +47,9 @@ import { RevokeAccountAccessUseCase } from './applications/revoke-account-access
     RolesModule,
     KafkaModule,
     OrganizationPermissionsModule,
+    // Sólo el alta del perfil Free: deliberadamente NO se importa `BillingModule`, que traería
+    // Stripe y el catálogo a un flujo que no habla con el proveedor.
+    BillingProvisioningModule,
   ],
   controllers: [
     AccountController,
