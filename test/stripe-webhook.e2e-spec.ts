@@ -510,7 +510,7 @@ describe('Webhook de Stripe (e2e)', () => {
         productEvent('product.created', {
           id: 'prod_ajeno',
           name: 'Otro producto de la cuenta de Stripe',
-          active: true,
+          isActive: true,
           metadata: {},
         }),
       );
