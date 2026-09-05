@@ -537,15 +537,23 @@ npm run migration:revert                                         # revierte la �
 
 ### Seed en Docker (post-build)
 
-`npm run seed:roles`/`seed:documents` (ver sección 3) usan `ts-node` sobre `src/*.ts` — no sirven dentro de la imagen de producción, que solo tiene `dist/` compilado y `node_modules --omit=dev` (sin `ts-node`, ver `Dockerfile`). Para esos casos existen `seed:roles:prod`/`seed:documents:prod`, que corren el `.js` ya compilado directo con `node`:
+`npm run seed:roles`/`seed:documents`/`seed:billing-catalog` usan `ts-node` sobre `src/*.ts` — no sirven dentro de la imagen de producción, que solo tiene `dist/` compilado y `node_modules --omit=dev` (sin `ts-node`, ver `Dockerfile`). Para esos casos existen sus variantes `:prod`, que corren el `.js` ya compilado directo con `node`:
 
 ```bash
 docker compose up -d              # o el compose real del entorno (staging/prod)
 docker exec <nombre-o-id-del-contenedor-api> npm run seed:roles:prod
 docker exec <nombre-o-id-del-contenedor-api> npm run seed:documents:prod   # requiere el usuario fixture PRIMARY_TEST_EMAIL, ver src/scripts/seed-documents.ts — normalmente solo seed:roles:prod aplica en un ambiente real
+docker exec <nombre-o-id-del-contenedor-api> npm run seed:billing-catalog:prod
 ```
 
 Correrlo **después** de que el contenedor de la API y el de la base de datos ya estén arriba (nunca durante el `RUN` del build) — el seed abre su propia conexión a Postgres vía `POSTGRES_DB_URL`, así que la base tiene que estar alcanzable en ese momento. Es idempotente: correrlo más de una vez no duplica filas.
+
+`seed:billing-catalog` además requiere `STRIPE_SECRET_KEY`: crea el plan **Free** local (3
+documentos incluidos y sin precio Stripe) y, en la cuenta Stripe configurada, el producto de una
+compra única de **1 documento adicional por $39.00 MXN**. El precio usa el lookup key
+`document_credit_free_1_mxn`, por lo que es idempotente. Su metadata (`catalogType=document_pack`,
+`documentsGranted=1`, `eligiblePlanType=free`) hace que los webhooks sincronicen el ítem, el pack y
+el precio en el catálogo local. La API debe estar disponible en el endpoint de webhooks al correrlo.
 
 ---
 
