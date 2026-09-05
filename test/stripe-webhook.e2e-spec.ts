@@ -23,13 +23,18 @@ import { BillingProfileEntity } from './../src/billing/profiles/billing-profile.
 import { CheckoutOrderEntity } from './../src/billing/checkout/checkout-order.entity';
 import { CreditLotEntity } from './../src/billing/credits/credit-lot.entity';
 import { PlanEntity } from './../src/billing/catalog/plan.entity';
-import { PlanPriceEntity } from './../src/billing/catalog/plan-price.entity';
-import { DocumentPackOfferEntity } from './../src/billing/catalog/document-pack-offer.entity';
+import { CatalogItemEntity } from './../src/billing/catalog/catalog-item.entity';
+import { CatalogPriceEntity } from './../src/billing/catalog/catalog-price.entity';
+import { DocumentCreditPackEntity } from './../src/billing/catalog/document-credit-pack.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from './../src/billing/enums/billing-profile-status.enum';
 import { BILLING_INTERVAL_ENUM } from './../src/billing/enums/billing-interval.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from './../src/billing/enums/checkout-order-status.enum';
 import { CHECKOUT_KIND_ENUM } from './../src/billing/enums/checkout-kind.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from './../src/billing/enums/credit-lot-origin.enum';
+import { CATALOG_ITEM_TYPE_ENUM } from './../src/billing/enums/catalog-item-type.enum';
+import { CATALOG_PRICE_BILLING_MODE_ENUM } from './../src/billing/enums/catalog-price-billing-mode.enum';
+import { CATALOG_SOURCE_ENUM } from './../src/billing/enums/catalog-source.enum';
+import { PLAN_CREATION_SOURCE_ENUM } from './../src/billing/enums/plan-creation-source.enum';
 import {
   createDataSourceStub,
   createInMemoryRepository,
@@ -48,7 +53,7 @@ const PROFILE_ID = 'perfil-1';
 const CUSTOMER_ID = 'cus_e2e';
 const SUBSCRIPTION_ID = 'sub_e2e';
 const PRICE_ID = 'price_e2e';
-const PLAN_CODE = 'pro';
+const PLAN_TYPE = 'pro';
 const MONTHLY_DOCUMENT_LIMIT = 50;
 const PERIOD_START = 1893456000; // 2030-01-01T00:00:00Z
 const PERIOD_END = 1896134400; // 2030-02-01T00:00:00Z
@@ -98,7 +103,7 @@ function checkoutCompletedEvent() {
         payment_intent: 'pi_e2e',
         metadata: {
           billingProfileId: PROFILE_ID,
-          planType: PLAN_CODE,
+          planType: PLAN_TYPE,
           accountId: 'cuenta-1',
         },
       },
@@ -131,6 +136,7 @@ describe('Webhook de Stripe (e2e)', () => {
   let checkoutOrders: InMemoryRepository<never>;
   let creditLots: InMemoryRepository<never>;
   let plans: InMemoryRepository<never>;
+  let catalogItems: InMemoryRepository<never>;
 
   /** Firma el cuerpo tal cual se va a enviar, que es como lo hace Stripe de verdad. */
   function sign(body: string): string {
@@ -171,7 +177,7 @@ describe('Webhook de Stripe (e2e)', () => {
       {
         id: 'orden-1',
         billingProfileId: PROFILE_ID,
-        planPriceId: 'precio-1',
+        catalogPriceId: 'precio-1',
         kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
         stripeCheckoutSessionId: 'cs_e2e',
         stripePaymentIntentId: null,
@@ -180,28 +186,32 @@ describe('Webhook de Stripe (e2e)', () => {
       },
     ] as never[]);
     creditLots = createInMemoryRepository();
+    catalogItems = createInMemoryRepository();
     plans = createInMemoryRepository([
       {
-        planType: PLAN_CODE,
+        planType: PLAN_TYPE,
+        catalogItemId: null,
         name: 'Plan Pro',
         isActive: true,
+        creationSource: PLAN_CREATION_SOURCE_ENUM.STRIPE,
         stripeProductId: null,
         documentsIncluded: MONTHLY_DOCUMENT_LIMIT,
       },
     ] as never[]);
 
-    const planPrices = createInMemoryRepository([
+    const catalogPrices = createInMemoryRepository([
       {
         id: 'precio-1',
-        planType: PLAN_CODE,
         stripePriceId: PRICE_ID,
         amount: 49900,
         currency: 'mxn',
+        billingMode: CATALOG_PRICE_BILLING_MODE_ENUM.RECURRING,
         interval: BILLING_INTERVAL_ENUM.MONTH,
+        intervalCount: 1,
         isActive: true,
         effectiveFrom: null,
         effectiveTo: null,
-        plan: plans.rows[0],
+        catalogItem: { isActive: true, plan: plans.rows[0], scopes: [] },
       },
     ] as never[]);
 
@@ -251,10 +261,14 @@ describe('Webhook de Stripe (e2e)', () => {
           provide: getRepositoryToken(CheckoutOrderEntity),
           useValue: checkoutOrders,
         },
-        { provide: getRepositoryToken(PlanPriceEntity), useValue: planPrices },
+        { provide: getRepositoryToken(CatalogPriceEntity), useValue: catalogPrices },
         { provide: getRepositoryToken(PlanEntity), useValue: plans },
         {
-          provide: getRepositoryToken(DocumentPackOfferEntity),
+          provide: getRepositoryToken(CatalogItemEntity),
+          useValue: catalogItems,
+        },
+        {
+          provide: getRepositoryToken(DocumentCreditPackEntity),
           useValue: createInMemoryRepository(),
         },
       ],
@@ -358,7 +372,7 @@ describe('Webhook de Stripe (e2e)', () => {
       expect(response.status).toBe(200);
       expect(billingProfiles.rows[0]).toMatchObject({
         stripeSubscriptionId: SUBSCRIPTION_ID,
-        currentPlanType: PLAN_CODE,
+        currentPlanType: PLAN_TYPE,
         status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
       });
       expect(checkoutOrders.rows[0]).toMatchObject({
@@ -374,7 +388,7 @@ describe('Webhook de Stripe (e2e)', () => {
       expect(response.status).toBe(200);
       expect(billingProfiles.rows[0]).toMatchObject({
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-        currentPlanType: PLAN_CODE,
+        currentPlanType: PLAN_TYPE,
       });
       expect(creditLots.rows).toHaveLength(1);
       expect(creditLots.rows[0]).toMatchObject({
@@ -435,7 +449,7 @@ describe('Webhook de Stripe (e2e)', () => {
           id: 'prod_e2e',
           name: 'Plan Pro (renombrado)',
           active: true,
-          metadata: { catalogType: 'plan', planCode: PLAN_CODE },
+          metadata: { catalogType: 'plan', planType: PLAN_TYPE },
         }),
       );
 
@@ -447,14 +461,13 @@ describe('Webhook de Stripe (e2e)', () => {
       });
     });
 
-    /** Los límites comerciales son configuración nuestra: Stripe no los conoce y no los pisa. */
-    it('product.updated no toca el límite mensual de documentos', async () => {
+    it('product.updated conserva documentsIncluded si Stripe no lo declara', async () => {
       await post(
         productEvent('product.updated', {
           id: 'prod_e2e',
           name: 'Plan Pro',
           active: true,
-          metadata: { catalogType: 'plan', planCode: PLAN_CODE },
+          metadata: { catalogType: 'plan', planType: PLAN_TYPE },
         }),
       );
 
@@ -464,19 +477,25 @@ describe('Webhook de Stripe (e2e)', () => {
     });
 
     it('product.deleted desactiva el plan en vez de borrarlo', async () => {
-      Object.assign(plans.rows[0], { stripeProductId: 'prod_e2e' });
+      await catalogItems.save({
+        id: 'catalog-item-e2e',
+        itemType: CATALOG_ITEM_TYPE_ENUM.PLAN,
+        source: CATALOG_SOURCE_ENUM.STRIPE,
+        stripeProductId: 'prod_e2e',
+        isActive: true,
+      } as never);
 
       const response = await post(
         productEvent('product.deleted', {
           id: 'prod_e2e',
           name: 'Plan Pro',
-          metadata: { catalogType: 'plan', planCode: PLAN_CODE },
+          metadata: { catalogType: 'plan', planType: PLAN_TYPE },
         }),
       );
 
       expect(response.status).toBe(200);
       expect(plans.rows).toHaveLength(1);
-      expect(plans.rows[0]).toMatchObject({ active: false });
+      expect(catalogItems.rows[0]).toMatchObject({ isActive: false });
     });
 
     it('ignora un producto ajeno al catálogo sin fallar la entrega', async () => {

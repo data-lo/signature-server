@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { CheckoutOrderEntity } from './checkout-order.entity';
 import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
@@ -25,13 +25,12 @@ export class CheckoutOrderService {
   /**
    * Registra la orden PENDING recién abierta contra Stripe.
    *
-   * `documentPackOfferId` va explícitamente en NULL y `kind` en SUBSCRIPTION porque la tabla lo
-   * exige: `CHK_checkout_orders_item_matches_kind` obliga a que una orden lleve exactamente uno
-   * de los dos artículos, el precio de plan o la oferta de paquete, según su tipo.
+   * Una orden siempre apunta a un único `catalog_price`; el item de esa oferta decide qué se
+   * compra, sin columnas polimórficas para plan y paquetes.
    */
   async registerPendingSubscription(input: {
     billingProfileId: string;
-    planPriceId: string;
+    catalogPriceId: string;
     stripeCheckoutSessionId: string;
     amount: number;
     currency: string;
@@ -39,8 +38,7 @@ export class CheckoutOrderService {
     const order = await this.checkoutOrderRepository.save(
       this.checkoutOrderRepository.create({
         billingProfileId: input.billingProfileId,
-        planPriceId: input.planPriceId,
-        documentPackOfferId: null,
+        catalogPriceId: input.catalogPriceId,
         kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
         stripeCheckoutSessionId: input.stripeCheckoutSessionId,
         stripePaymentIntentId: null,
@@ -62,7 +60,7 @@ export class CheckoutOrderService {
    *
    * Idempotente por diseño: el `WHERE` exige que siga en PENDING, así que una re-entrega del
    * mismo `checkout.session.completed` no vuelve a mover `completed_at` (que dejaría de ser la
-   * fecha real del pago) y no pisa un `stripePaymentIntentId` ya grabado.
+   * fecha real del pago) ni los ids de Stripe ya grabados.
    *
    * No lanza si no encuentra la orden: la sesión puede haberse creado fuera de este flujo (una
    * prueba desde el dashboard de Stripe, por ejemplo). El evento en sí sigue siendo válido y su
@@ -71,6 +69,7 @@ export class CheckoutOrderService {
   async markCompleted(input: {
     stripeCheckoutSessionId: string;
     stripePaymentIntentId: string | null;
+    stripeSubscriptionId: string | null;
   }): Promise<void> {
     const result = await this.checkoutOrderRepository.update(
       {
@@ -81,6 +80,7 @@ export class CheckoutOrderService {
         status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
         completedAt: new Date(),
         stripePaymentIntentId: input.stripePaymentIntentId,
+        stripeSubscriptionId: input.stripeSubscriptionId,
       },
     );
 
@@ -90,5 +90,48 @@ export class CheckoutOrderService {
           'orden PENDING que cerrar (ya cerrada por una entrega anterior, o abierta fuera de este flujo).',
       );
     }
+  }
+
+  /**
+   * Conecta la orden de alta con el slot que la primera factura de la suscripción emitió.
+   * Se invoca al crear el slot, por lo que cubre el orden normal: Checkout → invoice.paid.
+   */
+  async linkCompletedSubscriptionToCreditSlot(input: {
+    billingProfileId: string;
+    stripeSubscriptionId: string | null;
+    creditSlotId: string;
+  }): Promise<void> {
+    if (!input.stripeSubscriptionId) {
+      return;
+    }
+
+    await this.checkoutOrderRepository.update(
+      {
+        billingProfileId: input.billingProfileId,
+        stripeSubscriptionId: input.stripeSubscriptionId,
+        kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
+        status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
+        creditSlotId: IsNull(),
+      },
+      { creditSlotId: input.creditSlotId },
+    );
+  }
+
+  /**
+   * Cubre el orden inverso: `invoice.paid` pudo crear el slot antes de que llegara Checkout.
+   * Actualiza sólo esa sesión y nunca reemplaza un vínculo que ya existía.
+   */
+  async linkCheckoutSessionToCreditSlot(input: {
+    stripeCheckoutSessionId: string;
+    creditSlotId: string;
+  }): Promise<void> {
+    await this.checkoutOrderRepository.update(
+      {
+        stripeCheckoutSessionId: input.stripeCheckoutSessionId,
+        status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
+        creditSlotId: IsNull(),
+      },
+      { creditSlotId: input.creditSlotId },
+    );
   }
 }

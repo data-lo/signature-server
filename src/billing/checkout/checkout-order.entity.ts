@@ -3,23 +3,21 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
-import { PlanPriceEntity } from '../catalog/plan-price.entity';
-import { DocumentPackOfferEntity } from '../catalog/document-pack-offer.entity';
+import { CatalogPriceEntity } from '../catalog/catalog-price.entity';
+import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
 
 @Entity('checkout_orders')
+@Index('IDX_checkout_orders_stripe_subscription', ['stripeSubscriptionId'])
 @Check('CHK_checkout_orders_amount', '"amount" >= 0')
-@Check(
-  'CHK_checkout_orders_item_matches_kind',
-  '("kind" = \'SUBSCRIPTION\' AND "plan_price_id" IS NOT NULL AND "document_pack_offer_id" IS NULL) OR ("kind" = \'ADD_ON\' AND "plan_price_id" IS NULL AND "document_pack_offer_id" IS NOT NULL)',
-)
 export class CheckoutOrderEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -31,22 +29,24 @@ export class CheckoutOrderEntity {
   @JoinColumn({ name: 'billing_profile_id' })
   billingProfile: BillingProfileEntity;
 
-  @Column({ name: 'plan_price_id', nullable: true })
-  planPriceId: string | null;
+  /** La única oferta cobrada; su item determina si es suscripción o créditos. */
+  @Column({ name: 'catalog_price_id' })
+  catalogPriceId: string;
 
-  @ManyToOne(() => PlanPriceEntity, { nullable: true, onDelete: 'RESTRICT' })
-  @JoinColumn({ name: 'plan_price_id' })
-  planPrice: PlanPriceEntity | null;
+  @ManyToOne(() => CatalogPriceEntity, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'catalog_price_id' })
+  catalogPrice: CatalogPriceEntity;
 
-  @Column({ name: 'document_pack_offer_id', nullable: true })
-  documentPackOfferId: string | null;
+  /** El slot acreditado por esta orden. Varias órdenes pueden contribuir al mismo periodo. */
+  @Column({ name: 'credit_slot_id', nullable: true })
+  creditSlotId: string | null;
 
-  @ManyToOne(() => DocumentPackOfferEntity, {
+  @ManyToOne(() => CreditLotEntity, (slot) => slot.checkoutOrders, {
     nullable: true,
-    onDelete: 'RESTRICT',
+    onDelete: 'SET NULL',
   })
-  @JoinColumn({ name: 'document_pack_offer_id' })
-  documentPackOffer: DocumentPackOfferEntity | null;
+  @JoinColumn({ name: 'credit_slot_id' })
+  creditSlot: CreditLotEntity | null;
 
   @Column({ type: 'enum', enum: CHECKOUT_KIND_ENUM })
   kind: CHECKOUT_KIND_ENUM;
@@ -56,6 +56,13 @@ export class CheckoutOrderEntity {
 
   @Column({ name: 'stripe_payment_intent_id', nullable: true, unique: true })
   stripePaymentIntentId: string | null;
+
+  /**
+   * Se llena cuando Stripe termina un Checkout de suscripción. No es único: una misma
+   * suscripción puede tener varias órdenes históricas vinculadas a ella.
+   */
+  @Column({ name: 'stripe_subscription_id', nullable: true })
+  stripeSubscriptionId: string | null;
 
   @Column({
     type: 'enum',

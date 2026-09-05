@@ -67,7 +67,7 @@ export class BillingProfileNotFoundForInvoiceException extends InternalServerErr
 }
 
 /**
- * La factura pagada corresponde a un `stripe_price_id` que no está en `plan_prices`, así que no
+ * La factura pagada corresponde a un `stripe_price_id` que no está en `catalog_prices`, así que no
  * hay forma de saber cuántos documentos conceder.
  *
  * Mismo criterio que arriba: hubo cobro, así que se falla ruidosamente en vez de conceder un
@@ -76,6 +76,6 @@ export class BillingProfileNotFoundForInvoiceException extends InternalServerErr
 export class PlanNotFoundForInvoiceException extends InternalServerErrorException {
   constructor(stripePriceId: string | null) {
     super('No se encontró el plan correspondiente a la factura recibida.');
-    this.cause = `Sin plan_prices para el precio ${stripePriceId ?? '(desconocido)'}.`;
+    this.cause = `Sin catalog_prices para el precio ${stripePriceId ?? '(desconocido)'}.`;
   }
 }

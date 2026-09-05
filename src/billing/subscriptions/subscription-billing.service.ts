@@ -64,6 +64,8 @@ export class SubscriptionBillingService {
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(BillingProfileEntity)
     private readonly billingProfileRepository: Repository<BillingProfileEntity>,
+    @InjectRepository(CreditLotEntity)
+    private readonly creditLotRepository: Repository<CreditLotEntity>,
     private readonly billingCatalogService: BillingCatalogService,
     private readonly checkoutOrderService: CheckoutOrderService,
   ) {}
@@ -99,10 +101,12 @@ export class SubscriptionBillingService {
       return;
     }
 
+    const stripeSubscriptionId = this.toId(session.subscription);
+
     await this.billingProfileRepository.update(profile.id, {
       stripeCustomerId: this.toId(session.customer) ?? profile.stripeCustomerId,
       stripeSubscriptionId:
-        this.toId(session.subscription) ?? profile.stripeSubscriptionId,
+        stripeSubscriptionId ?? profile.stripeSubscriptionId,
       currentPlanType: session.metadata?.planType ?? profile.currentPlanType,
       /**
        * INCOMPLETE y no ACTIVE: la sesión terminó, pero la activación la da el cobro
@@ -117,7 +121,27 @@ export class SubscriptionBillingService {
     await this.checkoutOrderService.markCompleted({
       stripeCheckoutSessionId: session.id,
       stripePaymentIntentId: this.toId(session.payment_intent),
+      stripeSubscriptionId,
     });
+
+    // Stripe no asegura el orden de los dos eventos de alta. Si invoice.paid llegó primero,
+    // el slot ya existe y ahora podemos enlazar la sesión exacta que acaba de completarse.
+    if (stripeSubscriptionId) {
+      const existingSlot = await this.creditLotRepository.findOne({
+        where: {
+          billingProfileId: profile.id,
+          stripeSubscriptionId,
+          origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
+        },
+        order: { createdAt: 'DESC' },
+      });
+      if (existingSlot) {
+        await this.checkoutOrderService.linkCheckoutSessionToCreditSlot({
+          stripeCheckoutSessionId: session.id,
+          creditSlotId: existingSlot.id,
+        });
+      }
+    }
 
     this.logger.log(
       `Perfil ${profile.id} vinculado a Stripe tras completarse la sesión ${session.id}.`,
@@ -152,7 +176,7 @@ export class SubscriptionBillingService {
       ? await this.billingCatalogService.findPriceForInvoice(stripePriceId)
       : null;
 
-    if (!planPrice?.plan) {
+    if (!planPrice?.catalogItem.plan) {
       throw new PlanNotFoundForInvoiceException(stripePriceId);
     }
 
@@ -188,7 +212,7 @@ export class SubscriptionBillingService {
 
       await this.rolloverPreviousPeriod(manager, locked.id);
 
-      const issued = planPrice.plan.documentsIncluded;
+      const issued = planPrice.catalogItem.plan.documentsIncluded;
       const lot = await creditLotRepository.save(
         creditLotRepository.create({
           billingProfileId: locked.id,
@@ -197,6 +221,7 @@ export class SubscriptionBillingService {
           remaining: issued,
           priority: CURRENT_PERIOD_LOT_PRIORITY,
           stripeInvoiceId: invoice.id ?? null,
+          stripeSubscriptionId,
           periodStart,
           periodEnd,
         }),
@@ -204,15 +229,23 @@ export class SubscriptionBillingService {
 
       await manager.update(BillingProfileEntity, locked.id, {
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-        currentPlanType: planPrice.planType,
+        currentPlanType: planPrice.catalogItem.plan.planType,
         stripeSubscriptionId:
           stripeSubscriptionId ?? locked.stripeSubscriptionId,
         currentPeriodStart: periodStart,
         currentPeriodEnd: periodEnd,
       });
 
+      // Orden normal: Checkout ya guardó la suscripción. Vinculamos sólo la orden inicial que
+      // aún no tenga slot; en renovaciones no hay una orden de Checkout nueva que tocar.
+      await this.checkoutOrderService.linkCompletedSubscriptionToCreditSlot({
+        billingProfileId: locked.id,
+        stripeSubscriptionId,
+        creditSlotId: lot.id,
+      });
+
       this.logger.log(
-        `Perfil ${locked.id} ACTIVE con el plan ${planPrice.planType}; lote ${lot.id} de ${issued} documentos emitido por la factura ${invoice.id}.`,
+        `Perfil ${locked.id} ACTIVE con el plan ${planPrice.catalogItem.plan.planType}; lote ${lot.id} de ${issued} documentos emitido por la factura ${invoice.id}.`,
       );
     });
   }
@@ -280,7 +313,9 @@ export class SubscriptionBillingService {
     await this.billingProfileRepository.update(profile.id, {
       status: this.toProfileStatus(subscription.status),
       stripeSubscriptionId: subscription.id,
-      ...(planPrice ? { currentPlanType: planPrice.planType } : {}),
+      ...(planPrice?.catalogItem.plan
+        ? { currentPlanType: planPrice.catalogItem.plan.planType }
+        : {}),
       ...(periodStart ? { currentPeriodStart: periodStart } : {}),
       ...(periodEnd ? { currentPeriodEnd: periodEnd } : {}),
     });
