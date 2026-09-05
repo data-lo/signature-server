@@ -15,6 +15,7 @@ import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-
 import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';
 import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
+import { GetBillingStateUseCase } from './../src/billing/profiles/get-billing-state.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
 import { CheckoutOrderService } from './../src/billing/checkout/checkout-order.service';
@@ -170,6 +171,8 @@ describe('Checkout de suscripción (e2e)', () => {
       controllers: [PaymentsController],
       providers: [
         CreateSubscriptionCheckoutUseCase,
+        // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e.
+        GetBillingStateUseCase,
         BillingOwnerService,
         BillingCatalogService,
         CheckoutOrderService,
@@ -232,6 +235,40 @@ describe('Checkout de suscripción (e2e)', () => {
         amount: 49900,
         currency: 'mxn',
       });
+    });
+
+    /**
+     * Desde que toda cuenta nace con su `billing_profile` en plan Free, ÉSTE es el camino normal
+     * de una primera contratación: quien pulsa "Contratar" ya tiene perfil, y viene en FREE.
+     *
+     * Antes el perfil se creaba aquí mismo, así que la prueba de arriba —que parte de una tabla
+     * vacía— era el caso real. Ahora es el excepcional (una cuenta anterior al plan gratuito),
+     * y hace falta cubrir el que de verdad va a ocurrir: el plan gratuito NO puede estorbar la
+     * compra, ni reutilizando su perfil ni bloqueando la sesión.
+     */
+    it('un perfil en plan Free puede contratar, reutilizando su perfil', async () => {
+      await billingProfiles.save({
+        id: 'perfil-free',
+        personalAccountId: PERSONAL_ACCOUNT_ID,
+        organizationId: null,
+        currentPlanType: 'free',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+      } as never);
+
+      const response = await openCheckout();
+
+      expect(response.status).toBe(201);
+      expect(billingProfiles.rows).toHaveLength(1);
+      expect(createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            billingProfileId: 'perfil-free',
+          }),
+        }),
+      );
+      expect(checkoutOrders.rows).toHaveLength(1);
     });
 
     /**

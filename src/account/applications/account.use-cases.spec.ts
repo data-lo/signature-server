@@ -12,6 +12,7 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { RedisService } from 'src/shared/redis/redis.service';
 import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
 import { RolesService } from 'src/roles/roles.service';
+import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-profile-provisioning.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { OrganizationInvitationService } from '../organization-invitation.service';
 
@@ -118,6 +119,16 @@ describe('casos de uso de cuentas y organizaciones', () => {
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: RedisService, useValue: redisService },
         { provide: RolesService, useValue: rolesService },
+        {
+          // Toda cuenta nace con su perfil Free; acá sólo interesa que el alta siga funcionando,
+          // el contenido del perfil lo cubre `BillingProfileProvisioningService`.
+          provide: BillingProfileProvisioningService,
+          useValue: {
+            provisionFreeProfile: jest
+              .fn()
+              .mockResolvedValue({ id: 'perfil-free-1' }),
+          },
+        },
         {
           provide: OrganizationInvitationService,
           useValue: organizationInvitationService,

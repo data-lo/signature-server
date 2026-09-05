@@ -2,21 +2,16 @@ import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
-import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { BillingProfileEntity } from './billing-profile.entity';
-import {
-  InconsistentOrganizationAccountException,
-  MissingActiveAccountException,
-} from '../exceptions/billing.exceptions';
+import { toBillingOwner, type BillingOwner } from './billing-owner.util';
+import { MissingActiveAccountException } from '../exceptions/billing.exceptions';
 
 /**
- * A quién se le factura: exactamente una de las dos columnas va poblada, nunca ambas ni ninguna
- * (lo garantiza `CHK_billing_profiles_exactly_one_owner` en la tabla).
+ * El propietario facturable y su regla de traducción viven en `billing-owner.util`, sin
+ * dependencias, porque el alta de la cuenta también los necesita y no comparte módulo con este
+ * servicio. Se re-exporta para no romper a quien ya lo importaba de acá.
  */
-export interface BillingOwner {
-  personalAccountId: string | null;
-  organizationId: string | null;
-}
+export type { BillingOwner } from './billing-owner.util';
 
 /**
  * Resuelve **de quién** es el dinero y el saldo, y le consigue su `billing_profile`.
@@ -77,22 +72,7 @@ export class BillingOwnerService {
       throw new ForbiddenException('No perteneces a esta cuenta');
     }
 
-    return this.toOwner(account);
-  }
-
-  private toOwner(account: AccountEntity): BillingOwner {
-    if (account.accountType === ACCOUNT_TYPE_ENUM.ORGANIZATION) {
-      if (!account.organizationId) {
-        throw new InconsistentOrganizationAccountException(account.id);
-      }
-
-      return {
-        personalAccountId: null,
-        organizationId: account.organizationId,
-      };
-    }
-
-    return { personalAccountId: account.id, organizationId: null };
+    return toBillingOwner(account);
   }
 
   /** Atajo para los llamadores que sólo necesitan el perfil. */
@@ -116,7 +96,7 @@ export class BillingOwnerService {
    * lo correcto es justamente lo que ya ocurrió: el perfil existe.
    */
   async getOrCreateProfile(owner: BillingOwner): Promise<BillingProfileEntity> {
-    const existing = await this.findByOwner(owner);
+    const existing = await this.findProfileByOwner(owner);
     if (existing) {
       return existing;
     }
@@ -136,7 +116,7 @@ export class BillingOwnerService {
         throw error;
       }
 
-      const raced = await this.findByOwner(owner);
+      const raced = await this.findProfileByOwner(owner);
       if (!raced) {
         throw error;
       }
@@ -145,7 +125,20 @@ export class BillingOwnerService {
     }
   }
 
-  private async findByOwner(
+  /**
+   * Busca el perfil del propietario **sin crearlo**.
+   *
+   * Es la mitad de lectura de `getOrCreateProfile`, y es pública porque consultar el estado de
+   * facturación no debe dar de alta nada: preguntar "¿qué plan tengo?" desde una pantalla
+   * cualquiera acabaría insertando una fila en `billing_profiles` por cada cuenta que sólo
+   * miró, y `null` —que es lo que el consumidor necesita distinguir— dejaría de darse nunca.
+   *
+   * Qué columna se consulta es justamente la distinción del módulo: `organization_id` cuando el
+   * contexto es una organización (perfil compartido por todos sus miembros) y
+   * `personal_account_id` cuando es una cuenta personal. El `owner` ya viene resuelto por
+   * `resolveOwner`, así que acá no se vuelve a decidir de quién es el dinero.
+   */
+  async findProfileByOwner(
     owner: BillingOwner,
   ): Promise<BillingProfileEntity | null> {
     return this.billingProfileRepository.findOne({
