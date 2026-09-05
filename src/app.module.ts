@@ -17,6 +17,7 @@ import { AuthModule } from './auth/auth.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuditModule } from './audit/audit.module';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { IpInterceptor } from './ip/ip.interceptor';
 import { SharedModule } from './shared/shared.module';
 import { DocumentModule } from './document/document.module';
@@ -89,6 +90,19 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+
+    /**
+     * Habilita los trabajos programados del proyecto. `forRoot()` sólo registra el explorador que
+     * descubre los `@Cron`; los jobs viven en el módulo de su dominio —hoy
+     * `ExpireManualSubscriptionsJob` en `BillingModule`— y no acá.
+     *
+     * **Ojo al escalar horizontalmente:** el scheduler es de PROCESO, así que cada réplica dispara
+     * su propia copia de cada job. Los que se añadan tienen que ser seguros ante ejecuciones
+     * simultáneas por su cuenta; el de facturación lo consigue con `FOR UPDATE SKIP LOCKED` y
+     * revalidando las condiciones ya con la fila bloqueada (ver su docblock).
+     */
+    ScheduleModule.forRoot(),
+
     AuthModule,
     DocumentModule,
     UserModule,

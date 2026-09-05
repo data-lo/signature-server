@@ -15,6 +15,7 @@ import { PlanEntity } from '../catalog/plan.entity';
 import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
 
 const ADMIN_ROLE = { id: 'rol-admin', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
@@ -224,6 +225,7 @@ describe('Alta del perfil Free (integración)', () => {
         organizationId: null,
         currentPlanType: FREE_PLAN_TYPE,
         status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        billingSource: BILLING_SOURCE_ENUM.FREE,
         stripeCustomerId: null,
         stripeSubscriptionId: null,
       });
@@ -251,6 +253,7 @@ describe('Alta del perfil Free (integración)', () => {
         organizationId: organizacion.id,
         currentPlanType: FREE_PLAN_TYPE,
         status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        billingSource: BILLING_SOURCE_ENUM.FREE,
       });
     });
   });

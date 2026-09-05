@@ -17,11 +17,14 @@ import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { PlanEntity } from '../catalog/plan.entity';
 import { CatalogItemEntity } from '../catalog/catalog-item.entity';
 import { CatalogPriceEntity } from '../catalog/catalog-price.entity';
 import { DocumentCreditPackEntity } from '../catalog/document-credit-pack.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 
@@ -55,6 +58,9 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
   let billingProfileRepository: ReturnType<typeof createMockRepository>;
   let checkoutOrderRepository: ReturnType<typeof createMockRepository>;
   let creditLotRepository: ReturnType<typeof createMockRepository>;
+  let subscriptionBillingHistoryRepository: ReturnType<
+    typeof createMockRepository
+  >;
   let catalogPriceRepository: ReturnType<typeof createMockRepository>;
   let verifier: { verify: jest.Mock };
   let rolloverExecute: jest.Mock;
@@ -89,12 +95,18 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
     });
 
     creditLotRepository.findOne.mockResolvedValue(null);
+    subscriptionBillingHistoryRepository = createMockRepository();
 
     rolloverExecute = jest.fn().mockResolvedValue({ affected: 0 });
     const manager = {
       findOne: jest.fn().mockResolvedValue({ id: 'profile-1' }),
       update: jest.fn(),
-      getRepository: jest.fn().mockReturnValue(creditLotRepository),
+      // Por entidad: en la misma transacción se piden el repositorio de lotes y el del historial.
+      getRepository: jest.fn((entity: unknown) =>
+        entity === SubscriptionBillingHistoryEntity
+          ? subscriptionBillingHistoryRepository
+          : creditLotRepository,
+      ),
       createQueryBuilder: jest.fn().mockReturnValue({
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
@@ -271,6 +283,26 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         'webhook-row-1',
         expect.objectContaining({
           processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.PROCESSED,
+        }),
+      );
+    });
+
+    /**
+     * El origen recorre la cadena entera hasta la base: el perfil queda gobernado por Stripe
+     * —y por tanto fuera del alcance de `ExpireManualSubscriptionsJob`— y el periodo cobrado
+     * queda registrado con el origen con el que se cobró, que es lo que sobrevive aunque el
+     * perfil vuelva a Free más adelante.
+     */
+    it('deja el perfil en origen STRIPE y abre el periodo en el historial', async () => {
+      await deliver(invoicePaidEvent);
+
+      expect(subscriptionBillingHistoryRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          billingProfileId: 'profile-1',
+          source: BILLING_SOURCE_ENUM.STRIPE,
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+          planType: 'pro',
+          stripeInvoiceId: 'in_1',
         }),
       );
     });

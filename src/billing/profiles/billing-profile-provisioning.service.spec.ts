@@ -4,6 +4,7 @@ import { BillingProfileProvisioningService } from './billing-profile-provisionin
 import { BillingProfileEntity } from './billing-profile.entity';
 import { PlanEntity } from '../catalog/plan.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { PLAN_CREATION_SOURCE_ENUM } from '../enums/plan-creation-source.enum';
 import {
   FREE_PLAN_DOCUMENTS_INCLUDED,
@@ -97,13 +98,20 @@ describe('BillingProfileProvisioningService', () => {
   });
 
   describe('perfil inicial', () => {
-    it('nace en plan free, estado FREE y sin nada de Stripe', async () => {
+    /**
+     * Los tres campos dicen lo mismo desde ángulos distintos —beneficios, situación comercial y
+     * quién gobierna el ciclo de vida— y hacen falta los tres. El origen es además lo que
+     * mantiene la cuenta fuera del alcance de `ExpireManualSubscriptionsJob`, que sólo mira
+     * perfiles `MANUAL`.
+     */
+    it('nace en plan free, estado FREE, origen FREE y sin nada de Stripe', async () => {
       await provision();
 
       expect(manager.save).toHaveBeenCalledWith(
         expect.objectContaining({
           currentPlanType: FREE_PLAN_TYPE,
           status: BILLING_PROFILE_STATUS_ENUM.FREE,
+          billingSource: BILLING_SOURCE_ENUM.FREE,
           stripeCustomerId: null,
           stripeSubscriptionId: null,
         }),

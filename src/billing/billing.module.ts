@@ -18,6 +18,8 @@ import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
 import { GetBillingStateUseCase } from './profiles/get-billing-state.use-case';
 import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
+import { SubscriptionBillingHistoryEntity } from './subscriptions/subscription-billing-history.entity';
+import { ExpireManualSubscriptionsJob } from './subscriptions/expire-manual-subscriptions.job';
 
 /**
  * Dominio de facturación: catálogo comercial, perfiles, órdenes de compra y saldo de documentos.
@@ -46,6 +48,7 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
       CheckoutOrderEntity,
       CreditLotEntity,
       DocumentCreditConsumptionEntity,
+      SubscriptionBillingHistoryEntity,
       // Sólo para comprobar la membresía de la cuenta activa (ver `BillingOwnerService`);
       // este módulo nunca escribe en `accounts`.
       AccountEntity,
@@ -60,6 +63,7 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    ExpireManualSubscriptionsJob,
   ],
   exports: [
     CatalogSyncService,
@@ -69,6 +73,7 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    ExpireManualSubscriptionsJob,
   ],
 })
 export class BillingModule {}

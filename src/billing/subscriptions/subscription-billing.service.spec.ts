@@ -7,7 +7,11 @@ import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { BILLING_PERIOD_END_REASON_ENUM } from '../enums/billing-period-end-reason.enum';
+import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import {
   BillingProfileNotFoundForInvoiceException,
@@ -51,6 +55,7 @@ describe('SubscriptionBillingService', () => {
     create: jest.Mock;
     save: jest.Mock;
   };
+  let historyRepository: { create: jest.Mock; save: jest.Mock };
   let billingCatalogService: { findPriceForInvoice: jest.Mock };
   let checkoutOrderService: {
     markCompleted: jest.Mock;
@@ -75,6 +80,10 @@ describe('SubscriptionBillingService', () => {
       create: jest.fn((data) => data),
       save: jest.fn(async (data) => ({ id: 'lot-1', ...data })),
     };
+    historyRepository = {
+      create: jest.fn((data) => data),
+      save: jest.fn(async (data) => ({ id: 'period-1', ...data })),
+    };
     billingCatalogService = {
       findPriceForInvoice: jest.fn().mockResolvedValue(PLAN_PRICE),
     };
@@ -88,7 +97,16 @@ describe('SubscriptionBillingService', () => {
     manager = {
       findOne: jest.fn().mockResolvedValue({ id: 'profile-1' }),
       update: jest.fn(),
-      getRepository: jest.fn().mockReturnValue(creditLotRepository),
+      /**
+       * Se enruta por entidad y no se devuelve siempre el mismo doble: el servicio pide desde la
+       * misma transacción el repositorio de lotes y el del historial, y confundirlos haría que
+       * una aserción sobre el saldo se cumpliera con una escritura del historial (o al revés).
+       */
+      getRepository: jest.fn((entity: unknown) =>
+        entity === SubscriptionBillingHistoryEntity
+          ? historyRepository
+          : creditLotRepository,
+      ),
       createQueryBuilder: jest.fn().mockReturnValue({
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
@@ -495,6 +513,176 @@ describe('SubscriptionBillingService', () => {
         { status: BILLING_PROFILE_STATUS_ENUM.CANCELED },
       );
       expect(creditLotRepository.save).not.toHaveBeenCalled();
+    });
+  });
+  describe('origen de facturación e historial de periodos', () => {
+    it('un cobro de Stripe deja el perfil gobernado por STRIPE', async () => {
+      await service.handleInvoicePaid(buildInvoice());
+
+      expect(manager.update).toHaveBeenCalledWith(
+        BillingProfileEntity,
+        'profile-1',
+        expect.objectContaining({
+          billingSource: BILLING_SOURCE_ENUM.STRIPE,
+        }),
+      );
+    });
+
+    it('abre el periodo del historial con el origen y el plan cobrados', async () => {
+      await service.handleInvoicePaid(buildInvoice());
+
+      expect(historyRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          billingProfileId: 'profile-1',
+          planType: 'pro',
+          source: BILLING_SOURCE_ENUM.STRIPE,
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+          periodStart: new Date(PERIOD_START * 1000),
+          periodEnd: new Date(PERIOD_END * 1000),
+          stripeInvoiceId: 'in_1',
+          stripeSubscriptionId: 'sub_1',
+          endedAt: null,
+          endedReason: null,
+        }),
+      );
+    });
+
+    /**
+     * `RENEWED` y no `MANUAL_PERIOD_ENDED`: el periodo anterior no se agotó, lo sustituyó uno
+     * nuevo y el cliente no se quedó sin servicio ni un minuto. Esa diferencia es lo que hace
+     * legible el historial meses después.
+     */
+    it('cierra el periodo anterior como RENEWED', async () => {
+      await service.handleInvoicePaid(buildInvoice());
+
+      expect(manager.update).toHaveBeenCalledWith(
+        SubscriptionBillingHistoryEntity,
+        {
+          billingProfileId: 'profile-1',
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        },
+        expect.objectContaining({
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.EXPIRED,
+          endedReason: BILLING_PERIOD_END_REASON_ENUM.RENEWED,
+        }),
+      );
+    });
+
+    /**
+     * El orden lo impone `UQ_subscription_billing_history_active`, que sólo tolera un periodo
+     * vigente por perfil: abrir antes de cerrar reventaría contra el índice.
+     */
+    it('cierra el anterior antes de abrir el nuevo', async () => {
+      const orden: string[] = [];
+      manager.update.mockImplementation(async (entity: unknown) => {
+        if (entity === SubscriptionBillingHistoryEntity) {
+          orden.push('cierra');
+        }
+        return { affected: 1 };
+      });
+      historyRepository.save.mockImplementation(async (data) => {
+        orden.push('abre');
+        return { id: 'period-1', ...data };
+      });
+
+      await service.handleInvoicePaid(buildInvoice());
+
+      expect(orden).toEqual(['cierra', 'abre']);
+    });
+
+    it('no escribe historial si la factura ya se había procesado', async () => {
+      creditLotRepository.findOne.mockResolvedValue({ id: 'lot-existente' });
+
+      await service.handleInvoicePaid(buildInvoice());
+
+      expect(historyRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('perfiles de facturación manual frente a los webhooks de Stripe', () => {
+    const manual = {
+      id: 'profile-manual',
+      billingSource: BILLING_SOURCE_ENUM.MANUAL,
+      status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+      currentPlanType: 'plus',
+    };
+
+    beforeEach(() => {
+      billingProfileRepository.findOne.mockResolvedValue(manual);
+      manager.findOne.mockResolvedValue(manual);
+    });
+
+    it('invoice.payment_failed no lo toca', async () => {
+      await service.handleInvoicePaymentFailed({
+        id: 'in_1',
+        customer: 'cus_1',
+      } as unknown as Stripe.Invoice);
+
+      expect(billingProfileRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('customer.subscription.updated no lo toca', async () => {
+      await service.handleSubscriptionUpdated({
+        id: 'sub_1',
+        customer: 'cus_1',
+        status: 'active',
+        items: { data: [{ price: 'price_pro_mensual' }] },
+      } as unknown as Stripe.Subscription);
+
+      expect(billingProfileRepository.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * El caso que más daño haría: un perfil que estuvo en Stripe y luego pasó a facturación
+     * manual conserva sus ids, así que una cancelación tardía de la suscripción vieja lo
+     * encuentra. Dejarla pasar cancelaría a un cliente que está al corriente por otra vía.
+     */
+    it('customer.subscription.deleted no lo cancela', async () => {
+      await service.handleSubscriptionDeleted({
+        id: 'sub_1',
+        customer: 'cus_1',
+      } as unknown as Stripe.Subscription);
+
+      expect(billingProfileRepository.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * El checkout sí puede vincularlo con Stripe —sin eso el cobro posterior no encontraría el
+     * perfil—, pero no puede quitarle el plan que tiene pagado antes de que ese cobro exista.
+     */
+    it('checkout.session.completed lo vincula pero no le cambia plan ni estado', async () => {
+      await service.handleCheckoutSessionCompleted({
+        id: 'cs_1',
+        mode: 'subscription',
+        customer: 'cus_1',
+        subscription: 'sub_1',
+        payment_intent: 'pi_1',
+        metadata: { billingProfileId: 'profile-manual', planType: 'pro' },
+      } as unknown as Stripe.Checkout.Session);
+
+      const cambios = billingProfileRepository.update.mock.calls[0][1];
+      expect(cambios).toEqual({
+        stripeCustomerId: 'cus_1',
+        stripeSubscriptionId: 'sub_1',
+      });
+    });
+
+    /**
+     * El único camino permitido de manual a Stripe, y por eso está acá: hay un cobro confirmado
+     * que justifica el cambio de gobierno. A partir de ahora lo mueven los webhooks y el cron
+     * deja de verlo.
+     */
+    it('invoice.paid sí lo migra a STRIPE', async () => {
+      await service.handleInvoicePaid(buildInvoice());
+
+      expect(manager.update).toHaveBeenCalledWith(
+        BillingProfileEntity,
+        'profile-manual',
+        expect.objectContaining({
+          billingSource: BILLING_SOURCE_ENUM.STRIPE,
+          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        }),
+      );
     });
   });
 });

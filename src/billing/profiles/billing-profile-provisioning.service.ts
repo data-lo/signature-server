@@ -3,6 +3,7 @@ import { EntityManager } from 'typeorm';
 import { PlanEntity } from '../catalog/plan.entity';
 import { PLAN_CREATION_SOURCE_ENUM } from '../enums/plan-creation-source.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import {
   FREE_PLAN_DOCUMENTS_INCLUDED,
   FREE_PLAN_NAME,
@@ -68,6 +69,14 @@ export class BillingProfileProvisioningService {
         organizationId: owner.organizationId,
         currentPlanType: FREE_PLAN_TYPE,
         status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        /**
+         * Los tres campos dicen lo mismo desde ángulos distintos y por eso van los tres: el plan
+         * (`free`) son los beneficios, el estado (`FREE`) es la situación comercial, y el origen
+         * (`FREE`) es quién gobierna el ciclo de vida — nadie, porque no hay periodo que vencer.
+         * El origen es además el que mantiene la cuenta fuera del alcance de
+         * `ExpireManualSubscriptionsJob`, que sólo mira perfiles `MANUAL`.
+         */
+        billingSource: BILLING_SOURCE_ENUM.FREE,
         // Explícitos, no por omisión: son la afirmación de que el plan Free no toca Stripe.
         stripeCustomerId: null,
         stripeSubscriptionId: null,

@@ -4,9 +4,13 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import Stripe = require('stripe');
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { BILLING_PERIOD_END_REASON_ENUM } from '../enums/billing-period-end-reason.enum';
+import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import {
   BillingProfileNotFoundForInvoiceException,
@@ -116,27 +120,51 @@ export class SubscriptionBillingService {
 
     const stripeSubscriptionId = this.toId(session.subscription);
 
+    /**
+     * Un perfil de facturación manual recibe de acá el VÍNCULO con Stripe (cliente y
+     * suscripción) y nada más: ni el plan ni el estado.
+     *
+     * El vínculo sí hace falta —sin él, el `invoice.paid` que venga después no encontraría el
+     * perfil y el cobro quedaría huérfano—, pero cambiarle el plan por el que se está comprando
+     * le quitaría el que tiene pagado ANTES de que ese pago se confirme; si el cobro falla se
+     * quedaría sin ninguno de los dos. La migración de manual a Stripe la hace `invoice.paid`,
+     * que es donde ya hay dinero cobrado que la justifique.
+     */
+    const perfilManual = profile.billingSource === BILLING_SOURCE_ENUM.MANUAL;
+
     await this.billingProfileRepository.update(profile.id, {
       stripeCustomerId: this.toId(session.customer) ?? profile.stripeCustomerId,
       stripeSubscriptionId:
         stripeSubscriptionId ?? profile.stripeSubscriptionId,
-      currentPlanType: session.metadata?.planType ?? profile.currentPlanType,
-      /**
-       * INCOMPLETE y no ACTIVE: la sesión terminó, pero la activación la da el cobro
-       * (`invoice.paid`). Y sólo se avanza desde un estado que todavía no tiene suscripción de
-       * pago: si `invoice.paid` ya llegó primero y dejó el perfil ACTIVE, esta entrega no puede
-       * desactivarlo.
-       *
-       * `FREE` entra en esa condición desde que toda cuenta nace con su perfil gratuito. Antes
-       * el perfil lo creaba `getOrCreateProfile` y llegaba acá ya en INCOMPLETE, así que esto
-       * era un no-op que sólo lo preservaba; ahora llega en FREE y hay una transición REAL que
-       * hacer. Sin ella el perfil se quedaría diciendo "plan gratuito" entre el fin del checkout
-       * y el cobro, cuando lo cierto es que ya contrató y falta confirmar el pago.
-       */
-      ...(ADMITE_CHECKOUT_PENDIENTE.has(profile.status)
-        ? { status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE }
-        : {}),
+      ...(perfilManual
+        ? {}
+        : {
+            currentPlanType:
+              session.metadata?.planType ?? profile.currentPlanType,
+            /**
+             * INCOMPLETE y no ACTIVE: la sesión terminó, pero la activación la da el cobro
+             * (`invoice.paid`). Y sólo se avanza desde un estado que todavía no tiene suscripción de
+             * pago: si `invoice.paid` ya llegó primero y dejó el perfil ACTIVE, esta entrega no puede
+             * desactivarlo.
+             *
+             * `FREE` entra en esa condición desde que toda cuenta nace con su perfil gratuito. Antes
+             * el perfil lo creaba `getOrCreateProfile` y llegaba acá ya en INCOMPLETE, así que esto
+             * era un no-op que sólo lo preservaba; ahora llega en FREE y hay una transición REAL que
+             * hacer. Sin ella el perfil se quedaría diciendo "plan gratuito" entre el fin del checkout
+             * y el cobro, cuando lo cierto es que ya contrató y falta confirmar el pago.
+             */
+            ...(ADMITE_CHECKOUT_PENDIENTE.has(profile.status)
+              ? { status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE }
+              : {}),
+          }),
     });
+
+    if (perfilManual) {
+      this.logger.log(
+        `Perfil manual ${profile.id}: la sesión ${session.id} sólo lo vincula con Stripe; ` +
+          'su plan y su estado no se tocan hasta que haya un cobro confirmado.',
+      );
+    }
 
     await this.checkoutOrderService.markCompleted({
       stripeCheckoutSessionId: session.id,
@@ -247,9 +275,26 @@ export class SubscriptionBillingService {
         }),
       );
 
+      await this.recordStripePeriod(manager, {
+        billingProfileId: locked.id,
+        planType: planPrice.catalogItem.plan.planType,
+        periodStart,
+        periodEnd,
+        stripeInvoiceId: invoice.id ?? null,
+        stripeSubscriptionId,
+      });
+
       await manager.update(BillingProfileEntity, locked.id, {
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
         currentPlanType: planPrice.catalogItem.plan.planType,
+        /**
+         * **El único punto donde un perfil pasa a estar gobernado por Stripe.** Vale también
+         * para uno que venía de facturación manual: es la "migración explícita de manual a
+         * Stripe" que la regla permite, y se hace acá y no en `checkout.session.completed`
+         * porque acá ya hay un cobro confirmado que la justifica. A partir de ahora lo mueven
+         * los webhooks, y `ExpireManualSubscriptionsJob` deja de verlo.
+         */
+        billingSource: BILLING_SOURCE_ENUM.STRIPE,
         stripeSubscriptionId:
           stripeSubscriptionId ?? locked.stripeSubscriptionId,
         currentPeriodStart: periodStart,
@@ -290,6 +335,15 @@ export class SubscriptionBillingService {
       return;
     }
 
+    if (
+      this.gobernadoPorFacturacionManual(
+        profile,
+        `invoice.payment_failed (factura ${invoice.id})`,
+      )
+    ) {
+      return;
+    }
+
     await this.billingProfileRepository.update(profile.id, {
       status: BILLING_PROFILE_STATUS_ENUM.PAST_DUE,
     });
@@ -312,6 +366,15 @@ export class SubscriptionBillingService {
       this.logger.warn(
         `customer.subscription.updated sin perfil local asociado (suscripción ${subscription.id}).`,
       );
+      return;
+    }
+
+    if (
+      this.gobernadoPorFacturacionManual(
+        profile,
+        `customer.subscription.updated (suscripción ${subscription.id})`,
+      )
+    ) {
       return;
     }
 
@@ -365,12 +428,84 @@ export class SubscriptionBillingService {
       return;
     }
 
+    if (
+      this.gobernadoPorFacturacionManual(
+        profile,
+        `customer.subscription.deleted (suscripción ${subscription.id})`,
+      )
+    ) {
+      return;
+    }
+
     await this.billingProfileRepository.update(profile.id, {
       status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
     });
 
     this.logger.log(
       `Perfil ${profile.id} CANCELED tras eliminarse la suscripción ${subscription.id}.`,
+    );
+  }
+
+  /**
+   * Cierra el periodo vigente del historial y abre el que acaba de cobrarse.
+   *
+   * **En este orden y en esta transacción, no por gusto.**
+   * `UQ_subscription_billing_history_active` deja como mucho un periodo `ACTIVE` por perfil, así
+   * que abrir antes de cerrar reventaría contra el índice. Y como todo esto corre dentro de la
+   * transacción de `handleInvoicePaid` —con el perfil ya bloqueado—, nadie puede ver el instante
+   * intermedio en el que el perfil no tiene periodo vigente.
+   *
+   * El anterior se cierra como `RENEWED` y no como `MANUAL_PERIOD_ENDED`: no se agotó, lo
+   * sustituyó uno nuevo, y el cliente no se quedó ni un minuto sin servicio. Esa diferencia es
+   * justo lo que hace legible el historial más tarde. Sirve igual para el periodo manual de un
+   * perfil que acaba de migrar a Stripe: también quedó sustituido, no vencido.
+   *
+   * En una renovación normal no hay periodo anterior que cerrar sólo la primera vez; el `UPDATE`
+   * por condición afecta a cero filas y no hace falta comprobarlo antes.
+   */
+  private async recordStripePeriod(
+    manager: EntityManager,
+    period: {
+      billingProfileId: string;
+      planType: string;
+      periodStart: Date | null;
+      periodEnd: Date | null;
+      stripeInvoiceId: string | null;
+      stripeSubscriptionId: string | null;
+    },
+  ): Promise<void> {
+    const now = new Date();
+
+    await manager.update(
+      SubscriptionBillingHistoryEntity,
+      {
+        billingProfileId: period.billingProfileId,
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+      },
+      {
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.EXPIRED,
+        endedAt: now,
+        endedReason: BILLING_PERIOD_END_REASON_ENUM.RENEWED,
+      },
+    );
+
+    const historyRepository = manager.getRepository(
+      SubscriptionBillingHistoryEntity,
+    );
+
+    await historyRepository.save(
+      historyRepository.create({
+        billingProfileId: period.billingProfileId,
+        planType: period.planType,
+        source: BILLING_SOURCE_ENUM.STRIPE,
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
+        stripeInvoiceId: period.stripeInvoiceId,
+        stripeSubscriptionId: period.stripeSubscriptionId,
+        endedAt: null,
+        endedReason: null,
+      }),
     );
   }
 
@@ -400,6 +535,36 @@ export class SubscriptionBillingService {
         `${result.affected} lote(s) del periodo anterior pasaron a ROLLOVER en el perfil ${billingProfileId}.`,
       );
     }
+  }
+
+  /**
+   * `true` si el perfil lo gobierna la facturación manual y, por tanto, este webhook debe
+   * dejarlo en paz.
+   *
+   * **Por qué un webhook de Stripe puede llegar a un perfil manual.** Los tres eventos de ciclo
+   * de vida localizan el perfil por `stripe_subscription_id` o `stripe_customer_id`, y un perfil
+   * que en su día estuvo en Stripe y luego se pasó a facturación manual CONSERVA esos ids —son
+   * historia que no se borra—. Sin esta comprobación, una cancelación tardía de la suscripción
+   * vieja llegaría meses después y dejaría en CANCELED a un cliente que está al corriente por
+   * otra vía.
+   *
+   * El camino contrario —de manual a Stripe— sí está permitido, pero sólo desde `invoice.paid`:
+   * ahí hay un cobro confirmado que justifica el cambio de gobierno. Ver su docblock.
+   */
+  private gobernadoPorFacturacionManual(
+    profile: BillingProfileEntity,
+    evento: string,
+  ): boolean {
+    if (profile.billingSource !== BILLING_SOURCE_ENUM.MANUAL) {
+      return false;
+    }
+
+    this.logger.warn(
+      `${evento} alcanzó el perfil ${profile.id}, que es de facturación manual; ` +
+        'su ciclo de vida no lo gobierna Stripe y no se modifica.',
+    );
+
+    return true;
   }
 
   /** Igual que `findProfile`, pero exigiendo resultado: hubo un cobro y no se puede ignorar. */
