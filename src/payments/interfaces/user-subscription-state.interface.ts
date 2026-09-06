@@ -14,6 +14,15 @@ export interface UserSubscriptionState {
   /** Plan vigente del catálogo (`basic`, `plus`, `premium`, ...). */
   planType: string | null;
   status: BILLING_PROFILE_STATUS_ENUM | null;
+  /**
+   * La baja está programada para el final del periodo vigente.
+   *
+   * Convive con `hasActiveSubscription: true` a propósito: el servicio sigue habilitado hasta
+   * `currentPeriodEnd` y sólo entonces deja de renovarse. Es lo que la pantalla necesita para
+   * decidir entre ofrecer "Cancelar suscripción" y anunciar la fecha de término, sin volver a
+   * deducirlo de nada.
+   */
+  cancelAtPeriodEnd: boolean;
   currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
 }

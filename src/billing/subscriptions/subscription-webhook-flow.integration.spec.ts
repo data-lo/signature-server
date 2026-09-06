@@ -365,6 +365,9 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         'profile-1',
         {
           status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
+          // La baja programada ya se cumplió: dejarla en `true` haría que la pantalla siguiera
+          // prometiendo un término sobre una suscripción que ya terminó.
+          cancelAtPeriodEnd: false,
         },
       );
       expect(creditLotRepository.save).not.toHaveBeenCalled();

@@ -107,3 +107,59 @@ export class PlanNotFoundForInvoiceException extends InternalServerErrorExceptio
     this.cause = `Sin catalog_prices para el precio ${stripePriceId ?? '(desconocido)'}.`;
   }
 }
+
+/**
+ * Se pidió cancelar cuando no hay ninguna suscripción de pago que dar de baja: la cuenta no tiene
+ * perfil, su perfil no está `ACTIVE`, o está `ACTIVE` sin `stripe_subscription_id`.
+ *
+ * **Los tres casos responden lo mismo a propósito.** Desde fuera son la misma situación —"no hay
+ * nada que cancelar"— y distinguirlos sólo serviría para sondear qué tiene contratada una
+ * organización ajena. El detalle que sí hace falta para depurar viaja en `cause`, que se queda en
+ * el log del servidor.
+ *
+ * El tercer caso no es teórico: un perfil en plan gratuito está en `FREE`, pero uno que se
+ * quedó a medio contratar puede estar `ACTIVE` por una corrección manual sin que exista la
+ * suscripción en el proveedor. Pedirle a Stripe que actualice `undefined` daría un 400 suyo, y el
+ * usuario vería un error del proveedor donde lo cierto es que no hay nada que cancelar.
+ *
+ * 409 y no 404: la petición está bien formada y el recurso existe; lo que choca es el estado
+ * actual, y el frontend necesita distinguirlo para redibujar la tarjeta en vez de tratarlo como
+ * una ruta rota.
+ */
+export class NoActiveSubscriptionToCancelException extends ConflictException {
+  constructor(reason: string) {
+    super('No tienes una suscripción activa que cancelar.');
+    this.cause = reason;
+  }
+}
+
+/**
+ * La baja ya estaba programada y se volvió a pedir.
+ *
+ * Se corta ANTES de hablar con Stripe. Repetir la llamada sería inofensivo para el proveedor
+ * —`cancel_at_period_end: true` sobre algo que ya lo tiene es idempotente— pero gastaría una
+ * llamada de red por cada doble clic y, sobre todo, dejaría al frontend sin forma de distinguir
+ * "acabo de cancelar" de "ya estaba cancelado". El 409 es lo que le permite refrescar y mostrar
+ * la fecha de término en vez de un segundo mensaje de éxito.
+ */
+export class SubscriptionCancellationAlreadyScheduledException extends ConflictException {
+  constructor() {
+    super(
+      'La cancelación de tu suscripción ya está programada para el final del periodo vigente.',
+    );
+  }
+}
+
+/**
+ * Se pidió reanudar una suscripción que no tiene ninguna baja programada.
+ *
+ * Se corta antes de hablar con Stripe, por el mismo motivo que su gemela de cancelación: mandar
+ * `cancel_at_period_end: false` sobre algo que ya renueva sería inofensivo allá, pero dejaría al
+ * frontend sin distinguir "acabo de reanudar" de "no había nada que reanudar" — y con ello, sin
+ * saber si el botón que acaba de pulsar el usuario hizo algo.
+ */
+export class NoScheduledCancellationToResumeException extends ConflictException {
+  constructor() {
+    super('Tu suscripción no tiene ninguna cancelación programada.');
+  }
+}

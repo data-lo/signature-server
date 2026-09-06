@@ -10,6 +10,7 @@ const mockPricesList = jest.fn();
 const mockProductsRetrieve = jest.fn();
 const mockSessionsCreate = jest.fn();
 const mockCustomersCreate = jest.fn();
+const mockSubscriptionsUpdate = jest.fn();
 
 jest.mock('stripe', () =>
   jest.fn().mockImplementation(() => ({
@@ -17,6 +18,7 @@ jest.mock('stripe', () =>
     products: { retrieve: mockProductsRetrieve },
     checkout: { sessions: { create: mockSessionsCreate } },
     customers: { create: mockCustomersCreate },
+    subscriptions: { update: mockSubscriptionsUpdate },
   })),
 );
 
@@ -190,6 +192,67 @@ describe('StripePaymentService', () => {
       await expect(service.retrieveProduct('prod_pro')).rejects.toBeInstanceOf(
         BadGatewayException,
       );
+    });
+  });
+
+  describe('baja programada de una suscripción', () => {
+    /**
+     * `cancel_at_period_end` y NO `subscriptions.cancel()`: aquél le dice a Stripe que no emita
+     * la próxima factura y deja la suscripción viva hasta el final del periodo pagado; éste la
+     * cortaría ahora mismo y le quitaría al cliente el tiempo que ya compró.
+     */
+    it('programa la baja para el final del periodo, sin cancelar de inmediato', async () => {
+      const suscripcion = { id: 'sub_1', cancel_at_period_end: true };
+      mockSubscriptionsUpdate.mockResolvedValue(suscripcion);
+
+      await expect(
+        service.scheduleSubscriptionCancellation('sub_1'),
+      ).resolves.toBe(suscripcion);
+      expect(mockSubscriptionsUpdate).toHaveBeenCalledWith('sub_1', {
+        cancel_at_period_end: true,
+      });
+    });
+
+    it('traduce un fallo del proveedor a 502, sin filtrar su error', async () => {
+      mockSubscriptionsUpdate.mockRejectedValue(new Error('Stripe: timeout'));
+
+      await expect(
+        service.scheduleSubscriptionCancellation('sub_1'),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+    });
+
+    it('una credencial rechazada es un 500 nuestro, no un 502 del proveedor', async () => {
+      mockSubscriptionsUpdate.mockRejectedValue({
+        type: 'StripeAuthenticationError',
+        message: 'Invalid API Key',
+      });
+
+      await expect(
+        service.scheduleSubscriptionCancellation('sub_1'),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+    });
+  });
+
+  describe('reactivación de una suscripción', () => {
+    /** La operación inversa exacta: la misma llamada con la bandera al revés. */
+    it('le quita la baja programada', async () => {
+      const suscripcion = { id: 'sub_1', cancel_at_period_end: false };
+      mockSubscriptionsUpdate.mockResolvedValue(suscripcion);
+
+      await expect(service.resumeSubscription('sub_1')).resolves.toBe(
+        suscripcion,
+      );
+      expect(mockSubscriptionsUpdate).toHaveBeenCalledWith('sub_1', {
+        cancel_at_period_end: false,
+      });
+    });
+
+    it('traduce un fallo del proveedor a 502, sin filtrar su error', async () => {
+      mockSubscriptionsUpdate.mockRejectedValue(new Error('Stripe: timeout'));
+
+      await expect(
+        service.resumeSubscription('sub_1'),
+      ).rejects.toBeInstanceOf(BadGatewayException);
     });
   });
 
