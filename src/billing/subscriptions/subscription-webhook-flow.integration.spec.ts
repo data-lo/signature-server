@@ -11,6 +11,8 @@ import { StripeWebhookService } from 'src/payments/stripe/stripe-webhook.service
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './subscription-billing.service';
+import { FinalizeSubscriptionFromStripeUseCase } from './finalize-subscription-from-stripe.use-case';
+import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CatalogSyncService } from '../catalog/catalog-sync.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
@@ -22,6 +24,9 @@ import { CatalogItemEntity } from '../catalog/catalog-item.entity';
 import { CatalogPriceEntity } from '../catalog/catalog-price.entity';
 import { DocumentCreditPackEntity } from '../catalog/document-credit-pack.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
+import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.enum';
+import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 
@@ -55,6 +60,10 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
   let billingProfileRepository: ReturnType<typeof createMockRepository>;
   let checkoutOrderRepository: ReturnType<typeof createMockRepository>;
   let creditLotRepository: ReturnType<typeof createMockRepository>;
+  let subscriptionBillingHistoryRepository: ReturnType<
+    typeof createMockRepository
+  >;
+  let managerUpdate: jest.Mock;
   let catalogPriceRepository: ReturnType<typeof createMockRepository>;
   let verifier: { verify: jest.Mock };
   let rolloverExecute: jest.Mock;
@@ -90,11 +99,28 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
 
     creditLotRepository.findOne.mockResolvedValue(null);
 
+    subscriptionBillingHistoryRepository = createMockRepository();
+    subscriptionBillingHistoryRepository.findOne.mockResolvedValue(null);
+
     rolloverExecute = jest.fn().mockResolvedValue({ affected: 0 });
+    managerUpdate = jest.fn();
     const manager = {
-      findOne: jest.fn().mockResolvedValue({ id: 'profile-1' }),
-      update: jest.fn(),
-      getRepository: jest.fn().mockReturnValue(creditLotRepository),
+      // El perfil que se bloquea dentro de la transacción trae plan y periodo: es de ahí de donde
+      // el cierre toma el plan pagado que conserva el historial.
+      findOne: jest.fn().mockResolvedValue({
+        id: 'profile-1',
+        currentPlanType: 'pro',
+        currentPeriodStart: new Date(PERIOD_START * 1000),
+        currentPeriodEnd: new Date(PERIOD_END * 1000),
+        stripeCustomerId: 'cus_1',
+        stripeSubscriptionId: 'sub_1',
+      }),
+      update: managerUpdate,
+      getRepository: jest.fn((entity: unknown) =>
+        entity === SubscriptionBillingHistoryEntity
+          ? subscriptionBillingHistoryRepository
+          : creditLotRepository,
+      ),
       createQueryBuilder: jest.fn().mockReturnValue({
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
@@ -119,6 +145,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         RegisterWebhookEventUseCase,
         StripeWebhookService,
         SubscriptionBillingService,
+        FinalizeSubscriptionFromStripeUseCase,
         BillingCatalogService,
         CheckoutOrderService,
         CatalogSyncService,
@@ -152,6 +179,10 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         {
           provide: getRepositoryToken(CreditLotEntity),
           useValue: creditLotRepository,
+        },
+        {
+          provide: getRepositoryToken(SubscriptionBillingHistoryEntity),
+          useValue: subscriptionBillingHistoryRepository,
         },
         {
           provide: getRepositoryToken(CatalogPriceEntity),
@@ -354,18 +385,46 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
       expect(creditLotRepository.save).not.toHaveBeenCalled();
     });
 
-    it('customer.subscription.deleted cancela el perfil sin borrar su historial', async () => {
+    /**
+     * El recorrido completo del término definitivo: la entrega de Stripe acaba dejando el perfil
+     * en el plan gratuito y el cierre escrito en el historial, sin tocar nada de lo comprado.
+     */
+    it('customer.subscription.deleted devuelve el perfil a Free y registra el cierre', async () => {
       await deliver({
         id: 'evt_deleted',
         type: 'customer.subscription.deleted',
-        data: { object: { id: 'sub_1', customer: 'cus_1' } },
+        data: {
+          object: {
+            id: 'sub_1',
+            customer: 'cus_1',
+            status: 'canceled',
+            cancel_at_period_end: true,
+            ended_at: PERIOD_END,
+            cancellation_details: { reason: 'cancellation_requested' },
+          },
+        },
       });
 
-      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+      expect(managerUpdate).toHaveBeenCalledWith(
+        BillingProfileEntity,
         'profile-1',
-        {
-          status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
-        },
+        expect.objectContaining({
+          currentPlanType: FREE_PLAN_TYPE,
+          status: BILLING_PROFILE_STATUS_ENUM.FREE,
+          cancelAtPeriodEnd: false,
+          currentPeriodStart: null,
+        }),
+      );
+      expect(subscriptionBillingHistoryRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          billingProfileId: 'profile-1',
+          // El plan PAGADO, no `free`: es lo que esta tabla existe para conservar.
+          planType: 'pro',
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.CANCELED,
+          endedReason: SUBSCRIPTION_END_REASON_ENUM.CANCELED_AT_PERIOD_END,
+          stripeSubscriptionId: 'sub_1',
+          stripeCustomerId: 'cus_1',
+        }),
       );
       expect(creditLotRepository.save).not.toHaveBeenCalled();
       expect(creditLotRepository.update).not.toHaveBeenCalled();

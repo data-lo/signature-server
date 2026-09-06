@@ -3,6 +3,7 @@ import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import Stripe = require('stripe');
 import { SubscriptionBillingService } from './subscription-billing.service';
+import { FinalizeSubscriptionFromStripeUseCase } from './finalize-subscription-from-stripe.use-case';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
@@ -52,6 +53,7 @@ describe('SubscriptionBillingService', () => {
     save: jest.Mock;
   };
   let billingCatalogService: { findPriceForInvoice: jest.Mock };
+  let finalizeSubscription: { execute: jest.Mock };
   let checkoutOrderService: {
     markCompleted: jest.Mock;
     linkCompletedSubscriptionToCreditSlot: jest.Mock;
@@ -78,6 +80,7 @@ describe('SubscriptionBillingService', () => {
     billingCatalogService = {
       findPriceForInvoice: jest.fn().mockResolvedValue(PLAN_PRICE),
     };
+    finalizeSubscription = { execute: jest.fn() };
     checkoutOrderService = {
       markCompleted: jest.fn(),
       linkCompletedSubscriptionToCreditSlot: jest.fn(),
@@ -121,6 +124,10 @@ describe('SubscriptionBillingService', () => {
         },
         { provide: BillingCatalogService, useValue: billingCatalogService },
         { provide: CheckoutOrderService, useValue: checkoutOrderService },
+        {
+          provide: FinalizeSubscriptionFromStripeUseCase,
+          useValue: finalizeSubscription,
+        },
       ],
     }).compile();
 
@@ -460,6 +467,43 @@ describe('SubscriptionBillingService', () => {
       );
     });
 
+    /**
+     * Stripe no garantiza el orden de entrega: un `updated` con estado terminal puede llegar
+     * DESPUÉS del `deleted` que ya devolvió el perfil al plan gratuito. Sin la guarda, esa entrega
+     * tardía volvería a poner el perfil en CANCELED y le restauraría plan y periodo, deshaciendo
+     * el término.
+     */
+    it('ignora una sincronización terminal de una suscripción ya finalizada', async () => {
+      billingProfileRepository.findOne.mockResolvedValue({
+        id: 'profile-1',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        stripeSubscriptionId: 'sub_1',
+      });
+
+      await service.handleSubscriptionUpdated({
+        ...subscription,
+        status: 'canceled',
+      } as unknown as Stripe.Subscription);
+
+      expect(billingProfileRepository.update).not.toHaveBeenCalled();
+    });
+
+    /** Un perfil que ya volvió a contratar tiene otra suscripción, y ese evento sí hay que atenderlo. */
+    it('sí sincroniza si la suscripción terminal es otra distinta', async () => {
+      billingProfileRepository.findOne.mockResolvedValue({
+        id: 'profile-1',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        stripeSubscriptionId: 'sub_nueva',
+      });
+
+      await service.handleSubscriptionUpdated({
+        ...subscription,
+        status: 'canceled',
+      } as unknown as Stripe.Subscription);
+
+      expect(billingProfileRepository.update).toHaveBeenCalled();
+    });
+
     it.each([
       ['past_due', BILLING_PROFILE_STATUS_ENUM.PAST_DUE],
       ['unpaid', BILLING_PROFILE_STATUS_ENUM.PAST_DUE],
@@ -484,16 +528,21 @@ describe('SubscriptionBillingService', () => {
   });
 
   describe('CA11 — customer.subscription.deleted', () => {
-    it('cancela el perfil sin tocar lotes ni consumos', async () => {
-      await service.handleSubscriptionDeleted({
-        id: 'sub_1',
-        customer: 'cus_1',
-      } as unknown as Stripe.Subscription);
+    const subscription = {
+      id: 'sub_1',
+      customer: 'cus_1',
+    } as unknown as Stripe.Subscription;
 
-      expect(billingProfileRepository.update).toHaveBeenCalledWith(
-        'profile-1',
-        { status: BILLING_PROFILE_STATUS_ENUM.CANCELED },
-      );
+    /**
+     * Acá no queda lógica: el mismo cierre tiene que poder dispararse desde otras vías —una
+     * conciliación manual, una reparación de datos— con exactamente los mismos efectos, y dos
+     * copias de esa lógica se separan a la primera corrección.
+     */
+    it('delega el término definitivo en el caso de uso', async () => {
+      await service.handleSubscriptionDeleted(subscription);
+
+      expect(finalizeSubscription.execute).toHaveBeenCalledWith(subscription);
+      expect(billingProfileRepository.update).not.toHaveBeenCalled();
       expect(creditLotRepository.save).not.toHaveBeenCalled();
     });
   });

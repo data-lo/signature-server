@@ -6,6 +6,7 @@ import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
+import { FinalizeSubscriptionFromStripeUseCase } from './finalize-subscription-from-stripe.use-case';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import {
@@ -81,6 +82,7 @@ export class SubscriptionBillingService {
     private readonly creditLotRepository: Repository<CreditLotEntity>,
     private readonly billingCatalogService: BillingCatalogService,
     private readonly checkoutOrderService: CheckoutOrderService,
+    private readonly finalizeSubscription: FinalizeSubscriptionFromStripeUseCase,
   ) {}
 
   /**
@@ -315,6 +317,29 @@ export class SubscriptionBillingService {
       return;
     }
 
+    /**
+     * **Una suscripción ya finalizada no se resucita.** Stripe no garantiza el orden de entrega,
+     * así que un `customer.subscription.updated` con estado terminal puede llegar DESPUÉS del
+     * `deleted` que ya devolvió el perfil al plan gratuito. Sin esta guarda, esa entrega tardía
+     * volvería a poner el perfil en CANCELED y le restauraría plan y periodo — deshaciendo el
+     * término y dejando al cliente con un plan de pago que Stripe ya no cobra.
+     *
+     * Se exige que sea LA MISMA suscripción: un perfil que ya volvió a contratar tiene otra, y
+     * ese evento sí hay que atenderlo.
+     */
+    if (
+      profile.status === BILLING_PROFILE_STATUS_ENUM.FREE &&
+      profile.stripeSubscriptionId === subscription.id &&
+      this.toProfileStatus(subscription.status) ===
+        BILLING_PROFILE_STATUS_ENUM.CANCELED
+    ) {
+      this.logger.log(
+        `La suscripción ${subscription.id} ya se finalizó en el perfil ${profile.id}; ` +
+          'se ignora esta sincronización tardía.',
+      );
+      return;
+    }
+
     const item = subscription.items?.data?.[0];
     const stripePriceId = this.toId(item?.price);
     const planPrice = stripePriceId
@@ -346,32 +371,17 @@ export class SubscriptionBillingService {
   }
 
   /**
-   * Cancela el perfil sin tocar su historial: los lotes emitidos y los consumos registrados se
-   * conservan tal cual. Son la evidencia de lo que el cliente pagó y gastó, y hacen falta para
-   * responder una aclaración meses después de la baja.
+   * Término definitivo de la suscripción. Delega en `FinalizeSubscriptionFromStripeUseCase`, que
+   * registra el cierre en el historial y devuelve el perfil al plan gratuito.
+   *
+   * Acá no queda lógica porque el mismo cierre tiene que poder dispararse desde otras vías —una
+   * conciliación manual, una reparación de datos— con exactamente los mismos efectos, y dos
+   * copias de esa lógica se separan a la primera corrección.
    */
   async handleSubscriptionDeleted(
     subscription: Stripe.Subscription,
   ): Promise<void> {
-    const profile = await this.findProfile(
-      subscription.id,
-      this.toId(subscription.customer),
-    );
-
-    if (!profile) {
-      this.logger.warn(
-        `customer.subscription.deleted sin perfil local asociado (suscripción ${subscription.id}).`,
-      );
-      return;
-    }
-
-    await this.billingProfileRepository.update(profile.id, {
-      status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
-    });
-
-    this.logger.log(
-      `Perfil ${profile.id} CANCELED tras eliminarse la suscripción ${subscription.id}.`,
-    );
+    await this.finalizeSubscription.execute(subscription);
   }
 
   /**
