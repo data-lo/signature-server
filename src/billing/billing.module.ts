@@ -18,6 +18,8 @@ import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
 import { GetBillingStateUseCase } from './profiles/get-billing-state.use-case';
 import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
+import { CancelSubscriptionUseCase } from './subscriptions/cancel-subscription.use-case';
+import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.use-case';
 
 /**
  * Dominio de facturación: catálogo comercial, perfiles, órdenes de compra y saldo de documentos.
@@ -60,6 +62,8 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    CancelSubscriptionUseCase,
+    ResumeSubscriptionUseCase,
   ],
   exports: [
     CatalogSyncService,
@@ -69,6 +73,8 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    CancelSubscriptionUseCase,
+    ResumeSubscriptionUseCase,
   ],
 })
 export class BillingModule {}

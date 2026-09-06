@@ -333,6 +333,17 @@ export class SubscriptionBillingService {
     await this.billingProfileRepository.update(profile.id, {
       status: this.toProfileStatus(subscription.status),
       stripeSubscriptionId: subscription.id,
+      /**
+       * **Se escribe SIEMPRE, no sólo cuando viene en `true`.** Es lo que hace que este webhook
+       * cubra los dos sentidos: la baja programada desde nuestra API o desde el Dashboard de
+       * Stripe, y también la REACTIVACIÓN —alguien la quita en el Dashboard y el perfil tiene que
+       * dejar de anunciar un término que ya no va a ocurrir—. Condicionarlo a que sea verdadero
+       * dejaría la marca pegada para siempre.
+       *
+       * De paso es lo que hace idempotente la sincronización: Stripe reentrega el mismo evento
+       * varias veces y escribir el valor que ya está no tiene ningún efecto.
+       */
+      cancelAtPeriodEnd: subscription.cancel_at_period_end ?? false,
       ...(planPrice?.catalogItem.plan
         ? { currentPlanType: planPrice.catalogItem.plan.planType }
         : {}),
@@ -367,6 +378,13 @@ export class SubscriptionBillingService {
 
     await this.billingProfileRepository.update(profile.id, {
       status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
+      /**
+       * La baja programada ya se cumplió: dejar la marca en `true` haría que la pantalla siguiera
+       * prometiendo "seguirá activa hasta el X" sobre una suscripción que ya terminó, y que una
+       * contratación futura sobre este mismo perfil naciera anunciando una cancelación que nadie
+       * pidió.
+       */
+      cancelAtPeriodEnd: false,
     });
 
     this.logger.log(

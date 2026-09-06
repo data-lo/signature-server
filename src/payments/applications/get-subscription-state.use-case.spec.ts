@@ -53,6 +53,7 @@ describe('GetSubscriptionStateUseCase', () => {
       id: 'perfil-1',
       status,
       currentPlanType: 'plus',
+      cancelAtPeriodEnd: false,
       currentPeriodStart: PERIODO_INICIO,
       currentPeriodEnd: PERIODO_FIN,
       ...extra,
@@ -92,6 +93,7 @@ describe('GetSubscriptionStateUseCase', () => {
         hasActiveSubscription: true,
         planType: 'premium',
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        cancelAtPeriodEnd: false,
         currentPeriodStart: PERIODO_INICIO,
         currentPeriodEnd: PERIODO_FIN,
       });
@@ -109,6 +111,7 @@ describe('GetSubscriptionStateUseCase', () => {
         hasActiveSubscription: false,
         planType: null,
         status: null,
+        cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
       });
@@ -139,8 +142,34 @@ describe('GetSubscriptionStateUseCase', () => {
         hasActiveSubscription: true,
         planType: 'plus',
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        cancelAtPeriodEnd: false,
         currentPeriodStart: PERIODO_INICIO,
         currentPeriodEnd: PERIODO_FIN,
+      });
+    });
+  });
+
+  /**
+   * Es lo que la pantalla necesita para decidir entre ofrecer "Cancelar suscripción" y anunciar
+   * la fecha de término. Convive con `hasActiveSubscription: true` a propósito: el servicio sigue
+   * habilitado y lo único que cambia es que no se renovará.
+   */
+  describe('baja programada', () => {
+    it('expone la baja programada junto al periodo que sigue vigente', async () => {
+      perfil(BILLING_PROFILE_STATUS_ENUM.ACTIVE, { cancelAtPeriodEnd: true });
+
+      await expect(execute()).resolves.toMatchObject({
+        hasActiveSubscription: true,
+        cancelAtPeriodEnd: true,
+        currentPeriodEnd: PERIODO_FIN,
+      });
+    });
+
+    it('una suscripción sin baja programada la reporta en falso', async () => {
+      perfil(BILLING_PROFILE_STATUS_ENUM.ACTIVE);
+
+      await expect(execute()).resolves.toMatchObject({
+        cancelAtPeriodEnd: false,
       });
     });
   });
