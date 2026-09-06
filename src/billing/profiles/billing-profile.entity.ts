@@ -57,6 +57,25 @@ export class BillingProfileEntity {
   })
   status: BILLING_PROFILE_STATUS_ENUM;
 
+  /**
+   * El cliente pidió la baja y conserva el servicio hasta que acabe lo que ya pagó.
+   *
+   * **No es un estado**, y por eso convive con `status = ACTIVE`: durante el resto del periodo la
+   * suscripción habilita exactamente lo mismo que antes y lo único que cambia es que no se va a
+   * renovar. El término de verdad no lo decide esta bandera sino
+   * `customer.subscription.deleted`, que es cuando Stripe confirma que la suscripción acabó.
+   *
+   * Se limpia al finalizar: una vez consumida, dejarla puesta haría que el perfil siguiera
+   * anunciando un término que ya ocurrió.
+   */
+  @Column({ name: 'cancel_at_period_end', type: 'boolean', default: false })
+  cancelAtPeriodEnd: boolean;
+
+  /**
+   * Inicio del periodo VIGENTE, y por eso se anula al terminar la suscripción: un plan que ya
+   * acabó no tiene periodo en curso que declarar. Su pareja `current_period_end` sí sobrevive,
+   * como fecha histórica de hasta cuándo tuvo servicio.
+   */
   @Column({ name: 'current_period_start', type: 'timestamptz', nullable: true })
   currentPeriodStart: Date | null;
 
