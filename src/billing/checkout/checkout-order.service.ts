@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { EntityManager, IsNull, Repository } from 'typeorm';
 import { CheckoutOrderEntity } from './checkout-order.entity';
 import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
@@ -93,28 +93,57 @@ export class CheckoutOrderService {
   }
 
   /**
-   * Conecta la orden de alta con el slot que la primera factura de la suscripción emitió.
-   * Se invoca al crear el slot, por lo que cubre el orden normal: Checkout → invoice.paid.
+   * Conecta la orden de alta con el slot que la primera factura de la suscripción emitió, y
+   * devuelve QUÉ orden se vinculó.
+   *
+   * Cubre el orden normal (Checkout → invoice.paid) y sólo alcanza al ALTA: en una renovación el
+   * cliente no vuelve a pasar por Checkout, no hay orden nueva y el filtro `credit_slot_id IS
+   * NULL` hace que no se toque la del periodo anterior.
+   *
+   * **Devuelve el id porque el historial lo necesita.** `subscription_billing_history` guarda en
+   * `checkout_order_id` la compra que originó el periodo, y resolverlo por separado significaría
+   * repetir esta misma consulta arriesgándose a que las dos eligieran órdenes distintas. Se busca
+   * primero y se actualiza por id: así el vínculo que se escribe y el que se reporta son el mismo.
+   *
+   * `manager` opcional: cuando lo recibe, el vínculo se escribe DENTRO de la transacción que
+   * emitió el lote, que es lo que hace que créditos, historial, perfil y orden queden o no queden
+   * los cuatro juntos.
    */
-  async linkCompletedSubscriptionToCreditSlot(input: {
-    billingProfileId: string;
-    stripeSubscriptionId: string | null;
-    creditSlotId: string;
-  }): Promise<void> {
+  async linkCompletedSubscriptionToCreditSlot(
+    input: {
+      billingProfileId: string;
+      stripeSubscriptionId: string | null;
+      creditSlotId: string;
+    },
+    manager?: EntityManager,
+  ): Promise<string | null> {
     if (!input.stripeSubscriptionId) {
-      return;
+      return null;
     }
 
-    await this.checkoutOrderRepository.update(
-      {
+    const repository = manager
+      ? manager.getRepository(CheckoutOrderEntity)
+      : this.checkoutOrderRepository;
+
+    const order = await repository.findOne({
+      where: {
         billingProfileId: input.billingProfileId,
         stripeSubscriptionId: input.stripeSubscriptionId,
         kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
         status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
         creditSlotId: IsNull(),
       },
-      { creditSlotId: input.creditSlotId },
-    );
+      // La más antigua: es la del alta, la única que puede quedar sin slot.
+      order: { createdAt: 'ASC' },
+    });
+
+    if (!order) {
+      return null;
+    }
+
+    await repository.update(order.id, { creditSlotId: input.creditSlotId });
+
+    return order.id;
   }
 
   /**

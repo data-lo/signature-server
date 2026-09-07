@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
 import { PaymentsModule } from 'src/payments/payments.module';
 import { PlanEntity } from './catalog/plan.entity';
 import { CatalogItemEntity } from './catalog/catalog-item.entity';
@@ -19,7 +20,10 @@ import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscriptio
 import { GetBillingStateUseCase } from './profiles/get-billing-state.use-case';
 import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
 import { SubscriptionBillingHistoryEntity } from './subscriptions/subscription-billing-history.entity';
+import { RegisterSubscriptionBillingUseCase } from './subscriptions/register-subscription-billing.use-case';
+import { RegisterManualSubscriptionBillingUseCase } from './subscriptions/register-manual-subscription-billing.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './subscriptions/finalize-subscription-from-stripe.use-case';
+import { InternalSubscriptionBillingController } from './subscriptions/internal-subscription-billing.controller';
 
 /**
  * Dominio de facturación: catálogo comercial, perfiles, órdenes de compra y saldo de documentos.
@@ -52,9 +56,13 @@ import { FinalizeSubscriptionFromStripeUseCase } from './subscriptions/finalize-
       // Sólo para comprobar la membresía de la cuenta activa (ver `BillingOwnerService`);
       // este módulo nunca escribe en `accounts`.
       AccountEntity,
+      // Sólo para comprobar que el autor de un cobro manual exista y siga activo (ver
+      // `RegisterManualSubscriptionBillingUseCase`); este módulo nunca escribe en `users`.
+      UserEntity,
     ]),
     forwardRef(() => PaymentsModule),
   ],
+  controllers: [InternalSubscriptionBillingController],
   providers: [
     CatalogSyncService,
     BillingCatalogService,
@@ -63,6 +71,8 @@ import { FinalizeSubscriptionFromStripeUseCase } from './subscriptions/finalize-
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    RegisterSubscriptionBillingUseCase,
+    RegisterManualSubscriptionBillingUseCase,
     FinalizeSubscriptionFromStripeUseCase,
   ],
   exports: [
@@ -73,6 +83,8 @@ import { FinalizeSubscriptionFromStripeUseCase } from './subscriptions/finalize-
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    RegisterSubscriptionBillingUseCase,
+    RegisterManualSubscriptionBillingUseCase,
     FinalizeSubscriptionFromStripeUseCase,
   ],
 })

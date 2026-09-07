@@ -6,32 +6,43 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { UserEntity } from 'src/user/entities/user.entity';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { PlanEntity } from '../catalog/plan.entity';
+import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
+import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
 import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.enum';
 
 /**
- * Un renglón por periodo de suscripción: qué plan cubrió, entre qué fechas y cómo terminó.
+ * Un renglón por PERIODO FACTURADO: qué plan cubría, entre qué fechas, cuánto se cobró, quién lo
+ * cobró y con qué se le sigue el rastro.
  *
- * **Existe porque `billing_profiles` sólo sabe el presente.** El perfil representa el estado
- * VIGENTE —un plan, un periodo— y cada cambio lo pisa. Eso bastaba mientras un perfil dado de
- * baja se quedaba en `CANCELED` recordando su último plan, pero desde que el término definitivo
- * lo devuelve al plan gratuito (`FinalizeSubscriptionFromStripeUseCase`), el perfil deja de poder
- * responder qué tenía contratado antes. Esta tabla es la que lo conserva.
+ * **Por qué no basta con `billing_profiles`.** El perfil representa únicamente el ESTADO VIGENTE:
+ * guarda un solo periodo y cada cobro lo pisa. Eso responde "¿qué tiene hoy este cliente?" pero
+ * no "¿desde cuándo?", "¿qué pasó en marzo?", "¿cuánto se le cobró?" ni "¿esto se lo cobró Stripe
+ * o se lo facturamos a mano?". Esta tabla es el registro que sobrevive a cada renovación, y
+ * separarla del perfil es lo que permite que aquél siga siendo una sola fila trivial de leer.
  *
- * **Por eso el plan del renglón no se reescribe nunca con `free`.** El perfil vuelve a Free; el
- * historial guarda el plan que el cliente PAGÓ, que es lo que hace falta para explicar un cobro,
- * atender una aclaración o contar cuánta gente se fue de qué plan.
+ * **Sirve igual a los dos orígenes, y ésa es la razón de su forma.** Las columnas de Stripe
+ * (`stripe_*`) y las manuales (`external_reference`, `created_by_user_id`, `notes`) son todas
+ * nullables porque ningún periodo llena las dos familias: un cobro de Stripe no tiene folio
+ * interno y una transferencia no tiene `in_...`. Lo que impide que eso degenere en filas a
+ * medias es `CHK_subscription_billing_history_origin_evidence`, que le exige a cada origen
+ * exactamente aquello con lo que sí se le puede rastrear.
  *
- * `status`, `ended_at` y `ended_reason` describen el cierre y no el cobro: un periodo cerrado se
- * pagó igual de bien que uno vigente. Los tres se escriben juntos —lo impone
- * `CHK_subscription_billing_history_ended`— porque un cierre sin fecha o sin motivo es un renglón
- * que nadie sabe contar después.
+ * **También es donde consta el FINAL de la suscripción.** `status`, `ended_at` y `ended_reason`
+ * describen el cierre y no el cobro: un periodo terminado se pagó igual de bien que uno vigente.
+ * Viven acá y no en `billing_profiles` porque el perfil vuelve al plan gratuito cuando Stripe da
+ * la baja por consumada (`FinalizeSubscriptionFromStripeUseCase`) y deja de poder responder qué
+ * tenía contratado antes; el renglón conserva el plan que el cliente PAGÓ, entre qué fechas y por
+ * qué se acabó, que es lo que hace falta para explicar un cobro o atender una aclaración meses
+ * después.
  */
 @Entity('subscription_billing_history')
 @Index('IDX_subscription_billing_history_profile', [
@@ -39,30 +50,65 @@ import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.e
   'periodStart',
 ])
 /**
- * La llave de reconciliación del webhook.
+ * La clave natural de un cobro manual: **una referencia no se puede registrar dos veces para el
+ * mismo perfil**.
  *
- * `customer.subscription.deleted` puede llegar varias veces —Stripe reintenta— y también puede
- * llegar después de un `customer.subscription.updated` que ya cerró lo mismo. Buscar por
- * suscripción es lo que permite reconocer "esto ya está registrado" en vez de abrir un segundo
- * renglón para el mismo periodo. No es único: un cliente que contrata, se va y vuelve genera
- * suscripciones distintas, y una misma suscripción puede dejar varios periodos si se renovó.
+ * Es lo que convierte "no dupliques el folio 4471" en una garantía del motor y no en una
+ * intención del código. Un administrador que reenvía el formulario, o dos que capturan la misma
+ * transferencia, chocan contra este índice y la transacción entera se deshace — créditos
+ * incluidos. Parcial y sólo sobre `MANUAL` porque los periodos de Stripe se desduplican por
+ * `stripe_invoice_id`, y porque un folio nulo no debe competir por la unicidad.
+ */
+/**
+ * La llave con la que el webhook de baja reconoce lo que ya cerró.
+ *
+ * `customer.subscription.deleted` puede llegar varias veces —Stripe reintenta— y también detrás de
+ * un `customer.subscription.updated` que ya describía el mismo final. Buscar por suscripción es lo
+ * que permite localizar el periodo a cerrar y reconocer "esto ya está registrado" en vez de pisar
+ * un `ended_at` que ya era el bueno. No es único: una suscripción deja un renglón por cada periodo
+ * que se le cobró, y un cliente que se va y vuelve genera suscripciones distintas.
  */
 @Index('IDX_subscription_billing_history_stripe_subscription', [
   'stripeSubscriptionId',
 ])
+@Index(
+  'UQ_subscription_billing_history_manual_reference',
+  ['billingProfileId', 'externalReference'],
+  {
+    unique: true,
+    where: `"source" = 'MANUAL' AND "external_reference" IS NOT NULL`,
+  },
+)
 /**
- * El historial registra periodos FACTURADOS, y el plan gratuito no factura: `free` es un plan
- * legítimo del perfil pero nunca de esta tabla. La regla vive en la base porque un `INSERT` de
- * corrección hecho a mano no pasa por el caso de uso que la respeta.
+ * Cada origen tiene que aportar aquello con lo que se le puede rastrear, y sin eso la fila no
+ * entra:
+ *
+ * - **`STRIPE` exige `stripe_invoice_id`.** Es el identificador del cobro en el proveedor y, de
+ *   paso, la clave de idempotencia de todo el flujo: sin él una re-entrega del webhook no se
+ *   podría reconocer como repetida y acreditaría documentos por segunda vez.
+ * - **`MANUAL` exige folio o autor.** Un cobro fuera de la plataforma no deja rastro en ningún
+ *   sistema externo, así que el rastro tiene que ser interno: la referencia del movimiento
+ *   (`external_reference`) o, como mínimo, quién lo registró (`created_by_user_id`). Una fila
+ *   manual sin ninguno de los dos sería un plan regalado del que nadie responde.
+ *
+ * Vive en la base y no sólo en el código porque un `INSERT` de corrección hecho a mano —una
+ * migración de datos, un arreglo en caliente— no pasa por el caso de uso que la respeta.
  */
 @Check(
-  'CHK_subscription_billing_history_plan',
-  `"plan_type" IS NULL OR "plan_type" <> 'free'`,
+  'CHK_subscription_billing_history_origin_evidence',
+  `("source" = 'STRIPE' AND "stripe_invoice_id" IS NOT NULL)
+   OR ("source" = 'MANUAL' AND ("external_reference" IS NOT NULL OR "created_by_user_id" IS NOT NULL))`,
+)
+@Check('CHK_subscription_billing_history_amount', '"amount" >= 0')
+@Check(
+  'CHK_subscription_billing_history_period',
+  '"period_start" < "period_end"',
 )
 /**
  * Cerrado significa cerrado: un periodo terminado tiene que decir CUÁNDO y POR QUÉ, y uno vigente
  * no puede afirmar que ya terminó. Sin esta comprobación, una actualización a medias dejaría
- * filas que el historial no sabría interpretar.
+ * filas que el historial no sabría interpretar — un cierre sin fecha no se puede ordenar y uno sin
+ * motivo no se puede contar.
  */
 @Check(
   'CHK_subscription_billing_history_ended',
@@ -81,47 +127,106 @@ export class SubscriptionBillingHistoryEntity {
   billingProfile: BillingProfileEntity;
 
   /**
-   * El plan que cubría ESTE periodo, no el que el perfil tenga hoy.
+   * La orden de compra que originó este periodo, cuando la hubo.
    *
-   * Nullable porque el renglón puede nacer al cerrar una suscripción cuyo perfil no llegó a
-   * registrar plan —una corrección manual, un alta a medias—. Perder el nombre del plan es
-   * asumible; perder el registro del cierre no, así que la fila entra igual. Por el mismo motivo
-   * el `ON DELETE SET NULL`: retirar un plan del catálogo no puede quedar bloqueado por
-   * facturación vieja.
+   * Nula en dos casos legítimos y muy distintos: una RENOVACIÓN de Stripe (el cliente no vuelve
+   * a pasar por Checkout, así que no hay orden nueva que apuntar) y un cobro MANUAL (nunca hubo
+   * Checkout). Sólo el alta inicial contratada por el usuario la tiene.
    */
-  @Column({ name: 'plan_type', type: 'varchar', length: 64, nullable: true })
-  planType: string | null;
+  @Column({ name: 'checkout_order_id', nullable: true })
+  checkoutOrderId: string | null;
 
-  @ManyToOne(() => PlanEntity, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'plan_type', referencedColumnName: 'planType' })
-  plan: PlanEntity | null;
+  @ManyToOne(() => CheckoutOrderEntity, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'checkout_order_id' })
+  checkoutOrder: CheckoutOrderEntity | null;
 
   /**
-   * `enumName` explícito porque el tipo no se llama como TypeORM lo derivaría de la tabla y la
-   * columna (`subscription_billing_history_source_enum`): el origen de un cobro es un concepto de
-   * facturación y no de esta tabla en concreto, así que el tipo lleva su propio nombre. Sin esto,
-   * un `migration:generate` posterior propondría recrear la columna sin motivo.
+   * El lote de documentos que este periodo emitió, uno a uno.
+   *
+   * `OneToOne` y con la columna única a propósito: un periodo concede su saldo UNA vez, y que dos
+   * renglones del historial pudieran señalar el mismo lote significaría que un cobro se registró
+   * dos veces repartiéndose unos créditos emitidos una sola. El índice único es lo que convierte
+   * "cada historial se vincula a un único credit_lot" en algo que impone el motor.
    */
+  @Column({ name: 'credit_slot_id', nullable: true, unique: true })
+  creditSlotId: string | null;
+
+  @OneToOne(() => CreditLotEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'credit_slot_id' })
+  creditSlot: CreditLotEntity | null;
+
   @Column({
     type: 'enum',
     enum: BILLING_SOURCE_ENUM,
     enumName: 'billing_source_enum',
-    default: BILLING_SOURCE_ENUM.STRIPE,
   })
   source: BILLING_SOURCE_ENUM;
 
+  /**
+   * El plan que cubría ESTE periodo, no el que el perfil tenga hoy. Se guarda aparte justamente
+   * porque el del perfil cambia: un cliente que subió de `basic` a `plus` tiene que seguir
+   * viendo `basic` en los meses que pagó como `basic`.
+   *
+   * `ON DELETE RESTRICT` y no `SET NULL` como en el perfil: la columna es obligatoria, así que el
+   * motor no podría "olvidarla" sin dejar la fila inválida. Borrar un plan con periodos
+   * facturados a su nombre queda bloqueado, que es lo correcto — el catálogo se retira con
+   * `is_active`, no borrando filas de las que cuelga la facturación.
+   */
+  @Column({ name: 'plan_type', type: 'varchar', length: 64 })
+  planType: string;
+
+  @ManyToOne(() => PlanEntity, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'plan_type', referencedColumnName: 'planType' })
+  plan: PlanEntity;
+
+  /**
+   * Importe cobrado por el periodo, en la unidad mínima de la moneda (centavos), igual que en
+   * `checkout_orders` y que en la propia API de Stripe. Entero y nunca decimal: los flotantes no
+   * representan exactamente los importes y sumarlos acumula error justo donde no se puede.
+   *
+   * Se permite `0` —una cortesía, una migración, un periodo de gracia registrado a mano— pero no
+   * negativo: una devolución no es un periodo facturado y no se representa como uno.
+   */
+  @Column({ type: 'integer' })
+  amount: number;
+
+  @Column({ type: 'varchar', length: 3 })
+  currency: string;
+
+  @Column({ name: 'period_start', type: 'timestamptz' })
+  periodStart: Date;
+
+  @Column({ name: 'period_end', type: 'timestamptz' })
+  periodEnd: Date;
+
+  /**
+   * Cuándo se cobró de verdad, que no es cuándo lo registramos.
+   *
+   * Se separa de `created_at` porque pueden distar mucho: una transferencia recibida el día 2 y
+   * capturada por administración el día 9 tiene `paid_at` el 2 y `created_at` el 9. Confundirlos
+   * falsearía cualquier corte de caja.
+   */
+  @Column({ name: 'paid_at', type: 'timestamptz' })
+  paidAt: Date;
+
+  /**
+   * Cómo acabó la suscripción EN ESTE periodo.
+   *
+   * Nace `ACTIVE` y sólo lo mueve `FinalizeSubscriptionFromStripeUseCase`, que cierra el último
+   * periodo cobrado cuando Stripe confirma la baja. Un periodo que se renovó se queda `ACTIVE`
+   * porque no fue él quien terminó el ciclo: el cliente siguió, y lo que hay a continuación es el
+   * renglón del periodo siguiente. Dicho de otro modo, la marca de cierre la lleva el ÚLTIMO
+   * periodo de cada suscripción, que es el que responde "¿cómo se fue este cliente?".
+   */
   @Column({
     type: 'enum',
     enum: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM,
     default: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
   })
   status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM;
-
-  @Column({ name: 'period_start', type: 'timestamptz', nullable: true })
-  periodStart: Date | null;
-
-  @Column({ name: 'period_end', type: 'timestamptz', nullable: true })
-  periodEnd: Date | null;
 
   /**
    * Cuándo confirmó Stripe el término. **No es lo mismo que `period_end`**: una baja inmediata o
@@ -131,7 +236,12 @@ export class SubscriptionBillingHistoryEntity {
   @Column({ name: 'ended_at', type: 'timestamptz', nullable: true })
   endedAt: Date | null;
 
-  /** `enumName` explícito, por el mismo motivo que en `source`. */
+  /**
+   * `enumName` explícito porque el tipo no se llama como TypeORM lo derivaría de la tabla y la
+   * columna (`subscription_billing_history_ended_reason_enum`): el motivo de un término es un
+   * concepto de suscripción y no de esta tabla en concreto, así que el tipo lleva su propio
+   * nombre. Sin esto, un `migration:generate` posterior propondría recrear la columna sin motivo.
+   */
   @Column({
     name: 'ended_reason',
     type: 'enum',
@@ -141,17 +251,50 @@ export class SubscriptionBillingHistoryEntity {
   })
   endedReason: SUBSCRIPTION_END_REASON_ENUM | null;
 
-  /**
-   * Los identificadores del proveedor se guardan en el renglón y no sólo en el perfil: el perfil
-   * los pisa en cuanto el cliente vuelve a contratar, y entonces ya no habría forma de saber qué
-   * suscripción de Stripe corresponde a qué periodo. Son la referencia con la que se audita un
-   * cobro meses después.
-   */
   @Column({ name: 'stripe_customer_id', nullable: true })
   stripeCustomerId: string | null;
 
   @Column({ name: 'stripe_subscription_id', nullable: true })
   stripeSubscriptionId: string | null;
+
+  /**
+   * Único: la misma factura de Stripe no puede abrir dos periodos. Es la clave de idempotencia
+   * del webhook —Stripe reintenta las entregas durante días— y la última red por debajo de la
+   * comprobación que hace `RegisterSubscriptionBillingUseCase`.
+   *
+   * En Postgres un `UNIQUE` admite tantos `NULL` como haga falta, que es justo lo que necesitan
+   * los cobros manuales: son todos "sin factura" sin estorbarse entre sí.
+   */
+  @Column({ name: 'stripe_invoice_id', nullable: true, unique: true })
+  stripeInvoiceId: string | null;
+
+  @Column({ name: 'stripe_payment_intent_id', nullable: true })
+  stripePaymentIntentId: string | null;
+
+  /**
+   * El rastro del cobro fuera de la plataforma: folio interno, referencia de la transferencia,
+   * número de la factura emitida por administración. Es además la clave de idempotencia del
+   * origen manual (ver `UQ_subscription_billing_history_manual_reference`), así que conviene que
+   * sea el identificador real del movimiento y no una nota libre — para eso está `notes`.
+   */
+  @Column({ name: 'external_reference', type: 'varchar', nullable: true })
+  externalReference: string | null;
+
+  /**
+   * Quién registró el cobro manual. `ON DELETE SET NULL` y no `RESTRICT`: dar de baja a un
+   * empleado no puede quedar bloqueado por las facturas que capturó, y perder el autor es menos
+   * grave que perder el periodo — el folio de `external_reference` sigue siendo el rastro
+   * principal.
+   */
+  @Column({ name: 'created_by_user_id', nullable: true })
+  createdByUserId: string | null;
+
+  @ManyToOne(() => UserEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'created_by_user_id' })
+  createdByUser: UserEntity | null;
+
+  @Column({ type: 'text', nullable: true })
+  notes: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

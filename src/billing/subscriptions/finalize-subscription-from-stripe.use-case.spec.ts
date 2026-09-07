@@ -73,6 +73,35 @@ function bajaDeStripe(
   } as unknown as Stripe.Subscription;
 }
 
+/**
+ * El renglón tal y como lo deja `RegisterSubscriptionBillingUseCase` al cobrar el periodo: con su
+ * importe, su factura y su fecha de pago, y todavía `ACTIVE`. Es lo que la baja tiene que cerrar
+ * — no algo que este caso de uso pueda crear, porque una baja no aporta ninguno de esos datos.
+ */
+function periodoCobrado(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: 'period-1',
+    billingProfileId: 'profile-1',
+    planType: 'plus',
+    source: BILLING_SOURCE_ENUM.STRIPE,
+    amount: 49900,
+    currency: 'mxn',
+    periodStart: new Date(PERIOD_START * 1000),
+    periodEnd: new Date(PERIOD_END * 1000),
+    paidAt: new Date(PERIOD_START * 1000),
+    status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+    stripeCustomerId: 'cus_1',
+    stripeSubscriptionId: 'sub_1',
+    stripeInvoiceId: 'in_1',
+    endedAt: null,
+    endedReason: null,
+    createdAt: new Date(PERIOD_START * 1000),
+    ...overrides,
+  };
+}
+
 describe('FinalizeSubscriptionFromStripeUseCase', () => {
   let useCase: FinalizeSubscriptionFromStripeUseCase;
   let perfiles: PerfilFalso[];
@@ -82,7 +111,7 @@ describe('FinalizeSubscriptionFromStripeUseCase', () => {
 
   beforeEach(async () => {
     perfiles = [perfilDePago()];
-    historial = [];
+    historial = [periodoCobrado()];
     opcionesDeBloqueo = [];
 
     const billingProfileRepository = {
@@ -99,14 +128,25 @@ describe('FinalizeSubscriptionFromStripeUseCase', () => {
     };
 
     const historyRepository = {
+      /**
+       * Ordena como el caso de uso pide (`period_start` descendente): con varias renovaciones de
+       * la misma suscripción, cuál se devuelve es justo lo que hay que demostrar, y un `find` a
+       * secas devolvería el primero que se insertó.
+       */
       findOne: jest.fn(async (options: any) => {
         const { billingProfileId, stripeSubscriptionId } = options.where;
         return (
-          historial.find(
-            (fila) =>
-              fila.billingProfileId === billingProfileId &&
-              fila.stripeSubscriptionId === stripeSubscriptionId,
-          ) ?? null
+          historial
+            .filter(
+              (fila) =>
+                fila.billingProfileId === billingProfileId &&
+                fila.stripeSubscriptionId === stripeSubscriptionId,
+            )
+            .sort(
+              (a, b) =>
+                (b.periodStart as Date).getTime() -
+                (a.periodStart as Date).getTime(),
+            )[0] ?? null
         );
       }),
       create: jest.fn((data) => ({ ...data })),
@@ -204,33 +244,44 @@ describe('FinalizeSubscriptionFromStripeUseCase', () => {
       });
     });
 
-    it('registra el cierre en el historial con el plan que se pagó', async () => {
+    it('cierra el periodo cobrado con el motivo y la fecha del término', async () => {
       await useCase.execute(bajaDeStripe());
 
       expect(historial).toHaveLength(1);
       expect(historial[0]).toMatchObject({
-        billingProfileId: 'profile-1',
-        planType: 'plus',
-        source: BILLING_SOURCE_ENUM.STRIPE,
+        id: 'period-1',
         status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.CANCELED,
         endedReason: SUBSCRIPTION_END_REASON_ENUM.CANCELED_AT_PERIOD_END,
         endedAt: new Date(ENDED_AT * 1000),
-        periodStart: new Date(PERIOD_START * 1000),
-        periodEnd: new Date(PERIOD_END * 1000),
-        stripeCustomerId: 'cus_1',
-        stripeSubscriptionId: 'sub_1',
       });
     });
 
     /**
-     * El plan se lee del perfil ANTES de degradarlo. Leerlo después guardaría `free` en todos los
-     * renglones, que es justo lo que esta tabla existe para evitar.
+     * El cierre describe cómo TERMINÓ el periodo, no cómo se cobró. El plan que el cliente pagó,
+     * el importe y la factura son la evidencia del cobro y siguen siendo ciertos después de la
+     * baja: tocarlos falsearía el historial que esta tabla existe para conservar.
      */
-    it('no sobrescribe el plan del historial con free', async () => {
+    it('no toca el plan, el importe ni la factura del periodo', async () => {
       await useCase.execute(bajaDeStripe());
 
+      expect(historial[0]).toMatchObject({
+        planType: 'plus',
+        amount: 49900,
+        currency: 'mxn',
+        stripeInvoiceId: 'in_1',
+      });
       expect(historial[0].planType).not.toBe(FREE_PLAN_TYPE);
-      expect(historial[0].planType).toBe('plus');
+    });
+
+    /**
+     * Un renglón del historial representa un COBRO —lleva importe, fecha de pago y la factura que
+     * lo respalda, y la base lo exige—, y una baja no aporta ninguna de las tres cosas. Abrir acá
+     * una fila para dejar constancia del final sería inventarse un cobro que no existió.
+     */
+    it('no abre un renglón nuevo para registrar el final', async () => {
+      await useCase.execute(bajaDeStripe());
+
+      expect(historial).toHaveLength(1);
     });
 
     it('bloquea el perfil antes de escribir', async () => {
@@ -251,38 +302,68 @@ describe('FinalizeSubscriptionFromStripeUseCase', () => {
       const entidadesEscritas = managerUpdate.mock.calls.map(
         ([entity]) => entity,
       );
-      expect(entidadesEscritas).toEqual([BillingProfileEntity]);
+      expect(entidadesEscritas).toEqual([
+        SubscriptionBillingHistoryEntity,
+        BillingProfileEntity,
+      ]);
       expect(entidadesEscritas).not.toContain(CreditLotEntity);
       expect(entidadesEscritas).not.toContain(CheckoutOrderEntity);
     });
   });
 
-  describe('cierre de un periodo ya registrado', () => {
-    beforeEach(() => {
-      historial.push({
-        id: 'period-existente',
-        billingProfileId: 'profile-1',
-        planType: 'plus',
-        source: BILLING_SOURCE_ENUM.STRIPE,
+  describe('suscripción con varios periodos cobrados', () => {
+    /**
+     * Una suscripción que se renovó deja un renglón por periodo. La baja cierra el ÚLTIMO, que es
+     * el que la tenía viva; los anteriores se quedan como estaban porque no fueron ellos los que
+     * terminaron el ciclo — el cliente siguió pagando después.
+     */
+    it('cierra el último periodo y deja intactos los anteriores', async () => {
+      historial.push(
+        periodoCobrado({
+          id: 'period-0',
+          periodStart: new Date((PERIOD_START - 2678400) * 1000),
+          periodEnd: new Date(PERIOD_START * 1000),
+          stripeInvoiceId: 'in_0',
+        }),
+      );
+
+      await useCase.execute(bajaDeStripe());
+
+      expect(historial.find((fila) => fila.id === 'period-1')).toMatchObject({
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.CANCELED,
+        endedAt: new Date(ENDED_AT * 1000),
+      });
+      expect(historial.find((fila) => fila.id === 'period-0')).toMatchObject({
         status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
-        stripeSubscriptionId: 'sub_1',
         endedAt: null,
         endedReason: null,
       });
     });
 
-    /** Si el periodo ya estaba anotado, se CIERRA en vez de abrir un segundo renglón. */
-    it('actualiza el renglón vigente en lugar de crear otro', async () => {
+    /**
+     * Un cliente que contrata, se va y vuelve tiene renglones de varias suscripciones en el mismo
+     * perfil. Cerrar "el último del perfil" marcaría el periodo vigente de la suscripción NUEVA
+     * con la baja de la vieja.
+     */
+    it('no cierra periodos de otra suscripción del mismo perfil', async () => {
+      historial.push(
+        periodoCobrado({
+          id: 'period-otra',
+          periodStart: new Date((PERIOD_END + 86400) * 1000),
+          periodEnd: new Date((PERIOD_END + 2678400) * 1000),
+          stripeSubscriptionId: 'sub_2',
+          stripeInvoiceId: 'in_2',
+        }),
+      );
+
       await useCase.execute(bajaDeStripe());
 
-      expect(historial).toHaveLength(1);
-      expect(historial[0]).toMatchObject({
-        id: 'period-existente',
-        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.CANCELED,
-        endedReason: SUBSCRIPTION_END_REASON_ENUM.CANCELED_AT_PERIOD_END,
-        endedAt: new Date(ENDED_AT * 1000),
-        planType: 'plus',
-      });
+      expect(historial.find((fila) => fila.id === 'period-otra')).toMatchObject(
+        {
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+          endedAt: null,
+        },
+      );
     });
   });
 
@@ -334,7 +415,10 @@ describe('FinalizeSubscriptionFromStripeUseCase', () => {
       expect(mensaje).toContain('sub_1');
       expect(mensaje).toContain('cus_1');
       expect(mensaje).toContain('canceled');
-      expect(historial).toHaveLength(0);
+      expect(historial[0]).toMatchObject({
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        endedAt: null,
+      });
     });
 
     /**
@@ -347,7 +431,9 @@ describe('FinalizeSubscriptionFromStripeUseCase', () => {
       await useCase.execute(bajaDeStripe());
 
       expect(perfiles[0].status).toBe(BILLING_PROFILE_STATUS_ENUM.FREE);
-      expect(historial).toHaveLength(1);
+      expect(historial[0].status).toBe(
+        SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.CANCELED,
+      );
     });
   });
 
@@ -437,32 +523,44 @@ describe('FinalizeSubscriptionFromStripeUseCase', () => {
       const endedAt = historial[0].endedAt as Date;
       expect(endedAt.getTime()).toBeGreaterThanOrEqual(antes);
     });
+  });
 
-    /** Una suscripción ya terminada suele llegar sin items; el periodo del perfil es el respaldo. */
-    it('toma el periodo del perfil si el evento no trae items', async () => {
-      await useCase.execute(bajaDeStripe({ items: { data: [] } }));
-
-      expect(historial[0]).toMatchObject({
-        periodStart: new Date(PERIOD_START * 1000),
-        periodEnd: new Date(PERIOD_END * 1000),
-      });
+  /**
+   * Una suscripción anterior a `subscription_billing_history`, o una cuyo `invoice.paid` nunca
+   * llegó, no tiene periodo que cerrar. No es un error: lo que el cliente ve —volver al plan
+   * gratuito— tiene que ocurrir igual, y el aviso queda para quien deba reconstruir el periodo.
+   */
+  describe('suscripción sin periodo registrado', () => {
+    beforeEach(() => {
+      historial = [];
     });
 
-    /**
-     * El historial registra periodos facturados, y el plan gratuito no factura: antes que mentir
-     * diciendo que se pagó por el gratuito, el renglón se queda sin plan.
-     */
-    it('deja el plan en nulo si el perfil ya venía en Free', async () => {
-      perfiles = [
-        perfilDePago({
-          currentPlanType: FREE_PLAN_TYPE,
-          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-        }),
-      ];
+    it('devuelve el perfil al plan gratuito y avisa', async () => {
+      const warn = jest.spyOn(useCase['logger'], 'warn').mockImplementation();
 
       await useCase.execute(bajaDeStripe());
 
-      expect(historial[0].planType).toBeNull();
+      expect(perfiles[0]).toMatchObject({
+        currentPlanType: FREE_PLAN_TYPE,
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+      });
+      expect(warn).toHaveBeenCalled();
+      expect(warn.mock.calls[0][0] as string).toContain('sub_1');
+    });
+
+    /**
+     * Sin renglón que haga de testigo, la repetición se reconoce por el propio perfil: uno que ya
+     * está en el plan gratuito no tiene nada que degradar.
+     */
+    it('una segunda entrega no vuelve a escribir el perfil', async () => {
+      jest.spyOn(useCase['logger'], 'warn').mockImplementation();
+
+      await useCase.execute(bajaDeStripe());
+      managerUpdate.mockClear();
+
+      await useCase.execute(bajaDeStripe());
+
+      expect(managerUpdate).not.toHaveBeenCalled();
     });
   });
 });

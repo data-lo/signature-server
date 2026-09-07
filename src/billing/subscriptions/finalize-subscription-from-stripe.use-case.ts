@@ -5,10 +5,19 @@ import Stripe = require('stripe');
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
-import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
 import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.enum';
 import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
+
+/**
+ * Qué se encontró al intentar cerrar el periodo.
+ *
+ * `SIN_PERIODO` no es un error: una suscripción anterior a que existiera
+ * `subscription_billing_history`, o una cuyo `invoice.paid` nunca llegó, no tiene renglón que
+ * cerrar. El perfil se devuelve al plan gratuito igualmente —lo que el cliente ve es eso— y el
+ * aviso queda en el log para quien tenga que reconstruir el periodo a mano.
+ */
+type ResultadoDelCierre = 'CERRADO' | 'YA_CERRADO' | 'SIN_PERIODO';
 
 /** Cómo terminó la suscripción: la categoría con la que se cuenta y el motivo concreto. */
 interface Termino {
@@ -37,6 +46,11 @@ interface Termino {
  * **Nada de lo comprado se toca.** `credit_lots`, `checkout_orders`, los renglones anteriores del
  * historial y los identificadores de Stripe quedan intactos: son la evidencia de lo que el cliente
  * pagó y consumió, y hacen falta para responder una aclaración meses después de la baja.
+ *
+ * **No abre periodos, sólo los cierra.** Los renglones del historial los crea
+ * `RegisterSubscriptionBillingUseCase` cuando hay un cobro de verdad —con su importe, su fecha de
+ * pago y su factura—, y una baja no aporta ninguna de las tres cosas. Acá se marca el último
+ * periodo cobrado de la suscripción con cómo, cuándo y por qué terminó.
  *
  * **Idempotente porque Stripe reintenta.** El mismo evento puede llegar varias veces, y también
  * puede llegar detrás de un `customer.subscription.updated` que ya describía el mismo final. La
@@ -93,19 +107,37 @@ export class FinalizeSubscriptionFromStripeUseCase {
         return;
       }
 
-      const cerrado = await this.closeHistory(
+      const cierre = await this.closeHistory(
         manager,
         locked,
         subscription,
         termino,
       );
 
-      if (!cerrado) {
+      if (cierre === 'YA_CERRADO') {
         this.logger.log(
           `La suscripción ${subscription.id} ya estaba finalizada en el perfil ${locked.id}; ` +
             'no se repite nada.',
         );
         return;
+      }
+
+      /**
+       * Sin renglón que cerrar, la degradación sigue siendo lo correcto —el cliente dejó de
+       * pagar y no puede quedarse con el plan—, pero entonces hace falta otra forma de reconocer
+       * una entrega repetida: un perfil ya en el plan gratuito no tiene nada que degradar, y
+       * repetirlo sólo escribiría dos veces lo mismo.
+       */
+      if (cierre === 'SIN_PERIODO') {
+        this.logger.warn(
+          `La suscripción ${subscription.id} no tiene periodo registrado en el perfil ` +
+            `${locked.id}; se devuelve el perfil al plan gratuito sin cerrar historial. ` +
+            'El periodo tendrá que reconstruirse a mano si hace falta para un corte de caja.',
+        );
+
+        if (this.yaEstaEnFree(locked)) {
+          return;
+        }
       }
 
       await this.downgradeToFree(manager, locked);
@@ -118,95 +150,81 @@ export class FinalizeSubscriptionFromStripeUseCase {
   }
 
   /**
-   * Deja escrito el cierre del periodo. Devuelve `false` si no había nada que cerrar porque ya
-   * estaba registrado — que es como se reconoce una entrega repetida.
+   * Marca el periodo cobrado con cómo, cuándo y por qué terminó la suscripción.
    *
-   * **Cierra el renglón vigente si lo hay, y lo crea si no.** Las dos ramas son necesarias por lo
-   * mismo: este webhook es hoy el único que escribe en la tabla, así que en un perfil que nunca
-   * pasó por otro flujo NO existe ningún renglón que cerrar, y el término se perdería. Cuando el
-   * alta y las renovaciones también registren su periodo, la rama de creación quedará como la
-   * excepción — pero seguirá siendo la que impide perder un cierre.
+   * **Sólo actualiza; nunca inserta.** Un renglón del historial representa un cobro —lleva
+   * importe, fecha de pago y la factura que lo respalda, y la base lo exige
+   * (`CHK_subscription_billing_history_origin_evidence`)—, y una baja no aporta ninguno de los
+   * tres. Abrir acá una fila para registrar el final significaría inventarse un cobro que no
+   * existió.
    */
   private async closeHistory(
     manager: EntityManager,
     profile: BillingProfileEntity,
     subscription: Stripe.Subscription,
     termino: Termino,
-  ): Promise<boolean> {
+  ): Promise<ResultadoDelCierre> {
     const historyRepository = manager.getRepository(
       SubscriptionBillingHistoryEntity,
     );
 
     /**
-     * Se busca por suscripción y no sólo por perfil: un cliente que contrata, se va y vuelve tiene
-     * varios renglones en el mismo perfil, y cerrar "el último" acabaría cerrando el periodo
-     * vigente de la suscripción NUEVA con la baja de la vieja.
+     * El ÚLTIMO periodo de ESTA suscripción, que es el que la tenía viva cuando Stripe la dio de
+     * baja. Se busca por suscripción y no sólo por perfil porque un cliente que contrata, se va y
+     * vuelve tiene renglones de varias suscripciones en el mismo perfil, y cerrar "el último del
+     * perfil" acabaría marcando el periodo vigente de la suscripción NUEVA con la baja de la
+     * vieja. El orden es por `period_start` —el comercial, el del índice— y `created_at` sólo
+     * desempata cuando dos renglones cubren el mismo periodo.
      */
-    const registrado = await historyRepository.findOne({
+    const ultimoPeriodo = await historyRepository.findOne({
       where: {
         billingProfileId: profile.id,
         stripeSubscriptionId: subscription.id,
       },
-      order: { createdAt: 'DESC' },
+      order: { periodStart: 'DESC', createdAt: 'DESC' },
     });
 
+    if (!ultimoPeriodo) {
+      return 'SIN_PERIODO';
+    }
+
     if (
-      registrado &&
-      registrado.status !== SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE
+      ultimoPeriodo.status !== SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE
     ) {
-      return false;
+      return 'YA_CERRADO';
     }
 
-    const endedAt = this.resolveEndedAt(subscription);
-    const cierre = {
-      status: termino.status,
-      endedAt,
-      endedReason: termino.reason,
-    };
-
-    if (registrado) {
-      /**
-       * Condicionado a que siga `ACTIVE`: si dos entregas simultáneas llegaran hasta acá, la
-       * segunda afecta a cero filas en vez de pisar el `ended_at` que escribió la primera —que es
-       * el registro de cuándo terminó de verdad, y reescribirlo falsearía el historial.
-       */
-      const result = await manager.update(
-        SubscriptionBillingHistoryEntity,
-        {
-          id: registrado.id,
-          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
-        },
-        cierre,
-      );
-
-      return Boolean(result.affected);
-    }
-
-    const { periodStart, periodEnd } = this.resolvePeriod(
-      subscription,
-      profile,
+    /**
+     * Condicionado a que siga `ACTIVE`: si dos entregas simultáneas llegaran hasta acá, la
+     * segunda afecta a cero filas en vez de pisar el `ended_at` que escribió la primera —que es
+     * el registro de cuándo terminó de verdad, y reescribirlo falsearía el historial.
+     */
+    const result = await manager.update(
+      SubscriptionBillingHistoryEntity,
+      {
+        id: ultimoPeriodo.id,
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+      },
+      {
+        status: termino.status,
+        endedAt: this.resolveEndedAt(subscription),
+        endedReason: termino.reason,
+      },
     );
 
-    await historyRepository.save(
-      historyRepository.create({
-        billingProfileId: profile.id,
-        /**
-         * El plan que el cliente PAGÓ, tomado del perfil ANTES de devolverlo a Free. Es el dato
-         * que esta tabla existe para conservar, y por eso el orden importa: leerlo después de la
-         * degradación guardaría `free` en todos los renglones.
-         */
-        planType: this.planFacturado(profile),
-        source: BILLING_SOURCE_ENUM.STRIPE,
-        periodStart,
-        periodEnd,
-        stripeCustomerId:
-          this.toId(subscription.customer) ?? profile.stripeCustomerId,
-        stripeSubscriptionId: subscription.id,
-        ...cierre,
-      }),
-    );
+    return result.affected ? 'CERRADO' : 'YA_CERRADO';
+  }
 
-    return true;
+  /**
+   * Un perfil que ya está en el plan gratuito por esta misma baja no tiene nada que degradar.
+   * Es la comprobación de repetición para las suscripciones sin periodo registrado, donde el
+   * historial no puede hacer de testigo.
+   */
+  private yaEstaEnFree(profile: BillingProfileEntity): boolean {
+    return (
+      profile.status === BILLING_PROFILE_STATUS_ENUM.FREE &&
+      profile.currentPlanType === FREE_PLAN_TYPE
+    );
   }
 
   /**
@@ -291,40 +309,6 @@ export class FinalizeSubscriptionFromStripeUseCase {
       this.toDate(subscription.canceled_at) ??
       new Date()
     );
-  }
-
-  /**
-   * El periodo final, preferido desde Stripe y con el del perfil como respaldo.
-   *
-   * El periodo vive en el ITEM, no en la suscripción: Stripe lo movió ahí en la API de 2025 y
-   * `Stripe.Subscription` ya no lo expone: buscarlo donde lo pone toda la documentación anterior
-   * devuelve `undefined` en silencio. El respaldo del perfil es lo que salva el renglón cuando el
-   * evento de baja llega sin items, que es lo normal en una suscripción ya terminada.
-   */
-  private resolvePeriod(
-    subscription: Stripe.Subscription,
-    profile: BillingProfileEntity,
-  ): { periodStart: Date | null; periodEnd: Date | null } {
-    const item = subscription.items?.data?.[0];
-
-    return {
-      periodStart:
-        this.toDate(item?.current_period_start) ?? profile.currentPeriodStart,
-      periodEnd:
-        this.toDate(item?.current_period_end) ?? profile.currentPeriodEnd,
-    };
-  }
-
-  /**
-   * El plan del renglón nunca es `free`: esta tabla registra periodos facturados, y el plan
-   * gratuito no factura. Un perfil que llegue acá ya en Free —una corrección manual, un evento
-   * repetido de otra vía— deja el renglón sin plan antes que mentir diciendo que pagó por el
-   * gratuito. Lo respalda `CHK_subscription_billing_history_plan`.
-   */
-  private planFacturado(profile: BillingProfileEntity): string | null {
-    return profile.currentPlanType === FREE_PLAN_TYPE
-      ? null
-      : profile.currentPlanType;
   }
 
   /**

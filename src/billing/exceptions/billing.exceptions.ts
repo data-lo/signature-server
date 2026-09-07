@@ -79,22 +79,6 @@ export class InconsistentOrganizationAccountException extends InternalServerErro
 }
 
 /**
- * Llegó una factura pagada de una suscripción que no se puede asociar a ningún perfil local, ni
- * por `stripe_subscription_id` ni por `stripe_customer_id`.
- *
- * **Se lanza en vez de ignorarse** —a diferencia de un producto de Stripe que no es de nuestro
- * catálogo— porque aquí sí hubo un cobro real a un cliente: dar el evento por bueno dejaría a
- * alguien pagando sin recibir documentos y sin rastro del problema. El 5xx hace que Stripe
- * reintente durante días, que es tiempo suficiente para reparar el vínculo.
- */
-export class BillingProfileNotFoundForInvoiceException extends InternalServerErrorException {
-  constructor(reference: string) {
-    super('No se encontró el perfil de facturación de la factura recibida.');
-    this.cause = `Sin billing_profile para ${reference}.`;
-  }
-}
-
-/**
  * La factura pagada corresponde a un `stripe_price_id` que no está en `catalog_prices`, así que no
  * hay forma de saber cuántos documentos conceder.
  *
@@ -105,5 +89,48 @@ export class PlanNotFoundForInvoiceException extends InternalServerErrorExceptio
   constructor(stripePriceId: string | null) {
     super('No se encontró el plan correspondiente a la factura recibida.');
     this.cause = `Sin catalog_prices para el precio ${stripePriceId ?? '(desconocido)'}.`;
+  }
+}
+
+/**
+ * El perfil de facturación al que se quiere anotar un periodo no existe.
+ *
+ * 404 y no 500 porque el llamador legítimo de esto es el endpoint interno de facturación manual,
+ * donde un id equivocado es un error de la petición y no del sistema. El adaptador de Stripe
+ * nunca llega a lanzarla: resuelve el perfil antes y, si no lo encuentra, avisa y se retira sin
+ * invocar el caso de uso.
+ */
+export class BillingProfileNotFoundForRegistrationException extends NotFoundException {
+  constructor(billingProfileId: string) {
+    super('No se encontró el perfil de facturación indicado.');
+    this.cause = `Sin billing_profile con id ${billingProfileId}.`;
+  }
+}
+
+/**
+ * El `plan_type` que se quiere facturar no está en el catálogo local.
+ *
+ * Se comprueba aunque el plan venga de Stripe: `subscription_billing_history.plan_type` es clave
+ * foránea a `plans`, y sin la fila el alta reventaría con una violación de constraint a mitad de
+ * la transacción — un error ilegible en el log en vez de uno que dice qué plan falta.
+ */
+export class PlanNotFoundForRegistrationException extends NotFoundException {
+  constructor(planType: string) {
+    super('No se encontró el plan indicado.');
+    this.cause = `Sin plans con plan_type ${planType}.`;
+  }
+}
+
+/**
+ * Los datos del periodo a registrar no se sostienen entre sí: un importe negativo, un periodo que
+ * termina antes de empezar, un cobro de Stripe sin factura o uno manual sin folio ni autor.
+ *
+ * Vive en el caso de uso y no sólo en el DTO del endpoint porque el adaptador de Stripe también
+ * lo invoca, y por ahí no pasa ninguna validación de `class-validator`. Es la última frontera
+ * antes de escribir dinero en la base.
+ */
+export class InvalidBillingRegistrationException extends BadRequestException {
+  constructor(reason: string) {
+    super(`No se puede registrar el periodo facturado: ${reason}`);
   }
 }

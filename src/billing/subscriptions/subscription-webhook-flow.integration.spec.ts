@@ -11,6 +11,7 @@ import { StripeWebhookService } from 'src/payments/stripe/stripe-webhook.service
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './subscription-billing.service';
+import { RegisterSubscriptionBillingUseCase } from './register-subscription-billing.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './finalize-subscription-from-stripe.use-case';
 import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
@@ -24,6 +25,7 @@ import { CatalogItemEntity } from '../catalog/catalog-item.entity';
 import { CatalogPriceEntity } from '../catalog/catalog-price.entity';
 import { DocumentCreditPackEntity } from '../catalog/document-credit-pack.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
 import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.enum';
 import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
@@ -103,23 +105,36 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
     subscriptionBillingHistoryRepository.findOne.mockResolvedValue(null);
 
     rolloverExecute = jest.fn().mockResolvedValue({ affected: 0 });
-    managerUpdate = jest.fn();
+    managerUpdate = jest.fn().mockResolvedValue({ affected: 1 });
     const manager = {
-      // El perfil que se bloquea dentro de la transacción trae plan y periodo: es de ahí de donde
-      // el cierre toma el plan pagado que conserva el historial.
-      findOne: jest.fn().mockResolvedValue({
-        id: 'profile-1',
-        currentPlanType: 'pro',
-        currentPeriodStart: new Date(PERIOD_START * 1000),
-        currentPeriodEnd: new Date(PERIOD_END * 1000),
-        stripeCustomerId: 'cus_1',
-        stripeSubscriptionId: 'sub_1',
-      }),
+      /**
+       * Por entidad, no un valor único: dentro de la transacción el registro del cobro pide
+       * primero el perfil (para bloquearlo) y después el plan (para saber cuántos documentos
+       * concede), y devolverles lo mismo a los dos dejaría el lote sin `issued`.
+       *
+       * El perfil trae plan y periodo vigentes porque el cierre de la baja los necesita: son el
+       * estado desde el que se degrada a Free.
+       */
+      findOne: jest.fn(async (entity: unknown) =>
+        entity === PlanEntity
+          ? { planType: 'pro', documentsIncluded: 100 }
+          : {
+              id: 'profile-1',
+              status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+              currentPlanType: 'pro',
+              currentPeriodStart: new Date(PERIOD_START * 1000),
+              currentPeriodEnd: new Date(PERIOD_END * 1000),
+              stripeCustomerId: 'cus_1',
+              stripeSubscriptionId: 'sub_1',
+            },
+      ),
       update: managerUpdate,
       getRepository: jest.fn((entity: unknown) =>
         entity === SubscriptionBillingHistoryEntity
           ? subscriptionBillingHistoryRepository
-          : creditLotRepository,
+          : entity === CheckoutOrderEntity
+            ? checkoutOrderRepository
+            : creditLotRepository,
       ),
       createQueryBuilder: jest.fn().mockReturnValue({
         update: jest.fn().mockReturnThis(),
@@ -145,6 +160,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         RegisterWebhookEventUseCase,
         StripeWebhookService,
         SubscriptionBillingService,
+        RegisterSubscriptionBillingUseCase,
         FinalizeSubscriptionFromStripeUseCase,
         BillingCatalogService,
         CheckoutOrderService,
@@ -244,6 +260,11 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
       object: {
         id: 'in_1',
         customer: 'cus_1',
+        currency: 'mxn',
+        amount_paid: 149900,
+        total: 149900,
+        payment_intent: 'pi_1',
+        status_transitions: { paid_at: PERIOD_START },
         parent: { subscription_details: { subscription: 'sub_1' } },
         lines: {
           data: [
@@ -298,6 +319,68 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
           stripeSubscriptionId: 'sub_1',
         }),
       );
+      expect(webhookEventRepository.update).toHaveBeenCalledWith(
+        'webhook-row-1',
+        expect.objectContaining({
+          processingStatus: WEBHOOK_PROCESSING_STATUS_ENUM.PROCESSED,
+        }),
+      );
+    });
+
+    /**
+     * El recorrido completo de esta historia: la entrega de Stripe acaba escribiendo un periodo
+     * con su origen, su dinero y sus ids de rastreo. Es lo que sobrevive a la próxima renovación,
+     * cuando el perfil ya diga otra cosa.
+     */
+    it('registra el periodo en el historial con origen STRIPE y el dinero cobrado', async () => {
+      await deliver(invoicePaidEvent);
+
+      expect(subscriptionBillingHistoryRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          billingProfileId: 'profile-1',
+          source: BILLING_SOURCE_ENUM.STRIPE,
+          planType: 'pro',
+          amount: 149900,
+          currency: 'mxn',
+          stripeInvoiceId: 'in_1',
+          stripeSubscriptionId: 'sub_1',
+          stripeCustomerId: 'cus_1',
+          stripePaymentIntentId: 'pi_1',
+          externalReference: null,
+          createdByUserId: null,
+        }),
+      );
+    });
+
+    it('deja el perfil con el plan y el periodo vigentes', async () => {
+      await deliver(invoicePaidEvent);
+
+      expect(managerUpdate).toHaveBeenCalledWith(
+        BillingProfileEntity,
+        'profile-1',
+        expect.objectContaining({
+          currentPlanType: 'pro',
+          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+          currentPeriodStart: new Date(PERIOD_START * 1000),
+          currentPeriodEnd: new Date(PERIOD_END * 1000),
+          stripeSubscriptionId: 'sub_1',
+        }),
+      );
+    });
+
+    /**
+     * El otro extremo del criterio de aceptación: una factura que no se puede asociar a ningún
+     * perfil deja un aviso con todos los ids y NO tumba el webhook. Un 5xx sólo conseguiría que
+     * Stripe reintentara durante días algo que ningún reintento arregla.
+     */
+    it('una factura sin perfil asociado avisa pero no falla la entrega', async () => {
+      billingProfileRepository.findOne.mockResolvedValue(null);
+
+      const result = await deliver(invoicePaidEvent);
+
+      expect(result).toEqual({ received: true, duplicate: false });
+      expect(creditLotRepository.save).not.toHaveBeenCalled();
+      expect(subscriptionBillingHistoryRepository.save).not.toHaveBeenCalled();
       expect(webhookEventRepository.update).toHaveBeenCalledWith(
         'webhook-row-1',
         expect.objectContaining({
@@ -389,7 +472,19 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
      * El recorrido completo del término definitivo: la entrega de Stripe acaba dejando el perfil
      * en el plan gratuito y el cierre escrito en el historial, sin tocar nada de lo comprado.
      */
-    it('customer.subscription.deleted devuelve el perfil a Free y registra el cierre', async () => {
+    it('customer.subscription.deleted devuelve el perfil a Free y cierra el periodo cobrado', async () => {
+      // El periodo que abrió `invoice.paid`: es el renglón que la baja tiene que cerrar.
+      subscriptionBillingHistoryRepository.findOne.mockResolvedValue({
+        id: 'period-1',
+        billingProfileId: 'profile-1',
+        planType: 'pro',
+        source: BILLING_SOURCE_ENUM.STRIPE,
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        stripeSubscriptionId: 'sub_1',
+        endedAt: null,
+        endedReason: null,
+      });
+
       await deliver({
         id: 'evt_deleted',
         type: 'customer.subscription.deleted',
@@ -415,17 +510,24 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
           currentPeriodStart: null,
         }),
       );
-      expect(subscriptionBillingHistoryRepository.save).toHaveBeenCalledWith(
+      /**
+       * El cierre ACTUALIZA el periodo que ya existía; no abre uno nuevo. Un renglón del
+       * historial representa un cobro —con importe, fecha de pago y factura— y una baja no aporta
+       * ninguna de las tres cosas, así que inventarse una fila acá sería inventarse un cobro.
+       */
+      expect(managerUpdate).toHaveBeenCalledWith(
+        SubscriptionBillingHistoryEntity,
+        {
+          id: 'period-1',
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        },
         expect.objectContaining({
-          billingProfileId: 'profile-1',
-          // El plan PAGADO, no `free`: es lo que esta tabla existe para conservar.
-          planType: 'pro',
           status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.CANCELED,
           endedReason: SUBSCRIPTION_END_REASON_ENUM.CANCELED_AT_PERIOD_END,
-          stripeSubscriptionId: 'sub_1',
-          stripeCustomerId: 'cus_1',
+          endedAt: new Date(PERIOD_END * 1000),
         }),
       );
+      expect(subscriptionBillingHistoryRepository.save).not.toHaveBeenCalled();
       expect(creditLotRepository.save).not.toHaveBeenCalled();
       expect(creditLotRepository.update).not.toHaveBeenCalled();
     });

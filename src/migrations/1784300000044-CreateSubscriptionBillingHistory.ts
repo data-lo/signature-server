@@ -1,21 +1,29 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /**
- * Crea `subscription_billing_history` y añade `billing_profiles.cancel_at_period_end`: lo que
- * hace falta para que el término definitivo de una suscripción deje rastro.
+ * Crea `subscription_billing_history`: un renglón por periodo de suscripción pagado, venga el
+ * cobro de Stripe o de una factura emitida a mano.
  *
- * **Las dos cosas van juntas porque describen el mismo ciclo.** `cancel_at_period_end` es la baja
- * PROGRAMADA —la suscripción sigue viva y pagada— y el historial es donde queda el término
- * CONSUMADO, con el plan que el cliente tuvo, cuándo acabó y por qué. Separarlas en dos
- * migraciones dejaría una base intermedia en la que el perfil puede anunciar un término que no
- * tiene dónde registrarse.
+ * **Qué problema resuelve.** Hasta ahora el único rastro de un cobro recurrente eran el
+ * `credit_lot` que emitió y el `billing_profile`, y ninguno de los dos guarda historia: el perfil
+ * representa el estado VIGENTE y cada renovación lo pisa, así que el plan y el periodo anteriores
+ * desaparecían. Con esta tabla el perfil puede seguir siendo una sola fila trivial —lo que está
+ * activo hoy— mientras el registro de qué se cobró, cuándo, por cuánto y quién lo cobró vive
+ * aparte y no se sobrescribe nunca.
  *
- * **Qué problema resuelve el historial.** Al finalizar, el perfil vuelve al plan gratuito, así
- * que deja de poder responder qué tenía contratado antes. Sin esta tabla, la única forma de
- * saber que alguien pagó un `plus` durante ocho meses sería reconstruirlo desde los `credit_lots`
- * o desde el panel de Stripe.
+ * **Trae también el ciclo de vida del periodo y `billing_profiles.cancel_at_period_end`.**
+ * `cancel_at_period_end` es la baja PROGRAMADA —la suscripción sigue viva y pagada— y
+ * `status` / `ended_at` / `ended_reason` son donde queda el término CONSUMADO, con el plan que el
+ * cliente tuvo, cuándo acabó y por qué. Van en la misma migración que la tabla porque describen
+ * el mismo ciclo: separarlas dejaría una base intermedia en la que el perfil puede anunciar un
+ * término que no tiene dónde registrarse.
  *
- * `IF NOT EXISTS` y los bloques `DO` mantienen la migración repetible sobre las bases de
+ * **Los índices únicos son la idempotencia, no una optimización.** `stripe_invoice_id` impide que
+ * una re-entrega del webhook (Stripe reintenta durante días) acredite documentos dos veces;
+ * `UQ_..._manual_reference` impide lo mismo cuando quien reenvía es una persona capturando la
+ * misma transferencia. El código los comprueba antes, pero es la base la que lo garantiza.
+ *
+ * `IF NOT EXISTS` y el bloque `DO` del tipo mantienen la migración repetible sobre las bases de
  * desarrollo que ya hubieran levantado el esquema desde las entidades, igual que hace
  * `CreateBillingSchema`.
  */
@@ -34,37 +42,63 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
       CREATE TABLE IF NOT EXISTS "subscription_billing_history" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "billing_profile_id" uuid NOT NULL,
-        "plan_type" character varying(64),
-        "source" "public"."billing_source_enum" NOT NULL DEFAULT 'STRIPE',
+        "checkout_order_id" uuid,
+        "credit_slot_id" uuid,
+        "source" "public"."billing_source_enum" NOT NULL,
+        "plan_type" character varying(64) NOT NULL,
+        "amount" integer NOT NULL,
+        "currency" character varying(3) NOT NULL,
+        "period_start" TIMESTAMP WITH TIME ZONE NOT NULL,
+        "period_end" TIMESTAMP WITH TIME ZONE NOT NULL,
+        "paid_at" TIMESTAMP WITH TIME ZONE NOT NULL,
         "status" "public"."subscription_billing_history_status_enum" NOT NULL DEFAULT 'ACTIVE',
-        "period_start" TIMESTAMP WITH TIME ZONE,
-        "period_end" TIMESTAMP WITH TIME ZONE,
         "ended_at" TIMESTAMP WITH TIME ZONE,
         "ended_reason" "public"."subscription_end_reason_enum",
         "stripe_customer_id" character varying,
         "stripe_subscription_id" character varying,
+        "stripe_invoice_id" character varying,
+        "stripe_payment_intent_id" character varying,
+        "external_reference" character varying,
+        "created_by_user_id" uuid,
+        "notes" text,
         "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         CONSTRAINT "PK_subscription_billing_history" PRIMARY KEY ("id"),
-        CONSTRAINT "CHK_subscription_billing_history_plan"
-          CHECK ("plan_type" IS NULL OR "plan_type" <> 'free'),
+        CONSTRAINT "UQ_subscription_billing_history_stripe_invoice" UNIQUE ("stripe_invoice_id"),
+        CONSTRAINT "UQ_subscription_billing_history_credit_slot" UNIQUE ("credit_slot_id"),
+        CONSTRAINT "CHK_subscription_billing_history_amount" CHECK ("amount" >= 0),
+        CONSTRAINT "CHK_subscription_billing_history_period" CHECK ("period_start" < "period_end"),
         CONSTRAINT "CHK_subscription_billing_history_ended" CHECK (
           ("status" = 'ACTIVE' AND "ended_at" IS NULL AND "ended_reason" IS NULL)
           OR ("status" <> 'ACTIVE' AND "ended_at" IS NOT NULL AND "ended_reason" IS NOT NULL)
         ),
+        CONSTRAINT "CHK_subscription_billing_history_origin_evidence" CHECK (
+          ("source" = 'STRIPE' AND "stripe_invoice_id" IS NOT NULL)
+          OR ("source" = 'MANUAL' AND ("external_reference" IS NOT NULL OR "created_by_user_id" IS NOT NULL))
+        ),
         CONSTRAINT "FK_subscription_billing_history_profile"
           FOREIGN KEY ("billing_profile_id")
           REFERENCES "billing_profiles"("id") ON DELETE CASCADE,
+        CONSTRAINT "FK_subscription_billing_history_checkout_order"
+          FOREIGN KEY ("checkout_order_id")
+          REFERENCES "checkout_orders"("id") ON DELETE SET NULL,
+        CONSTRAINT "FK_subscription_billing_history_credit_slot"
+          FOREIGN KEY ("credit_slot_id")
+          REFERENCES "credit_lots"("id") ON DELETE SET NULL,
         CONSTRAINT "FK_subscription_billing_history_plan"
           FOREIGN KEY ("plan_type")
-          REFERENCES "plans"("plan_type") ON DELETE SET NULL
+          REFERENCES "plans"("plan_type") ON DELETE RESTRICT,
+        CONSTRAINT "FK_subscription_billing_history_created_by"
+          FOREIGN KEY ("created_by_user_id")
+          REFERENCES "users"("id") ON DELETE SET NULL
       )
     `);
 
     /**
-     * La consulta natural es "el historial de este perfil, del más reciente al más viejo", y
-     * `period_start` es el orden que tiene sentido comercial — no `created_at`, que ordenaría los
-     * periodos por cuándo los registró el webhook en vez de por cuándo ocurrieron.
+     * La consulta natural de la tabla es "el historial de este perfil, del más reciente al más
+     * viejo", y `period_start` es el orden que tiene sentido comercial — no `created_at`, que en
+     * una factura manual capturada con retraso ordenaría los periodos por cuándo los tecleó
+     * administración en vez de por cuándo ocurrieron.
      */
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_subscription_billing_history_profile"
@@ -72,20 +106,31 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
     `);
 
     /**
-     * La llave con la que el webhook reconoce lo que ya registró. `customer.subscription.deleted`
-     * llega más de una vez, y sin este índice cada reintento recorrería la tabla entera para
-     * decidir si el cierre ya estaba escrito.
+     * La llave con la que el webhook de baja localiza el periodo a cerrar.
+     * `customer.subscription.deleted` llega más de una vez, y sin este índice cada reintento
+     * recorrería la tabla entera para decidir si el cierre ya estaba escrito.
      */
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_subscription_billing_history_stripe_subscription"
       ON "subscription_billing_history" ("stripe_subscription_id")
     `);
+
+    /**
+     * La clave natural del cobro manual: una referencia no se registra dos veces para el mismo
+     * perfil. Parcial porque los periodos de Stripe ya se desduplican por `stripe_invoice_id` y
+     * porque un folio nulo —todos los de Stripe lo son— no debe competir por la unicidad.
+     */
+    await queryRunner.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "UQ_subscription_billing_history_manual_reference"
+      ON "subscription_billing_history" ("billing_profile_id", "external_reference")
+      WHERE "source" = 'MANUAL' AND "external_reference" IS NOT NULL
+    `);
   }
 
   /**
-   * Se borra la tabla entera y la columna: nacen acá y nadie las escribía antes, así que revertir
-   * no puede perder un dato que existiera de otra fuente. Los `credit_lots` y los
-   * `checkout_orders` a los que acompaña NO se tocan — el saldo que el cliente compró es suyo con
+   * Se borra la tabla entera y la columna del perfil: nacen acá y nadie las escribía antes, así
+   * que revertir no puede perder un dato que existiera de otra fuente. Los `credit_lots` y los
+   * `checkout_orders` a los que apuntaba NO se tocan — el saldo que el cliente compró es suyo con
    * historial o sin él.
    */
   public async down(queryRunner: QueryRunner): Promise<void> {
@@ -111,8 +156,8 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
    * idempotencia se consigue atrapando `duplicate_object`.
    *
    * Los tres tipos se crean y se usan en la MISMA transacción, y eso sí se puede: la restricción
-   * que obligó a partir en dos `AddFreeBillingProfileStatus` (55P04) aplica a los valores
-   * AÑADIDOS a un enum que ya existía, no a un tipo nacido en esta transacción.
+   * de Postgres que obligó a partir en dos `AddFreeBillingProfileStatus` (55P04) aplica a los
+   * valores AÑADIDOS a un enum que ya existía, no a un tipo nacido en esta transacción.
    */
   private async createEnums(queryRunner: QueryRunner): Promise<void> {
     const enums: [string, string[]][] = [
