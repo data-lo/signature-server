@@ -10,6 +10,7 @@ import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { RolesService } from 'src/roles/roles.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-profile-provisioning.service';
 
 const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
 const CURRENT_USER = {
@@ -48,8 +49,10 @@ describe('AccountService', () => {
   let accountRepository: ReturnType<typeof createMockRepository>;
   let organizationRepository: ReturnType<typeof createMockRepository>;
   let userRepository: ReturnType<typeof createMockRepository>;
-  let dataSource: { createQueryRunner: jest.Mock };
+  let dataSource: { createQueryRunner: jest.Mock; transaction: jest.Mock };
   let queryRunner: ReturnType<typeof createMockQueryRunner>;
+  let transactionManager: { create: jest.Mock; save: jest.Mock };
+  let billingProfileProvisioning: { provisionFreeProfile: jest.Mock };
   let redisService: { set: jest.Mock; get: jest.Mock };
   let rolesService: {
     findSystemRoleByName: jest.Mock;
@@ -63,7 +66,24 @@ describe('AccountService', () => {
     userRepository = createMockRepository();
     userRepository.findOne.mockResolvedValue(CURRENT_USER);
     queryRunner = createMockQueryRunner();
-    dataSource = { createQueryRunner: jest.fn(() => queryRunner) };
+    transactionManager = {
+      create: jest.fn((_entity, data) => data),
+      save: jest.fn(async (data) => ({ id: 'generated-id', ...data })),
+    };
+    dataSource = {
+      createQueryRunner: jest.fn(() => queryRunner),
+      // Ejecuta el callback en línea: lo que se comprueba es QUÉ se escribe dentro de la
+      // transacción y con qué manager, no el aislamiento, que es cosa de Postgres.
+      transaction: jest.fn(
+        async (run: (manager: unknown) => Promise<unknown>) =>
+          run(transactionManager),
+      ),
+    };
+    billingProfileProvisioning = {
+      provisionFreeProfile: jest
+        .fn()
+        .mockResolvedValue({ id: 'perfil-free-1' }),
+    };
     redisService = { set: jest.fn(), get: jest.fn() };
     rolesService = {
       findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
@@ -95,6 +115,10 @@ describe('AccountService', () => {
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: RedisService, useValue: redisService },
         { provide: RolesService, useValue: rolesService },
+        {
+          provide: BillingProfileProvisioningService,
+          useValue: billingProfileProvisioning,
+        },
       ],
     }).compile();
 
@@ -171,6 +195,149 @@ describe('AccountService', () => {
       expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
       expect(queryRunner.release).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Toda cuenta personal y toda organización nacen con su `billing_profile` en plan Free, y
+   * nacen DENTRO de la misma transacción que las crea: o quedan las dos filas o no queda
+   * ninguna. Lo que se comprueba acá es esa atadura —qué manager recibe el aprovisionamiento— y
+   * a qué propietario se ata el perfil.
+   */
+  describe('alta del perfil de facturación en plan Free', () => {
+    it('la cuenta personal lo crea con el MISMO manager de la transacción de registro', async () => {
+      const manager = {
+        create: jest.fn((_entity, data) => data),
+        save: jest.fn(async (data) => ({ id: 'personal-account-1', ...data })),
+      };
+
+      await service.createDefaultPersonalAccount(
+        manager as any,
+        'user-1',
+        'user1@empresa.com',
+        'hashed-pw',
+      );
+
+      expect(
+        billingProfileProvisioning.provisionFreeProfile,
+      ).toHaveBeenCalledWith(manager, {
+        personalAccountId: 'personal-account-1',
+        organizationId: null,
+      });
+    });
+
+    it('la organización lo ata a organization_id, no a la membresía de quien la creó', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'organizacion-1' })
+        .mockResolvedValueOnce({ id: 'cuenta-admin-1' });
+      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-admin-1' });
+
+      await service.saveOrganizationWithAdminAccount(
+        CURRENT_USER as any,
+        {
+          organizationName: 'Acme',
+        } as any,
+      );
+
+      expect(
+        billingProfileProvisioning.provisionFreeProfile,
+      ).toHaveBeenCalledWith(queryRunner.manager, {
+        personalAccountId: null,
+        organizationId: 'organizacion-1',
+      });
+    });
+
+    /**
+     * El perfil va ANTES del commit: si se aprovisionara después, un fallo suyo dejaría la
+     * organización ya confirmada y sin estado comercial — el hueco que esta historia cierra.
+     */
+    it('la organización lo crea antes de confirmar la transacción', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'organizacion-1' })
+        .mockResolvedValueOnce({ id: 'cuenta-admin-1' });
+      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-admin-1' });
+
+      const orden: string[] = [];
+      billingProfileProvisioning.provisionFreeProfile.mockImplementation(
+        async () => {
+          orden.push('perfil');
+          return { id: 'perfil-free-1' };
+        },
+      );
+      queryRunner.commitTransaction.mockImplementation(async () => {
+        orden.push('commit');
+      });
+
+      await service.saveOrganizationWithAdminAccount(
+        CURRENT_USER as any,
+        {
+          organizationName: 'Acme',
+        } as any,
+      );
+
+      expect(orden).toEqual(['perfil', 'commit']);
+    });
+
+    it('si falla el perfil, la organización hace rollback y no se confirma', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'organizacion-1' })
+        .mockResolvedValueOnce({ id: 'cuenta-admin-1' });
+      billingProfileProvisioning.provisionFreeProfile.mockRejectedValue(
+        new Error('perfil no se pudo crear'),
+      );
+
+      await expect(
+        service.saveOrganizationWithAdminAccount(
+          CURRENT_USER as any,
+          {
+            organizationName: 'Acme',
+          } as any,
+        ),
+      ).rejects.toThrow('perfil no se pudo crear');
+
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalled();
+    });
+
+    describe('saveAccount', () => {
+      it('escribe la cuenta y su perfil en una sola transacción', async () => {
+        await service.saveAccount({
+          userId: 'user-1',
+          accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+          organizationId: null,
+          roleId: 'admin-role-1',
+          user: CURRENT_USER as any,
+        });
+
+        expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+        expect(
+          billingProfileProvisioning.provisionFreeProfile,
+        ).toHaveBeenCalledWith(transactionManager, {
+          personalAccountId: 'generated-id',
+          organizationId: null,
+        });
+      });
+
+      it('una cuenta de organización ata el perfil a la organización', async () => {
+        await service.saveAccount({
+          userId: 'user-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'organizacion-1',
+          roleId: 'admin-role-1',
+          user: CURRENT_USER as any,
+        });
+
+        expect(
+          billingProfileProvisioning.provisionFreeProfile,
+        ).toHaveBeenCalledWith(transactionManager, {
+          personalAccountId: null,
+          organizationId: 'organizacion-1',
+        });
+      });
     });
   });
 
