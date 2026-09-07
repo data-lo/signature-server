@@ -14,6 +14,8 @@ import { BillingProfileEntity } from './billing-profile.entity';
 import { PlanEntity } from '../catalog/plan.entity';
 import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
+import { FREE_WELCOME_DOCUMENT_CREDITS } from '../catalog/free-plan.constants';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
 
@@ -121,8 +123,8 @@ function createInMemoryManager() {
  *
  * Lo que un spec por unidad no puede afirmar y éste sí: qué acaba realmente en la base después
  * de crear una cuenta, y —sobre todo— qué NO. El criterio central de esta historia es negativo
- * (el plan Free no toca Stripe, ni deja orden de compra, ni lote de créditos), y sólo se puede
- * comprobar mirando el resultado completo del alta en vez de una llamada aislada.
+ * (el plan Free no toca Stripe ni deja orden de compra) y uno positivo que se le sumó después
+ * —el lote de bienvenida—, y ninguno de los dos se puede comprobar mirando una llamada aislada.
  */
 describe('Alta del perfil Free (integración)', () => {
   let accountService: AccountService;
@@ -316,14 +318,42 @@ describe('Alta del perfil Free (integración)', () => {
       });
     });
 
-    it('no escribe ninguna orden de compra ni lote de créditos', async () => {
+    it('no escribe ninguna orden de compra', async () => {
       await altaDeCuentaPersonal();
       await altaDeOrganizacion();
 
-      // No hubo compra que registrar…
+      // No hubo compra que registrar: el plan gratuito no se contrata.
       expect(manager.filasDe(CheckoutOrderEntity)).toHaveLength(0);
-      // …y los créditos del plan gratuito son de su propio flujo de asignación.
-      expect(manager.filasDe(CreditLotEntity)).toHaveLength(0);
+    });
+
+    /**
+     * El lote de bienvenida SÍ se escribe, y en la misma transacción que la cuenta: es lo que
+     * evita que una cuenta recién creada exista con perfil y sin saldo, y que su primer documento
+     * falle por falta de créditos que en realidad le tocaban.
+     */
+    it('concede un lote de bienvenida por propietario, con sus 3 documentos', async () => {
+      await altaDeCuentaPersonal();
+      await altaDeOrganizacion();
+
+      const lotes = manager.filasDe(CreditLotEntity);
+
+      // Uno por propietario: la cuenta personal y la organización tienen saldos distintos.
+      expect(lotes).toHaveLength(2);
+      lotes.forEach((lote) => {
+        expect(lote.origin).toBe(CREDIT_LOT_ORIGIN_ENUM.FREE_GRANT);
+        expect(lote.issued).toBe(FREE_WELCOME_DOCUMENT_CREDITS);
+        expect(lote.remaining).toBe(FREE_WELCOME_DOCUMENT_CREDITS);
+        // Sin caducidad ni cobro detrás: no lo emitió ningún periodo facturado.
+        expect(lote.expiresAt ?? null).toBeNull();
+        expect(lote.stripeInvoiceId ?? null).toBeNull();
+      });
+
+      // Cada lote cuelga del perfil de su propietario, no de la cuenta que hizo el alta.
+      expect(lotes.map((lote) => lote.billingProfileId).sort()).toEqual(
+        perfiles()
+          .map((perfil) => perfil.id)
+          .sort(),
+      );
     });
 
     it('deja los identificadores de Stripe en null', async () => {

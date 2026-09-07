@@ -4,6 +4,18 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Separa el producto comercial de su precio y reemplaza las dos rutas polimórficas de checkout
  * por un catálogo genérico. No borra las tablas heredadas: permanecen como evidencia de órdenes
  * anteriores mientras checkout_orders ya queda enlazado a catalog_prices.
+ *
+ * **Todo lo que lee del modelo VIEJO va condicionado a que ese modelo exista.** No es
+ * defensividad por costumbre: el entorno de desarrollo levanta el esquema desde las entidades con
+ * `synchronize: true` (ver `app.module.ts`) Y ADEMÁS corre las migraciones, así que
+ * `checkout_orders` nace ya con la forma de DESPUÉS de esta migración —sin `plan_price_id` ni
+ * `document_pack_offer_id`— y el backfill moría con `column o.plan_price_id does not exist`,
+ * dejando el servidor sin arrancar en bucle de reintentos.
+ *
+ * Con las guardas, la migración hace lo correcto en los tres escenarios posibles: una base
+ * heredada (migra sus datos), una levantada por `synchronize` (no hay nada que migrar y se salta
+ * el backfill) y una vacía (idem). Lo que NO se relajó es la comprobación final: una orden que se
+ * quede sin `catalog_price_id` sigue abortando la migración, porque eso sí sería una pérdida.
  */
 export class IntroduceGenericCatalog1784300000040 implements MigrationInterface {
   name = 'IntroduceGenericCatalog1784300000040';
@@ -266,9 +278,35 @@ export class IntroduceGenericCatalog1784300000040 implements MigrationInterface 
   }
 
   private async backfillLegacyPrices(queryRunner: QueryRunner): Promise<void> {
+    /**
+     * Los mapas temporales se crean SIEMPRE, aunque queden vacíos: `backfillCheckoutOrders` los
+     * consulta después, y hacerlos condicionales obligaría a repetir la misma guarda allá.
+     */
     await queryRunner.query(`
-      CREATE TEMP TABLE "plan_price_catalog_map" ON COMMIT DROP AS
-      SELECT pp."id" AS "legacy_id", uuid_generate_v4() AS "catalog_price_id"
+      CREATE TEMP TABLE "plan_price_catalog_map" (
+        "legacy_id" uuid, "catalog_price_id" uuid
+      ) ON COMMIT DROP
+    `);
+    await queryRunner.query(`
+      CREATE TEMP TABLE "pack_offer_catalog_map" (
+        "legacy_id" uuid, "catalog_item_id" uuid, "catalog_price_id" uuid
+      ) ON COMMIT DROP
+    `);
+
+    if (await this.tableExists(queryRunner, 'plan_prices')) {
+      await this.backfillPlanPrices(queryRunner);
+    }
+
+    if (await this.tableExists(queryRunner, 'document_pack_offers')) {
+      await this.backfillPackOffers(queryRunner);
+    }
+  }
+
+  /** Precios recurrentes heredados de `plan_prices`. */
+  private async backfillPlanPrices(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      INSERT INTO "plan_price_catalog_map" ("legacy_id", "catalog_price_id")
+      SELECT pp."id", uuid_generate_v4()
       FROM "plan_prices" pp
     `);
     await queryRunner.query(`
@@ -287,10 +325,15 @@ export class IntroduceGenericCatalog1784300000040 implements MigrationInterface 
       INNER JOIN "plan_prices" pp ON pp."id" = m."legacy_id"
       INNER JOIN "plans" p ON p."plan_type" = pp."plan_type"
     `);
+  }
 
+  /** Paquetes de documentos heredados de `document_pack_offers`. */
+  private async backfillPackOffers(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      CREATE TEMP TABLE "pack_offer_catalog_map" ON COMMIT DROP AS
-      SELECT o."id" AS "legacy_id", uuid_generate_v4() AS "catalog_item_id", uuid_generate_v4() AS "catalog_price_id"
+      INSERT INTO "pack_offer_catalog_map" (
+        "legacy_id", "catalog_item_id", "catalog_price_id"
+      )
+      SELECT o."id", uuid_generate_v4(), uuid_generate_v4()
       FROM "document_pack_offers" o
     `);
     await queryRunner.query(`
@@ -328,30 +371,60 @@ export class IntroduceGenericCatalog1784300000040 implements MigrationInterface 
     `);
   }
 
+  /**
+   * Reapunta las órdenes heredadas al precio de catálogo equivalente.
+   *
+   * Cada `UPDATE` va condicionado a que su columna polimórfica exista: en una base levantada por
+   * `synchronize`, `checkout_orders` nace ya sin ellas y el `UPDATE` moría con
+   * `column ... does not exist`. Que no estén significa que no hay ninguna orden vieja que
+   * reapuntar, así que saltarlo es la respuesta correcta y no una omisión.
+   */
   private async backfillCheckoutOrders(
     queryRunner: QueryRunner,
   ): Promise<void> {
-    await queryRunner.query(`
-      UPDATE "checkout_orders" o
-      SET "catalog_price_id" = m."catalog_price_id"
-      FROM "plan_price_catalog_map" m
-      WHERE o."plan_price_id" = m."legacy_id"
-        AND o."catalog_price_id" IS NULL
-    `);
-    await queryRunner.query(`
-      UPDATE "checkout_orders" o
-      SET "catalog_price_id" = m."catalog_price_id"
-      FROM "pack_offer_catalog_map" m
-      WHERE o."document_pack_offer_id" = m."legacy_id"
-        AND o."catalog_price_id" IS NULL
-    `);
-    await queryRunner.query(`
-      UPDATE "checkout_orders" o
-      SET "credit_slot_id" = cl."id"
-      FROM "credit_lots" cl
-      WHERE cl."checkout_order_id" = o."id"
-        AND o."credit_slot_id" IS NULL
-    `);
+    if (
+      await this.columnExists(queryRunner, 'checkout_orders', 'plan_price_id')
+    ) {
+      await queryRunner.query(`
+        UPDATE "checkout_orders" o
+        SET "catalog_price_id" = m."catalog_price_id"
+        FROM "plan_price_catalog_map" m
+        WHERE o."plan_price_id" = m."legacy_id"
+          AND o."catalog_price_id" IS NULL
+      `);
+    }
+
+    if (
+      await this.columnExists(
+        queryRunner,
+        'checkout_orders',
+        'document_pack_offer_id',
+      )
+    ) {
+      await queryRunner.query(`
+        UPDATE "checkout_orders" o
+        SET "catalog_price_id" = m."catalog_price_id"
+        FROM "pack_offer_catalog_map" m
+        WHERE o."document_pack_offer_id" = m."legacy_id"
+          AND o."catalog_price_id" IS NULL
+      `);
+    }
+    /**
+     * `credit_lots.checkout_order_id` es la otra columna que esta misma migración retira al final:
+     * en una base levantada por `synchronize` ya nace sin ella, y su ausencia significa que no hay
+     * ningún vínculo viejo que invertir.
+     */
+    if (
+      await this.columnExists(queryRunner, 'credit_lots', 'checkout_order_id')
+    ) {
+      await queryRunner.query(`
+        UPDATE "checkout_orders" o
+        SET "credit_slot_id" = cl."id"
+        FROM "credit_lots" cl
+        WHERE cl."checkout_order_id" = o."id"
+          AND o."credit_slot_id" IS NULL
+      `);
+    }
     await queryRunner.query(`
       UPDATE "checkout_orders" o
       SET "stripe_subscription_id" = bp."stripe_subscription_id"
@@ -387,5 +460,38 @@ export class IntroduceGenericCatalog1784300000040 implements MigrationInterface 
         END LOOP;
       END $$;
     `);
+  }
+
+  /** ¿Existe la tabla en el esquema público? */
+  private async tableExists(
+    queryRunner: QueryRunner,
+    table: string,
+  ): Promise<boolean> {
+    const [{ existe }] = await queryRunner.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = $1
+       ) AS "existe"`,
+      [table],
+    );
+
+    return existe === true;
+  }
+
+  /** ¿Existe la columna en esa tabla? */
+  private async columnExists(
+    queryRunner: QueryRunner,
+    table: string,
+    column: string,
+  ): Promise<boolean> {
+    const [{ existe }] = await queryRunner.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+       ) AS "existe"`,
+      [table, column],
+    );
+
+    return existe === true;
   }
 }

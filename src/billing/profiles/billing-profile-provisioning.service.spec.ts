@@ -4,11 +4,15 @@ import { BillingProfileProvisioningService } from './billing-profile-provisionin
 import { BillingProfileEntity } from './billing-profile.entity';
 import { PlanEntity } from '../catalog/plan.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_PROFILE_SOURCE_ENUM } from '../enums/billing-profile-source.enum';
 import { PLAN_CREATION_SOURCE_ENUM } from '../enums/plan-creation-source.enum';
 import {
   FREE_PLAN_DOCUMENTS_INCLUDED,
   FREE_PLAN_TYPE,
+  FREE_WELCOME_DOCUMENT_CREDITS,
 } from '../catalog/free-plan.constants';
+import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 
 const PERSONAL_OWNER = {
   personalAccountId: 'cuenta-personal-1',
@@ -104,23 +108,59 @@ describe('BillingProfileProvisioningService', () => {
         expect.objectContaining({
           currentPlanType: FREE_PLAN_TYPE,
           status: BILLING_PROFILE_STATUS_ENUM.FREE,
+          // Los tres campos que definen el plan gratuito, juntos: plan, estado y quién factura.
+          billingSource: BILLING_PROFILE_SOURCE_ENUM.FREE,
           stripeCustomerId: null,
           stripeSubscriptionId: null,
         }),
       );
     });
 
-    it('escribe en billing_profiles y en nada más', async () => {
+    it('escribe el perfil y su lote de bienvenida, y nada más', async () => {
       await provision();
 
-      expect(manager.create).toHaveBeenCalledTimes(1);
       expect(manager.create).toHaveBeenCalledWith(
         BillingProfileEntity,
         expect.any(Object),
       );
-      // Ni orden de compra ni lote de créditos: no hubo compra, y los créditos gratuitos son
-      // de su propio flujo de asignación.
-      expect(manager.save).toHaveBeenCalledTimes(1);
+      expect(manager.create).toHaveBeenCalledWith(
+        CreditLotEntity,
+        expect.any(Object),
+      );
+      // Dos filas y no tres: no se escribe ninguna orden de compra, porque no hubo compra.
+      expect(manager.create).toHaveBeenCalledTimes(2);
+      expect(manager.save).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * La regla del plan gratuito: 3 documentos, una sola vez. Sin caducidad y con la prioridad
+     * por omisión, para que se gasten DESPUÉS de los créditos de un periodo facturado, que sí se
+     * pierden al cerrarse (ver `ConsumeDocumentCreditUseCase`).
+     */
+    it('concede 3 documentos de bienvenida, sin caducidad ni factura', async () => {
+      await provision();
+
+      expect(manager.create).toHaveBeenCalledWith(CreditLotEntity, {
+        billingProfileId: 'perfil-nuevo',
+        origin: CREDIT_LOT_ORIGIN_ENUM.FREE_GRANT,
+        issued: FREE_WELCOME_DOCUMENT_CREDITS,
+        remaining: FREE_WELCOME_DOCUMENT_CREDITS,
+      });
+      expect(FREE_WELCOME_DOCUMENT_CREDITS).toBe(3);
+    });
+
+    /**
+     * El lote se ata al perfil recién guardado, no al `owner`: un lote colgado de la cuenta
+     * dejaría a los miembros de una organización con saldos separados en vez del único que
+     * comparten.
+     */
+    it('ata el lote al perfil que acaba de crear', async () => {
+      await provision(ORGANIZATION_OWNER);
+
+      expect(manager.create).toHaveBeenCalledWith(
+        CreditLotEntity,
+        expect.objectContaining({ billingProfileId: 'perfil-nuevo' }),
+      );
     });
 
     /**
@@ -164,6 +204,22 @@ describe('BillingProfileProvisioningService', () => {
       await expect(provision()).resolves.toBe(existente);
       expect(manager.save).not.toHaveBeenCalled();
       expect(manager.create).not.toHaveBeenCalled();
+    });
+
+    /**
+     * La bienvenida es "una sola vez", y esto es lo que lo garantiza: un reintento del registro
+     * sale por el perfil que ya existe, antes de conceder nada. Sin esta salida temprana, cada
+     * reintento regalaría otros 3 documentos.
+     */
+    it('no vuelve a conceder los créditos de bienvenida a un perfil que ya existe', async () => {
+      manager.findOne.mockResolvedValue({ id: 'perfil-existente' });
+
+      await provision();
+
+      expect(manager.create).not.toHaveBeenCalledWith(
+        CreditLotEntity,
+        expect.anything(),
+      );
     });
 
     /**

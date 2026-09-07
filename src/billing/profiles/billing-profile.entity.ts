@@ -12,6 +12,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_PROFILE_SOURCE_ENUM } from '../enums/billing-profile-source.enum';
 import { PlanEntity } from '../catalog/plan.entity';
 
 @Entity('billing_profiles')
@@ -56,6 +57,29 @@ export class BillingProfileEntity {
     default: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
   })
   status: BILLING_PROFILE_STATUS_ENUM;
+
+  /**
+   * Por dónde se le factura hoy a este propietario.
+   *
+   * **No se deduce de `status` ni de los `stripe_*`.** Un perfil `ACTIVE` puede estar en Stripe o
+   * llevarse a mano, y uno facturado por transferencia conserva los ids de Stripe de cuando sí
+   * estuvo allá — mirarlos para decidir daría `STRIPE` justo en el caso que hay que distinguir.
+   *
+   * Nace en `FREE` porque todo perfil nace en el plan gratuito, que no se le cobra a nadie. Lo
+   * mueve quien empieza a cobrar: el webhook de Stripe al confirmarse una suscripción, y el alta
+   * manual al registrar su primer periodo.
+   *
+   * Su tipo es propio y no el de `subscription_billing_history.source`: ver
+   * `BILLING_PROFILE_SOURCE_ENUM`, que explica por qué no pueden compartirlo.
+   */
+  @Column({
+    name: 'billing_source',
+    type: 'enum',
+    enum: BILLING_PROFILE_SOURCE_ENUM,
+    enumName: 'billing_profile_source_enum',
+    default: BILLING_PROFILE_SOURCE_ENUM.FREE,
+  })
+  billingSource: BILLING_PROFILE_SOURCE_ENUM;
 
   /**
    * El cliente pidió la baja y conserva el servicio hasta que acabe lo que ya pagó.

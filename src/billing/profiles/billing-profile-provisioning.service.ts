@@ -3,11 +3,15 @@ import { EntityManager } from 'typeorm';
 import { PlanEntity } from '../catalog/plan.entity';
 import { PLAN_CREATION_SOURCE_ENUM } from '../enums/plan-creation-source.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_PROFILE_SOURCE_ENUM } from '../enums/billing-profile-source.enum';
 import {
   FREE_PLAN_DOCUMENTS_INCLUDED,
   FREE_PLAN_NAME,
   FREE_PLAN_TYPE,
+  FREE_WELCOME_DOCUMENT_CREDITS,
 } from '../catalog/free-plan.constants';
+import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import { BillingProfileEntity } from './billing-profile.entity';
 import type { BillingOwner } from './billing-owner.util';
 
@@ -28,8 +32,13 @@ import type { BillingOwner } from './billing-owner.util';
  * **Nada de esto habla con Stripe.** El plan Free no tiene producto, precio, cliente ni
  * suscripción en el proveedor: `stripe_customer_id` y `stripe_subscription_id` nacen en `null` y
  * sólo se llenan cuando alguien contrata de verdad (`CreateSubscriptionCheckoutUseCase`). Tampoco
- * se escribe ningún `checkout_order` —no hubo compra— ni ningún `credit_lot`: los créditos del
- * plan gratuito son de su propio flujo de asignación.
+ * se escribe ningún `checkout_order`: no hubo compra.
+ *
+ * **Sí se escribe un `credit_lot`**, el de bienvenida (`FREE_GRANT`, 3 documentos). Va acá y no
+ * en un flujo aparte por lo mismo que el perfil: si se concediera después, una cuenta podría
+ * existir con perfil y sin saldo, y su primer documento fallaría por falta de créditos que en
+ * realidad le tocaban. Con el alta entera en una transacción, o hay cuenta, perfil y saldo, o no
+ * hay nada.
  *
  * Sólo se aprovisiona al PROPIETARIO: la cuenta personal y la organización. Sumarse a una
  * organización que ya existe (invitación aceptada, acceso concedido) no crea perfil, porque el
@@ -68,17 +77,49 @@ export class BillingProfileProvisioningService {
         organizationId: owner.organizationId,
         currentPlanType: FREE_PLAN_TYPE,
         status: BILLING_PROFILE_STATUS_ENUM.FREE,
+        // Explícito, aunque sea el default de la columna: el alta declara los tres campos que
+        // definen el plan gratuito juntos, para que se lean como la afirmación que son.
+        billingSource: BILLING_PROFILE_SOURCE_ENUM.FREE,
         // Explícitos, no por omisión: son la afirmación de que el plan Free no toca Stripe.
         stripeCustomerId: null,
         stripeSubscriptionId: null,
       }),
     );
 
+    await this.grantWelcomeCredits(manager, profile.id);
+
     this.logger.log(
-      `Perfil de facturación ${profile.id} creado en plan Free para ${describe(owner)}.`,
+      `Perfil de facturación ${profile.id} creado en plan Free para ${describe(owner)}, ` +
+        `con ${FREE_WELCOME_DOCUMENT_CREDITS} documentos de bienvenida.`,
     );
 
     return profile;
+  }
+
+  /**
+   * Concede el lote de bienvenida del plan gratuito.
+   *
+   * **Sólo se llama al CREAR el perfil**, nunca sobre uno que ya existía: el `return existing` de
+   * arriba sale antes. Es lo que hace que la bienvenida sea "una sola vez" — si se otorgara en
+   * cada paso por este método, un reintento del registro regalaría tres documentos más.
+   *
+   * El lote nace sin caducidad (`expires_at` nulo) y con la prioridad por omisión (0): son
+   * créditos que no se pierden, así que se gastan DESPUÉS de los del periodo facturado, que sí
+   * caducan (ver `ConsumeDocumentCreditUseCase`). Tampoco lleva periodo ni factura: no lo emitió
+   * ningún cobro.
+   */
+  private async grantWelcomeCredits(
+    manager: EntityManager,
+    billingProfileId: string,
+  ): Promise<void> {
+    await manager.save(
+      manager.create(CreditLotEntity, {
+        billingProfileId,
+        origin: CREDIT_LOT_ORIGIN_ENUM.FREE_GRANT,
+        issued: FREE_WELCOME_DOCUMENT_CREDITS,
+        remaining: FREE_WELCOME_DOCUMENT_CREDITS,
+      }),
+    );
   }
 
   /**

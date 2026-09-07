@@ -18,6 +18,7 @@ import { BillingOwnerService } from './profiles/billing-owner.service';
 import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
 import { GetBillingStateUseCase } from './profiles/get-billing-state.use-case';
+import { ConsumeDocumentCreditUseCase } from './credits/consume-document-credit.use-case';
 import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
 import { SubscriptionBillingHistoryEntity } from './subscriptions/subscription-billing-history.entity';
 import { RegisterSubscriptionBillingUseCase } from './subscriptions/register-subscription-billing.use-case';
@@ -72,6 +73,7 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
+    ConsumeDocumentCreditUseCase,
     SubscriptionBillingService,
     RegisterSubscriptionBillingUseCase,
     RegisterManualSubscriptionBillingUseCase,
@@ -86,6 +88,7 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
+    ConsumeDocumentCreditUseCase,
     SubscriptionBillingService,
     RegisterSubscriptionBillingUseCase,
     RegisterManualSubscriptionBillingUseCase,

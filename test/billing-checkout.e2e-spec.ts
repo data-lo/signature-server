@@ -17,6 +17,8 @@ import { StripePaymentService } from './../src/payments/stripe/stripe-payment.se
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
 import { GetBillingStateUseCase } from './../src/billing/profiles/get-billing-state.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
+import { CancelSubscriptionUseCase } from './../src/billing/subscriptions/cancel-subscription.use-case';
+import { ResumeSubscriptionUseCase } from './../src/billing/subscriptions/resume-subscription.use-case';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
 import { CheckoutOrderService } from './../src/billing/checkout/checkout-order.service';
 import { BillingProfileEntity } from './../src/billing/profiles/billing-profile.entity';
@@ -170,6 +172,19 @@ describe('Checkout de suscripción (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
       providers: [
+        /**
+         * Los pide el controller para `POST /subscription/cancel` y `/resume`, que tienen su
+         * propia cobertura por unidad. Van simulados para no arrastrar hasta acá el adaptador de
+         * Stripe y sus repositorios: esta prueba es del checkout, no de la baja.
+         */
+        {
+          provide: CancelSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        {
+          provide: ResumeSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
         CreateSubscriptionCheckoutUseCase,
         // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e.
         GetBillingStateUseCase,
@@ -198,7 +213,10 @@ describe('Checkout de suscripción (e2e)', () => {
           provide: getRepositoryToken(CheckoutOrderEntity),
           useValue: checkoutOrders,
         },
-        { provide: getRepositoryToken(CatalogPriceEntity), useValue: catalogPrices },
+        {
+          provide: getRepositoryToken(CatalogPriceEntity),
+          useValue: catalogPrices,
+        },
       ],
     }).compile();
 

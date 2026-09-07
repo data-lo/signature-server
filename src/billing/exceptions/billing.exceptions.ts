@@ -190,3 +190,26 @@ export class InvalidBillingRegistrationException extends BadRequestException {
     super(`No se puede registrar el periodo facturado: ${reason}`);
   }
 }
+
+/**
+ * La cuenta no tiene ningún crédito de documento con el que crear uno nuevo.
+ *
+ * **409 y no 402 ni 403.** La petición está bien formada y el usuario tiene permiso: lo que choca
+ * es el estado de su saldo, y es un estado que él mismo puede cambiar sin cambiar de plan
+ * —comprando documentos sueltos— o cambiándolo —contratando—. El frontend necesita distinguirlo
+ * de un 403 para ofrecer esos dos caminos en vez de un "no tienes acceso".
+ *
+ * El mensaje nombra las dos salidas a propósito: quien se queda sin documentos en el plan
+ * gratuito no tiene forma de adivinar cuál de las dos le conviene, y un "créditos insuficientes"
+ * a secas lo deja mirando una pantalla sin acción posible.
+ */
+export class InsufficientDocumentCreditsException extends ConflictException {
+  constructor(billingProfileId?: string) {
+    super(
+      'No tienes créditos de documentos disponibles. Compra documentos adicionales o contrata un plan.',
+    );
+    this.cause = billingProfileId
+      ? `Sin credit_lots con saldo utilizable para el perfil ${billingProfileId}.`
+      : 'La cuenta activa no tiene perfil de facturación, así que tampoco lotes de crédito.';
+  }
+}

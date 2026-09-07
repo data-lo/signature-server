@@ -15,6 +15,8 @@ import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
 import { GetBillingStateUseCase } from './../src/billing/profiles/get-billing-state.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
+import { CancelSubscriptionUseCase } from './../src/billing/subscriptions/cancel-subscription.use-case';
+import { ResumeSubscriptionUseCase } from './../src/billing/subscriptions/resume-subscription.use-case';
 import { BillingProfileEntity } from './../src/billing/profiles/billing-profile.entity';
 import { AccountEntity } from './../src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from './../src/payments/entities/account-subscription.entity';
@@ -141,6 +143,19 @@ describe('Estado de suscripción (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
       providers: [
+        /**
+         * Los pide el controller para `POST /subscription/cancel` y `/resume`, que tienen su
+         * propia cobertura por unidad. Van simulados para no arrastrar hasta acá el adaptador de
+         * Stripe y sus repositorios: esta prueba es del checkout, no de la baja.
+         */
+        {
+          provide: CancelSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        {
+          provide: ResumeSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
         GetSubscriptionStateUseCase,
         BillingOwnerService,
         { provide: APP_GUARD, useClass: FakeAuthGuard },
@@ -255,6 +270,9 @@ describe('Estado de suscripción (e2e)', () => {
         hasActiveSubscription: false,
         planType: null,
         status: null,
+        // Sin perfil no hay baja programada que anunciar, pero el campo viaja igual: la pantalla
+        // decide entre "cancelar" y "termina el día X" sin tener que distinguir un undefined.
+        cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
       });

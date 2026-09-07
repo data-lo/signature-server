@@ -15,6 +15,7 @@ import { NotificationEventsProducer } from 'src/kafka/notification-events.produc
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
+import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
@@ -55,6 +56,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let documentEventsProducer: Record<string, jest.Mock>;
   let emailService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
+  let consumeDocumentCredit: Record<string, jest.Mock>;
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -169,6 +171,9 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         .mockResolvedValue(undefined),
     };
     documentTransactionService = { createInitial: jest.fn() };
+    consumeDocumentCredit = {
+      execute: jest.fn().mockResolvedValue({ id: 'consumo-1' }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -191,6 +196,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         {
           provide: DocumentTransactionService,
           useValue: documentTransactionService,
+        },
+        {
+          provide: ConsumeDocumentCreditUseCase,
+          useValue: consumeDocumentCredit,
         },
       ],
     }).compile();
