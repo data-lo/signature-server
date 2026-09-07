@@ -5,6 +5,9 @@ import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { CreateSubscriptionCheckoutUseCase } from 'src/billing/checkout/create-subscription-checkout.use-case';
+import { CancelSubscriptionUseCase } from 'src/billing/subscriptions/cancel-subscription.use-case';
+import { ResumeSubscriptionUseCase } from 'src/billing/subscriptions/resume-subscription.use-case';
+import type { SubscriptionScheduleResponse } from 'src/billing/subscriptions/subscription-schedule.interface';
 import {
   GetBillingStateUseCase,
   type BillingStateResponse,
@@ -19,6 +22,8 @@ import { ApiGetPaymentServices } from './docs/api-get-payment-services.docs';
 import { ApiCreateCheckoutSession } from './docs/api-create-checkout-session.docs';
 import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs';
 import { ApiGetBillingState } from './docs/api-get-billing-state.docs';
+import { ApiCancelSubscription } from './docs/api-cancel-subscription.docs';
+import { ApiResumeSubscription } from './docs/api-resume-subscription.docs';
 
 /**
  * Endpoints autenticados del catálogo y la compra.
@@ -35,6 +40,8 @@ export class PaymentsController {
     private readonly createSubscriptionCheckout: CreateSubscriptionCheckoutUseCase,
     private readonly getSubscriptionState: GetSubscriptionStateUseCase,
     private readonly getBillingState: GetBillingStateUseCase,
+    private readonly cancelSubscription: CancelSubscriptionUseCase,
+    private readonly resumeSubscription: ResumeSubscriptionUseCase,
   ) {}
 
   /**
@@ -98,6 +105,53 @@ export class PaymentsController {
       success: true,
       message: 'Estado de facturación obtenido correctamente',
       data: await this.getBillingState.execute({
+        userId: user.sub,
+        accountId,
+      }),
+    };
+  }
+
+  /**
+   * Programa la baja de la suscripción de la cuenta activa.
+   *
+   * `POST` y no `DELETE` porque no se borra ni se termina nada: se AGENDA un cambio para una
+   * fecha futura y la suscripción sigue exactamente igual de viva hasta que llegue. Un `DELETE`
+   * prometería lo contrario de lo que hace.
+   *
+   * Sin cuerpo: no hay nada que elegir. Qué suscripción se cancela lo determina por completo la
+   * cuenta activa del header, igual que en el checkout — y por el mismo motivo, que es quién paga.
+   */
+  @Post('subscription/cancel')
+  @ApiCancelSubscription()
+  async cancelSubscriptionAtPeriodEnd(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+  ): Promise<BaseResponse<SubscriptionScheduleResponse>> {
+    return {
+      success: true,
+      message: 'Tu suscripción no se renovará al terminar el periodo vigente',
+      data: await this.cancelSubscription.execute({
+        userId: user.sub,
+        accountId,
+      }),
+    };
+  }
+
+  /**
+   * Deshace la baja programada. Es el camino de vuelta de la cancelación, y sin él quien se da de
+   * baja por error queda encerrado: no puede cancelar (ya está programada) ni contratar (el perfil
+   * sigue ACTIVE y el checkout lo rechaza con 409).
+   */
+  @Post('subscription/resume')
+  @ApiResumeSubscription()
+  async resumeSubscriptionRenewal(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+  ): Promise<BaseResponse<SubscriptionScheduleResponse>> {
+    return {
+      success: true,
+      message: 'Tu suscripción volverá a renovarse automáticamente',
+      data: await this.resumeSubscription.execute({
         userId: user.sub,
         accountId,
       }),

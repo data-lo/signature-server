@@ -274,19 +274,6 @@ export class RegisterSubscriptionBillingUseCase {
 
   /**
    * Deja el perfil describiendo lo vigente. Es la mitad del reparto de trabajo con el historial:
-   * aquí vive el ESTADO ACTUAL, allá el registro de cada periodo.
-   *
-   * **Los ids de Stripe sólo se escriben si el cobro vino de Stripe**, y nunca se borran: un
-   * perfil que pasa a facturación manual conserva los suyos como referencia histórica, y ponerlos
-   * a `null` desde acá tiraría el vínculo con cobros reales que aún hay que poder consultar.
-   *
-   * `cancel_at_period_end` se limpia sólo en el camino MANUAL. Un periodo manual nuevo sustituye
-   * cualquier intención previa de no renovar; en el camino de Stripe esa bandera la gobierna el
-   * proveedor a través de `customer.subscription.updated`, y pisarla desde un cobro podría
-   * contradecir una baja que el cliente ya pidió.
-   */
-  /**
-   * Deja el perfil describiendo lo vigente. Es la mitad del reparto de trabajo con el historial:
    * acá vive el ESTADO ACTUAL —una sola fila, siempre el plan y el periodo de ahora—, allá el
    * registro de cada periodo que se cobró.
    *
@@ -294,6 +281,14 @@ export class RegisterSubscriptionBillingUseCase {
    * cobro manual no los aporta, y ponerlos a `null` desde acá tiraría el vínculo con cobros
    * reales que todavía hay que poder consultar. Por eso el `spread` condicionado en vez de
    * asignarlos siempre.
+   *
+   * **`cancel_at_period_end` se limpia sólo en el camino MANUAL.** Un periodo facturado a mano
+   * sustituye cualquier intención previa de no renovar: si administración acaba de cobrar el mes
+   * siguiente, el perfil no puede seguir anunciando que el servicio termina. En el camino de
+   * Stripe esa bandera la gobierna el proveedor a través de `customer.subscription.updated`, y
+   * pisarla desde un cobro contradiría una baja que el cliente sí pidió — `invoice.paid` del
+   * periodo vigente llega DESPUÉS de que se programe la cancelación, y limpiarla ahí revocaría en
+   * silencio la decisión del cliente.
    */
   private async updateProfile(
     manager: EntityManager,
@@ -313,7 +308,7 @@ export class RegisterSubscriptionBillingUseCase {
             stripeSubscriptionId:
               input.stripeSubscriptionId ?? profile.stripeSubscriptionId,
           }
-        : {}),
+        : { cancelAtPeriodEnd: false }),
     });
   }
 

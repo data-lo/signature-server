@@ -202,6 +202,56 @@ export class StripePaymentService {
   }
 
   /**
+   * Programa la baja de una suscripción para el final del periodo ya pagado.
+   *
+   * **No la cancela**: `cancel_at_period_end` le dice a Stripe que no emita la próxima factura.
+   * La suscripción sigue activa —y cobrada— hasta `current_period_end`, y sólo entonces Stripe
+   * la da de baja y manda `customer.subscription.deleted`. Usar `subscriptions.cancel()` en su
+   * lugar la cortaría ahora mismo y le quitaría al cliente el tiempo que ya pagó.
+   *
+   * Devuelve la suscripción tal como quedó en Stripe para que el llamador pueda comprobar que la
+   * baja se programó de verdad antes de escribir nada en nuestra base: un 200 del proveedor
+   * confirma que la petición se procesó, y este objeto confirma QUÉ quedó.
+   */
+  async scheduleSubscriptionCancellation(
+    subscriptionId: string,
+  ): Promise<Stripe.Subscription> {
+    try {
+      return await this.client.subscriptions.update(subscriptionId, {
+        cancel_at_period_end: true,
+      });
+    } catch (error) {
+      throw this.translateError(
+        error,
+        `programar la baja de la suscripción de Stripe ${subscriptionId}`,
+      );
+    }
+  }
+
+  /**
+   * Deshace una baja programada: la suscripción vuelve a renovarse al terminar el periodo.
+   *
+   * Es la operación inversa exacta de `scheduleSubscriptionCancellation`, y sólo sirve MIENTRAS
+   * el periodo siga vigente. Una vez que Stripe da de baja la suscripción, ésta ya no se puede
+   * revivir —hay que contratar de nuevo— y el proveedor responde un error; por eso el caso de uso
+   * comprueba antes que el perfil siga activo con la baja pendiente.
+   */
+  async resumeSubscription(
+    subscriptionId: string,
+  ): Promise<Stripe.Subscription> {
+    try {
+      return await this.client.subscriptions.update(subscriptionId, {
+        cancel_at_period_end: false,
+      });
+    } catch (error) {
+      throw this.translateError(
+        error,
+        `reanudar la suscripción de Stripe ${subscriptionId}`,
+      );
+    }
+  }
+
+  /**
    * Un precio entra al catálogo público si su producto vino expandido, está activo y su metadata
    * lo declara plan visible. Se filtra acá y no en el caso de uso porque son particularidades
    * del catálogo de Stripe (qué trae la respuesta, cómo se marca un producto), no reglas de

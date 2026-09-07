@@ -8,6 +8,7 @@ const SIN_SUSCRIPCION: UserSubscriptionState = {
   hasActiveSubscription: false,
   planType: null,
   status: null,
+  cancelAtPeriodEnd: false,
   currentPeriodStart: null,
   currentPeriodEnd: null,
 };
@@ -62,6 +63,12 @@ export class GetSubscriptionStateUseCase {
         profile.status === BILLING_PROFILE_STATUS_ENUM.ACTIVE,
       planType: profile.currentPlanType,
       status: profile.status,
+      /**
+       * No se cruza con `hasActiveSubscription`: son dos preguntas distintas y la pantalla
+       * necesita las dos por separado. Una suscripción con la baja programada está activa Y no se
+       * renovará, y colapsarlas dejaría al usuario sin saber cuál de las dos cosas está viendo.
+       */
+      cancelAtPeriodEnd: profile.cancelAtPeriodEnd,
       currentPeriodStart: profile.currentPeriodStart,
       currentPeriodEnd: profile.currentPeriodEnd,
     };

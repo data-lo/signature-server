@@ -37,6 +37,7 @@ interface PerfilFalso {
   status: BILLING_PROFILE_STATUS_ENUM;
   currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
+  cancelAtPeriodEnd: boolean;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
 }
@@ -48,6 +49,7 @@ function perfil(overrides: Partial<PerfilFalso> = {}): PerfilFalso {
     status: BILLING_PROFILE_STATUS_ENUM.FREE,
     currentPeriodStart: null,
     currentPeriodEnd: null,
+    cancelAtPeriodEnd: false,
     stripeCustomerId: null,
     stripeSubscriptionId: null,
     ...overrides,
@@ -292,6 +294,19 @@ describe('RegisterSubscriptionBillingUseCase', () => {
     });
 
     /**
+     * La contracara del camino manual: la bandera la gobierna Stripe por
+     * `customer.subscription.updated`. El `invoice.paid` del periodo vigente llega DESPUÉS de que
+     * el cliente programe su baja, así que limpiarla acá revocaría en silencio lo que pidió.
+     */
+    it('no toca la baja programada que el cliente ya pidió', async () => {
+      perfiles[0] = perfil({ cancelAtPeriodEnd: true });
+
+      await useCase.execute(cobroStripe());
+
+      expect(perfiles[0].cancelAtPeriodEnd).toBe(true);
+    });
+
+    /**
      * Una renovación no pasa por Checkout, así que no hay orden nueva que apuntar. Que el vínculo
      * quede nulo es lo correcto, no un fallo de resolución.
      */
@@ -330,6 +345,19 @@ describe('RegisterSubscriptionBillingUseCase', () => {
         currentPeriodStart: PERIOD_START,
         currentPeriodEnd: PERIOD_END,
       });
+    });
+
+    /**
+     * Si administración acaba de cobrar el mes siguiente, el perfil no puede seguir anunciando
+     * que el servicio termina: el cobro manual sustituye cualquier intención previa de no
+     * renovar.
+     */
+    it('limpia la baja programada que hubiera', async () => {
+      perfiles[0] = perfil({ cancelAtPeriodEnd: true });
+
+      await useCase.execute(cobroManual());
+
+      expect(perfiles[0].cancelAtPeriodEnd).toBe(false);
     });
 
     /**
