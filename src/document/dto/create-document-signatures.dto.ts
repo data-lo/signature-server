@@ -145,6 +145,23 @@ export class DocumentDataDto {
   @IsOptional()
   @IsBoolean()
   isSequential?: boolean;
+
+  /**
+   * Si el documento entra a Búsqueda Inteligente.
+   *
+   * Opcional **y con el default en el backend, no en el cliente**: omitirlo da un documento
+   * indexable. Que el frontend hoy siempre lo mande no cambia nada — un cliente viejo, una
+   * integración o un `curl` obtienen la misma regla, que es lo que impide que "indexable por
+   * defecto" dependa de quién llama.
+   */
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Si el documento participa en Búsqueda Inteligente. Si se omite, el backend asigna `true`. Con `false` el documento se crea igual y conserva firma, descarga y auditoría, pero no entra al flujo de indexación.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isIndexable?: boolean;
 }
 
 export class CollaboratorPayloadDto {

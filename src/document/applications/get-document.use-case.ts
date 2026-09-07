@@ -156,6 +156,12 @@ export class GetDocumentUseCase {
         canConfirmCancellation,
         requiresVerification: Boolean(requiresVerification),
         verificationConfirmed,
+        /**
+         * Si el documento participa en Búsqueda Inteligente. Se expone porque es una decisión que
+         * el autor tomó al crearlo y que después no puede consultar en ninguna otra parte: sin
+         * este campo, la única forma de saber si un documento quedó indexado sería buscarlo.
+         */
+        isIndexable: document.isIndexable,
         // Avance de firmas en tiempo real (ver Registro de Transacciones / Document
         // Transaction): completedSignersCount se compara contra totalSigners para saber si al
         // documento le falta algún firmante. completedSignedAt es la fecha en la que se
