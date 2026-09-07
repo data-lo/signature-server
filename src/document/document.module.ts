@@ -6,6 +6,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { DocumentEntity } from './entities/document.entity';
 import { CollaboratorEntity } from './entities/collaborator.entity';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
+import { DocumentUserPreferenceEntity } from './preferences/document-user-preference.entity';
 import { VerificationCodeService } from './verification-code.service';
 import { SharedModule } from 'src/shared/shared.module';
 import { UserModule } from 'src/user/user.module';
@@ -71,6 +72,14 @@ import { CreateDocumentSignatureFlowUseCase } from './applications/create-docume
       DocumentEntity,
       CollaboratorEntity,
       VerificationCodeEntity,
+      /**
+       * Todavía no la inyecta nadie —esta historia es sólo el modelo— pero tiene que estar
+       * nombrada acá igual: con `autoLoadEntities: true` (ver `app.module.ts`) TypeORM sólo carga
+       * el metadata de una entidad si algún `forFeature()` la menciona, y que exista su archivo
+       * `.entity.ts` no basta. Sin esto, `synchronize` no crearía la tabla en desarrollo y las
+       * relaciones hacia `documents` y `users` no se construirían.
+       */
+      DocumentUserPreferenceEntity,
     ]),
     SharedModule,
     UserModule,
