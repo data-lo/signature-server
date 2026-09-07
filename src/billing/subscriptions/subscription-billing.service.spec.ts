@@ -1,21 +1,19 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import Stripe = require('stripe');
 import { SubscriptionBillingService } from './subscription-billing.service';
+import { RegisterSubscriptionBillingUseCase } from './register-subscription-billing.use-case';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
-import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
-import {
-  BillingProfileNotFoundForInvoiceException,
-  PlanNotFoundForInvoiceException,
-} from '../exceptions/billing.exceptions';
+import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { PlanNotFoundForInvoiceException } from '../exceptions/billing.exceptions';
 
 const PERIOD_START = 1893456000; // 2030-01-01T00:00:00Z
 const PERIOD_END = 1896134400; // 2030-02-01T00:00:00Z
+const PAID_AT = 1893456300; // 2030-01-01T00:05:00Z
 
 const PLAN_PRICE = {
   id: 'catalog-price-1',
@@ -30,6 +28,11 @@ function buildInvoice(overrides: Record<string, unknown> = {}): Stripe.Invoice {
   return {
     id: 'in_1',
     customer: 'cus_1',
+    currency: 'mxn',
+    amount_paid: 149900,
+    total: 149900,
+    payment_intent: 'pi_1',
+    status_transitions: { paid_at: PAID_AT },
     parent: { subscription_details: { subscription: 'sub_1' } },
     lines: {
       data: [
@@ -57,13 +60,7 @@ describe('SubscriptionBillingService', () => {
     linkCompletedSubscriptionToCreditSlot: jest.Mock;
     linkCheckoutSessionToCreditSlot: jest.Mock;
   };
-  let manager: {
-    findOne: jest.Mock;
-    update: jest.Mock;
-    getRepository: jest.Mock;
-    createQueryBuilder: jest.Mock;
-  };
-  let rolloverExecute: jest.Mock;
+  let registerSubscriptionBilling: { execute: jest.Mock };
 
   beforeEach(async () => {
     billingProfileRepository = {
@@ -83,34 +80,16 @@ describe('SubscriptionBillingService', () => {
       linkCompletedSubscriptionToCreditSlot: jest.fn(),
       linkCheckoutSessionToCreditSlot: jest.fn(),
     };
-
-    rolloverExecute = jest.fn().mockResolvedValue({ affected: 0 });
-    manager = {
-      findOne: jest.fn().mockResolvedValue({ id: 'profile-1' }),
-      update: jest.fn(),
-      getRepository: jest.fn().mockReturnValue(creditLotRepository),
-      createQueryBuilder: jest.fn().mockReturnValue({
-        update: jest.fn().mockReturnThis(),
-        set: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        execute: rolloverExecute,
+    registerSubscriptionBilling = {
+      execute: jest.fn().mockResolvedValue({
+        history: { id: 'period-1' },
+        alreadyRegistered: false,
       }),
-    };
-
-    const dataSource = {
-      transaction: jest.fn(async (work: (m: unknown) => Promise<unknown>) =>
-        work(manager),
-      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SubscriptionBillingService,
-        {
-          provide: getDataSourceToken(),
-          useValue: dataSource as unknown as DataSource,
-        },
         {
           provide: getRepositoryToken(BillingProfileEntity),
           useValue: billingProfileRepository,
@@ -121,6 +100,10 @@ describe('SubscriptionBillingService', () => {
         },
         { provide: BillingCatalogService, useValue: billingCatalogService },
         { provide: CheckoutOrderService, useValue: checkoutOrderService },
+        {
+          provide: RegisterSubscriptionBillingUseCase,
+          useValue: registerSubscriptionBilling,
+        },
       ],
     }).compile();
 
@@ -248,120 +231,108 @@ describe('SubscriptionBillingService', () => {
     });
   });
 
-  describe('CA06 — invoice.paid activa el plan y emite el lote', () => {
-    it('crea el lote CURRENT_PERIOD con el límite mensual del plan y activa el perfil', async () => {
+  describe('invoice.paid — adaptación a `RegisterSubscriptionBillingUseCase`', () => {
+    it('traduce la factura y delega el efecto económico', async () => {
       await service.handleInvoicePaid(buildInvoice());
 
-      expect(creditLotRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          billingProfileId: 'profile-1',
-          origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
-          issued: 100,
-          remaining: 100,
-          priority: 100,
-          stripeInvoiceId: 'in_1',
-          stripeSubscriptionId: 'sub_1',
-          periodStart: new Date(PERIOD_START * 1000),
-          periodEnd: new Date(PERIOD_END * 1000),
-        }),
-      );
-
-      expect(manager.update).toHaveBeenCalledWith(
-        BillingProfileEntity,
-        'profile-1',
-        expect.objectContaining({
-          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
-          currentPlanType: 'pro',
-          stripeSubscriptionId: 'sub_1',
-          currentPeriodStart: new Date(PERIOD_START * 1000),
-          currentPeriodEnd: new Date(PERIOD_END * 1000),
-        }),
-      );
-      expect(
-        checkoutOrderService.linkCompletedSubscriptionToCreditSlot,
-      ).toHaveBeenCalledWith({
+      expect(registerSubscriptionBilling.execute).toHaveBeenCalledWith({
         billingProfileId: 'profile-1',
+        source: BILLING_SOURCE_ENUM.STRIPE,
+        planType: 'pro',
+        amount: 149900,
+        currency: 'mxn',
+        periodStart: new Date(PERIOD_START * 1000),
+        periodEnd: new Date(PERIOD_END * 1000),
+        paidAt: new Date(PAID_AT * 1000),
+        stripeCustomerId: 'cus_1',
         stripeSubscriptionId: 'sub_1',
-        creditSlotId: 'lot-1',
+        stripeInvoiceId: 'in_1',
+        stripePaymentIntentId: 'pi_1',
       });
-    });
-
-    it('bloquea el perfil antes de tocar el saldo', async () => {
-      await service.handleInvoicePaid(buildInvoice());
-
-      expect(manager.findOne).toHaveBeenCalledWith(BillingProfileEntity, {
-        where: { id: 'profile-1' },
-        lock: { mode: 'pessimistic_write' },
-      });
-    });
-  });
-
-  describe('CA07 — idempotencia de factura', () => {
-    it('no emite un segundo lote si la factura ya generó uno', async () => {
-      creditLotRepository.findOne.mockResolvedValue({ id: 'lot-existente' });
-
-      await service.handleInvoicePaid(buildInvoice());
-
-      expect(creditLotRepository.save).not.toHaveBeenCalled();
-      expect(manager.update).not.toHaveBeenCalled();
     });
 
     /**
-     * La comprobación va DENTRO de la transacción y después del bloqueo: comprobar antes dejaría
-     * una ventana en la que dos entregas simultáneas de la misma factura pasarían las dos.
+     * El adaptador ya no emite saldo ni escribe historial: eso vive en el caso de uso porque un
+     * cobro manual tiene que producir exactamente lo mismo, y dos copias de esa lógica se separan
+     * a la primera corrección.
      */
-    it('comprueba la factura ya procesada después de bloquear, no antes', async () => {
-      const orden: string[] = [];
-      manager.findOne.mockImplementation(async () => {
-        orden.push('lock');
-        return { id: 'profile-1' };
-      });
-      creditLotRepository.findOne.mockImplementation(async () => {
-        orden.push('check-invoice');
-        return null;
-      });
-
+    it('no toca créditos ni perfil por su cuenta', async () => {
       await service.handleInvoicePaid(buildInvoice());
 
-      expect(orden).toEqual(['lock', 'check-invoice']);
+      expect(creditLotRepository.save).not.toHaveBeenCalled();
+      expect(billingProfileRepository.update).not.toHaveBeenCalled();
     });
-  });
 
-  describe('CA09 — renovación con rollover', () => {
-    it('convierte el sobrante del periodo anterior en ROLLOVER y emite el lote nuevo', async () => {
-      rolloverExecute.mockResolvedValue({ affected: 1 });
+    /**
+     * `amount_paid` y no `total`: difieren cuando la factura se liquida en parte con saldo del
+     * cliente o con un cupón, y el historial tiene que cuadrar con el dinero que entró.
+     */
+    it('registra lo realmente cobrado, no lo facturado', async () => {
+      await service.handleInvoicePaid(
+        buildInvoice({ amount_paid: 50000, total: 149900 }),
+      );
 
-      await service.handleInvoicePaid(buildInvoice({ id: 'in_2' }));
+      expect(registerSubscriptionBilling.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 50000 }),
+      );
+    });
 
-      expect(rolloverExecute).toHaveBeenCalled();
-      expect(creditLotRepository.save).toHaveBeenCalledWith(
+    /**
+     * El periodo vive en la LÍNEA de la factura desde la API de 2025. Buscarlo en la suscripción
+     * —donde lo pone toda la documentación anterior— devuelve `undefined` en silencio.
+     */
+    it('toma el periodo de la línea de la factura', async () => {
+      await service.handleInvoicePaid(
+        buildInvoice({
+          lines: {
+            data: [
+              {
+                period: { start: 1900000000, end: 1902678400 },
+                pricing: { price_details: { price: 'price_pro_mensual' } },
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(registerSubscriptionBilling.execute).toHaveBeenCalledWith(
         expect.objectContaining({
-          origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
-          stripeInvoiceId: 'in_2',
+          periodStart: new Date(1900000000 * 1000),
+          periodEnd: new Date(1902678400 * 1000),
         }),
       );
     });
 
-    it('el rollover sólo alcanza lotes CURRENT_PERIOD con saldo restante', async () => {
-      const builder = manager.createQueryBuilder();
+    it('cae a "ahora" si la factura no informa cuándo se pagó', async () => {
+      const antes = Date.now();
 
-      await service.handleInvoicePaid(buildInvoice());
+      await service.handleInvoicePaid(buildInvoice({ status_transitions: {} }));
 
-      expect(builder.set).toHaveBeenCalledWith({
-        origin: CREDIT_LOT_ORIGIN_ENUM.ROLLOVER,
-      });
-      expect(builder.andWhere).toHaveBeenCalledWith('origin = :origin', {
-        origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
-      });
-      expect(builder.andWhere).toHaveBeenCalledWith('remaining > 0');
+      const { paidAt } = registerSubscriptionBilling.execute.mock.calls[0][0];
+      expect(paidAt.getTime()).toBeGreaterThanOrEqual(antes);
+    });
+
+    /**
+     * Un cobro suelto —un paquete de documentos— no abre un periodo ni renueva un plan, y
+     * registrarlo como tal dejaría el perfil diciendo que tiene una suscripción que nadie contrató.
+     */
+    it('ignora una factura que no es de suscripción', async () => {
+      await service.handleInvoicePaid(buildInvoice({ parent: null }));
+
+      expect(registerSubscriptionBilling.execute).not.toHaveBeenCalled();
     });
   });
 
-  describe('CA12 — eventos fuera de orden', () => {
+  describe('eventos fuera de orden y facturas huérfanas', () => {
+    /**
+     * El `stripe_customer_id` se graba antes de abrir el checkout; el `stripe_subscription_id` no
+     * existe hasta que la sesión se completa. Sin este respaldo, un `invoice.paid` que se
+     * adelantara a `checkout.session.completed` quedaría huérfano.
+     */
     it('encuentra el perfil por customer cuando la búsqueda por subscription falla', async () => {
       billingProfileRepository.findOne
-        .mockResolvedValueOnce(null) // por stripeSubscriptionId
-        .mockResolvedValueOnce({ id: 'profile-1' }); // por stripeCustomerId
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'profile-1' });
 
       await service.handleInvoicePaid(buildInvoice());
 
@@ -371,41 +342,42 @@ describe('SubscriptionBillingService', () => {
       expect(billingProfileRepository.findOne).toHaveBeenNthCalledWith(2, {
         where: { stripeCustomerId: 'cus_1' },
       });
-      expect(creditLotRepository.save).toHaveBeenCalled();
+      expect(registerSubscriptionBilling.execute).toHaveBeenCalled();
     });
 
-    it('backfillea el stripeSubscriptionId que faltaba en el perfil', async () => {
-      billingProfileRepository.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'profile-1', stripeSubscriptionId: null });
-
-      await service.handleInvoicePaid(buildInvoice());
-
-      expect(manager.update).toHaveBeenCalledWith(
-        BillingProfileEntity,
-        'profile-1',
-        expect.objectContaining({ stripeSubscriptionId: 'sub_1' }),
-      );
-    });
-  });
-
-  describe('fallos que deben provocar reintento de Stripe (5xx)', () => {
-    it('lanza si no hay perfil por ninguno de los dos criterios', async () => {
+    /**
+     * **Se avisa y se responde 2xx en vez de fallar.** Un 5xx haría que Stripe reintentara durante
+     * días y ninguno de esos reintentos encontraría el perfil: si no está vinculado ni por
+     * suscripción ni por cliente, el vínculo no aparece solo. Lo arregla una persona, y para eso
+     * el warning lleva todos los ids con los que buscar.
+     */
+    it('avisa con todos los ids y no falla si no hay perfil que asociar', async () => {
+      const warn = jest.spyOn(service['logger'], 'warn').mockImplementation();
       billingProfileRepository.findOne.mockResolvedValue(null);
 
-      await expect(service.handleInvoicePaid(buildInvoice())).rejects.toThrow(
-        BillingProfileNotFoundForInvoiceException,
-      );
-      expect(creditLotRepository.save).not.toHaveBeenCalled();
+      await expect(
+        service.handleInvoicePaid(buildInvoice()),
+      ).resolves.toBeUndefined();
+
+      expect(registerSubscriptionBilling.execute).not.toHaveBeenCalled();
+      const mensaje = warn.mock.calls[0][0] as string;
+      expect(mensaje).toContain('in_1');
+      expect(mensaje).toContain('sub_1');
+      expect(mensaje).toContain('cus_1');
     });
 
+    /**
+     * Ésta sí falla ruidosamente: hubo un cobro real y no sabemos cuántos documentos concede el
+     * plan. A diferencia del perfil ausente, esto SÍ se arregla solo en cuanto el catálogo se
+     * sincronice, así que los reintentos de Stripe trabajan a favor.
+     */
     it('lanza si el precio de la factura no está en el catálogo local', async () => {
       billingCatalogService.findPriceForInvoice.mockResolvedValue(null);
 
       await expect(service.handleInvoicePaid(buildInvoice())).rejects.toThrow(
         PlanNotFoundForInvoiceException,
       );
-      expect(creditLotRepository.save).not.toHaveBeenCalled();
+      expect(registerSubscriptionBilling.execute).not.toHaveBeenCalled();
     });
   });
 
