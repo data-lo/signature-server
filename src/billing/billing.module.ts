@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
 import { PaymentsModule } from 'src/payments/payments.module';
 import { PlanEntity } from './catalog/plan.entity';
 import { CatalogItemEntity } from './catalog/catalog-item.entity';
@@ -18,8 +19,12 @@ import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
 import { GetBillingStateUseCase } from './profiles/get-billing-state.use-case';
 import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
+import { SubscriptionBillingHistoryEntity } from './subscriptions/subscription-billing-history.entity';
+import { RegisterSubscriptionBillingUseCase } from './subscriptions/register-subscription-billing.use-case';
+import { RegisterManualSubscriptionBillingUseCase } from './subscriptions/register-manual-subscription-billing.use-case';
 import { CancelSubscriptionUseCase } from './subscriptions/cancel-subscription.use-case';
 import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.use-case';
+import { InternalSubscriptionBillingController } from './subscriptions/internal-subscription-billing.controller';
 
 /**
  * Dominio de facturación: catálogo comercial, perfiles, órdenes de compra y saldo de documentos.
@@ -48,12 +53,17 @@ import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.u
       CheckoutOrderEntity,
       CreditLotEntity,
       DocumentCreditConsumptionEntity,
+      SubscriptionBillingHistoryEntity,
       // Sólo para comprobar la membresía de la cuenta activa (ver `BillingOwnerService`);
       // este módulo nunca escribe en `accounts`.
       AccountEntity,
+      // Sólo para comprobar que el autor de un cobro manual exista y siga activo (ver
+      // `RegisterManualSubscriptionBillingUseCase`); este módulo nunca escribe en `users`.
+      UserEntity,
     ]),
     forwardRef(() => PaymentsModule),
   ],
+  controllers: [InternalSubscriptionBillingController],
   providers: [
     CatalogSyncService,
     BillingCatalogService,
@@ -62,6 +72,8 @@ import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.u
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    RegisterSubscriptionBillingUseCase,
+    RegisterManualSubscriptionBillingUseCase,
     CancelSubscriptionUseCase,
     ResumeSubscriptionUseCase,
   ],
@@ -73,6 +85,8 @@ import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.u
     CreateSubscriptionCheckoutUseCase,
     GetBillingStateUseCase,
     SubscriptionBillingService,
+    RegisterSubscriptionBillingUseCase,
+    RegisterManualSubscriptionBillingUseCase,
     CancelSubscriptionUseCase,
     ResumeSubscriptionUseCase,
   ],

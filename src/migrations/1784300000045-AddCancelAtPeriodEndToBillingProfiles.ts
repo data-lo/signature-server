@@ -13,9 +13,13 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * `DEFAULT false` cubre el backfill sin escribir una sola fila: ningún perfil existente tiene una
  * baja programada, porque hasta ahora no había forma de pedirla.
+ *
+ * Numerada `045` y no `044`: ese número ya lo ocupa `CreateSubscriptionBillingHistory`, que entró
+ * antes en `development`. Dos migraciones con el mismo timestamp dejan su orden al azar del
+ * glob, y la que se aplique segunda no tiene por qué ser la que uno cree.
  */
-export class AddCancelAtPeriodEndToBillingProfiles1784300000044 implements MigrationInterface {
-  name = 'AddCancelAtPeriodEndToBillingProfiles1784300000044';
+export class AddCancelAtPeriodEndToBillingProfiles1784300000045 implements MigrationInterface {
+  name = 'AddCancelAtPeriodEndToBillingProfiles1784300000045';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     /**
