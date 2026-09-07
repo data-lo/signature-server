@@ -22,6 +22,8 @@ import { SubscriptionBillingService } from './subscriptions/subscription-billing
 import { SubscriptionBillingHistoryEntity } from './subscriptions/subscription-billing-history.entity';
 import { RegisterSubscriptionBillingUseCase } from './subscriptions/register-subscription-billing.use-case';
 import { RegisterManualSubscriptionBillingUseCase } from './subscriptions/register-manual-subscription-billing.use-case';
+import { CancelSubscriptionUseCase } from './subscriptions/cancel-subscription.use-case';
+import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './subscriptions/finalize-subscription-from-stripe.use-case';
 import { InternalSubscriptionBillingController } from './subscriptions/internal-subscription-billing.controller';
 
@@ -73,6 +75,8 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     SubscriptionBillingService,
     RegisterSubscriptionBillingUseCase,
     RegisterManualSubscriptionBillingUseCase,
+    CancelSubscriptionUseCase,
+    ResumeSubscriptionUseCase,
     FinalizeSubscriptionFromStripeUseCase,
   ],
   exports: [
@@ -85,6 +89,8 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     SubscriptionBillingService,
     RegisterSubscriptionBillingUseCase,
     RegisterManualSubscriptionBillingUseCase,
+    CancelSubscriptionUseCase,
+    ResumeSubscriptionUseCase,
     FinalizeSubscriptionFromStripeUseCase,
   ],
 })

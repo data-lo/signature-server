@@ -469,6 +469,85 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
     });
 
     /**
+     * La costura entre las dos mitades del ciclo de baja: primero la INTENCIÓN —el
+     * `customer.subscription.updated` que sincroniza `cancel_at_period_end` sin quitarle al
+     * cliente el periodo que ya pagó— y después el TÉRMINO, que la consume.
+     *
+     * Se prueba en la cadena real y con las dos entregas seguidas porque el fallo que importa
+     * sólo aparece al encadenarlas: si el término no limpiara la marca, el perfil se quedaría en
+     * el plan gratuito PROMETIENDO un término que ya ocurrió, y una contratación futura sobre ese
+     * mismo perfil nacería anunciando una cancelación que nadie pidió.
+     */
+    it('una baja programada y luego consumada deja el perfil en Free y sin la marca', async () => {
+      await deliver({
+        id: 'evt_updated',
+        type: 'customer.subscription.updated',
+        data: {
+          object: {
+            id: 'sub_1',
+            customer: 'cus_1',
+            status: 'active',
+            cancel_at_period_end: true,
+            items: {
+              data: [
+                {
+                  price: 'price_pro_mensual',
+                  current_period_start: PERIOD_START,
+                  current_period_end: PERIOD_END,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      // La intención queda escrita y el perfil sigue habilitando el servicio: el mes está pagado.
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({
+          cancelAtPeriodEnd: true,
+          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        }),
+      );
+
+      subscriptionBillingHistoryRepository.findOne.mockResolvedValue({
+        id: 'period-1',
+        billingProfileId: 'profile-1',
+        planType: 'pro',
+        source: BILLING_SOURCE_ENUM.STRIPE,
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        stripeSubscriptionId: 'sub_1',
+        endedAt: null,
+        endedReason: null,
+      });
+
+      await deliver({
+        id: 'evt_deleted_tras_programada',
+        type: 'customer.subscription.deleted',
+        data: {
+          object: {
+            id: 'sub_1',
+            customer: 'cus_1',
+            status: 'canceled',
+            cancel_at_period_end: true,
+            ended_at: PERIOD_END,
+            cancellation_details: { reason: 'cancellation_requested' },
+          },
+        },
+      });
+
+      expect(managerUpdate).toHaveBeenCalledWith(
+        BillingProfileEntity,
+        'profile-1',
+        expect.objectContaining({
+          status: BILLING_PROFILE_STATUS_ENUM.FREE,
+          currentPlanType: FREE_PLAN_TYPE,
+          cancelAtPeriodEnd: false,
+        }),
+      );
+    });
+
+    /**
      * El recorrido completo del término definitivo: la entrega de Stripe acaba dejando el perfil
      * en el plan gratuito y el cierre escrito en el historial, sin tocar nada de lo comprado.
      */
@@ -506,6 +585,8 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         expect.objectContaining({
           currentPlanType: FREE_PLAN_TYPE,
           status: BILLING_PROFILE_STATUS_ENUM.FREE,
+          // La baja programada ya se cumplió: dejarla en `true` haría que la pantalla siguiera
+          // prometiendo un término sobre una suscripción que ya terminó.
           cancelAtPeriodEnd: false,
           currentPeriodStart: null,
         }),

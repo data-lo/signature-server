@@ -476,6 +476,67 @@ describe('SubscriptionBillingService', () => {
       expect(billingProfileRepository.update).toHaveBeenCalled();
     });
 
+    /**
+     * La baja hecha desde el Dashboard de Stripe nunca pasa por nuestra API: este webhook es el
+     * único camino por el que llega.
+     */
+    it('sincroniza la baja programada que llega desde Stripe', async () => {
+      await service.handleSubscriptionUpdated({
+        ...subscription,
+        cancel_at_period_end: true,
+      } as unknown as Stripe.Subscription);
+
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({
+          cancelAtPeriodEnd: true,
+          // El estado NO cambia: el periodo sigue pagado y habilitando el servicio.
+          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        }),
+      );
+    });
+
+    /**
+     * El sentido contrario, que es el que se pierde si el valor se escribiera sólo cuando viene
+     * en `true`: alguien reactiva la suscripción en el Dashboard y el perfil tiene que dejar de
+     * anunciar un término que ya no va a ocurrir.
+     */
+    it('deshace la baja programada cuando Stripe la revierte', async () => {
+      await service.handleSubscriptionUpdated({
+        ...subscription,
+        cancel_at_period_end: false,
+      } as unknown as Stripe.Subscription);
+
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({ cancelAtPeriodEnd: false }),
+      );
+    });
+
+    /** Stripe reentrega el mismo evento: escribir el valor que ya está no tiene ningún efecto. */
+    it('escribe lo mismo ante entregas repetidas del mismo evento', async () => {
+      const entrega = {
+        ...subscription,
+        cancel_at_period_end: true,
+      } as unknown as Stripe.Subscription;
+
+      await service.handleSubscriptionUpdated(entrega);
+      await service.handleSubscriptionUpdated(entrega);
+
+      const [primera, segunda] = billingProfileRepository.update.mock.calls;
+      expect(primera).toEqual(segunda);
+    });
+
+    /** Una suscripción sin la bandera se trata como "no hay baja programada", no como ausencia. */
+    it('trata la ausencia del campo como baja no programada', async () => {
+      await service.handleSubscriptionUpdated(subscription);
+
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({ cancelAtPeriodEnd: false }),
+      );
+    });
+
     it.each([
       ['past_due', BILLING_PROFILE_STATUS_ENUM.PAST_DUE],
       ['unpaid', BILLING_PROFILE_STATUS_ENUM.PAST_DUE],
@@ -509,6 +570,10 @@ describe('SubscriptionBillingService', () => {
      * Acá no queda lógica: el mismo cierre tiene que poder dispararse desde otras vías —una
      * conciliación manual, una reparación de datos— con exactamente los mismos efectos, y dos
      * copias de esa lógica se separan a la primera corrección.
+     *
+     * Lo que este método hacía antes —dejar el perfil `CANCELED` y limpiar `cancel_at_period_end`—
+     * lo cubre ahora el caso de uso, y con más motivo: su `downgradeToFree` limpia la bandera y
+     * además devuelve el perfil al plan gratuito. Ver su propio spec.
      */
     it('delega el término definitivo en el caso de uso', async () => {
       await service.handleSubscriptionDeleted(subscription);

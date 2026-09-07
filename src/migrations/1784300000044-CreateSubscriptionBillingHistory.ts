@@ -11,12 +11,14 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * activo hoy— mientras el registro de qué se cobró, cuándo, por cuánto y quién lo cobró vive
  * aparte y no se sobrescribe nunca.
  *
- * **Trae también el ciclo de vida del periodo y `billing_profiles.cancel_at_period_end`.**
- * `cancel_at_period_end` es la baja PROGRAMADA —la suscripción sigue viva y pagada— y
- * `status` / `ended_at` / `ended_reason` son donde queda el término CONSUMADO, con el plan que el
- * cliente tuvo, cuándo acabó y por qué. Van en la misma migración que la tabla porque describen
- * el mismo ciclo: separarlas dejaría una base intermedia en la que el perfil puede anunciar un
- * término que no tiene dónde registrarse.
+ * **Trae también el ciclo de vida del periodo.** `status`, `ended_at` y `ended_reason` son donde
+ * queda el término CONSUMADO, con el plan que el cliente tuvo, cuándo acabó y por qué. Van en la
+ * misma migración que la tabla porque son columnas suyas.
+ *
+ * Su pareja `billing_profiles.cancel_at_period_end` —la baja PROGRAMADA, con la suscripción
+ * todavía viva y pagada— NO se crea acá: la trae `045`, que ya está en `development`. Duplicar el
+ * `ADD COLUMN` sería inofensivo al aplicar (las dos usan `IF NOT EXISTS`) pero no al revertir:
+ * deshacer esta migración se llevaría por delante una columna de la que responde la otra.
  *
  * **Los índices únicos son la idempotencia, no una optimización.** `stripe_invoice_id` impide que
  * una re-entrega del webhook (Stripe reintenta durante días) acredite documentos dos veces;
@@ -32,11 +34,6 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await this.createEnums(queryRunner);
-
-    await queryRunner.query(`
-      ALTER TABLE "billing_profiles"
-      ADD COLUMN IF NOT EXISTS "cancel_at_period_end" boolean NOT NULL DEFAULT false
-    `);
 
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "subscription_billing_history" (
@@ -128,17 +125,14 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
   }
 
   /**
-   * Se borra la tabla entera y la columna del perfil: nacen acá y nadie las escribía antes, así
-   * que revertir no puede perder un dato que existiera de otra fuente. Los `credit_lots` y los
-   * `checkout_orders` a los que apuntaba NO se tocan — el saldo que el cliente compró es suyo con
-   * historial o sin él.
+   * Se borra la tabla entera: nace acá y nadie la escribía antes, así que revertir no puede
+   * perder un dato que existiera de otra fuente. Los `credit_lots` y los `checkout_orders` a los
+   * que apuntaba NO se tocan —el saldo que el cliente compró es suyo con historial o sin él— y
+   * `billing_profiles.cancel_at_period_end` tampoco, porque es de `045`.
    */
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
       `DROP TABLE IF EXISTS "subscription_billing_history"`,
-    );
-    await queryRunner.query(
-      `ALTER TABLE "billing_profiles" DROP COLUMN IF EXISTS "cancel_at_period_end"`,
     );
     await queryRunner.query(
       `DROP TYPE IF EXISTS "public"."subscription_end_reason_enum"`,

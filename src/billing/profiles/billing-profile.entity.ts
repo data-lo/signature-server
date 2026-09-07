@@ -60,13 +60,21 @@ export class BillingProfileEntity {
   /**
    * El cliente pidió la baja y conserva el servicio hasta que acabe lo que ya pagó.
    *
-   * **No es un estado**, y por eso convive con `status = ACTIVE`: durante el resto del periodo la
-   * suscripción habilita exactamente lo mismo que antes y lo único que cambia es que no se va a
-   * renovar. El término de verdad no lo decide esta bandera sino
-   * `customer.subscription.deleted`, que es cuando Stripe confirma que la suscripción acabó.
+   * **No es un estado**, y por eso convive con `status = ACTIVE` en vez de sustituirlo: durante
+   * el resto del periodo la suscripción habilita exactamente lo mismo que antes —firma, saldo,
+   * todo—, y lo único que cambia es que no se va a renovar. Colapsarlo en `CANCELED` le quitaría
+   * al usuario un mes que ya está pagado.
    *
-   * Se limpia al finalizar: una vez consumida, dejarla puesta haría que el perfil siguiera
-   * anunciando un término que ya ocurrió.
+   * **La fuente de verdad es Stripe.** El endpoint de cancelación lo escribe acá sólo después de
+   * que Stripe confirme el `cancel_at_period_end`, y `customer.subscription.updated` lo vuelve a
+   * sincronizar en cada entrega — de ahí salen también las bajas y las reactivaciones hechas
+   * directamente desde el Dashboard del proveedor, que nunca pasan por nuestra API.
+   *
+   * **Es una intención, no el término.** Quien cierra el ciclo es
+   * `customer.subscription.deleted`, y `FinalizeSubscriptionFromStripeUseCase` la limpia al
+   * hacerlo: una vez consumida, dejarla puesta haría que el perfil siguiera anunciando un término
+   * que ya ocurrió — y que una contratación futura sobre este mismo perfil naciera prometiendo
+   * una baja que nadie pidió.
    */
   @Column({ name: 'cancel_at_period_end', type: 'boolean', default: false })
   cancelAtPeriodEnd: boolean;
