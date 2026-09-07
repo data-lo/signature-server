@@ -87,7 +87,7 @@ describe('AdvancedSummaryDocumentService', () => {
   describe('Constancia de Conservación (NOM-151)', () => {
     /**
      * Antes esta tabla salía siempre vacía porque el sellado corría DESPUÉS de armar la hoja. Con
-     * el orden corregido, la constancia llega y "EMITIDO" se imprime.
+     * el orden corregido, la constancia llega y "Emitido" se imprime.
      */
     it('imprime la fecha de emisión cuando el documento ya fue sellado', () => {
       const definition = service['buildDocDefinition'](
@@ -104,7 +104,7 @@ describe('AdvancedSummaryDocumentService', () => {
       const [, nom151] = tablesOf(definition);
 
       // ISO 8601 con desfase explícito: es la marca del PSC, tiene que ser inequívoca.
-      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toBe(
+      expect(nom151.find(([label]) => label === 'Emitido')?.[1]).toBe(
         '2026-07-30T09:59:22.000-06:00',
       );
     });
@@ -131,11 +131,11 @@ describe('AdvancedSummaryDocumentService', () => {
       expect(nom151.find(([label]) => label === 'Certificado (TSA)')?.[1]).toBe(
         'PSC Codex',
       );
-      expect(nom151.find(([label]) => label === 'NUMERO DE SERIE')?.[1]).toBe(
+      expect(nom151.find(([label]) => label === 'Número de Serie')?.[1]).toBe(
         '4A1B2C3D',
       );
       // ISO 8601 con desfase explícito: es la marca del PSC, tiene que ser inequívoca.
-      expect(nom151.find(([label]) => label === 'EMITIDO')?.[1]).toBe(
+      expect(nom151.find(([label]) => label === 'Emitido')?.[1]).toBe(
         '2026-07-30T09:59:22.000-06:00',
       );
     });
@@ -147,8 +147,8 @@ describe('AdvancedSummaryDocumentService', () => {
 
       expect(nom151).toEqual([
         ['Certificado (TSA)', ''],
-        ['NUMERO DE SERIE', ''],
-        ['EMITIDO', ''],
+        ['Número de Serie', ''],
+        ['Emitido', ''],
       ]);
     });
   });
@@ -196,8 +196,8 @@ describe('AdvancedSummaryDocumentService', () => {
 
     expect(nom151).toEqual([
       ['Certificado (TSA)', ''],
-      ['NUMERO DE SERIE', ''],
-      ['EMITIDO', ''],
+      ['Número de Serie', ''],
+      ['Emitido', ''],
     ]);
   });
 
@@ -244,6 +244,45 @@ describe('AdvancedSummaryDocumentService', () => {
       'a'.repeat(344),
     );
     expect(valueOf('Firma Electrónica')).toContain('\n');
+  });
+
+  /**
+   * La fecha de firma se imprime como marca Unix en milisegundos, igual que en la hoja simple:
+   * sólo dígitos, sin zona horaria ni convención de fecha que interpretar. Es además el mismo
+   * valor que la vista previa muestra a partir del mismo `signedAt`.
+   */
+  it('imprime la fecha de firma como timestamp Unix en milisegundos', () => {
+    const [, , firstSigner] = tablesOf(buildDefinition());
+    const fechaDeFirma = firstSigner.find(
+      ([label]) => label === 'Fecha de Firma',
+    )?.[1];
+
+    expect(fechaDeFirma).toBe(String(new Date('2026-01-15T10:30:00Z').getTime()));
+    expect(fechaDeFirma).toMatch(/^\d+$/);
+  });
+
+  /**
+   * El renglón `Emitido` NO se convirtió: es la marca del PSC, no la de la firma, y se coteja
+   * contra el token RFC 3161 en ISO. Sin esta prueba, "no queda ninguna fecha legible en la
+   * hoja" invitaría a convertirlo también.
+   */
+  it('conserva la fecha del PSC en ISO, que no es la fecha de firma', () => {
+    const definition = service['buildDocDefinition'](
+      {
+        ...document,
+        conservationRecord: {
+          tsaCertificate: null,
+          serialNumber: null,
+          issuedAt: new Date('2026-07-30T15:59:22Z'),
+        },
+      },
+      signers,
+    );
+    const [, nom151] = tablesOf(definition);
+
+    expect(nom151.find(([label]) => label === 'Emitido')?.[1]).toBe(
+      '2026-07-30T09:59:22.000-06:00',
+    );
   });
 
   // Una firma avanzada sin evidencia guardada (fila anterior a que se persistiera
