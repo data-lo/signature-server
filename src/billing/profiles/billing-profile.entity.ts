@@ -69,10 +69,21 @@ export class BillingProfileEntity {
    * que Stripe confirme el `cancel_at_period_end`, y `customer.subscription.updated` lo vuelve a
    * sincronizar en cada entrega — de ahí salen también las bajas y las reactivaciones hechas
    * directamente desde el Dashboard del proveedor, que nunca pasan por nuestra API.
+   *
+   * **Es una intención, no el término.** Quien cierra el ciclo es
+   * `customer.subscription.deleted`, y `FinalizeSubscriptionFromStripeUseCase` la limpia al
+   * hacerlo: una vez consumida, dejarla puesta haría que el perfil siguiera anunciando un término
+   * que ya ocurrió — y que una contratación futura sobre este mismo perfil naciera prometiendo
+   * una baja que nadie pidió.
    */
   @Column({ name: 'cancel_at_period_end', type: 'boolean', default: false })
   cancelAtPeriodEnd: boolean;
 
+  /**
+   * Inicio del periodo VIGENTE, y por eso se anula al terminar la suscripción: un plan que ya
+   * acabó no tiene periodo en curso que declarar. Su pareja `current_period_end` sí sobrevive,
+   * como fecha histórica de hasta cuándo tuvo servicio.
+   */
   @Column({ name: 'current_period_start', type: 'timestamptz', nullable: true })
   currentPeriodStart: Date | null;
 

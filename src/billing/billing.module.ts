@@ -24,6 +24,7 @@ import { RegisterSubscriptionBillingUseCase } from './subscriptions/register-sub
 import { RegisterManualSubscriptionBillingUseCase } from './subscriptions/register-manual-subscription-billing.use-case';
 import { CancelSubscriptionUseCase } from './subscriptions/cancel-subscription.use-case';
 import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.use-case';
+import { FinalizeSubscriptionFromStripeUseCase } from './subscriptions/finalize-subscription-from-stripe.use-case';
 import { InternalSubscriptionBillingController } from './subscriptions/internal-subscription-billing.controller';
 
 /**
@@ -76,6 +77,7 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     RegisterManualSubscriptionBillingUseCase,
     CancelSubscriptionUseCase,
     ResumeSubscriptionUseCase,
+    FinalizeSubscriptionFromStripeUseCase,
   ],
   exports: [
     CatalogSyncService,
@@ -89,6 +91,7 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     RegisterManualSubscriptionBillingUseCase,
     CancelSubscriptionUseCase,
     ResumeSubscriptionUseCase,
+    FinalizeSubscriptionFromStripeUseCase,
   ],
 })
 export class BillingModule {}

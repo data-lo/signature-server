@@ -11,6 +11,15 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * activo hoy— mientras el registro de qué se cobró, cuándo, por cuánto y quién lo cobró vive
  * aparte y no se sobrescribe nunca.
  *
+ * **Trae también el ciclo de vida del periodo.** `status`, `ended_at` y `ended_reason` son donde
+ * queda el término CONSUMADO, con el plan que el cliente tuvo, cuándo acabó y por qué. Van en la
+ * misma migración que la tabla porque son columnas suyas.
+ *
+ * Su pareja `billing_profiles.cancel_at_period_end` —la baja PROGRAMADA, con la suscripción
+ * todavía viva y pagada— NO se crea acá: la trae `045`, que ya está en `development`. Duplicar el
+ * `ADD COLUMN` sería inofensivo al aplicar (las dos usan `IF NOT EXISTS`) pero no al revertir:
+ * deshacer esta migración se llevaría por delante una columna de la que responde la otra.
+ *
  * **Los índices únicos son la idempotencia, no una optimización.** `stripe_invoice_id` impide que
  * una re-entrega del webhook (Stripe reintenta durante días) acredite documentos dos veces;
  * `UQ_..._manual_reference` impide lo mismo cuando quien reenvía es una persona capturando la
@@ -24,21 +33,7 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
   name = 'CreateSubscriptionBillingHistory1784300000044';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    /**
-     * `CREATE TYPE` no admite `IF NOT EXISTS` en ninguna versión de Postgres, así que la
-     * idempotencia se consigue atrapando `duplicate_object`.
-     *
-     * El tipo se crea y se usa en la MISMA transacción, y eso sí se puede: la restricción de
-     * Postgres que obligó a partir en dos `AddFreeBillingProfileStatus` (55P04) aplica a los
-     * valores AÑADIDOS a un enum que ya existía, no a un tipo nacido en esta transacción.
-     */
-    await queryRunner.query(`
-      DO $$ BEGIN
-        CREATE TYPE "public"."billing_source_enum" AS ENUM ('STRIPE', 'MANUAL');
-      EXCEPTION
-        WHEN duplicate_object THEN NULL;
-      END $$;
-    `);
+    await this.createEnums(queryRunner);
 
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "subscription_billing_history" (
@@ -53,6 +48,9 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
         "period_start" TIMESTAMP WITH TIME ZONE NOT NULL,
         "period_end" TIMESTAMP WITH TIME ZONE NOT NULL,
         "paid_at" TIMESTAMP WITH TIME ZONE NOT NULL,
+        "status" "public"."subscription_billing_history_status_enum" NOT NULL DEFAULT 'ACTIVE',
+        "ended_at" TIMESTAMP WITH TIME ZONE,
+        "ended_reason" "public"."subscription_end_reason_enum",
         "stripe_customer_id" character varying,
         "stripe_subscription_id" character varying,
         "stripe_invoice_id" character varying,
@@ -67,6 +65,10 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
         CONSTRAINT "UQ_subscription_billing_history_credit_slot" UNIQUE ("credit_slot_id"),
         CONSTRAINT "CHK_subscription_billing_history_amount" CHECK ("amount" >= 0),
         CONSTRAINT "CHK_subscription_billing_history_period" CHECK ("period_start" < "period_end"),
+        CONSTRAINT "CHK_subscription_billing_history_ended" CHECK (
+          ("status" = 'ACTIVE' AND "ended_at" IS NULL AND "ended_reason" IS NULL)
+          OR ("status" <> 'ACTIVE' AND "ended_at" IS NOT NULL AND "ended_reason" IS NOT NULL)
+        ),
         CONSTRAINT "CHK_subscription_billing_history_origin_evidence" CHECK (
           ("source" = 'STRIPE' AND "stripe_invoice_id" IS NOT NULL)
           OR ("source" = 'MANUAL' AND ("external_reference" IS NOT NULL OR "created_by_user_id" IS NOT NULL))
@@ -101,6 +103,16 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
     `);
 
     /**
+     * La llave con la que el webhook de baja localiza el periodo a cerrar.
+     * `customer.subscription.deleted` llega más de una vez, y sin este índice cada reintento
+     * recorrería la tabla entera para decidir si el cierre ya estaba escrito.
+     */
+    await queryRunner.query(`
+      CREATE INDEX IF NOT EXISTS "IDX_subscription_billing_history_stripe_subscription"
+      ON "subscription_billing_history" ("stripe_subscription_id")
+    `);
+
+    /**
      * La clave natural del cobro manual: una referencia no se registra dos veces para el mismo
      * perfil. Parcial porque los periodos de Stripe ya se desduplican por `stripe_invoice_id` y
      * porque un folio nulo —todos los de Stripe lo son— no debe competir por la unicidad.
@@ -115,14 +127,54 @@ export class CreateSubscriptionBillingHistory1784300000044 implements MigrationI
   /**
    * Se borra la tabla entera: nace acá y nadie la escribía antes, así que revertir no puede
    * perder un dato que existiera de otra fuente. Los `credit_lots` y los `checkout_orders` a los
-   * que apuntaba NO se tocan — el saldo que el cliente compró es suyo con historial o sin él.
+   * que apuntaba NO se tocan —el saldo que el cliente compró es suyo con historial o sin él— y
+   * `billing_profiles.cancel_at_period_end` tampoco, porque es de `045`.
    */
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
       `DROP TABLE IF EXISTS "subscription_billing_history"`,
     );
     await queryRunner.query(
+      `DROP TYPE IF EXISTS "public"."subscription_end_reason_enum"`,
+    );
+    await queryRunner.query(
+      `DROP TYPE IF EXISTS "public"."subscription_billing_history_status_enum"`,
+    );
+    await queryRunner.query(
       `DROP TYPE IF EXISTS "public"."billing_source_enum"`,
     );
+  }
+
+  /**
+   * `CREATE TYPE` no admite `IF NOT EXISTS` en ninguna versión de Postgres, así que la
+   * idempotencia se consigue atrapando `duplicate_object`.
+   *
+   * Los tres tipos se crean y se usan en la MISMA transacción, y eso sí se puede: la restricción
+   * de Postgres que obligó a partir en dos `AddFreeBillingProfileStatus` (55P04) aplica a los
+   * valores AÑADIDOS a un enum que ya existía, no a un tipo nacido en esta transacción.
+   */
+  private async createEnums(queryRunner: QueryRunner): Promise<void> {
+    const enums: [string, string[]][] = [
+      ['billing_source_enum', ['STRIPE', 'MANUAL']],
+      [
+        'subscription_billing_history_status_enum',
+        ['ACTIVE', 'CANCELED', 'EXPIRED'],
+      ],
+      [
+        'subscription_end_reason_enum',
+        ['CANCELED_AT_PERIOD_END', 'PAYMENT_FAILURE', 'STRIPE_TERMINATED'],
+      ],
+    ];
+
+    for (const [name, values] of enums) {
+      const literals = values.map((value) => `'${value}'`).join(', ');
+      await queryRunner.query(`
+        DO $$ BEGIN
+          CREATE TYPE "public"."${name}" AS ENUM (${literals});
+        EXCEPTION
+          WHEN duplicate_object THEN NULL;
+        END $$;
+      `);
+    }
   }
 }

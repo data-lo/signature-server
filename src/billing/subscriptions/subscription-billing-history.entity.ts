@@ -16,6 +16,8 @@ import { PlanEntity } from '../catalog/plan.entity';
 import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
+import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.enum';
 
 /**
  * Un renglón por PERIODO FACTURADO: qué plan cubría, entre qué fechas, cuánto se cobró, quién lo
@@ -33,6 +35,14 @@ import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
  * interno y una transferencia no tiene `in_...`. Lo que impide que eso degenere en filas a
  * medias es `CHK_subscription_billing_history_origin_evidence`, que le exige a cada origen
  * exactamente aquello con lo que sí se le puede rastrear.
+ *
+ * **También es donde consta el FINAL de la suscripción.** `status`, `ended_at` y `ended_reason`
+ * describen el cierre y no el cobro: un periodo terminado se pagó igual de bien que uno vigente.
+ * Viven acá y no en `billing_profiles` porque el perfil vuelve al plan gratuito cuando Stripe da
+ * la baja por consumada (`FinalizeSubscriptionFromStripeUseCase`) y deja de poder responder qué
+ * tenía contratado antes; el renglón conserva el plan que el cliente PAGÓ, entre qué fechas y por
+ * qué se acabó, que es lo que hace falta para explicar un cobro o atender una aclaración meses
+ * después.
  */
 @Entity('subscription_billing_history')
 @Index('IDX_subscription_billing_history_profile', [
@@ -49,6 +59,18 @@ import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
  * incluidos. Parcial y sólo sobre `MANUAL` porque los periodos de Stripe se desduplican por
  * `stripe_invoice_id`, y porque un folio nulo no debe competir por la unicidad.
  */
+/**
+ * La llave con la que el webhook de baja reconoce lo que ya cerró.
+ *
+ * `customer.subscription.deleted` puede llegar varias veces —Stripe reintenta— y también detrás de
+ * un `customer.subscription.updated` que ya describía el mismo final. Buscar por suscripción es lo
+ * que permite localizar el periodo a cerrar y reconocer "esto ya está registrado" en vez de pisar
+ * un `ended_at` que ya era el bueno. No es único: una suscripción deja un renglón por cada periodo
+ * que se le cobró, y un cliente que se va y vuelve genera suscripciones distintas.
+ */
+@Index('IDX_subscription_billing_history_stripe_subscription', [
+  'stripeSubscriptionId',
+])
 @Index(
   'UQ_subscription_billing_history_manual_reference',
   ['billingProfileId', 'externalReference'],
@@ -81,6 +103,17 @@ import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 @Check(
   'CHK_subscription_billing_history_period',
   '"period_start" < "period_end"',
+)
+/**
+ * Cerrado significa cerrado: un periodo terminado tiene que decir CUÁNDO y POR QUÉ, y uno vigente
+ * no puede afirmar que ya terminó. Sin esta comprobación, una actualización a medias dejaría
+ * filas que el historial no sabría interpretar — un cierre sin fecha no se puede ordenar y uno sin
+ * motivo no se puede contar.
+ */
+@Check(
+  'CHK_subscription_billing_history_ended',
+  `("status" = 'ACTIVE' AND "ended_at" IS NULL AND "ended_reason" IS NULL)
+   OR ("status" <> 'ACTIVE' AND "ended_at" IS NOT NULL AND "ended_reason" IS NOT NULL)`,
 )
 export class SubscriptionBillingHistoryEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -178,6 +211,45 @@ export class SubscriptionBillingHistoryEntity {
    */
   @Column({ name: 'paid_at', type: 'timestamptz' })
   paidAt: Date;
+
+  /**
+   * Cómo acabó la suscripción EN ESTE periodo.
+   *
+   * Nace `ACTIVE` y sólo lo mueve `FinalizeSubscriptionFromStripeUseCase`, que cierra el último
+   * periodo cobrado cuando Stripe confirma la baja. Un periodo que se renovó se queda `ACTIVE`
+   * porque no fue él quien terminó el ciclo: el cliente siguió, y lo que hay a continuación es el
+   * renglón del periodo siguiente. Dicho de otro modo, la marca de cierre la lleva el ÚLTIMO
+   * periodo de cada suscripción, que es el que responde "¿cómo se fue este cliente?".
+   */
+  @Column({
+    type: 'enum',
+    enum: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM,
+    default: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+  })
+  status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM;
+
+  /**
+   * Cuándo confirmó Stripe el término. **No es lo mismo que `period_end`**: una baja inmediata o
+   * una por impago cortan antes de que el periodo llegue a su fin, y el corte de caja necesita la
+   * fecha real, no la que estaba prevista.
+   */
+  @Column({ name: 'ended_at', type: 'timestamptz', nullable: true })
+  endedAt: Date | null;
+
+  /**
+   * `enumName` explícito porque el tipo no se llama como TypeORM lo derivaría de la tabla y la
+   * columna (`subscription_billing_history_ended_reason_enum`): el motivo de un término es un
+   * concepto de suscripción y no de esta tabla en concreto, así que el tipo lleva su propio
+   * nombre. Sin esto, un `migration:generate` posterior propondría recrear la columna sin motivo.
+   */
+  @Column({
+    name: 'ended_reason',
+    type: 'enum',
+    enum: SUBSCRIPTION_END_REASON_ENUM,
+    enumName: 'subscription_end_reason_enum',
+    nullable: true,
+  })
+  endedReason: SUBSCRIPTION_END_REASON_ENUM | null;
 
   @Column({ name: 'stripe_customer_id', nullable: true })
   stripeCustomerId: string | null;

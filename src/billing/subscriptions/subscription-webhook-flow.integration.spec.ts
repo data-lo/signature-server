@@ -12,6 +12,7 @@ import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './subscription-billing.service';
 import { RegisterSubscriptionBillingUseCase } from './register-subscription-billing.use-case';
+import { FinalizeSubscriptionFromStripeUseCase } from './finalize-subscription-from-stripe.use-case';
 import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CatalogSyncService } from '../catalog/catalog-sync.service';
@@ -25,6 +26,9 @@ import { CatalogPriceEntity } from '../catalog/catalog-price.entity';
 import { DocumentCreditPackEntity } from '../catalog/document-credit-pack.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
+import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.enum';
+import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 
@@ -58,11 +62,11 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
   let billingProfileRepository: ReturnType<typeof createMockRepository>;
   let checkoutOrderRepository: ReturnType<typeof createMockRepository>;
   let creditLotRepository: ReturnType<typeof createMockRepository>;
-  let catalogPriceRepository: ReturnType<typeof createMockRepository>;
   let subscriptionBillingHistoryRepository: ReturnType<
     typeof createMockRepository
   >;
   let managerUpdate: jest.Mock;
+  let catalogPriceRepository: ReturnType<typeof createMockRepository>;
   let verifier: { verify: jest.Mock };
   let rolloverExecute: jest.Mock;
 
@@ -101,18 +105,25 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
     subscriptionBillingHistoryRepository.findOne.mockResolvedValue(null);
 
     rolloverExecute = jest.fn().mockResolvedValue({ affected: 0 });
-    managerUpdate = jest.fn();
+    managerUpdate = jest.fn().mockResolvedValue({ affected: 1 });
     const manager = {
       /**
-       * Por entidad, no un valor único: dentro de la transacción el caso de uso pide primero el
-       * perfil (para bloquearlo) y después el plan (para saber cuántos documentos concede), y
-       * devolverles lo mismo a los dos dejaría el lote sin `issued`.
+       * Por entidad, no un valor único: dentro de la transacción el registro del cobro pide
+       * primero el perfil (para bloquearlo) y después el plan (para saber cuántos documentos
+       * concede), y devolverles lo mismo a los dos dejaría el lote sin `issued`.
+       *
+       * El perfil trae plan y periodo vigentes porque el cierre de la baja los necesita: son el
+       * estado desde el que se degrada a Free.
        */
       findOne: jest.fn(async (entity: unknown) =>
         entity === PlanEntity
           ? { planType: 'pro', documentsIncluded: 100 }
           : {
               id: 'profile-1',
+              status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+              currentPlanType: 'pro',
+              currentPeriodStart: new Date(PERIOD_START * 1000),
+              currentPeriodEnd: new Date(PERIOD_END * 1000),
               stripeCustomerId: 'cus_1',
               stripeSubscriptionId: 'sub_1',
             },
@@ -150,6 +161,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         StripeWebhookService,
         SubscriptionBillingService,
         RegisterSubscriptionBillingUseCase,
+        FinalizeSubscriptionFromStripeUseCase,
         BillingCatalogService,
         CheckoutOrderService,
         CatalogSyncService,
@@ -456,22 +468,147 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
       expect(creditLotRepository.save).not.toHaveBeenCalled();
     });
 
-    it('customer.subscription.deleted cancela el perfil sin borrar su historial', async () => {
+    /**
+     * La costura entre las dos mitades del ciclo de baja: primero la INTENCIÓN —el
+     * `customer.subscription.updated` que sincroniza `cancel_at_period_end` sin quitarle al
+     * cliente el periodo que ya pagó— y después el TÉRMINO, que la consume.
+     *
+     * Se prueba en la cadena real y con las dos entregas seguidas porque el fallo que importa
+     * sólo aparece al encadenarlas: si el término no limpiara la marca, el perfil se quedaría en
+     * el plan gratuito PROMETIENDO un término que ya ocurrió, y una contratación futura sobre ese
+     * mismo perfil nacería anunciando una cancelación que nadie pidió.
+     */
+    it('una baja programada y luego consumada deja el perfil en Free y sin la marca', async () => {
+      await deliver({
+        id: 'evt_updated',
+        type: 'customer.subscription.updated',
+        data: {
+          object: {
+            id: 'sub_1',
+            customer: 'cus_1',
+            status: 'active',
+            cancel_at_period_end: true,
+            items: {
+              data: [
+                {
+                  price: 'price_pro_mensual',
+                  current_period_start: PERIOD_START,
+                  current_period_end: PERIOD_END,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      // La intención queda escrita y el perfil sigue habilitando el servicio: el mes está pagado.
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({
+          cancelAtPeriodEnd: true,
+          status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        }),
+      );
+
+      subscriptionBillingHistoryRepository.findOne.mockResolvedValue({
+        id: 'period-1',
+        billingProfileId: 'profile-1',
+        planType: 'pro',
+        source: BILLING_SOURCE_ENUM.STRIPE,
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        stripeSubscriptionId: 'sub_1',
+        endedAt: null,
+        endedReason: null,
+      });
+
+      await deliver({
+        id: 'evt_deleted_tras_programada',
+        type: 'customer.subscription.deleted',
+        data: {
+          object: {
+            id: 'sub_1',
+            customer: 'cus_1',
+            status: 'canceled',
+            cancel_at_period_end: true,
+            ended_at: PERIOD_END,
+            cancellation_details: { reason: 'cancellation_requested' },
+          },
+        },
+      });
+
+      expect(managerUpdate).toHaveBeenCalledWith(
+        BillingProfileEntity,
+        'profile-1',
+        expect.objectContaining({
+          status: BILLING_PROFILE_STATUS_ENUM.FREE,
+          currentPlanType: FREE_PLAN_TYPE,
+          cancelAtPeriodEnd: false,
+        }),
+      );
+    });
+
+    /**
+     * El recorrido completo del término definitivo: la entrega de Stripe acaba dejando el perfil
+     * en el plan gratuito y el cierre escrito en el historial, sin tocar nada de lo comprado.
+     */
+    it('customer.subscription.deleted devuelve el perfil a Free y cierra el periodo cobrado', async () => {
+      // El periodo que abrió `invoice.paid`: es el renglón que la baja tiene que cerrar.
+      subscriptionBillingHistoryRepository.findOne.mockResolvedValue({
+        id: 'period-1',
+        billingProfileId: 'profile-1',
+        planType: 'pro',
+        source: BILLING_SOURCE_ENUM.STRIPE,
+        status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        stripeSubscriptionId: 'sub_1',
+        endedAt: null,
+        endedReason: null,
+      });
+
       await deliver({
         id: 'evt_deleted',
         type: 'customer.subscription.deleted',
-        data: { object: { id: 'sub_1', customer: 'cus_1' } },
+        data: {
+          object: {
+            id: 'sub_1',
+            customer: 'cus_1',
+            status: 'canceled',
+            cancel_at_period_end: true,
+            ended_at: PERIOD_END,
+            cancellation_details: { reason: 'cancellation_requested' },
+          },
+        },
       });
 
-      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+      expect(managerUpdate).toHaveBeenCalledWith(
+        BillingProfileEntity,
         'profile-1',
-        {
-          status: BILLING_PROFILE_STATUS_ENUM.CANCELED,
+        expect.objectContaining({
+          currentPlanType: FREE_PLAN_TYPE,
+          status: BILLING_PROFILE_STATUS_ENUM.FREE,
           // La baja programada ya se cumplió: dejarla en `true` haría que la pantalla siguiera
           // prometiendo un término sobre una suscripción que ya terminó.
           cancelAtPeriodEnd: false,
-        },
+          currentPeriodStart: null,
+        }),
       );
+      /**
+       * El cierre ACTUALIZA el periodo que ya existía; no abre uno nuevo. Un renglón del
+       * historial representa un cobro —con importe, fecha de pago y factura— y una baja no aporta
+       * ninguna de las tres cosas, así que inventarse una fila acá sería inventarse un cobro.
+       */
+      expect(managerUpdate).toHaveBeenCalledWith(
+        SubscriptionBillingHistoryEntity,
+        {
+          id: 'period-1',
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.ACTIVE,
+        },
+        expect.objectContaining({
+          status: SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM.CANCELED,
+          endedReason: SUBSCRIPTION_END_REASON_ENUM.CANCELED_AT_PERIOD_END,
+          endedAt: new Date(PERIOD_END * 1000),
+        }),
+      );
+      expect(subscriptionBillingHistoryRepository.save).not.toHaveBeenCalled();
       expect(creditLotRepository.save).not.toHaveBeenCalled();
       expect(creditLotRepository.update).not.toHaveBeenCalled();
     });
