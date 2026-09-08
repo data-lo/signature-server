@@ -15,6 +15,7 @@ import { NotificationEventsProducer } from 'src/kafka/notification-events.produc
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
+import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
@@ -55,6 +56,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let documentEventsProducer: Record<string, jest.Mock>;
   let emailService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
+  let consumeDocumentCredit: Record<string, jest.Mock>;
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -169,6 +171,9 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         .mockResolvedValue(undefined),
     };
     documentTransactionService = { createInitial: jest.fn() };
+    consumeDocumentCredit = {
+      execute: jest.fn().mockResolvedValue({ id: 'consumo-1' }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -191,6 +196,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         {
           provide: DocumentTransactionService,
           useValue: documentTransactionService,
+        },
+        {
+          provide: ConsumeDocumentCreditUseCase,
+          useValue: consumeDocumentCredit,
         },
       ],
     }).compile();
@@ -673,5 +682,122 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     expect(documentRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ requiresApproval: false }),
     );
+  });
+
+  describe('Búsqueda Inteligente (isIndexable)', () => {
+    /**
+     * La regla de producto: quien no opina, indexa. El default vive en el backend justamente para
+     * que no dependa de que el cliente mande el campo — un cliente viejo, una integración o un
+     * `curl` obtienen el mismo resultado que el frontend actual.
+     */
+    it('sin el campo en el payload, el documento se crea indexable', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isIndexable: true }),
+      );
+    });
+
+    it('con isIndexable:true explícito, el documento se crea indexable', async () => {
+      const dto: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: { ...baseDto.documentData, isIndexable: true },
+      };
+
+      await useCase.execute('creator-1', 'account-1', dto, file, '127.0.0.1');
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isIndexable: true }),
+      );
+    });
+
+    /**
+     * `false` es una decisión explícita del autor y tiene que sobrevivir al default: si el `??`
+     * se escribiera como `||`, un `false` se convertiría en `true` y la opción "No agregar" no
+     * haría nada. Por eso se afirma el valor guardado y no sólo que el documento se creó.
+     */
+    it('con isIndexable:false, el documento se crea igual pero marcado como no indexable', async () => {
+      const dto: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: { ...baseDto.documentData, isIndexable: false },
+      };
+
+      const response = await useCase.execute(
+        'creator-1',
+        'account-1',
+        dto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isIndexable: false }),
+      );
+      // El documento se crea con normalidad: excluirlo de la búsqueda no lo mutila.
+      expect(response.success).toBe(true);
+      expect(response.data.id).toBeDefined();
+    });
+
+    /**
+     * Excluirlo de Búsqueda Inteligente no lo saca de nada más. El evento `CREATED` alimenta la
+     * cadena de auditoría global y las notificaciones a los firmantes: si un documento no
+     * indexable dejara de emitirlo, perdería su ledger y nadie recibiría la invitación.
+     */
+    it('un documento no indexable conserva su evento de creación y sus notificaciones', async () => {
+      const dto: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: { ...baseDto.documentData, isIndexable: false },
+      };
+
+      await useCase.execute('creator-1', 'account-1', dto, file, '127.0.0.1');
+
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(1);
+      expect(notificationEventsProducer.emitCreated).toHaveBeenCalled();
+    });
+
+    /**
+     * El punto de enganche de la indexación está vacío a propósito (todavía no existe el flujo),
+     * así que lo único que se puede afirmar hoy es que NADIE publica nada extra por ser
+     * indexable: los dos casos emiten exactamente los mismos eventos. Cuando se agregue la
+     * llamada real, esta prueba es la que va a fallar y pedir que se distinga.
+     */
+    it('hoy la indexación todavía no emite nada: indexable y no indexable publican lo mismo', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+      const eventosIndexable = documentEventsProducer.emitCreated.mock.calls
+        .length;
+
+      jest.clearAllMocks();
+      minioService.uploadObject.mockResolvedValue({
+        status: FILE_STATUS_ENUM.FILE_CREATED,
+        fileId: 'object-key-1',
+      });
+
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        {
+          ...baseDto,
+          documentData: { ...baseDto.documentData, isIndexable: false },
+        },
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(
+        eventosIndexable,
+      );
+    });
   });
 });

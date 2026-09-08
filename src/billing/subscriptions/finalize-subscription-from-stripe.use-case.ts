@@ -5,6 +5,7 @@ import Stripe = require('stripe');
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_PROFILE_SOURCE_ENUM } from '../enums/billing-profile-source.enum';
 import { SUBSCRIPTION_BILLING_HISTORY_STATUS_ENUM } from '../enums/subscription-billing-history-status.enum';
 import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.enum';
 import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
@@ -235,6 +236,10 @@ export class FinalizeSubscriptionFromStripeUseCase {
    * localiza este ciclo en el panel del proveedor; y `current_period_end` responde "¿hasta cuándo
    * tuvo servicio?". Lo único que se anula es `current_period_start`, porque no hay periodo en
    * curso que declarar.
+   *
+   * `billing_source` vuelve a `FREE` por lo mismo que el estado: ya no le cobra nadie. Los ids de
+   * Stripe siguen ahí para auditar, y son justamente los que harían pensar lo contrario a quien
+   * los mirara en vez de mirar esta columna.
    */
   private async downgradeToFree(
     manager: EntityManager,
@@ -243,6 +248,7 @@ export class FinalizeSubscriptionFromStripeUseCase {
     await manager.update(BillingProfileEntity, profile.id, {
       currentPlanType: FREE_PLAN_TYPE,
       status: BILLING_PROFILE_STATUS_ENUM.FREE,
+      billingSource: BILLING_PROFILE_SOURCE_ENUM.FREE,
       cancelAtPeriodEnd: false,
       currentPeriodStart: null,
     });

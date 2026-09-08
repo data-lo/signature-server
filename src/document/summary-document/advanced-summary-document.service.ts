@@ -15,7 +15,7 @@ import {
   buildSheetFooter,
   buildSheetHeader,
   dashBanner,
-  formatSheetDate,
+  formatSheetTimestamp,
   renderSheetPdf,
   SHEET_DEFAULT_STYLE,
   SHEET_PAGE_MARGINS,
@@ -70,14 +70,17 @@ function buildConservationRecordRows(
 ): string[][] {
   return [
     ['Certificado (TSA)', record?.tsaCertificate ?? ''],
-    ['NUMERO DE SERIE', record?.serialNumber ?? ''],
+    ['Número de Serie', record?.serialNumber ?? ''],
     /**
-     * En ISO 8601 con desfase explícito y no en el formato corto del resto de la hoja: es la
-     * marca de tiempo que emite el PSC y la que se contrasta contra el sello, así que tiene que
-     * ser inequívoca y legible por una máquina. Las fechas de firma siguen en formato corto,
-     * que es lo que la plantilla de referencia pide.
+     * En ISO 8601 con desfase explícito: es la marca de tiempo que emite el PSC y la que se
+     * contrasta contra el sello, así que tiene que ser inequívoca y legible por una máquina.
+     *
+     * **No es la fecha de firma y por eso no se convirtió a Unix.** Aquélla dice cuándo firmó una
+     * persona —y ahora se imprime como número, ver `formatSheetTimestamp`—; ésta dice cuándo el
+     * PSC emitió la constancia, y se coteja renglón a renglón contra el token RFC 3161, donde
+     * consta en este mismo formato. Cambiarla obligaría a quien concilia a traducir de vuelta.
      */
-    ['EMITIDO', toIsoWithMexicoOffset(record?.issuedAt)],
+    ['Emitido', toIsoWithMexicoOffset(record?.issuedAt)],
   ];
 }
 
@@ -186,7 +189,7 @@ export class AdvancedSummaryDocumentService {
           signer.certificateSerialNumber ?? '',
         ],
         ['Firma Electrónica', this.wrapSignature(signer.electronicSignature)],
-        ['Fecha de Firma', formatSheetDate(signer.signedAt)],
+        ['Fecha de Firma', formatSheetTimestamp(signer.signedAt)],
       ],
       index === 0 ? 0 : 12,
     );

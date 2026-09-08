@@ -39,6 +39,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
+import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
@@ -114,6 +115,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
+    private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
   ) {}
 
   async execute(
@@ -202,6 +204,14 @@ export class CreateDocumentSignatureFlowUseCase {
 
     const isSequential = dto.documentData.isSequential ?? true;
 
+    /**
+     * El default vive acá y no sólo en la columna: `documentRepo.create()` sí respeta el default
+     * de la entidad cuando la propiedad viene `undefined`, pero un `false` explícito y un campo
+     * ausente se distinguen mal a simple vista más abajo. Resolverlo en una línea con nombre deja
+     * la regla —"quien no opina, indexa"— escrita donde se lee, y no deducida del esquema.
+     */
+    const isIndexable = dto.documentData.isIndexable ?? true;
+
     // Defensa en profundidad (ver signature-collision.util.ts): valida ANTES de tocar la base de
     // datos, agrupando por página todas las posiciones de todos los firmantes del payload.
     const positionsByPage = new Map<number, SignaturePositionDto[]>();
@@ -240,7 +250,23 @@ export class CreateDocumentSignatureFlowUseCase {
           requiresApproval: dto.documentData.requiresApproval === true,
           totalSigners,
           isSequential,
+          isIndexable,
         }),
+      );
+
+      /**
+       * El crédito se cobra AQUÍ: con el documento ya guardado —hace falta su id para el recibo—
+       * y dentro de la misma transacción, así que si no hay saldo el documento se deshace con
+       * ella. Al revés (cobrar antes) haría falta inventar un id, y un fallo posterior dejaría un
+       * crédito gastado sin documento que lo justifique.
+       *
+       * Se le pasa el `manager` a propósito: con transacción propia, el consumo quedaría
+       * confirmado aunque el resto del alta —los colaboradores, las notificaciones— reventara
+       * después, y el usuario habría pagado por un documento que no existe.
+       */
+      await this.consumeDocumentCredit.execute(
+        { documentId: document.id, accountId, userId: createdBy },
+        manager,
       );
 
       await this.documentTransactionService.createInitial(
@@ -424,6 +450,22 @@ export class CreateDocumentSignatureFlowUseCase {
       fileName: document.fileName,
       actorUserId: createdBy,
     });
+
+    if (document.isIndexable) {
+      /**
+       * Punto de enganche de Búsqueda Inteligente, deliberadamente vacío por ahora.
+       *
+       * **No publica ningún evento ni llama a ningún servicio**: la indexación todavía no existe
+       * (no hay productor, ni consumidor, ni índice), y este bloque marca el lugar exacto donde
+       * entrará cuando se construya — después de que la transacción haya confirmado, junto al
+       * resto de los efectos externos, para que un documento que no llegó a guardarse no
+       * dispare nada.
+       *
+       * La condición ya es la definitiva: un documento con `isIndexable: false` nunca entra acá,
+       * así que quien agregue la llamada no tiene que acordarse de filtrarlo — la regla ya está
+       * puesta y probada.
+       */
+    }
 
     for (const { notification, collaboratorId } of notificationEvents) {
       this.notificationEventsProducer.emitCreated({

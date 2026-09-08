@@ -15,6 +15,7 @@ import {
   buildSheetHeader,
   dashBanner,
   formatSheetDate,
+  formatSheetTimestamp,
   renderSheetPdf,
   SHEET_DEFAULT_STYLE,
   SHEET_PAGE_MARGINS,
@@ -68,8 +69,12 @@ function buildConservationRecordRows(
 ): string[][] {
   return [
     ['Certificado (TSA)', record?.tsaCertificate ?? ''],
-    ['NUMERO DE SERIE', record?.serialNumber ?? ''],
-    ['EMITIDO', formatSheetDate(record?.issuedAt)],
+    ['Número de Serie', record?.serialNumber ?? ''],
+    /**
+     * `Emitido` conserva su fecha legible: es la marca del PSC —cuándo emitió la constancia—, no
+     * la fecha de firma, y la historia que pidió el timestamp Unix habla sólo de esta última.
+     */
+    ['Emitido', formatSheetDate(record?.issuedAt)],
   ];
 }
 
@@ -164,8 +169,8 @@ export class SummaryDocumentService {
         ['Tipo de Firma', SIGNATURE_TYPE_LABEL],
         ['IP', signer.ipAddress],
         ['Sustentada', SIGNATURE_BACKING_LABEL],
-        ['OTP CODE', signer.otpCode ?? ''],
-        ['Fecha de Firma', formatSheetDate(signer.signedAt)],
+        ['OTP Code', signer.otpCode ?? ''],
+        ['Fecha de Firma', formatSheetTimestamp(signer.signedAt)],
       ],
       index === 0 ? 0 : 12,
     );

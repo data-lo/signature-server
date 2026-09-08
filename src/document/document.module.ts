@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { DocumentService } from './document.service';
 import { DocumentController } from './document.controller';
 import { DocumentSignaturesController } from './document-signatures.controller';
@@ -18,6 +18,7 @@ import { DocumentTransactionModule } from './document-transaction.module';
 import { EfirmaModule } from 'src/efirma/efirma.module';
 import { SealModule } from './seal/seal.module';
 import { SummaryDocumentModule } from './summary-document/summary-document.module';
+import { BillingModule } from 'src/billing/billing.module';
 import { SignatureQrService } from './services/signature-qr.service';
 
 // Use cases
@@ -91,6 +92,21 @@ import { CreateDocumentSignatureFlowUseCase } from './applications/create-docume
     EfirmaModule,
     SealModule,
     SummaryDocumentModule,
+    /**
+     * De aquí sale `ConsumeDocumentCreditUseCase`: crear un documento cuesta un crédito.
+     *
+     * **La dependencia va en un solo sentido** —ningún módulo del grafo de facturación importa
+     * `DocumentModule`— así que este import no crea ningún ciclo por sí mismo. El `forwardRef` es
+     * por el ciclo que YA existe del otro lado: `BillingModule` ⇄ `PaymentsModule` se importan
+     * mutuamente con `forwardRef`, y entrar a un módulo que participa de un ciclo deja el orden
+     * de inicialización a merced de cuál se resuelva primero. Es gratis cuando no hace falta.
+     *
+     * Se importa el módulo entero y no un `BillingProvisioningModule` a medida —como sí hace
+     * `AccountModule`— porque `ConsumeDocumentCreditUseCase` inyecta `BillingOwnerService` y el
+     * `DataSource`; el alta de cuentas no inyecta nada, trabaja con el `EntityManager` que le
+     * pasan.
+     */
+    forwardRef(() => BillingModule),
   ],
   exports: [DocumentService],
 })
