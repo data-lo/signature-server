@@ -232,9 +232,9 @@ export class DocumentService {
    *
    * Bug corregido: solo se emparejaba por `accountId`, pero ese campo permanece en null hasta que
    * el firmante entra por el enlace del correo (`/access-document` → linkPendingCollaboratorAccount).
-   * Como el listado (`GET /document?participantEmail=`) sí filtra por email, el usuario veía en
-   * "Por firmar" documentos que el detalle le rechazaba con 403 — quedaba atascado si llegaba por
-   * la navegación en vez del correo. Emparejar por email aquí no amplía el modelo de seguridad:
+   * Como el listado (`GET /document`) empareja también por email, el usuario veía entre los
+   * documentos que requieren su firma algunos que el detalle le rechazaba con 403 — quedaba
+   * atascado si llegaba por la navegación en vez del correo. Emparejar por email aquí no amplía el modelo de seguridad:
    * `sign()`/`reject()` ya identifican al firmante exactamente así (ver
    * findOrLinkMySignerCollaborator), y el email de la cuenta está verificado por OTP en el
    * registro.

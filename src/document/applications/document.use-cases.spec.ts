@@ -45,6 +45,9 @@ import { SummaryDocumentService } from '../summary-document/summary-document.ser
 import { AdvancedSummaryDocumentService } from '../summary-document/advanced-summary-document.service';
 import { SignatureQrService } from '../services/signature-qr.service';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { DOCUMENT_VIEW_ENUM } from '../enum/document-view.enum';
+import { DOCUMENT_SORT_FIELD_ENUM } from '../enum/document-sort-field.enum';
+import { DOCUMENT_PARTICIPATION_ENUM } from '../enum/document-participation.enum';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 
 // Use cases
@@ -642,14 +645,17 @@ describe('casos de uso de documentos', () => {
     });
   });
 
-  describe('findWithFilters', () => {
+  describe('listado unificado (GET /document)', () => {
     function createMockQueryBuilder(documents: unknown[] = [], total = 0) {
       const qb: any = {};
       [
         'where',
         'andWhere',
+        'orWhere',
+        'leftJoin',
         'leftJoinAndSelect',
         'orderBy',
+        'addOrderBy',
         'skip',
         'take',
       ].forEach((method) => {
@@ -659,11 +665,73 @@ describe('casos de uso de documentos', () => {
       return qb;
     }
 
-    const query = { page: 1, limit: 10 } as any;
+    /**
+     * Ejecuta el `Brackets` que se le pasó a `andWhere` y devuelve las condiciones que registró.
+     *
+     * Las condiciones agrupadas (el acceso, la búsqueda libre) no llegan al query builder como
+     * texto sino como una función que TypeORM invoca más tarde con un builder anidado. Sin
+     * desenvolverla, lo único que podría comprobarse es "se llamó a andWhere con algo", que no
+     * dice nada sobre QUÉ se filtró.
+     */
+    function bracketConditions(brackets: any): string[] {
+      const recorded: string[] = [];
+      const nested: any = {};
+      ['where', 'orWhere', 'andWhere'].forEach((method) => {
+        nested[method] = jest.fn((sql: string) => {
+          recorded.push(sql);
+          return nested;
+        });
+      });
+      brackets.whereFactory(nested);
+      return recorded;
+    }
+
+    /** Todas las condiciones en texto plano que recibió `andWhere`, con o sin `Brackets`. */
+    function allConditions(qb: any): string[] {
+      return qb.andWhere.mock.calls.flatMap(([condition]: [unknown]) =>
+        typeof condition === 'string'
+          ? [condition]
+          : bracketConditions(condition),
+      );
+    }
+
+    function personalAccount() {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+    }
+
+    /** El listado con los filtros indicados; el resto va con los valores por omisión del DTO. */
+    function list(filters: Record<string, unknown> = {}, qb?: any) {
+      const builder = qb ?? createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(builder);
+      return getDocuments.execute({
+        userId: 'user-1',
+        accountId: 'account-1',
+        filters: { page: 1, limit: 25, ...filters } as any,
+      });
+    }
+
+    beforeEach(() => {
+      personalAccount();
+      // El correo del usuario que consulta lo resuelve el propio caso de uso (antes llegaba por
+      // query como `participantEmail`), así que el mock tiene que devolver uno.
+      userService.findOne.mockResolvedValue({
+        id: 'user-1',
+        firstName: 'Ana',
+        lastName: 'López',
+        email: 'ana@correo.com',
+      });
+    });
 
     it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
       await expect(
-        getDocuments.execute('user-1', undefined as any, query),
+        getDocuments.execute({
+          userId: 'user-1',
+          accountId: undefined as any,
+          filters: { page: 1, limit: 25 } as any,
+        }),
       ).rejects.toThrow(BadRequestException);
       expect(documentRepository.createQueryBuilder).not.toHaveBeenCalled();
     });
@@ -673,151 +741,450 @@ describe('casos de uso de documentos', () => {
         new ForbiddenException('No perteneces a esta cuenta'),
       );
 
-      await expect(
-        getDocuments.execute('user-1', 'account-ajena', query),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(list()).rejects.toThrow(ForbiddenException);
     });
 
-    it('filtra el listado por accountId cuando la cuenta activa es PERSONAL', async () => {
+    /**
+     * El acceso es lo primero que se aplica y ningún filtro puede ensancharlo. Las tres vías van
+     * en un solo grupo `OR`: la cuenta activa, lo que creó el usuario y aquello en lo que
+     * participa. La tercera no sobra — un documento que me toca firmar casi siempre pertenece a
+     * la cuenta de quien lo mandó, no a la mía (bug corregido en su momento con un caso especial
+     * para `participantEmail`, que ahora es parte de la regla).
+     */
+    it('limita lo visible a la cuenta activa, lo creado por el usuario y aquello en lo que participa', async () => {
       const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
-      });
 
-      await getDocuments.execute('user-1', 'account-1', query);
+      await list({}, qb);
 
-      expect(accountMemberService.assertIsActiveMember).toHaveBeenCalledWith(
-        'user-1',
-        'account-1',
-      );
-      expect(qb.andWhere).toHaveBeenCalledWith(
+      const visibility = qb.andWhere.mock.calls
+        .map(([condition]: [unknown]) =>
+          typeof condition === 'string' ? [] : bracketConditions(condition),
+        )
+        .find((conditions: string[]) =>
+          conditions.some((sql) => sql.includes('document.accountId')),
+        );
+
+      expect(visibility).toEqual([
         'document.accountId = :accountId',
-        { accountId: 'account-1' },
-      );
+        'document.createdBy = :userId',
+        expect.stringContaining('SELECT c.document_id FROM collaborators c'),
+      ]);
     });
 
-    it('filtra el listado por organizationId cuando la cuenta activa es de una organización (Fase 5)', async () => {
-      const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
+    it('usa la organización en lugar de la cuenta cuando la cuenta activa pertenece a una', async () => {
       accountMemberService.assertIsActiveMember.mockResolvedValue({
         id: 'account-org-member-1',
         organizationId: 'org-1',
       });
+      const qb = createMockQueryBuilder();
 
-      await getDocuments.execute('user-1', 'account-org-member-1', query);
+      await list({}, qb);
 
-      expect(qb.andWhere).toHaveBeenCalledWith(
+      expect(allConditions(qb)).toContain(
         'document.organizationId = :organizationId',
-        { organizationId: 'org-1' },
       );
-    });
-
-    it('bug corregido: NO filtra por accountId/organizationId cuando se pide por participantEmail — un documento donde soy firmante casi siempre pertenece a la cuenta de quien lo creó, no a la mía', async () => {
-      const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
-      });
-
-      await getDocuments.execute('user-1', 'account-1', {
-        ...query,
-        participantEmail: 'firmante@correo.com',
-      } as any);
-
-      expect(qb.andWhere).not.toHaveBeenCalledWith(
+      expect(allConditions(qb)).not.toContain(
         'document.accountId = :accountId',
-        expect.anything(),
       );
     });
 
     /**
-     * Bug corregido ("las solicitudes FIEL sin 2FA no se muestran en Por firmar"): el listado
-     * comparaba `collaborators.email` con `=` exacto contra el correo (ya en minúsculas) del
-     * usuario en sesión, mientras que el detalle, la vinculación de cuenta y sign()/reject()
-     * comparan sin distinguir mayúsculas. Un firmante invitado como "Juan.Perez@mail.com" no
-     * veía el documento en "Por firmar" mientras su fila siguiera sin `accountId` — y sin 2FA
-     * nada la vincula antes de firmar (con 2FA, pedir el código sí lo hace).
+     * El emparejamiento por correo se hace en minúsculas porque `collaborators.email` conserva lo
+     * que tecleó quien invitó, mientras que `users.email` está normalizado (bug "las solicitudes
+     * FIEL sin 2FA no aparecen en Por firmar"). Ahora además el correo lo resuelve el servidor:
+     * ya no llega por query, así que nadie puede pedir la bandeja de otra persona.
      */
-    it('empareja al participante sin distinguir mayúsculas (firmante invitado con el correo en mayúsculas)', async () => {
+    it('resuelve el correo del usuario en el servidor y lo compara en minúsculas', async () => {
       const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
-      });
 
-      await getDocuments.execute('user-1', 'account-1', {
-        ...query,
-        participantEmail: 'Juan.Perez@Mail.com',
-      } as any);
+      await list({}, qb);
 
-      const participantClause = qb.andWhere.mock.calls.find(([sql]: [string]) =>
-        sql.includes('SELECT c.document_id'),
+      expect(userService.findOne).toHaveBeenCalledWith('user-1');
+      const participantClause = allConditions(qb).find((sql) =>
+        sql.includes('LOWER(c.email) = :callerEmail'),
       );
-
       expect(participantClause).toBeDefined();
-      expect(participantClause[0]).toContain('LOWER(c.email)');
-      expect(participantClause[0]).toContain('LOWER(u.email)');
-      expect(participantClause[1]).toEqual({
-        participantEmail: 'juan.perez@mail.com',
+    });
+
+    describe('view', () => {
+      it('por omisión lista lo que espera una acción del usuario', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({}, qb);
+
+        expect(qb.andWhere).toHaveBeenCalledWith(
+          'document.status = :pendingStatus',
+          { pendingStatus: DOCUMENT_STATUS_ENUM.PENDING },
+        );
+        const [, params] = qb.andWhere.mock.calls.find(
+          ([sql]: [unknown]) =>
+            typeof sql === 'string' && sql.includes('c.colaborator_type IN'),
+        );
+        // Un observador no firma ni revisa: nada le "requiere su firma".
+        expect(params.actingTypes).toEqual([
+          COLABORATOR_TYPE_ENUM.SIGNER,
+          COLABORATOR_TYPE_ENUM.REVIEWER,
+        ]);
+        expect(params.pendingSigneeStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
+      });
+
+      it('`created_by_me` lista lo que el usuario mandó a firmar', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({ view: DOCUMENT_VIEW_ENUM.CREATED_BY_ME }, qb);
+
+        expect(qb.andWhere).toHaveBeenCalledWith(
+          'document.createdBy = :userId',
+          { userId: 'user-1' },
+        );
+        expect(allConditions(qb)).not.toContain(
+          'document.status = :pendingStatus',
+        );
+      });
+
+      it('`completed` lista los documentos ya firmados por todos', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({ view: DOCUMENT_VIEW_ENUM.COMPLETED }, qb);
+
+        expect(qb.andWhere).toHaveBeenCalledWith(
+          'document.status = :signedStatus',
+          { signedStatus: DOCUMENT_STATUS_ENUM.SIGNED },
+        );
+      });
+
+      /**
+       * `all` es lo que hace posible buscar en toda la bandeja de una vez, que es justo lo que
+       * las tres secciones separadas impedían. No agrega ninguna condición: el acceso sigue
+       * aplicándose igual.
+       */
+      it('`all` no recorta nada, pero tampoco levanta el acceso', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        // Las condiciones sueltas son las que agrega la vista; las agrupadas son el acceso, que
+        // se aplica siempre (y donde `createdBy` aparece como una de sus tres vías).
+        const viewConditions = qb.andWhere.mock.calls
+          .map(([condition]: [unknown]) => condition)
+          .filter((condition: unknown) => typeof condition === 'string');
+        expect(viewConditions).not.toContain('document.status = :pendingStatus');
+        expect(viewConditions).not.toContain('document.createdBy = :userId');
+        expect(allConditions(qb)).toContain('document.accountId = :accountId');
       });
     });
 
-    it('aplica el mismo emparejamiento insensible a mayúsculas en el filtro "me toca firmar"', async () => {
-      const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
+    describe('filtros', () => {
+      it('busca por nombre del documento o por participante con una sola caja', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({ search: 'contrato' }, qb);
+
+        const searchCall = qb.andWhere.mock.calls.find(
+          ([, params]: [unknown, any]) => params?.search !== undefined,
+        );
+        expect(searchCall[1]).toEqual({ search: '%contrato%' });
+        const conditions = bracketConditions(searchCall[0]);
+        expect(conditions[0]).toBe('document.fileName ILIKE :search');
+        expect(conditions[1]).toContain('c.email ILIKE :search');
       });
 
-      await getDocuments.execute('user-1', 'account-1', {
-        ...query,
-        participantEmail: 'Juan.Perez@Mail.com',
-        myTurnOnly: true,
-      } as any);
+      it('acepta varios estatus a la vez', async () => {
+        const qb = createMockQueryBuilder();
 
-      const myTurnClause = qb.andWhere.mock.calls.find(([sql]: [string]) =>
-        sql.includes("c.colaborator_type = 'signer'"),
+        await list(
+          {
+            statuses: [
+              DOCUMENT_STATUS_ENUM.PENDING,
+              DOCUMENT_STATUS_ENUM.SIGNED,
+            ],
+          },
+          qb,
+        );
+
+        expect(qb.andWhere).toHaveBeenCalledWith(
+          'document.status IN (:...statuses)',
+          {
+            statuses: [
+              DOCUMENT_STATUS_ENUM.PENDING,
+              DOCUMENT_STATUS_ENUM.SIGNED,
+            ],
+          },
+        );
+      });
+
+      it('ignora una lista de estatus vacía en vez de devolver cero resultados', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({ statuses: [] }, qb);
+
+        expect(allConditions(qb)).not.toContain(
+          'document.status IN (:...statuses)',
+        );
+      });
+
+      it('filtra por nombre o correo de un participante', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({ participant: 'isaay' }, qb);
+
+        const [sql, params] = qb.andWhere.mock.calls.find(
+          ([, callParams]: [unknown, any]) =>
+            callParams?.participant !== undefined,
+        );
+        expect(sql).toContain('u.email ILIKE :participant');
+        expect(params).toEqual({ participant: '%isaay%' });
+      });
+
+      /**
+       * El comodín lo pone el servidor alrededor de un parámetro preparado: lo que el usuario
+       * teclea nunca es sintaxis, así que un `%` suelto busca un `%` y no "todo".
+       */
+      it('trata los comodines tecleados como texto, no como sintaxis', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list({ search: '100%' }, qb);
+
+        const searchCall = qb.andWhere.mock.calls.find(
+          ([, params]: [unknown, any]) => params?.search !== undefined,
+        );
+        expect(searchCall[1]).toEqual({ search: '%100%%' });
+      });
+
+      it('filtra por rango de fechas de creación y de firma', async () => {
+        const qb = createMockQueryBuilder();
+
+        await list(
+          {
+            createdFrom: '2026-01-01',
+            createdTo: '2026-12-31',
+            signedFrom: '2026-02-01',
+            signedTo: '2026-11-30',
+          },
+          qb,
+        );
+
+        const conditions = allConditions(qb);
+        expect(conditions).toEqual(
+          expect.arrayContaining([
+            'document.createdAt >= :createdFrom',
+            'document.createdAt <= :createdTo',
+            'document.signedAt >= :signedFrom',
+            'document.signedAt <= :signedTo',
+          ]),
+        );
+      });
+
+      /**
+       * Un rango invertido devolvería la lista vacía sin explicar por qué, y quien la mira no
+       * podría distinguir "no hay documentos" de "tecleaste las fechas al revés".
+       */
+      it.each([
+        ['creación', { createdFrom: '2026-12-31', createdTo: '2026-01-01' }],
+        ['firma', { signedFrom: '2026-12-31', signedTo: '2026-01-01' }],
+      ])(
+        'rechaza un rango de fechas de %s invertido antes de consultar',
+        async (_label, filters) => {
+          await expect(list(filters)).rejects.toThrow(BadRequestException);
+          expect(documentRepository.createQueryBuilder).not.toHaveBeenCalled();
+        },
       );
-
-      expect(myTurnClause).toBeDefined();
-      expect(myTurnClause[0]).toContain('LOWER(c.email)');
-      expect(myTurnClause[1]).toEqual({
-        participantEmail: 'juan.perez@mail.com',
-      });
     });
 
-    it('empareja al creador sin distinguir mayúsculas (filtro `email`, "Enviados para firma")', async () => {
-      const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
+    describe('ordenamiento y paginación', () => {
+      /**
+       * El campo de ordenamiento sale de un mapa nuestro y no del texto que mande el cliente: el
+       * `ORDER BY` no admite parámetros preparados, así que es la única parte de la consulta
+       * donde un valor libre acabaría interpolado en el SQL.
+       */
+      it.each([
+        [DOCUMENT_SORT_FIELD_ENUM.CREATED_AT, 'document.createdAt'],
+        [DOCUMENT_SORT_FIELD_ENUM.SIGNED_AT, 'document.signedAt'],
+        [DOCUMENT_SORT_FIELD_ENUM.FILE_NAME, 'document.fileName'],
+        [DOCUMENT_SORT_FIELD_ENUM.STATUS, 'document.status'],
+      ])('ordena por %s usando su columna del mapa', async (sortBy, column) => {
+        const qb = createMockQueryBuilder();
+
+        await list({ sortBy, sortDirection: 'ASC' }, qb);
+
+        expect(qb.orderBy).toHaveBeenCalledWith(column, 'ASC');
       });
 
-      await getDocuments.execute('user-1', 'account-1', {
-        ...query,
-        email: 'Creador@Mail.com',
-      } as any);
+      /**
+       * Sin desempate, dos documentos con el mismo valor ordenado pueden intercambiarse entre
+       * páginas: uno se repetiría en la segunda y otro no aparecería nunca.
+       */
+      it('desempata por id para que la paginación sea estable', async () => {
+        const qb = createMockQueryBuilder();
 
-      const creatorClause = qb.andWhere.mock.calls.find(([sql]: [string]) =>
-        sql.includes('requester.email'),
-      );
+        await list({}, qb);
 
-      expect(creatorClause).toBeDefined();
-      expect(creatorClause[0]).toContain('LOWER(requester.email)');
-      expect(creatorClause[1]).toEqual({ email: 'creador@mail.com' });
+        expect(qb.addOrderBy).toHaveBeenCalledWith('document.id', 'DESC');
+      });
+
+      it('pagina con skip/take y devuelve el resumen de la paginación', async () => {
+        const qb = createMockQueryBuilder([], 42);
+
+        const result = await list({ page: 2, limit: 25 }, qb);
+
+        expect(qb.skip).toHaveBeenCalledWith(25);
+        expect(qb.take).toHaveBeenCalledWith(25);
+        expect(result.pagination).toEqual({
+          page: 2,
+          limit: 25,
+          total: 42,
+          totalPages: 2,
+        });
+      });
     });
 
     /**
-     * La columna "Creado por" de las tres secciones del módulo Documentos muestra el nombre del
-     * creador y su RFC como texto secundario. El RFC no está en `users` sino en
-     * `personal_information`, así que sin el join el campo llegaba siempre en null al frontend.
+     * Archivar es una decisión personal: el `user_id` va en la condición del JOIN y no en el
+     * WHERE, porque abajo un documento archivado por otro participante desaparecería también de
+     * esta lista.
      */
+    it('excluye los documentos que el propio usuario archivó', async () => {
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb);
+
+      const [, alias, condition, params] = qb.leftJoin.mock.calls[0];
+      expect(alias).toBe('myPreference');
+      expect(condition).toContain('myPreference.documentId = document.id');
+      expect(condition).toContain('myPreference.userId = :preferenceUserId');
+      expect(params).toEqual({ preferenceUserId: 'user-1' });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'myPreference.archivedAt IS NULL',
+      );
+    });
+
+    /**
+     * Historia "Unificar listado de documentos": sin secciones que lo expliquen, cada fila tiene
+     * que decir por qué está en la lista. El valor es personal — depende de quién pregunta — y se
+     * resuelve sobre los colaboradores ya cargados, sin una consulta extra por documento.
+     */
+    describe('participación del usuario en cada fila', () => {
+      function documentWith(overrides: Record<string, unknown>) {
+        return {
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          fileType: 'application/pdf',
+          totalPages: 1,
+          status: DOCUMENT_STATUS_ENUM.PENDING,
+          createdAt: new Date('2026-03-15T23:55:00.000Z'),
+          createdBy: 'otro-usuario',
+          collaborators: [],
+          requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+          ...overrides,
+        };
+      }
+
+      function myPendingSignature() {
+        return {
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+          status: SIGNEE_STATUS_ENUM.PENDING,
+          signatureType: null,
+          signingOrder: 0,
+          account: { userId: 'user-1' },
+        };
+      }
+
+      it('marca "requiere mi firma" cuando el usuario debe responder y el documento sigue abierto', async () => {
+        const qb = createMockQueryBuilder(
+          [documentWith({ collaborators: [myPendingSignature()] })],
+          1,
+        );
+
+        const result = await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        expect(result.items[0].participation).toBe(
+          DOCUMENT_PARTICIPATION_ENUM.REQUIRES_MY_SIGNATURE,
+        );
+      });
+
+      /** Ya firmé: el documento sigue en mi lista, pero no me pide nada. */
+      it('deja de pedir firma en cuanto el usuario ya respondió', async () => {
+        const qb = createMockQueryBuilder(
+          [
+            documentWith({
+              collaborators: [
+                { ...myPendingSignature(), status: SIGNEE_STATUS_ENUM.SIGNED },
+              ],
+            }),
+          ],
+          1,
+        );
+
+        const result = await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        expect(result.items[0].participation).toBe(
+          DOCUMENT_PARTICIPATION_ENUM.PARTICIPANT,
+        );
+      });
+
+      it('marca "creado por mí" cuando el usuario lo mandó a firmar y no le toca nada', async () => {
+        const qb = createMockQueryBuilder(
+          [documentWith({ createdBy: 'user-1' })],
+          1,
+        );
+
+        const result = await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        expect(result.items[0].participation).toBe(
+          DOCUMENT_PARTICIPATION_ENUM.CREATED_BY_ME,
+        );
+      });
+
+      /**
+       * Crear un documento y firmarlo uno mismo es corriente. Gana lo que pide una acción: es lo
+       * que explica por qué esa fila está pidiendo atención.
+       */
+      it('la firma pendiente gana sobre "creado por mí" cuando el usuario es las dos cosas', async () => {
+        const qb = createMockQueryBuilder(
+          [
+            documentWith({
+              createdBy: 'user-1',
+              collaborators: [myPendingSignature()],
+            }),
+          ],
+          1,
+        );
+
+        const result = await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        expect(result.items[0].participation).toBe(
+          DOCUMENT_PARTICIPATION_ENUM.REQUIRES_MY_SIGNATURE,
+        );
+      });
+
+      /** Un firmante invitado por correo todavía no tiene cuenta vinculada y sí tiene tarea. */
+      it('reconoce al firmante invitado por correo, sin cuenta vinculada todavía', async () => {
+        const qb = createMockQueryBuilder(
+          [
+            documentWith({
+              collaborators: [
+                {
+                  colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+                  status: SIGNEE_STATUS_ENUM.PENDING,
+                  signatureType: null,
+                  signingOrder: 0,
+                  account: null,
+                  email: 'Ana@Correo.com',
+                },
+              ],
+            }),
+          ],
+          1,
+        );
+
+        const result = await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        expect(result.items[0].participation).toBe(
+          DOCUMENT_PARTICIPATION_ENUM.REQUIRES_MY_SIGNATURE,
+        );
+      });
+    });
+
     it('devuelve el RFC del creador (join a personal_information) junto al nombre en cada documento', async () => {
       const qb = createMockQueryBuilder(
         [
@@ -838,19 +1205,14 @@ describe('casos de uso de documentos', () => {
         ],
         1,
       );
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
-      });
 
-      const result = await getDocuments.execute('user-1', 'account-1', query);
+      const result = await list({}, qb);
 
       expect(qb.leftJoinAndSelect).toHaveBeenCalledWith(
         'requester.personalInformation',
         'requesterPersonalInfo',
       );
-      expect(result.data[0]).toEqual(
+      expect(result.items[0]).toEqual(
         expect.objectContaining({
           creator: 'Sara Ramírez',
           creatorRfc: 'SARA850315HN2',
@@ -874,15 +1236,10 @@ describe('casos de uso de documentos', () => {
         ],
         1,
       );
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
-      });
 
-      const result = await getDocuments.execute('user-1', 'account-1', query);
+      const result = await list({}, qb);
 
-      expect(result.data[0]).toEqual(
+      expect(result.items[0]).toEqual(
         expect.objectContaining({ creatorRfc: null }),
       );
     });
@@ -908,13 +1265,8 @@ describe('casos de uso de documentos', () => {
           ],
           1,
         );
-        documentRepository.createQueryBuilder.mockReturnValue(qb);
-        accountMemberService.assertIsActiveMember.mockResolvedValue({
-          id: 'account-1',
-          organizationId: null,
-        });
 
-        return getDocuments.execute('user-1', 'account-1', query);
+        return list({}, qb);
       }
 
       function signer(signatureType: SIGNATURE_TYPE_ENUM | null) {
@@ -931,7 +1283,7 @@ describe('casos de uso de documentos', () => {
           signer(SIGNATURE_TYPE_ENUM.FIEL),
         ]);
 
-        expect(result.data[0]).toEqual(
+        expect(result.items[0]).toEqual(
           expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.FIEL }),
         );
       });
@@ -945,7 +1297,7 @@ describe('casos de uso de documentos', () => {
           },
         ]);
 
-        expect(result.data[0]).toEqual(
+        expect(result.items[0]).toEqual(
           expect.objectContaining({
             signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
           }),
@@ -957,7 +1309,7 @@ describe('casos de uso de documentos', () => {
       it('devuelve null si los firmantes no tienen tipo de firma registrado', async () => {
         const result = await listWithSigners([signer(null)]);
 
-        expect(result.data[0]).toEqual(
+        expect(result.items[0]).toEqual(
           expect.objectContaining({ signatureType: null }),
         );
       });
@@ -968,7 +1320,7 @@ describe('casos de uso de documentos', () => {
           signer(SIGNATURE_TYPE_ENUM.FIEL),
         ]);
 
-        expect(result.data[0]).toEqual(
+        expect(result.items[0]).toEqual(
           expect.objectContaining({ signatureType: null }),
         );
       });
@@ -997,13 +1349,8 @@ describe('casos de uso de documentos', () => {
           ],
           1,
         );
-        documentRepository.createQueryBuilder.mockReturnValue(qb);
-        accountMemberService.assertIsActiveMember.mockResolvedValue({
-          id: 'account-1',
-          organizationId: null,
-        });
 
-        return getDocuments.execute('user-1', 'account-1', query);
+        return list({}, qb);
       }
 
       it('devuelve `signedAt` del documento firmado por todos', async () => {
@@ -1014,13 +1361,13 @@ describe('casos de uso de documentos', () => {
           signedAt,
         });
 
-        expect(result.data[0]).toEqual(expect.objectContaining({ signedAt }));
+        expect(result.items[0]).toEqual(expect.objectContaining({ signedAt }));
       });
 
       it('devuelve `signedAt` en null mientras el flujo de firma sigue abierto', async () => {
         const result = await listWithDocument({ signedAt: null });
 
-        expect(result.data[0]).toEqual(
+        expect(result.items[0]).toEqual(
           expect.objectContaining({ signedAt: null }),
         );
       });
@@ -1029,7 +1376,7 @@ describe('casos de uso de documentos', () => {
       it('normaliza a null la fecha ausente', async () => {
         const result = await listWithDocument({});
 
-        expect(result.data[0]).toEqual(
+        expect(result.items[0]).toEqual(
           expect.objectContaining({ signedAt: null }),
         );
       });
@@ -3955,8 +4302,10 @@ describe('casos de uso de documentos', () => {
       [
         'where',
         'andWhere',
+        'leftJoin',
         'leftJoinAndSelect',
         'orderBy',
+        'addOrderBy',
         'skip',
         'take',
       ].forEach((method) => {
@@ -3989,11 +4338,11 @@ describe('casos de uso de documentos', () => {
         organizationId: null,
       });
 
-      await getDocuments.execute('user-1', 'account-1', {
-        page: 1,
-        limit: 10,
-        withUrl: true,
-      } as any);
+      await getDocuments.execute({
+        userId: 'user-1',
+        accountId: 'account-1',
+        filters: { page: 1, limit: 25, withUrl: true } as any,
+      });
 
       expect(minioService.getFile).toHaveBeenCalledWith(
         'object-key-firmado',

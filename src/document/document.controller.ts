@@ -219,6 +219,11 @@ export class DocumentController {
     );
   }
 
+  /**
+   * El único listado de documentos. El controlador no interpreta nada: toma el usuario y la
+   * cuenta activa del contexto autenticado —nunca de la query— y le pasa al caso de uso los
+   * filtros ya validados por el DTO.
+   */
   @Get()
   @ApiGetDocuments()
   findAll(
@@ -226,7 +231,11 @@ export class DocumentController {
     @ActiveAccountId() accountId: string,
     @Query() query: GetDocumentsQueryDto,
   ) {
-    return this.getDocuments.execute(user.sub, accountId, query);
+    return this.getDocuments.execute({
+      userId: user.sub,
+      accountId,
+      filters: query,
+    });
   }
 
   @Get(':id')

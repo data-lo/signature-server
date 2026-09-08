@@ -6,81 +6,99 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
-import { DocumentGetListResponse } from '../interfaces/responses/document-get-response';
+import { DOCUMENT_VIEW_ENUM } from '../enum/document-view.enum';
+import {
+  DOCUMENT_SORT_FIELD_ENUM,
+  SORT_DIRECTION_ENUM,
+} from '../enum/document-sort-field.enum';
+import { DocumentsListResponse } from '../interfaces/responses/document-get-response';
 import { BadRequestResponse } from 'src/interfaces/api-response.dto';
 
-/** `GET /document` — listado paginado con filtros, restringido a la cuenta activa. */
+/**
+ * `GET /document` — el ÚNICO listado de documentos, paginado y con filtros.
+ *
+ * Sustituye a las tres consultas que armaban las pantallas segmentadas. Los parámetros de
+ * aquéllas (`participantEmail`, `email`, `status`, `fileName`, `participantName`, `myTurnOnly`)
+ * ya no existen: describían cómo consultar, y `view`/`search`/`participant`/`statuses` describen
+ * qué se quiere ver.
+ */
 export function ApiGetDocuments() {
   return applyDecorators(
-    ApiOperation({ summary: 'Consultar documentos con filtros opcionales' }),
+    ApiOperation({
+      summary: 'Listado unificado de documentos',
+      description:
+        'Devuelve los documentos visibles para el usuario en la cuenta activa: los de la cuenta ' +
+        'u organización, los que creó y aquellos en los que participa. `view` recorta ese ' +
+        'conjunto, nunca lo amplía. Excluye los que el propio usuario archivó.',
+    }),
     ApiHeader({
       name: 'X-Account-Id',
       description:
-        'UUID de la cuenta activa (personal u organización). El listado se restringe a los documentos de esa cuenta; el usuario debe ser miembro activo.',
+        'UUID de la cuenta activa (personal u organización). El usuario debe ser miembro activo. Nunca se acepta como parámetro de query.',
       required: true,
     }),
     ApiQuery({
-      name: 'id',
+      name: 'view',
       required: false,
-      description: 'UUID del documento',
-      format: 'uuid',
+      enum: DOCUMENT_VIEW_ENUM,
+      description:
+        'Recorte principal. Por omisión `requires_my_signature`: lo que espera una acción del usuario.',
     }),
     ApiQuery({
-      name: 'participantEmail',
+      name: 'search',
       required: false,
-      description: 'Email de un participante (firmante o espectador)',
+      description:
+        'Búsqueda libre por nombre del documento o por nombre/correo de cualquier participante',
     }),
     ApiQuery({
-      name: 'email',
+      name: 'statuses',
       required: false,
-      description: 'Email del propietario o de cualquier participante',
-    }),
-    ApiQuery({
-      name: 'status',
-      required: false,
+      isArray: true,
       enum: DOCUMENT_STATUS_ENUM,
-      description: 'Estatus del documento',
-    }),
-    ApiQuery({
-      name: 'dateFrom',
-      required: false,
-      description: 'Fecha de creación inicio (ISO 8601)',
-      example: '2024-01-01',
-    }),
-    ApiQuery({
-      name: 'dateTo',
-      required: false,
-      description: 'Fecha de creación fin (ISO 8601)',
-      example: '2024-12-31',
-    }),
-    ApiQuery({
-      name: 'signedDateFrom',
-      required: false,
-      description: 'Fecha de firma inicio (ISO 8601)',
-      example: '2024-01-01',
-    }),
-    ApiQuery({
-      name: 'signedDateTo',
-      required: false,
-      description: 'Fecha de firma fin (ISO 8601)',
-      example: '2024-12-31',
-    }),
-    ApiQuery({
-      name: 'fileName',
-      required: false,
-      description: 'Búsqueda parcial por nombre de archivo',
-    }),
-    ApiQuery({
-      name: 'participantName',
-      required: false,
       description:
-        'Búsqueda parcial por nombre o correo de un firmante/espectador',
+        'Uno o varios estatus. Repetible (`?statuses=pending&statuses=signed`) o separado por comas',
     }),
     ApiQuery({
-      name: 'myTurnOnly',
+      name: 'participant',
       required: false,
+      description: 'Nombre o correo de un participante del documento',
+    }),
+    ApiQuery({
+      name: 'createdFrom',
+      required: false,
+      description: 'Creados desde (ISO 8601)',
+      example: '2026-01-01',
+    }),
+    ApiQuery({
+      name: 'createdTo',
+      required: false,
+      description: 'Creados hasta (ISO 8601)',
+      example: '2026-12-31',
+    }),
+    ApiQuery({
+      name: 'signedFrom',
+      required: false,
+      description: 'Firmados desde (ISO 8601)',
+      example: '2026-01-01',
+    }),
+    ApiQuery({
+      name: 'signedTo',
+      required: false,
+      description: 'Firmados hasta (ISO 8601)',
+      example: '2026-12-31',
+    }),
+    ApiQuery({
+      name: 'sortBy',
+      required: false,
+      enum: DOCUMENT_SORT_FIELD_ENUM,
       description:
-        'Requiere participantEmail. Solo documentos donde te toca firmar ahora mismo',
+        'Campo de ordenamiento (lista cerrada). Por omisión `createdAt`',
+    }),
+    ApiQuery({
+      name: 'sortDirection',
+      required: false,
+      enum: SORT_DIRECTION_ENUM,
+      description: 'Dirección del ordenamiento. Por omisión `DESC`',
     }),
     ApiQuery({
       name: 'page',
@@ -91,17 +109,31 @@ export function ApiGetDocuments() {
     ApiQuery({
       name: 'limit',
       required: false,
-      description: 'Resultados por página',
-      example: 10,
+      description: 'Resultados por página (máximo 100)',
+      example: 25,
+    }),
+    ApiQuery({
+      name: 'id',
+      required: false,
+      description:
+        'UUID de un documento concreto, para comprobar si entra en el listado con estos filtros',
+      format: 'uuid',
+    }),
+    ApiQuery({
+      name: 'withUrl',
+      required: false,
+      description:
+        'Incluir la URL prefirmada de cada documento (una llamada a MinIO por resultado)',
     }),
     ApiResponse({
       status: 200,
-      description: 'Lista de documentos',
-      type: DocumentGetListResponse,
+      description: 'Documentos de la página, con su paginación',
+      type: DocumentsListResponse,
     }),
     ApiResponse({
       status: 400,
-      description: 'Parámetros inválidos',
+      description:
+        'Parámetros inválidos, falta el header X-Account-Id, o un rango de fechas está invertido',
       type: BadRequestResponse,
     }),
     ApiResponse({
