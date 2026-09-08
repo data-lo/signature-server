@@ -31,7 +31,10 @@ export function ApiSignDocument() {
     ApiBody({ type: SignDocumentDto, required: true }),
     ApiResponse({
       status: 200,
-      description: 'Documento firmado correctamente',
+      description:
+        'Firma registrada correctamente. `data.documentCompleted` distingue los dos desenlaces: ' +
+        '`true` si esta firma era la última que faltaba y el documento quedó completo, `false` ' +
+        'si todavía quedan firmantes pendientes.',
     }),
     ApiResponse({
       status: 400,

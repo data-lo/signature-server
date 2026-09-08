@@ -1087,6 +1087,12 @@ describe('casos de uso de documentos', () => {
       expect(documentRepository.update).toHaveBeenCalledWith('doc-1', {
         completedSignersCount: 1,
       });
+      /**
+       * Lo que la pantalla de firma necesita para elegir qué decirle al firmante: quedan
+       * participantes, así que el documento NO está completo. Va en `data` y no sólo en el
+       * `message` porque ese texto existe para mostrarse, no para ramificar.
+       */
+      expect(result.data).toEqual({ id: 'doc-1', documentCompleted: false });
     });
 
     /**
@@ -1446,6 +1452,8 @@ describe('casos de uso de documentos', () => {
       expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
       expect(emailService.sendDocumentSignedNotification).toHaveBeenCalled();
       expect(document.completedSignersCount).toBe(1);
+      // Esta firma era la última que faltaba: el documento quedó completo.
+      expect(result.data).toEqual({ id: 'doc-1', documentCompleted: true });
     });
 
     /**
