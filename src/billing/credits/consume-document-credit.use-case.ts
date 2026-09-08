@@ -93,15 +93,27 @@ export class ConsumeDocumentCreditUseCase {
      * quien crea el documento las dos situaciones son "no puedes crearlo, consigue documentos",
      * y distinguirlas en el mensaje sólo expondría cómo está montada la facturación por dentro.
      * El detalle que sirve para depurar viaja en `cause`.
+     *
+     * `available: 0` en los dos casos, y es literal: sin perfil no hay ni un lote que sumar, y
+     * cuando los hay pero ninguno acepta el descuento, el saldo utilizable HOY es cero aunque la
+     * tabla tenga filas —caducadas, o vaciadas por otra petición entre la consulta y el UPDATE—.
      */
     if (!profile) {
-      throw new InsufficientDocumentCreditsException();
+      throw new InsufficientDocumentCreditsException(
+        CREDITS_PER_DOCUMENT,
+        0,
+        'La cuenta activa no tiene perfil de facturación, así que tampoco lotes de crédito.',
+      );
     }
 
     const creditLotId = await this.spendOneCredit(manager, profile.id);
 
     if (!creditLotId) {
-      throw new InsufficientDocumentCreditsException(profile.id);
+      throw new InsufficientDocumentCreditsException(
+        CREDITS_PER_DOCUMENT,
+        0,
+        `Sin credit_lots con saldo utilizable para el perfil ${profile.id}.`,
+      );
     }
 
     const consumption = await consumptions.save(

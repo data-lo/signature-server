@@ -15,7 +15,7 @@ import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-
 import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';
 import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
-import { GetBillingStateUseCase } from './../src/billing/profiles/get-billing-state.use-case';
+import { GetBillingAccessUseCase } from './../src/billing/entitlements/get-billing-access.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
 import { CancelSubscriptionUseCase } from './../src/billing/subscriptions/cancel-subscription.use-case';
 import { ResumeSubscriptionUseCase } from './../src/billing/subscriptions/resume-subscription.use-case';
@@ -174,8 +174,8 @@ describe('Checkout de suscripción (e2e)', () => {
       providers: [
         /**
          * Los pide el controller para `POST /subscription/cancel` y `/resume`, que tienen su
-         * propia cobertura por unidad. Van simulados para no arrastrar hasta acá el adaptador de
-         * Stripe y sus repositorios: esta prueba es del checkout, no de la baja.
+         * propia cobertura: acá van simulados para no arrastrar el adaptador de Stripe a una
+         * prueba que no los ejercita.
          */
         {
           provide: CancelSubscriptionUseCase,
@@ -186,8 +186,12 @@ describe('Checkout de suscripción (e2e)', () => {
           useValue: { execute: jest.fn() },
         },
         CreateSubscriptionCheckoutUseCase,
-        // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e.
-        GetBillingStateUseCase,
+        // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e;
+        // acá va simulado para no arrastrar sus repositorios a una prueba que no lo ejercita.
+        {
+          provide: GetBillingAccessUseCase,
+          useValue: { execute: jest.fn() },
+        },
         BillingOwnerService,
         BillingCatalogService,
         CheckoutOrderService,

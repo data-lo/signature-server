@@ -151,8 +151,24 @@ export class DocumentEntity {
   @Column({ default: false, name: 'requires_approval' })
   requiresApproval: boolean;
 
-  @Column({ default: false, name: 'index_document' })
-  indexDocument: boolean;
+  /**
+   * Si el documento participa en Búsqueda Inteligente.
+   *
+   * **Nace en `true` y sólo el autor puede bajarlo**, al crear el documento: la regla de producto
+   * es que todo documento sea encontrable salvo que alguien decida lo contrario, así que el
+   * default no depende de que el cliente mande el campo — quien lo omite obtiene un documento
+   * indexable.
+   *
+   * `false` sólo excluye de la indexación. El documento sigue en el listado y conserva firma,
+   * descarga y auditoría intactas: no es un estado de visibilidad ni un borrado suave.
+   *
+   * Se llamaba `index_document` y era una columna no-op con `DEFAULT false` desde la Fase 1 del
+   * ER-V2 (ver `AddDocumentAdditiveColumns1784300000002`); la migración `046` la renombró,
+   * invirtió su default y puso en `true` el histórico, porque aquel `false` era el valor de una
+   * columna que nadie escribía y no la decisión de ningún autor.
+   */
+  @Column({ default: true, name: 'is_indexable' })
+  isIndexable: boolean;
 
   @OneToMany(
     () => CollaboratorEntity,

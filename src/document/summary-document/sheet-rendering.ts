@@ -249,15 +249,49 @@ export function dashBanner(label: string, width = MONO_BANNER_WIDTH): string {
 export function formatSheetDate(
   value: Date | string | null | undefined,
 ): string {
+  const date = toValidDate(value);
+
+  return date
+    ? date.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'medium' })
+    : '';
+}
+
+/**
+ * Marca de tiempo Unix en MILISEGUNDOS, sólo dígitos (`1788791722000`).
+ *
+ * Es el formato con el que la hoja imprime la fecha de firma. Un instante en números no depende
+ * de dónde se lea: una fecha localizada como `07/09/26 14:35:22` es ambigua fuera de México
+ * —`07/09` es julio en otras convenciones— y además se rendía en la zona horaria del SERVIDOR
+ * que generó el PDF, así que el mismo instante podía imprimirse distinto según dónde corriera el
+ * proceso. El número es el mismo dato sin ninguna de esas dos interpretaciones encima.
+ *
+ * **Milisegundos y no segundos**, que es la otra convención Unix habitual: `getTime()` da
+ * milisegundos y es la misma unidad que maneja el frontend, así que la vista previa y el PDF
+ * imprimen exactamente el mismo número sin que nadie tenga que dividir ni redondear —y un
+ * redondeo a segundos haría que los dos valores dejaran de coincidir en la mitad de los casos.
+ *
+ * Devuelve cadena y no número porque las celdas de la hoja son texto: pdfmake exige `string` en
+ * cada celda, y convertir aquí evita que cada llamador se invente su propio `String(...)`.
+ *
+ * Cadena vacía cuando el valor falta o no es una fecha: es el mismo criterio que
+ * `formatSheetDate` y lo que la hoja ya hace con cualquier dato ausente —un renglón en blanco es
+ * legible; un `NaN` impreso en un documento legal no.
+ */
+export function formatSheetTimestamp(
+  value: Date | string | null | undefined,
+): string {
+  const date = toValidDate(value);
+
+  return date ? String(date.getTime()) : '';
+}
+
+/** `null` para lo ausente y para lo que no es una fecha; el resto, ya normalizado a `Date`. */
+function toValidDate(value: Date | string | null | undefined): Date | null {
   if (!value) {
-    return '';
+    return null;
   }
+
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-  return date.toLocaleString('es-MX', {
-    dateStyle: 'short',
-    timeStyle: 'medium',
-  });
+
+  return Number.isNaN(date.getTime()) ? null : date;
 }

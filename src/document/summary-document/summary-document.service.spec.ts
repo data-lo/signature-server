@@ -144,8 +144,8 @@ describe('SummaryDocumentService', () => {
 
       expect(nom151.map(([label]) => label)).toEqual([
         'Certificado (TSA)',
-        'NUMERO DE SERIE',
-        'EMITIDO',
+        'Número de Serie',
+        'Emitido',
       ]);
       expect(nom151[0][1]).toBe('Autoridad CCMD de PSC CODEX TUL');
       expect(nom151[1][1]).toBe('00E4');
@@ -159,8 +159,8 @@ describe('SummaryDocumentService', () => {
 
       expect(nom151).toEqual([
         ['Certificado (TSA)', ''],
-        ['NUMERO DE SERIE', ''],
-        ['EMITIDO', ''],
+        ['Número de Serie', ''],
+        ['Emitido', ''],
       ]);
     });
 
@@ -173,7 +173,7 @@ describe('SummaryDocumentService', () => {
         'Tipo de Firma',
         'IP',
         'Sustentada',
-        'OTP CODE',
+        'OTP Code',
         'Fecha de Firma',
       ]);
     });
@@ -200,8 +200,40 @@ describe('SummaryDocumentService', () => {
       expect(valueOf('Nombre')).toBe('JUAN ANGEL CEPEDA FERNANDEZ');
       expect(valueOf('Tipo de Firma')).toBe('Digital Simple');
       expect(valueOf('IP')).toBe('189.237.82.225');
-      expect(valueOf('OTP CODE')).toBe('482913');
+      expect(valueOf('OTP Code')).toBe('482913');
       expect(valueOf('Sustentada')).toContain('Arts. 89, 90 y 93');
+    });
+
+    /**
+     * La fecha de firma se imprime como marca Unix en milisegundos: sólo dígitos, sin zona
+     * horaria ni convención de fecha que interpretar. Se afirma el número exacto porque es el
+     * mismo valor que la vista previa muestra a partir del mismo `signedAt`.
+     */
+    it('imprime la fecha de firma como timestamp Unix en milisegundos', () => {
+      const [, , firstSigner] = tablesOf(buildDefinition());
+      const fechaDeFirma = firstSigner.find(
+        ([label]) => label === 'Fecha de Firma',
+      )?.[1];
+
+      expect(fechaDeFirma).toBe(
+        String(new Date('2026-01-15T10:30:00Z').getTime()),
+      );
+      expect(fechaDeFirma).toMatch(/^\d+$/);
+    });
+
+    /**
+     * Lo que esta prueba impide es una regresión al formato anterior: una fecha localizada
+     * (`15/01/26 4:30:00`) o ISO (`2026-01-15T10:30:00.000Z`) se rendía en la zona horaria de
+     * quien generó el PDF, así que el mismo instante podía imprimirse distinto según dónde
+     * corriera el proceso.
+     */
+    it('no imprime ninguna fecha legible ni ISO en la tabla del firmante', () => {
+      const [, , firstSigner] = tablesOf(buildDefinition());
+
+      for (const [, value] of firstSigner) {
+        expect(value).not.toMatch(/\d{1,4}[/-]\d{1,2}[/-]\d{1,4}/);
+        expect(value).not.toMatch(/T\d{2}:\d{2}/);
+      }
     });
 
     it('deja en blanco los datos que el firmante no registró, sin romper la tabla', () => {
@@ -218,7 +250,7 @@ describe('SummaryDocumentService', () => {
       const valueOf = (label: string) =>
         onlySigner.find((row) => row[0] === label)?.[1];
 
-      expect(valueOf('OTP CODE')).toBe('');
+      expect(valueOf('OTP Code')).toBe('');
       expect(valueOf('Fecha de Firma')).toBe('');
     });
   });

@@ -40,8 +40,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * columna, con el enum compartido de tres valores. Al integrar hay que quedarse con UNA
  * definición; la de aquí no toca el historial, que es lo que la hace más segura de las dos.
  */
-export class LinkDocumentCreditConsumptions1784300000046 implements MigrationInterface {
-  name = 'LinkDocumentCreditConsumptions1784300000046';
+export class LinkDocumentCreditConsumptions1784300000048 implements MigrationInterface {
+  name = 'LinkDocumentCreditConsumptions1784300000048';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     /**
@@ -85,6 +85,17 @@ export class LinkDocumentCreditConsumptions1784300000046 implements MigrationInt
         ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
     `);
 
+    /**
+     * Se tira antes de crearla porque `ADD CONSTRAINT` no admite `IF NOT EXISTS`: en desarrollo
+     * el esquema sale además de las entidades (`synchronize: true`, ver `app.module.ts`), así que
+     * la relación de `DocumentCreditConsumptionEntity` ya trae su clave foránea puesta cuando la
+     * migración corre, y un `ADD` a secas dejaba el arranque en bucle con "constraint already
+     * exists". Tirar y volver a poner la deja idéntica en los dos caminos.
+     */
+    await queryRunner.query(`
+      ALTER TABLE "document_credit_consumptions"
+        DROP CONSTRAINT IF EXISTS "FK_document_credit_consumptions_billing_profile"
+    `);
     await queryRunner.query(`
       ALTER TABLE "document_credit_consumptions"
       ADD CONSTRAINT "FK_document_credit_consumptions_billing_profile"
@@ -111,9 +122,14 @@ export class LinkDocumentCreditConsumptions1784300000046 implements MigrationInt
     `);
 
     // El CHECK viejo (`units = 1`) se llamaba por su columna: se cambia entero, no se edita.
+    // El nuevo se tira antes de ponerlo por el mismo motivo que la foránea de arriba.
     await queryRunner.query(`
       ALTER TABLE "document_credit_consumptions"
         DROP CONSTRAINT IF EXISTS "CHK_document_credit_consumptions_units"
+    `);
+    await queryRunner.query(`
+      ALTER TABLE "document_credit_consumptions"
+        DROP CONSTRAINT IF EXISTS "CHK_document_credit_consumptions_credits"
     `);
     await queryRunner.query(`
       ALTER TABLE "document_credit_consumptions"

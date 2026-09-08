@@ -208,7 +208,7 @@ describe('ConsumeDocumentCreditUseCase', () => {
   });
 
   describe('sin créditos disponibles', () => {
-    it('rechaza con 409 cuando todos los lotes están agotados', async () => {
+    it('rechaza con 402 cuando todos los lotes están agotados', async () => {
       await buildUseCase([{ id: 'lote-vacio', remaining: 0 }]);
 
       await expect(consume()).rejects.toThrow(
@@ -217,7 +217,7 @@ describe('ConsumeDocumentCreditUseCase', () => {
       expect(doble.consumptions).toHaveLength(0);
     });
 
-    it('rechaza con 409 cuando el propietario no tiene ningún lote', async () => {
+    it('rechaza con 402 cuando el propietario no tiene ningún lote', async () => {
       await buildUseCase([]);
 
       await expect(consume()).rejects.toThrow(
@@ -229,7 +229,7 @@ describe('ConsumeDocumentCreditUseCase', () => {
      * Sin perfil no hay saldo, y se responde lo mismo que si estuviera agotado: para quien crea
      * el documento las dos situaciones son "consigue documentos".
      */
-    it('rechaza con 409 cuando la cuenta no tiene perfil de facturación', async () => {
+    it('rechaza con 402 cuando la cuenta no tiene perfil de facturación', async () => {
       billingOwnerService.findProfileByOwner.mockResolvedValue(null);
 
       await expect(consume()).rejects.toThrow(
@@ -237,11 +237,27 @@ describe('ConsumeDocumentCreditUseCase', () => {
       );
     });
 
-    it('el mensaje ofrece las dos salidas: comprar documentos o contratar', async () => {
+    /**
+     * El status es parte del contrato: 402 y no 403 es lo que distingue "no te queda saldo" de
+     * "tu plan no lo incluye" (ver `PlanActionNotIncludedException`), y el frontend manda al
+     * usuario a comprar documentos o a mejorar el plan según cuál de los dos reciba. Se afirma
+     * acá porque este caso de uso es el único que rechaza DENTRO de la transacción del alta: la
+     * comprobación previa de `AssertPlanActionUseCase` puede haber dado permiso y agotarse el
+     * saldo entre una cosa y la otra.
+     */
+    it('rechaza con 402 y el mensaje que manda a conseguir documentos', async () => {
       await buildUseCase([]);
 
-      await expect(consume()).rejects.toThrow(
-        'No tienes créditos de documentos disponibles. Compra documentos adicionales o contrata un plan.',
+      const fallo = await consume().catch(
+        (error: InsufficientDocumentCreditsException) => error,
+      );
+
+      expect(fallo).toBeInstanceOf(InsufficientDocumentCreditsException);
+      expect((fallo as InsufficientDocumentCreditsException).getStatus()).toBe(
+        402,
+      );
+      expect((fallo as InsufficientDocumentCreditsException).message).toBe(
+        'No tienes documentos disponibles. Compra más o espera a tu próximo periodo.',
       );
     });
   });
@@ -302,7 +318,7 @@ describe('ConsumeDocumentCreditUseCase', () => {
     /**
      * El caso que motiva el descuento condicional: dos peticiones sobre el ÚLTIMO crédito. El
      * doble replica la regla de Postgres —el `UPDATE` sólo prospera con `remaining > 0`—, así que
-     * la segunda ve `affected: 0`, se queda sin lotes y recibe su 409. Con un `SELECT` previo y
+     * la segunda ve `affected: 0`, se queda sin lotes y recibe su 402. Con un `SELECT` previo y
      * un `save`, las dos habrían leído `remaining: 1` y descontado las dos.
      */
     it('dos documentos no pueden gastar el mismo último crédito', async () => {
