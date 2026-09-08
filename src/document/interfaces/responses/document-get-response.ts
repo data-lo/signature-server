@@ -91,6 +91,13 @@ export class DocumentGetData {
       'Tipo de firma con el que se firma este documento, tomado de sus firmantes (es una decisión del documento, igual para todos ellos). Null en los documentos del endpoint antiguo POST /document, que nunca asignaron tipo.',
   })
   signatureType: SIGNATURE_TYPE_ENUM | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Si el documento participa en Búsqueda Inteligente. Lo decide su autor al crearlo y por omisión es `true`. `false` sólo lo excluye de la indexación: el documento sigue en el listado y conserva firma, descarga y auditoría.',
+  })
+  isIndexable: boolean;
 }
 
 export class PaginationMeta {
