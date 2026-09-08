@@ -8,10 +8,8 @@ import { CreateSubscriptionCheckoutUseCase } from 'src/billing/checkout/create-s
 import { CancelSubscriptionUseCase } from 'src/billing/subscriptions/cancel-subscription.use-case';
 import { ResumeSubscriptionUseCase } from 'src/billing/subscriptions/resume-subscription.use-case';
 import type { SubscriptionScheduleResponse } from 'src/billing/subscriptions/subscription-schedule.interface';
-import {
-  GetBillingStateUseCase,
-  type BillingStateResponse,
-} from 'src/billing/profiles/get-billing-state.use-case';
+import { GetBillingAccessUseCase } from 'src/billing/entitlements/get-billing-access.use-case';
+import type { BillingAccessResponse } from 'src/billing/entitlements/plan-entitlements.types';
 import { GetPublicStripePlansUseCase } from './applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
@@ -39,7 +37,7 @@ export class PaymentsController {
     private readonly getPublicStripePlans: GetPublicStripePlansUseCase,
     private readonly createSubscriptionCheckout: CreateSubscriptionCheckoutUseCase,
     private readonly getSubscriptionState: GetSubscriptionStateUseCase,
-    private readonly getBillingState: GetBillingStateUseCase,
+    private readonly getBillingAccess: GetBillingAccessUseCase,
     private readonly cancelSubscription: CancelSubscriptionUseCase,
     private readonly resumeSubscription: ResumeSubscriptionUseCase,
   ) {}
@@ -87,24 +85,33 @@ export class PaymentsController {
   }
 
   /**
-   * Estado de facturación de la cuenta activa: lo que el frontend consulta al entrar, al
-   * cambiar de cuenta y al volver de Checkout.
+   * Estado comercial de la cuenta activa: suscripción, saldo, beneficios y límites.
+   *
+   * **Es la fuente única del frontend**, y responde las cuatro cosas juntas porque juntas se
+   * usan: una pantalla que supiera el plan pero no el saldo dibujaría un botón de "crear
+   * documento" que el backend va a rechazar. Antes hacían falta dos consultas al MISMO
+   * `billing_profile` —ésta y `GET /subscription`—, con dos cachés que podían mostrar dos
+   * verdades distintas del mismo perfil.
    *
    * Lleva `X-Account-Id` por el mismo motivo que el checkout, y no por simetría: un usuario con
    * cuenta personal y organización tiene DOS estados de facturación distintos a la vez, y cuál
    * de los dos se responde depende de en cuál esté trabajando. Sin el header no habría forma de
    * saberlo — que es exactamente el defecto de `GET /subscription`, debajo.
+   *
+   * **`actions` y `limits` NO autorizan.** Son para dibujar: habilitar, ocultar, ofrecer la
+   * mejora. Cada acción protegida se vuelve a validar en su propio endpoint contra el mismo mapa
+   * (ver `AssertPlanActionUseCase`), porque nada obliga a un cliente a pasar por acá antes.
    */
   @Get('billing-state')
   @ApiGetBillingState()
   async billingState(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
-  ): Promise<BaseResponse<BillingStateResponse>> {
+  ): Promise<BaseResponse<BillingAccessResponse>> {
     return {
       success: true,
       message: 'Estado de facturación obtenido correctamente',
-      data: await this.getBillingState.execute({
+      data: await this.getBillingAccess.execute({
         userId: user.sub,
         accountId,
       }),
@@ -159,9 +166,14 @@ export class PaymentsController {
   }
 
   /**
-   * @deprecated Lee `account_subscriptions` y resuelve la cuenta por la PRIMERA membresía activa
-   * del usuario, así que ignora en qué cuenta está trabajando. Sustituido por `billing-state`;
-   * se conserva hasta que no quede ningún consumidor.
+   * @deprecated Sustituido por `GET /payments/billing-state`, que responde todo esto y además el
+   * saldo, los beneficios y los límites de la cuenta activa. **Ya no lo consume el frontend**; se
+   * conserva sólo por si quedara algún cliente sin actualizar, y se retira en cuanto se confirme
+   * que no queda ninguno.
+   *
+   * Su contrato es además incompleto para lo que hoy se necesita: devuelve `planType` sin
+   * `billingProfileId`, sin saldo y sin beneficios, así que quien lo use sigue obligado a decidir
+   * qué habilitar a partir del NOMBRE del plan — que es exactamente lo que `actions` elimina.
    */
   @Get('subscription')
   @ApiGetSubscriptionState()

@@ -13,8 +13,10 @@ import { PaymentsController } from './../src/payments/payments.controller';
 import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
-import { GetBillingStateUseCase } from './../src/billing/profiles/get-billing-state.use-case';
+import { GetBillingAccessUseCase } from './../src/billing/entitlements/get-billing-access.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
+import { CancelSubscriptionUseCase } from './../src/billing/subscriptions/cancel-subscription.use-case';
+import { ResumeSubscriptionUseCase } from './../src/billing/subscriptions/resume-subscription.use-case';
 import { BillingProfileEntity } from './../src/billing/profiles/billing-profile.entity';
 import { AccountEntity } from './../src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from './../src/payments/entities/account-subscription.entity';
@@ -141,6 +143,19 @@ describe('Estado de suscripción (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
       providers: [
+        /**
+         * Los pide el controller para `POST /subscription/cancel` y `/resume`, que tienen su
+         * propia cobertura: acá van simulados para no arrastrar el adaptador de Stripe a una
+         * prueba que no los ejercita.
+         */
+        {
+          provide: CancelSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        {
+          provide: ResumeSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
         GetSubscriptionStateUseCase,
         BillingOwnerService,
         { provide: APP_GUARD, useClass: FakeAuthGuard },
@@ -152,8 +167,12 @@ describe('Estado de suscripción (e2e)', () => {
           provide: CreateSubscriptionCheckoutUseCase,
           useValue: { execute: jest.fn() },
         },
-        // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e.
-        GetBillingStateUseCase,
+        // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e;
+        // acá va simulado para no arrastrar sus repositorios a una prueba que no lo ejercita.
+        {
+          provide: GetBillingAccessUseCase,
+          useValue: { execute: jest.fn() },
+        },
         { provide: getRepositoryToken(AccountEntity), useValue: accounts },
         {
           provide: getRepositoryToken(BillingProfileEntity),
@@ -255,6 +274,8 @@ describe('Estado de suscripción (e2e)', () => {
         hasActiveSubscription: false,
         planType: null,
         status: null,
+        // Sin perfil no hay baja programada que anunciar; el campo viaja igualmente.
+        cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
       });
