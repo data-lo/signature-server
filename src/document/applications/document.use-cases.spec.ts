@@ -648,6 +648,7 @@ describe('casos de uso de documentos', () => {
       [
         'where',
         'andWhere',
+        'leftJoin',
         'leftJoinAndSelect',
         'orderBy',
         'skip',
@@ -660,6 +661,53 @@ describe('casos de uso de documentos', () => {
     }
 
     const query = { page: 1, limit: 10 } as any;
+
+    /**
+     * Archivado personal: el listado deja fuera lo que ESTE usuario archivó y nada más.
+     *
+     * Las dos piezas se prueban juntas porque separadas no dicen nada: el `LEFT JOIN` sin el
+     * `WHERE` no excluye, y el `WHERE` sin el `user_id` dentro del `ON` excluiría los documentos
+     * que archivó cualquier otro participante.
+     */
+    it('excluye del listado los documentos archivados por el usuario que consulta', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await getDocuments.execute('user-1', 'account-1', query);
+
+      const [, alias, condition, parameters] = qb.leftJoin.mock.calls[0];
+      expect(alias).toBe('myPreference');
+      expect(condition).toContain('myPreference.documentId = document.id');
+      // El usuario va en la condición del JOIN, no en el WHERE: si estuviera abajo, un documento
+      // archivado por otro participante también desaparecería de esta lista.
+      expect(condition).toContain('myPreference.userId = :callerId');
+      expect(parameters).toEqual({ callerId: 'user-1' });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'myPreference.archivedAt IS NULL',
+      );
+    });
+
+    /**
+     * `LEFT JOIN` y no `INNER JOIN`: la mayoría de los documentos no tienen preferencia de nadie,
+     * y con un INNER el listado se vaciaría entero.
+     */
+    it('sigue mostrando los documentos sin preferencia de archivado (LEFT JOIN, no INNER)', async () => {
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        organizationId: null,
+      });
+
+      await getDocuments.execute('user-1', 'account-1', query);
+
+      expect(qb.leftJoin).toHaveBeenCalledTimes(1);
+      expect((qb as any).innerJoin).toBeUndefined();
+    });
 
     it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
       await expect(
@@ -3955,6 +4003,7 @@ describe('casos de uso de documentos', () => {
       [
         'where',
         'andWhere',
+        'leftJoin',
         'leftJoinAndSelect',
         'orderBy',
         'skip',

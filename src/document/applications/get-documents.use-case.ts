@@ -7,6 +7,7 @@ import { MinioService } from 'src/shared/minio/minio.service';
 
 import { GetDocumentsQueryDto } from '../dto/get-documents-query.dto';
 import { DocumentEntity } from '../entities/document.entity';
+import { DocumentUserPreferenceEntity } from '../preferences/document-user-preference.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { DocumentService } from '../document.service';
@@ -96,6 +97,36 @@ export class GetDocumentsUseCase {
       .orderBy('document.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
+
+    /**
+     * Fuera lo que ESTE usuario archivó.
+     *
+     * `leftJoin` y no `innerJoin`: la inmensa mayoría de los documentos no tienen preferencia de
+     * nadie, y un `INNER JOIN` vaciaría el listado entero. Sin fila, `archivedAt` es `NULL` y el
+     * documento pasa el filtro — que es exactamente lo que significa "no he dicho nada sobre este
+     * documento" (ver `DocumentUserPreferenceEntity`).
+     *
+     * **El `user_id` va en la condición del JOIN y no en el `WHERE`.** Puesto abajo, un documento
+     * archivado por OTRA persona traería su fila, `archivedAt` no sería nulo y desaparecería
+     * también de mi listado: archivar dejaría de ser personal. Arriba, sólo entra mi propia
+     * preferencia y la de los demás ni se mira.
+     *
+     * Va sin `select` porque el listado no muestra la fecha; sólo la usa para descartar. Y no
+     * multiplica filas: la restricción única garantiza a lo sumo una preferencia por par
+     * documento-usuario, así que la paginación cuenta lo mismo que contaba antes.
+     *
+     * Se aplica al listado ENTERO y no sólo a la pantalla de Completados —que es la única que hoy
+     * ofrece archivar— porque `GET /document` es un solo endpoint para las tres secciones, y un
+     * documento archivado no debe reaparecer por la puerta de al lado ("Enviados para firma"
+     * también muestra documentos firmados). Archivar exige el estatus `SIGNED`, así que para
+     * "Por firmar" esta condición nunca descarta nada.
+     */
+    qb.leftJoin(
+      DocumentUserPreferenceEntity,
+      'myPreference',
+      'myPreference.documentId = document.id AND myPreference.userId = :callerId',
+      { callerId },
+    ).andWhere('myPreference.archivedAt IS NULL');
 
     if (!participantEmail) {
       qb.andWhere(
