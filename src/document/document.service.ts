@@ -1388,7 +1388,7 @@ export class DocumentService {
   /**
    * Traduce un colaborador que firmó con firma simple a una tabla de la sección "Firmas".
    *
-   * **El OTP se resuelve aquí, no se hereda del colaborador.** El renglón "OTP CODE" salía vacío
+   * **El OTP se resuelve aquí, no se hereda del colaborador.** El renglón "OTP Code" salía vacío
    * en todas las hojas de firma simple porque este método nunca lo llenaba, pese a que la
    * interfaz lo declara y la vista pública sí lo publica. En una firma simple ese código ES la
    * prueba de identidad —no hay certificado que lo acredite—, así que la hoja sin él pierde

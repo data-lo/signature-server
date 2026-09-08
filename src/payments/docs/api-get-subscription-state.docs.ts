@@ -16,8 +16,10 @@ import { ApiHeader, ApiOperation, ApiResponse } from '@nestjs/swagger';
 export function ApiGetSubscriptionState() {
   return applyDecorators(
     ApiOperation({
-      summary: 'Estado de suscripción de la cuenta activa',
+      deprecated: true,
+      summary: '[DEPRECADO] Estado de suscripción de la cuenta activa',
       description:
+        'DEPRECADO: usa `GET /api/v1/payments/billing-state`, que responde esto mismo y además el saldo de documentos, los beneficios y los límites de la cuenta activa. El frontend ya no lo consume; este endpoint se retira en cuanto no queden clientes. ' +
         'Resuelve al propietario facturable de la cuenta activa (la cuenta personal, o la ORGANIZACIÓN completa si el contexto es una organización) y devuelve el estado de su suscripción leído de `billing_profiles`: si está vigente, el plan, el estado concreto y las fechas del periodo. ' +
         'La fuente es `billing_profiles` y NO `account_subscriptions`: aquella tabla se mantiene por compatibilidad pero no refleja la activación del pago, que hace el webhook `invoice.paid`. ' +
         'Es una consulta de sólo lectura: una cuenta que nunca ha contratado responde 200 con los campos vacíos, no 404.',
