@@ -16,6 +16,9 @@ import { StripeWebhookService } from './../src/payments/stripe/stripe-webhook.se
 import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
 import { AccountSubscriptionEntity } from './../src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './../src/billing/subscriptions/subscription-billing.service';
+import { RegisterSubscriptionBillingUseCase } from './../src/billing/subscriptions/register-subscription-billing.use-case';
+import { FinalizeSubscriptionFromStripeUseCase } from './../src/billing/subscriptions/finalize-subscription-from-stripe.use-case';
+import { SubscriptionBillingHistoryEntity } from './../src/billing/subscriptions/subscription-billing-history.entity';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
 import { CatalogSyncService } from './../src/billing/catalog/catalog-sync.service';
 import { CheckoutOrderService } from './../src/billing/checkout/checkout-order.service';
@@ -72,6 +75,15 @@ function invoicePaidEvent(overrides?: {
       object: {
         id: overrides?.invoiceId ?? 'in_e2e',
         customer: CUSTOMER_ID,
+        /**
+         * El dinero de la factura, que es lo que se anota en `subscription_billing_history`.
+         * Faltaba en este doble desde antes de que existiera el registro de periodos, y sin él
+         * la validación rechazaba la entrega con "la moneda debe ser un código ISO de tres
+         * letras" — un 400 que la prueba leía como si el webhook estuviera roto.
+         */
+        amount_paid: 49900,
+        currency: 'mxn',
+        status_transitions: { paid_at: PERIOD_START },
         parent: {
           subscription_details: { subscription: SUBSCRIPTION_ID },
         },
@@ -135,6 +147,7 @@ describe('Webhook de Stripe (e2e)', () => {
   let billingProfiles: InMemoryRepository<never>;
   let checkoutOrders: InMemoryRepository<never>;
   let creditLots: InMemoryRepository<never>;
+  let subscriptionHistory: InMemoryRepository<never>;
   let plans: InMemoryRepository<never>;
   let catalogItems: InMemoryRepository<never>;
 
@@ -215,10 +228,23 @@ describe('Webhook de Stripe (e2e)', () => {
       },
     ] as never[]);
 
+    /**
+     * El historial y los planes entran al mapa porque `RegisterSubscriptionBillingUseCase` los
+     * pide DENTRO de la transacción: anota el periodo cobrado y resuelve cuántos documentos
+     * concede el plan. Sin ellos el stub reventaría con "repositorio no registrado" en cuanto
+     * llegara un `invoice.paid`.
+     */
+    subscriptionHistory = createInMemoryRepository();
+
     const { dataSource } = createDataSourceStub(
       new Map<unknown, InMemoryRepository<never>>([
         [CreditLotEntity, creditLots],
         [BillingProfileEntity, billingProfiles],
+        [SubscriptionBillingHistoryEntity, subscriptionHistory],
+        [PlanEntity, plans],
+        // `CheckoutOrderService` enlaza la orden del alta con el lote del periodo, dentro de la
+        // misma transacción del cobro.
+        [CheckoutOrderEntity, checkoutOrders],
       ]),
     );
 
@@ -231,6 +257,13 @@ describe('Webhook de Stripe (e2e)', () => {
         StripeWebhookService,
         StripePaymentService,
         SubscriptionBillingService,
+        /**
+         * Los DOS van reales, no simulados: lo que estas pruebas afirman —que `invoice.paid`
+         * activa el perfil y emite el lote, y que una re-entrega no emite un segundo— es
+         * precisamente su trabajo. Con dobles, la prueba sólo comprobaría que se les llama.
+         */
+        RegisterSubscriptionBillingUseCase,
+        FinalizeSubscriptionFromStripeUseCase,
         BillingCatalogService,
         CatalogSyncService,
         CheckoutOrderService,
@@ -268,7 +301,10 @@ describe('Webhook de Stripe (e2e)', () => {
          * miraría un conjunto de filas y la inserción escribiría en otro.
          */
         { provide: getRepositoryToken(CreditLotEntity), useValue: creditLots },
-        { provide: getRepositoryToken(CatalogPriceEntity), useValue: catalogPrices },
+        {
+          provide: getRepositoryToken(CatalogPriceEntity),
+          useValue: catalogPrices,
+        },
         { provide: getRepositoryToken(PlanEntity), useValue: plans },
         {
           provide: getRepositoryToken(CatalogItemEntity),

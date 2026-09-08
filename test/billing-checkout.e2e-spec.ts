@@ -217,7 +217,10 @@ describe('Checkout de suscripción (e2e)', () => {
           provide: getRepositoryToken(CheckoutOrderEntity),
           useValue: checkoutOrders,
         },
-        { provide: getRepositoryToken(CatalogPriceEntity), useValue: catalogPrices },
+        {
+          provide: getRepositoryToken(CatalogPriceEntity),
+          useValue: catalogPrices,
+        },
       ],
     }).compile();
 

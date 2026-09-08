@@ -11,6 +11,7 @@ import { PlanEntity } from '../catalog/plan.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_PROFILE_SOURCE_ENUM } from '../enums/billing-profile-source.enum';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import {
@@ -257,6 +258,8 @@ describe('RegisterSubscriptionBillingUseCase', () => {
       expect(perfiles[0]).toMatchObject({
         currentPlanType: 'plus',
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        // Deja de ser gratuito: a partir de este cobro le factura Stripe.
+        billingSource: BILLING_PROFILE_SOURCE_ENUM.STRIPE,
         currentPeriodStart: PERIOD_START,
         currentPeriodEnd: PERIOD_END,
         stripeCustomerId: 'cus_1',
@@ -344,6 +347,22 @@ describe('RegisterSubscriptionBillingUseCase', () => {
         status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
         currentPeriodStart: PERIOD_START,
         currentPeriodEnd: PERIOD_END,
+      });
+    });
+
+    /**
+     * Lo único en lo que NO se parece a un cobro de Stripe: quién factura. Se toma del origen del
+     * cobro y no de los `stripe_*`, que un perfil migrado a facturación manual conserva —y que
+     * lo harían pasar por STRIPE justo en el caso que la columna existe para distinguir.
+     */
+    it('marca el perfil como facturado a mano, aunque conserve sus ids de Stripe', async () => {
+      perfiles[0].stripeSubscriptionId = 'sub_viejo';
+
+      await useCase.execute(cobroManual());
+
+      expect(perfiles[0]).toMatchObject({
+        billingSource: BILLING_PROFILE_SOURCE_ENUM.MANUAL,
+        stripeSubscriptionId: 'sub_viejo',
       });
     });
 

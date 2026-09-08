@@ -39,6 +39,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
 import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
+import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
@@ -114,6 +115,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
+    private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
   ) {}
 
   async execute(
@@ -250,6 +252,21 @@ export class CreateDocumentSignatureFlowUseCase {
           isSequential,
           isIndexable,
         }),
+      );
+
+      /**
+       * El crédito se cobra AQUÍ: con el documento ya guardado —hace falta su id para el recibo—
+       * y dentro de la misma transacción, así que si no hay saldo el documento se deshace con
+       * ella. Al revés (cobrar antes) haría falta inventar un id, y un fallo posterior dejaría un
+       * crédito gastado sin documento que lo justifique.
+       *
+       * Se le pasa el `manager` a propósito: con transacción propia, el consumo quedaría
+       * confirmado aunque el resto del alta —los colaboradores, las notificaciones— reventara
+       * después, y el usuario habría pagado por un documento que no existe.
+       */
+      await this.consumeDocumentCredit.execute(
+        { documentId: document.id, accountId, userId: createdBy },
+        manager,
       );
 
       await this.documentTransactionService.createInitial(

@@ -7,6 +7,7 @@ import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
+import { BILLING_PROFILE_SOURCE_ENUM } from '../enums/billing-profile-source.enum';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import {
@@ -289,6 +290,12 @@ export class RegisterSubscriptionBillingUseCase {
    * pisarla desde un cobro contradiría una baja que el cliente sí pidió — `invoice.paid` del
    * periodo vigente llega DESPUÉS de que se programe la cancelación, y limpiarla ahí revocaría en
    * silencio la decisión del cliente.
+   *
+   * **`billing_source` pasa a decir quién factura AHORA.** El perfil nace en `FREE` —nadie le
+   * cobra— y este cobro es justo el momento en que deja de ser cierto. Se toma del origen del
+   * cobro y no de la presencia de los `stripe_*`, porque un perfil que estuvo en Stripe y hoy se
+   * factura a mano conserva esos ids y quedaría contando como STRIPE — el caso exacto que la
+   * columna existe para distinguir.
    */
   private async updateProfile(
     manager: EntityManager,
@@ -299,6 +306,10 @@ export class RegisterSubscriptionBillingUseCase {
     await manager.update(BillingProfileEntity, profile.id, {
       currentPlanType: plan.planType,
       status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+      billingSource:
+        input.source === BILLING_SOURCE_ENUM.STRIPE
+          ? BILLING_PROFILE_SOURCE_ENUM.STRIPE
+          : BILLING_PROFILE_SOURCE_ENUM.MANUAL,
       currentPeriodStart: input.periodStart,
       currentPeriodEnd: input.periodEnd,
       ...(input.source === BILLING_SOURCE_ENUM.STRIPE
