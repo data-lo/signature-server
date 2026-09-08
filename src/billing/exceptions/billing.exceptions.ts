@@ -1,6 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
@@ -188,5 +191,52 @@ export class PlanNotFoundForRegistrationException extends NotFoundException {
 export class InvalidBillingRegistrationException extends BadRequestException {
   constructor(reason: string) {
     super(`No se puede registrar el periodo facturado: ${reason}`);
+  }
+}
+
+/**
+ * La acción que se pidió no está incluida en el plan de la cuenta activa.
+ *
+ * Es la mitad que de verdad autoriza: `GET /payments/billing-state` le dice al frontend qué
+ * dibujar, pero un cliente puede mandar la petición sin haber pedido nunca esa respuesta —o
+ * habiéndola pedido con otra cuenta activa—, así que la comprobación se repite acá, contra el
+ * mismo mapa de beneficios, en el momento de ejecutar.
+ *
+ * 403 y no 404: el recurso existe y la petición está bien formada; lo que falta es el derecho a
+ * usarlo. El frontend lo necesita distinto de un 402 para mandar al usuario a MEJORAR SU PLAN en
+ * vez de a comprar saldo, que son dos caminos comerciales distintos.
+ *
+ * El mensaje no dice qué plan hace falta: eso depende de la tabla comercial vigente y anunciarlo
+ * desde el error obligaría a mantener la lista en dos sitios. La pantalla de planes ya la tiene.
+ */
+export class PlanActionNotIncludedException extends ForbiddenException {
+  constructor(action: string, planType: string | null) {
+    super('Tu plan actual no incluye esta funcionalidad.');
+    this.cause = `La acción ${action} no está habilitada para el plan ${planType ?? '(sin plan)'}.`;
+  }
+}
+
+/**
+ * El plan incluye la acción, pero la cuenta no tiene saldo de documentos para ejecutarla.
+ *
+ * **Es un caso distinto del anterior y por eso es otro status.** Ahí falta plan, acá falta
+ * saldo: quien recibe esto ya compró lo correcto y sólo tiene que recargar. Colapsar los dos en
+ * un 403 mandaría a mejorar de plan a quien ya está en el que necesita.
+ *
+ * 402 Payment Required, que es exactamente lo que ocurre. No lo cubre ninguna excepción de Nest,
+ * así que se construye a mano sobre `HttpException`.
+ */
+export class InsufficientDocumentCreditsException extends HttpException {
+  constructor(required: number, available: number) {
+    super(
+      {
+        statusCode: HttpStatus.PAYMENT_REQUIRED,
+        message:
+          'No tienes documentos disponibles. Compra más o espera a tu próximo periodo.',
+        error: 'Payment Required',
+      },
+      HttpStatus.PAYMENT_REQUIRED,
+    );
+    this.cause = `Se requieren ${required} documento(s) y hay ${available} disponible(s).`;
   }
 }
