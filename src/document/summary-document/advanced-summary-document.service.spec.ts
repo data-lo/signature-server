@@ -182,9 +182,9 @@ describe('AdvancedSummaryDocumentService', () => {
 
     expect(documentInfo).toEqual([
       ['ID', document.id],
-      ['Nombre del documento', document.documentName],
+      ['Nombre del Documento', document.documentName],
       ['Hash', document.hash],
-      ['No de paginas', '1'],
+      ['No. de Páginas', '1'],
       ['Creado por', document.createdBy],
     ]);
   });
@@ -305,5 +305,105 @@ describe('AdvancedSummaryDocumentService', () => {
     expect(valueOf('Número de Serie del Certificado')).toBe('');
     expect(valueOf('Firma Electrónica')).toBe('');
     expect(valueOf('Fecha de Firma')).toBe('');
+  });
+
+  /**
+   * Historia "Capitalizar títulos hojas de evidencia": los rótulos de la hoja van en
+   * capitalización tipo título y no en mayúsculas sostenidas, que es como se leían antes
+   * (`NUMERO DE SERIE`). La hoja se anexa al PDF firmado y se conserva por años, así que la regla
+   * se afirma sobre TODOS los rótulos y no sobre los que hoy nos acordamos de revisar.
+   *
+   * Sólo aplica a los rótulos y a los títulos de sección. Los VALORES quedan fuera a propósito:
+   * el nombre de un firmante llega en mayúsculas desde su identificación oficial y reescribirlo
+   * sería alterar evidencia.
+   */
+  describe('capitalización de los rótulos', () => {
+    /**
+     * Siglas y códigos que SÍ van en mayúsculas: no son títulos mal escritos. Se comparan por
+     * palabra suelta porque conviven con texto normal dentro de un mismo rótulo
+     * (`Certificado (TSA)`, `Constancia de Conservación (NOM-151)`).
+     */
+    const TECHNICAL_TOKENS = [
+      'ID',
+      'IP',
+      'TSA',
+      'NOM',
+      'OTP',
+      'RFC',
+      'CURP',
+      'UUID',
+      'SHA',
+      'PSC',
+      'XML',
+      'QR',
+    ];
+
+    /** ¿Este texto lleva alguna palabra gritada en mayúsculas que no sea una sigla conocida? */
+    function shoutedWordsIn(text: string): string[] {
+      return text
+        .split(/[\s().,:/-]+/)
+        .filter(Boolean)
+        .filter((word) => /[A-ZÁÉÍÓÚÑ]/.test(word))
+        .filter((word) => word === word.toUpperCase())
+        .filter((word) => !TECHNICAL_TOKENS.includes(word))
+        .filter((word) => !/^\d+$/.test(word));
+    }
+
+    /** Los títulos de sección de la hoja (`Información del Documento.` y hermanos). */
+    function sectionTitlesOf(definition: TDocumentDefinitions): string[] {
+      return (definition.content as Content[])
+        .filter(
+          (item): item is { text: string; style: string } =>
+            typeof (item as { text?: unknown }).text === 'string' &&
+            (item as { style?: unknown }).style === 'sectionTitle',
+        )
+        .map((item) => item.text);
+    }
+
+    it('ningún rótulo de las tablas está en mayúsculas sostenidas', () => {
+      const labels = tablesOf(buildDefinition()).flatMap((table) =>
+        table.map(([label]) => label),
+      );
+
+      expect(labels.length).toBeGreaterThan(0);
+      for (const label of labels) {
+        expect(shoutedWordsIn(label)).toEqual([]);
+      }
+    });
+
+    it('ningún título de sección está en mayúsculas sostenidas', () => {
+      const titles = sectionTitlesOf(buildDefinition());
+
+      expect(titles.length).toBeGreaterThan(0);
+      for (const title of titles) {
+        expect(shoutedWordsIn(title)).toEqual([]);
+      }
+    });
+
+    /** Cada palabra con significado propio abre en mayúscula; las preposiciones no. */
+    it('los rótulos abren cada palabra en mayúscula, salvo preposiciones y artículos', () => {
+      const labels = tablesOf(buildDefinition()).flatMap((table) =>
+        table.map(([label]) => label),
+      );
+      const lowercaseWords = ['de', 'del', 'por', 'la', 'el', 'y'];
+
+      for (const label of labels) {
+        const words = label.split(/[\s()]+/).filter(Boolean);
+        for (const word of words) {
+          if (lowercaseWords.includes(word)) continue;
+          expect(word[0]).toBe(word[0].toUpperCase());
+        }
+      }
+    });
+
+    /** El ejemplo del reporte, afirmado tal cual. */
+    it('imprime "Número de Serie" y no "NUMERO DE SERIE"', () => {
+      const labels = tablesOf(buildDefinition()).flatMap((table) =>
+        table.map(([label]) => label),
+      );
+
+      expect(labels).toContain('Número de Serie');
+      expect(labels).not.toContain('NUMERO DE SERIE');
+    });
   });
 });

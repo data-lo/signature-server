@@ -160,15 +160,22 @@ export class AdvancedSummaryDocumentService {
     };
   }
 
-  /** Mismos campos y orden que la plantilla de referencia. */
+  /**
+   * Mismos campos y orden que la plantilla de referencia.
+   *
+   * Las etiquetas van en capitalización tipo título, igual que el resto de la hoja: las palabras
+   * con significado propio en mayúscula inicial y las preposiciones en minúscula
+   * (`Nombre del Documento`, `Creado por`). `ID` y `Hash` se quedan como están por ser sigla y
+   * término técnico.
+   */
   private buildDocumentInfoRows(
     document: AdvancedSummaryDocumentInfo,
   ): string[][] {
     return [
       ['ID', document.id],
-      ['Nombre del documento', document.documentName],
+      ['Nombre del Documento', document.documentName],
       ['Hash', document.hash],
-      ['No de paginas', String(document.totalPages)],
+      ['No. de Páginas', String(document.totalPages)],
       ['Creado por', document.createdBy],
     ];
   }
