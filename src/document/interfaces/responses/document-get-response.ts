@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
 import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
+import { DOCUMENT_PARTICIPATION_ENUM } from '../../enum/document-participation.enum';
 
 export class DocumentGetData {
   @ApiProperty({
@@ -98,32 +99,34 @@ export class DocumentGetData {
       'Si el documento participa en Búsqueda Inteligente. Lo decide su autor al crearlo y por omisión es `true`. `false` sólo lo excluye de la indexación: el documento sigue en el listado y conserva firma, descarga y auditoría.',
   })
   isIndexable: boolean;
+
+  @ApiProperty({
+    enum: DOCUMENT_PARTICIPATION_ENUM,
+    description:
+      'Qué papel juega en este documento el usuario que consulta. Es un valor derivado y personal: dos personas reciben valores distintos para el mismo documento, y el de una cambia en cuanto firma.',
+  })
+  participation: DOCUMENT_PARTICIPATION_ENUM;
 }
 
-export class PaginationMeta {
-  @ApiProperty({ example: 22, description: 'Total de registros encontrados' })
-  total: number;
-
+/**
+ * Dónde está parado el llamador dentro del total de resultados.
+ *
+ * Sin `hasNextPage`/`hasPrevPage`: eran dos campos que sólo repetían lo que `page` y `totalPages`
+ * ya dicen (`page < totalPages`, `page > 1`), y dos fuentes para el mismo hecho es una de más —
+ * en cuanto una se calcula distinto que la otra, la paginación empieza a mentir.
+ */
+export class DocumentsPaginationResponse {
   @ApiProperty({ example: 1, description: 'Página actual' })
   page: number;
 
-  @ApiProperty({ example: 10, description: 'Cantidad de registros por página' })
+  @ApiProperty({ example: 25, description: 'Cantidad de registros por página' })
   limit: number;
 
-  @ApiProperty({ example: 3, description: 'Total de páginas' })
+  @ApiProperty({ example: 42, description: 'Total de registros encontrados' })
+  total: number;
+
+  @ApiProperty({ example: 2, description: 'Total de páginas' })
   totalPages: number;
-
-  @ApiProperty({
-    example: true,
-    description: 'Indica si existe una página siguiente',
-  })
-  hasNextPage: boolean;
-
-  @ApiProperty({
-    example: false,
-    description: 'Indica si existe una página anterior',
-  })
-  hasPrevPage: boolean;
 }
 
 export class DocumentGetResponse extends BaseResponse {
@@ -134,10 +137,19 @@ export class DocumentGetResponse extends BaseResponse {
   data: DocumentGetData;
 }
 
-export class DocumentGetListResponse extends BaseResponse {
-  @ApiProperty({ type: [DocumentGetData], description: 'Lista de documentos' })
-  data: DocumentGetData[];
+/**
+ * El listado unificado responde `{ items, pagination }` **sin el sobre `BaseResponse`** que usa el
+ * resto de la API.
+ *
+ * Es una consulta, no una operación: `success` siempre valdría `true` (un fallo viaja como código
+ * HTTP, no dentro del cuerpo) y `message` sería una frase fija que ningún cliente lee. Lo que sí
+ * ganan los que la consumen es que `items` y `pagination` estén al mismo nivel, en vez de
+ * repartidos entre `data` y `meta`.
+ */
+export class DocumentsListResponse {
+  @ApiProperty({ type: [DocumentGetData], description: 'Documentos de la página' })
+  items: DocumentGetData[];
 
-  @ApiProperty({ type: PaginationMeta, description: 'Metadatos de paginación' })
-  meta: PaginationMeta;
+  @ApiProperty({ type: DocumentsPaginationResponse })
+  pagination: DocumentsPaginationResponse;
 }

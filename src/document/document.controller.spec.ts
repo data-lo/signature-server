@@ -22,6 +22,7 @@ import { SubmitDocumentForCancellationUseCase } from './applications/submit-docu
 import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
+import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 
 type Mocked = { execute: jest.Mock };
 
@@ -44,6 +45,7 @@ const USE_CASES = [
   ConfirmDocumentCancellationUseCase,
   UpdateDocumentUseCase,
   DeleteDocumentUseCase,
+  ArchiveCompletedDocumentUseCase,
 ];
 
 describe('DocumentController', () => {
@@ -232,16 +234,21 @@ describe('DocumentController', () => {
     expect(response.send).toHaveBeenCalledWith(content);
   });
 
-  it('findAll delega en GetDocumentsUseCase con el userId y el X-Account-Id', () => {
-    const query = { page: 1, limit: 10 } as any;
+  /**
+   * El controlador no interpreta los filtros ni deduce de quién es la bandeja: el usuario y la
+   * cuenta activa salen del contexto autenticado —nunca de la query— y todo lo demás viaja tal
+   * cual al caso de uso.
+   */
+  it('findAll delega en GetDocumentsUseCase el usuario, la cuenta activa y los filtros', () => {
+    const query = { page: 1, limit: 25, view: 'all' } as any;
 
     controller.findAll(user, 'account-1', query);
 
-    expect(useCase(GetDocumentsUseCase).execute).toHaveBeenCalledWith(
-      'user-1',
-      'account-1',
-      query,
-    );
+    expect(useCase(GetDocumentsUseCase).execute).toHaveBeenCalledWith({
+      userId: 'user-1',
+      accountId: 'account-1',
+      filters: query,
+    });
   });
 
   it('findOne delega en GetDocumentUseCase con el userId autenticado', () => {
@@ -360,6 +367,14 @@ describe('DocumentController', () => {
       'user-1',
       dto,
     );
+  });
+
+  it('archive delega en ArchiveCompletedDocumentUseCase con el userId autenticado', () => {
+    controller.archive(user, 'doc-1');
+
+    expect(
+      useCase(ArchiveCompletedDocumentUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1');
   });
 
   it('remove delega en DeleteDocumentUseCase con el userId autenticado', () => {
