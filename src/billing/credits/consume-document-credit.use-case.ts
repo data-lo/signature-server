@@ -4,12 +4,26 @@ import { CreditLotEntity } from './credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from './document-credit-consumption.entity';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { InsufficientDocumentCreditsException } from '../exceptions/billing.exceptions';
+import { BILLING_SIGNATURE_TYPE_ENUM } from '../enums/billing-signature-type.enum';
 
 export interface ConsumeDocumentCreditInput {
   documentId: string;
   /** Cuenta activa (`X-Account-Id`): decide a QUÉ propietario se le cobra. */
   accountId: string;
   userId: string;
+  /**
+   * Con qué tipo de firma se creó el documento, en vocabulario comercial.
+   *
+   * **Lo manda quien crea el documento, leído de la fila ya guardada** (`documents.signature_type`),
+   * nunca del payload del cliente: el recibo tiene que decir por qué se cobró realmente, y un
+   * cliente que mintiera en este campo falsearía la facturación sin tocar el documento.
+   *
+   * Opcional porque no todo documento tiene tipo de firma —el flujo viejo no lo pide, y los
+   * anteriores a la columna no lo tienen—: sin él el crédito se descuenta igual y el recibo queda
+   * con `signature_type` en `null`. Cobrar es lo que no puede fallar; anotar con qué se firma es
+   * información para facturación, no una condición del cobro.
+   */
+  signatureType?: BILLING_SIGNATURE_TYPE_ENUM | null;
 }
 
 /** Lo que cuesta crear un documento. Constante y no parámetro: hoy no hay otra tarifa. */
@@ -46,6 +60,36 @@ export class ConsumeDocumentCreditUseCase {
     private readonly billingOwnerService: BillingOwnerService,
   ) {}
 
+  /**
+   * Descuenta un crédito de documento y devuelve el recibo del consumo.
+   *
+   * Si el documento ya tenía recibo, devuelve el que existe sin descontar nada: el alta de un
+   * documento se reintenta con frecuencia y cobrar dos veces por lo mismo es peor que fallar.
+   *
+   * @param input - Documento a cobrar, cuenta activa y usuario que lo crea; opcionalmente el tipo
+   *   de firma del documento, que se anota en el recibo.
+   * @param manager - Transacción de quien crea el documento. Sin él abre una propia, y entonces el
+   *   consumo queda confirmado aunque el documento se deshaga después.
+   * @returns El consumo escrito, o el que ya existía para ese documento.
+   *
+   * @throws {InsufficientDocumentCreditsException} Si la cuenta no tiene perfil de facturación o
+   *   ningún lote con saldo utilizable.
+   * @throws {ForbiddenException} Si el usuario no pertenece a la cuenta activa (lo lanza
+   *   `BillingOwnerService.resolveOwner`).
+   *
+   * @example
+   * ```ts
+   * await this.consumeDocumentCredit.execute(
+   *   {
+   *     documentId: document.id,
+   *     accountId,
+   *     userId: createdBy,
+   *     signatureType: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+   *   },
+   *   manager,
+   * );
+   * ```
+   */
   async execute(
     input: ConsumeDocumentCreditInput,
     manager?: EntityManager,
@@ -64,6 +108,10 @@ export class ConsumeDocumentCreditUseCase {
     /**
      * Reintento del mismo documento: se devuelve el consumo que ya existe. Cobrar de nuevo por
      * algo que ya se pagó es peor que fallar, porque nadie lo nota.
+     *
+     * Tampoco se le reescribe el `signature_type` al recibo que ya está: es constancia de un
+     * cobro consumado, y un consumo escrito antes de que existiera este dato se queda como
+     * quedó. Rellenarlo aquí modificaría registros históricos por el camino más silencioso.
      */
     const existing = await consumptions.findOne({
       where: { documentId: input.documentId },
@@ -122,6 +170,12 @@ export class ConsumeDocumentCreditUseCase {
         billingProfileId: profile.id,
         creditLotId,
         creditsConsumed: CREDITS_PER_DOCUMENT,
+        /**
+         * `?? null` y no un default: un documento sin tipo de firma deja el recibo en `null`, que
+         * es lo que significa —no se decidió—. Traducirlo a SIMPLE contaría como firma simple
+         * documentos que no la eligieron, y ese error no se vería hasta un corte de facturación.
+         */
+        signatureType: input.signatureType ?? null,
         consumedAt: new Date(),
       }),
     );

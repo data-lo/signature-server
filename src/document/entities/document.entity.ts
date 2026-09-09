@@ -13,6 +13,7 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { CollaboratorEntity } from './collaborator.entity';
 
 // document.entity.ts
@@ -67,6 +68,29 @@ export class DocumentEntity {
 
   @Column({ name: 'signature_coordinates', type: 'jsonb', nullable: true })
   signatureCoordinates: SignatureCoordinates;
+
+  /**
+   * Con qué tipo de firma se creó el documento: la decisión vale para TODOS sus firmantes.
+   *
+   * Ya era una decisión de documento en el contrato desde la historia "Selección de tipo de firma
+   * al crear documentos" (`documentData.signatureType`), pero sólo se guardaba copiada en cada
+   * `collaborators.signature_type`. **Eso dejaba al documento sin poder responder por sí mismo con
+   * qué se firma**: cualquiera que necesitara el dato —el recibo de crédito de
+   * `ConsumeDocumentCreditUseCase`, el primero en necesitarlo— tenía que ir a buscarlo a los
+   * firmantes y confiar en que todos coincidieran. Aquí la fuente de verdad es una sola fila.
+   *
+   * Nullable, y no por comodidad: `CreateDocumentUseCase` —el flujo viejo, que no pide tipo de
+   * firma— crea documentos sin él, y los que ya existían antes de esta columna tampoco lo tienen.
+   * `null` significa "no se decidió", que es distinto de SIMPLE, y ningún consumidor debe
+   * traducirlo a un tipo por defecto.
+   */
+  @Column({
+    name: 'signature_type',
+    type: 'enum',
+    enum: SIGNATURE_TYPE_ENUM,
+    nullable: true,
+  })
+  signatureType: SIGNATURE_TYPE_ENUM | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

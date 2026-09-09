@@ -6,6 +6,7 @@ import { CreditLotEntity } from './credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from './document-credit-consumption.entity';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { InsufficientDocumentCreditsException } from '../exceptions/billing.exceptions';
+import { BILLING_SIGNATURE_TYPE_ENUM } from '../enums/billing-signature-type.enum';
 
 const PERSONAL_OWNER = {
   personalAccountId: 'account-1',
@@ -132,11 +133,15 @@ describe('ConsumeDocumentCreditUseCase', () => {
     await buildUseCase();
   });
 
-  const consume = (documentId = 'documento-1') =>
+  const consume = (
+    documentId = 'documento-1',
+    signatureType?: BILLING_SIGNATURE_TYPE_ENUM | null,
+  ) =>
     useCase.execute({
       documentId,
       accountId: 'account-1',
       userId: 'user-1',
+      signatureType,
     });
 
   describe('consumo exitoso', () => {
@@ -311,6 +316,88 @@ describe('ConsumeDocumentCreditUseCase', () => {
 
       expect(billingOwnerService.resolveOwner).not.toHaveBeenCalled();
       expect(doble.updateCalls).toHaveLength(0);
+    });
+  });
+
+  /**
+   * El recibo tiene que decir con qué tipo de firma se creó el documento: es el dato que permite
+   * cortar la facturación por tipo de firma. Antes se escribía siempre en `null` porque el caso
+   * de uso nunca lo recibía — el defecto que arregla esta historia.
+   */
+  describe('tipo de firma en el recibo', () => {
+    it('guarda SIMPLE cuando el documento se creó con firma simple', async () => {
+      const consumption = await consume(
+        'documento-1',
+        BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
+      );
+
+      expect(consumption.signatureType).toBe(
+        BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
+      );
+      expect(doble.consumptions[0]).toMatchObject({
+        documentId: 'documento-1',
+        signatureType: BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
+      });
+    });
+
+    it('guarda ADVANCED cuando el documento se creó con firma avanzada', async () => {
+      const consumption = await consume(
+        'documento-1',
+        BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+      );
+
+      expect(consumption.signatureType).toBe(
+        BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+      );
+      expect(doble.consumptions[0]).toMatchObject({
+        documentId: 'documento-1',
+        signatureType: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+      });
+    });
+
+    /**
+     * Un documento sin tipo de firma —el flujo viejo no lo pide— tiene que poder cobrarse igual:
+     * el crédito se descuenta y el recibo queda en `null`. Que falte el dato es información
+     * incompleta para facturación, no una razón para no cobrar.
+     */
+    it('descuenta el crédito y deja el recibo en null cuando el documento no tiene tipo de firma', async () => {
+      const consumption = await consume('documento-1');
+
+      expect(consumption.signatureType).toBeNull();
+      expect(consumption.creditLotId).toBe('lote-1');
+      expect(doble.lots[0].remaining).toBe(2);
+    });
+
+    /**
+     * `null` es "no se decidió" y NO debe traducirse a SIMPLE: contaría como firma simple
+     * documentos que no la eligieron, y el error sólo se vería en un corte de facturación.
+     */
+    it('no convierte la ausencia de tipo de firma en SIMPLE', async () => {
+      const consumption = await consume('documento-1', null);
+
+      expect(consumption.signatureType).toBeNull();
+      expect(consumption.signatureType).not.toBe(
+        BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
+      );
+    });
+
+    /**
+     * El recibo ya escrito es constancia de un cobro consumado. Un reintento que ahora sí trae el
+     * tipo de firma no puede reescribirlo: sería modificar un registro histórico por el camino
+     * más silencioso posible.
+     */
+    it('el reintento no reescribe el tipo de firma del recibo que ya existe', async () => {
+      const primero = await consume('documento-1');
+      expect(primero.signatureType).toBeNull();
+
+      const segundo = await consume(
+        'documento-1',
+        BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+      );
+
+      expect(segundo).toBe(primero);
+      expect(segundo.signatureType).toBeNull();
+      expect(doble.consumptions).toHaveLength(1);
     });
   });
 

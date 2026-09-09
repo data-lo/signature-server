@@ -21,6 +21,7 @@ import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
 import {
   CreateDocumentSignaturesDto,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -325,6 +326,91 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         (call) => call[0].signatureType === SIGNATURE_TYPE_ENUM.FIEL,
       ),
     ).toBe(true);
+  });
+
+  it('guarda el tipo de firma EN el documento, no sólo copiado en los firmantes', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.SIMPLE }),
+    );
+  });
+
+  it('guarda fiel en el documento cuando la firma es avanzada', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.FIEL }),
+    );
+  });
+
+  it('el consumo de crédito de un documento con firma simple se anota como SIMPLE', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureType: BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
+      }),
+      expect.anything(),
+    );
+  });
+
+  /**
+   * `fiel` en el dominio de documentos y `ADVANCED` en el comercial son el mismo tipo de firma:
+   * la traducción es el único punto donde se cruza esa frontera y aquí se verifica que no se
+   * escape el vocabulario de documentos al recibo.
+   */
+  it('el consumo de crédito de un documento con firma avanzada se anota como ADVANCED', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureType: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+      }),
+      expect.anything(),
+    );
+  });
+
+  /**
+   * El valor del recibo sale del documento GUARDADO, no del payload: se guarda un documento sin
+   * tipo de firma y el consumo tiene que reflejar eso —`null`— en vez del SIMPLE que traía el
+   * DTO. Si el flujo leyera del payload, esta prueba pasaría a `SIMPLE` y no se notaría.
+   */
+  it('el tipo del recibo proviene del documento guardado, no del payload', async () => {
+    documentRepo.save.mockImplementation(async (entity) => {
+      const { signatureType: _descartado, ...sinTipoDeFirma } = entity;
+      return { id: 'documento-sin-tipo', ...sinTipoDeFirma };
+    });
+
+    const result = await useCase.execute(
+      'creator-1',
+      'account-1',
+      baseDto,
+      file,
+      '127.0.0.1',
+    );
+
+    // El alta no se rompe: el documento se crea y el crédito se cobra igual.
+    expect(result.data.id).toBe('documento-sin-tipo');
+    expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documentId: 'documento-sin-tipo',
+        signatureType: null,
+      }),
+      expect.anything(),
+    );
   });
 
   it('historia "Selección de tipo de firma": descarta el rfc que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
