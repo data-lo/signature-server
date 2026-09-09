@@ -734,21 +734,16 @@ describe('casos de uso de documentos', () => {
      */
     it('excluye del listado los documentos archivados por el usuario que consulta', async () => {
       const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
-      });
 
-      await getDocuments.execute('user-1', 'account-1', query);
+      await list({}, qb);
 
       const [, alias, condition, parameters] = qb.leftJoin.mock.calls[0];
       expect(alias).toBe('myPreference');
       expect(condition).toContain('myPreference.documentId = document.id');
       // El usuario va en la condición del JOIN, no en el WHERE: si estuviera abajo, un documento
       // archivado por otro participante también desaparecería de esta lista.
-      expect(condition).toContain('myPreference.userId = :callerId');
-      expect(parameters).toEqual({ callerId: 'user-1' });
+      expect(condition).toContain('myPreference.userId = :preferenceUserId');
+      expect(parameters).toEqual({ preferenceUserId: 'user-1' });
       expect(qb.andWhere).toHaveBeenCalledWith(
         'myPreference.archivedAt IS NULL',
       );
@@ -760,13 +755,8 @@ describe('casos de uso de documentos', () => {
      */
     it('sigue mostrando los documentos sin preferencia de archivado (LEFT JOIN, no INNER)', async () => {
       const qb = createMockQueryBuilder();
-      documentRepository.createQueryBuilder.mockReturnValue(qb);
-      accountMemberService.assertIsActiveMember.mockResolvedValue({
-        id: 'account-1',
-        organizationId: null,
-      });
 
-      await getDocuments.execute('user-1', 'account-1', query);
+      await list({}, qb);
 
       expect(qb.leftJoin).toHaveBeenCalledTimes(1);
       expect((qb as any).innerJoin).toBeUndefined();
