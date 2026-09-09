@@ -3,7 +3,6 @@ import { getDataSourceToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type Stripe from 'stripe';
 import { RegisterDocumentCreditPurchaseUseCase } from './register-document-credit-purchase.use-case';
-import { CreditLotEntity } from './credit-lot.entity';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
@@ -17,7 +16,10 @@ function sesion(overrides: Record<string, unknown> = {}) {
     id: 'cs_test_123',
     mode: 'payment',
     payment_intent: 'pi_123',
-    metadata: { billingProfileId: 'perfil-1', catalogPriceId: 'catalog-price-1' },
+    metadata: {
+      billingProfileId: 'perfil-1',
+      catalogPriceId: 'catalog-price-1',
+    },
     ...overrides,
   } as unknown as Stripe.Checkout.Session;
 }
