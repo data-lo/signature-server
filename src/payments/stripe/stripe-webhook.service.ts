@@ -8,6 +8,7 @@ import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
 import { StripePaymentService } from './stripe-payment.service';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
+import { RegisterDocumentCreditPurchaseUseCase } from '../../billing/credits/register-document-credit-purchase.use-case';
 
 /**
  * Router de los eventos de Stripe ya autenticados. Cada evento soportado tiene su propio handler
@@ -34,6 +35,7 @@ export class StripeWebhookService {
     private readonly catalogSyncService: CatalogSyncService,
     private readonly paymentGateway: StripePaymentService,
     private readonly subscriptionBillingService: SubscriptionBillingService,
+    private readonly registerDocumentCreditPurchase: RegisterDocumentCreditPurchaseUseCase,
   ) {}
 
   async process(event: Stripe.Event): Promise<void> {
@@ -42,6 +44,15 @@ export class StripeWebhookService {
         const session = event.data.object as Stripe.Checkout.Session;
         await this.handleCheckoutSessionCompleted(session);
         await this.subscriptionBillingService.handleCheckoutSessionCompleted(
+          session,
+        );
+        /**
+         * Las compras sueltas de documentos llegan por el MISMO evento, en modo `payment`. Cada
+         * manejador filtra por `session.mode` y atiende lo suyo: aquél las suscripciones, éste
+         * los créditos. Van los dos y no un `else` porque el evento es el mismo canal para dos
+         * flujos que no se conocen entre sí.
+         */
+        await this.registerDocumentCreditPurchase.handleCheckoutSessionCompleted(
           session,
         );
         break;

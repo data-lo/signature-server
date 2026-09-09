@@ -6,6 +6,7 @@ import { SUBSCRIPTION_STATUS_ENUM } from '../enums/subscription-status.enum';
 import { PLAN_ID_ENUM } from '../enums/plan-id.enum';
 import { CatalogSyncService } from '../../billing/catalog/catalog-sync.service';
 import { StripePaymentService } from './stripe-payment.service';
+import { RegisterDocumentCreditPurchaseUseCase } from '../../billing/credits/register-document-credit-purchase.use-case';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 import Stripe = require('stripe');
 
@@ -36,6 +37,7 @@ describe('StripeWebhookService', () => {
   };
   let paymentGateway: { retrieveProduct: jest.Mock };
   let subscriptionBillingService: Record<string, jest.Mock>;
+  let registerDocumentCreditPurchase: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     subscriptionRepository = createMockRepository();
@@ -54,6 +56,9 @@ describe('StripeWebhookService', () => {
       handleSubscriptionUpdated: jest.fn().mockResolvedValue(undefined),
       handleSubscriptionDeleted: jest.fn().mockResolvedValue(undefined),
     };
+    registerDocumentCreditPurchase = {
+      handleCheckoutSessionCompleted: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -64,6 +69,10 @@ describe('StripeWebhookService', () => {
         },
         { provide: CatalogSyncService, useValue: catalogSyncService },
         { provide: StripePaymentService, useValue: paymentGateway },
+        {
+          provide: RegisterDocumentCreditPurchaseUseCase,
+          useValue: registerDocumentCreditPurchase,
+        },
         {
           provide: SubscriptionBillingService,
           useValue: subscriptionBillingService,
@@ -236,6 +245,23 @@ describe('StripeWebhookService', () => {
    * que llegar a los dos, o uno de los dos se queda desincronizado en silencio.
    */
   describe('enrutado hacia el modelo de billing', () => {
+    /**
+     * Las compras sueltas de documentos llegan por el MISMO evento, en modo `payment`: el router
+     * las entrega a los dos manejadores y cada uno se descarta solo por `session.mode`.
+     */
+    it('checkout.session.completed llega también a RegisterDocumentCreditPurchaseUseCase', async () => {
+      const session = { id: 'cs_1', mode: 'payment', metadata: {} };
+
+      await service.process({
+        type: 'checkout.session.completed',
+        data: { object: session },
+      } as unknown as Stripe.Event);
+
+      expect(
+        registerDocumentCreditPurchase.handleCheckoutSessionCompleted,
+      ).toHaveBeenCalledWith(session);
+    });
+
     it('checkout.session.completed llega también a SubscriptionBillingService', async () => {
       subscriptionRepository.findOne.mockResolvedValue(null);
       const session = {

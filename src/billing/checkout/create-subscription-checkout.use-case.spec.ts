@@ -4,6 +4,7 @@ import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service
 import { CreateSubscriptionCheckoutUseCase } from './create-subscription-checkout.use-case';
 import { CheckoutOrderService } from './checkout-order.service';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
+import { StripeCustomerService } from '../profiles/stripe-customer.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BILLING_INTERVAL_ENUM } from '../enums/billing-interval.enum';
@@ -28,6 +29,7 @@ const PLAN_PRICE = {
 describe('CreateSubscriptionCheckoutUseCase', () => {
   let useCase: CreateSubscriptionCheckoutUseCase;
   let billingProfileRepository: { update: jest.Mock };
+  let stripeCustomerService: { resolveForProfile: jest.Mock };
   let billingOwnerService: {
     resolveOwner: jest.Mock;
     getOrCreateProfile: jest.Mock;
@@ -41,6 +43,29 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
 
   beforeEach(async () => {
     billingProfileRepository = { update: jest.fn() };
+    /**
+     * El doble replica la regla real de `StripeCustomerService`: un perfil tiene UN cliente,
+     * creado la primera vez. Sin replicarla aquí, las pruebas de "reutiliza el cliente" y "lo
+     * crea y lo guarda" no estarían comprobando nada.
+     */
+    stripeCustomerService = {
+      resolveForProfile: jest.fn(async (profile, email: string) => {
+        if (profile.stripeCustomerId) {
+          return profile.stripeCustomerId;
+        }
+
+        const customerId = await paymentGateway.createCustomer(
+          profile.id,
+          email,
+        );
+        await billingProfileRepository.update(profile.id, {
+          stripeCustomerId: customerId,
+        });
+        profile.stripeCustomerId = customerId;
+
+        return customerId;
+      }),
+    };
     billingOwnerService = {
       resolveOwner: jest.fn().mockResolvedValue({
         personalAccountId: 'account-1',
@@ -71,10 +96,7 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CreateSubscriptionCheckoutUseCase,
-        {
-          provide: getRepositoryToken(BillingProfileEntity),
-          useValue: billingProfileRepository,
-        },
+        { provide: StripeCustomerService, useValue: stripeCustomerService },
         { provide: BillingOwnerService, useValue: billingOwnerService },
         { provide: BillingCatalogService, useValue: billingCatalogService },
         { provide: CheckoutOrderService, useValue: checkoutOrderService },

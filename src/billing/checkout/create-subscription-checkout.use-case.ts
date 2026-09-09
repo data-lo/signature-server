@@ -1,11 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
+import { StripeCustomerService } from '../profiles/stripe-customer.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
-import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { ActiveSubscriptionAlreadyExistsException } from '../exceptions/billing.exceptions';
 import { CheckoutOrderService } from './checkout-order.service';
@@ -23,9 +21,8 @@ export class CreateSubscriptionCheckoutUseCase {
   private readonly logger = new Logger(CreateSubscriptionCheckoutUseCase.name);
 
   constructor(
-    @InjectRepository(BillingProfileEntity)
-    private readonly billingProfileRepository: Repository<BillingProfileEntity>,
     private readonly billingOwnerService: BillingOwnerService,
+    private readonly stripeCustomerService: StripeCustomerService,
     private readonly billingCatalogService: BillingCatalogService,
     private readonly checkoutOrderService: CheckoutOrderService,
     private readonly paymentGateway: StripePaymentService,
@@ -67,7 +64,10 @@ export class CreateSubscriptionCheckoutUseCase {
       throw new Error(`El precio ${input.priceId} no tiene un plan asociado.`);
     }
 
-    const customerId = await this.resolveCustomerId(profile, input.email);
+    const customerId = await this.stripeCustomerService.resolveForProfile(
+      profile,
+      input.email,
+    );
     const frontendUrl = frontendBaseUrl();
 
     const { sessionId, checkoutUrl } =
@@ -104,31 +104,5 @@ export class CreateSubscriptionCheckoutUseCase {
     );
 
     return { checkoutUrl };
-  }
-
-  /**
-   * Un perfil tiene un solo cliente en Stripe, creado la primera vez que intenta pagar. Si se
-   * creara uno por sesión, el historial de facturación del mismo propietario quedaría repartido
-   * entre clientes distintos y los eventos de renovación no podrían reconciliarse por cliente.
-   */
-  private async resolveCustomerId(
-    profile: BillingProfileEntity,
-    email: string,
-  ): Promise<string> {
-    if (profile.stripeCustomerId) {
-      return profile.stripeCustomerId;
-    }
-
-    const customerId = await this.paymentGateway.createCustomer(
-      profile.id,
-      email,
-    );
-
-    await this.billingProfileRepository.update(profile.id, {
-      stripeCustomerId: customerId,
-    });
-    profile.stripeCustomerId = customerId;
-
-    return customerId;
   }
 }

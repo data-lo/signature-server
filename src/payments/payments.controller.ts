@@ -5,6 +5,10 @@ import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { CreateSubscriptionCheckoutUseCase } from 'src/billing/checkout/create-subscription-checkout.use-case';
+import { CreateDocumentCreditCheckoutUseCase } from 'src/billing/checkout/create-document-credit-checkout.use-case';
+import type { DocumentCreditCheckoutResponse } from 'src/billing/checkout/create-document-credit-checkout.use-case';
+import { GetAvailableDocumentCreditOffersUseCase } from 'src/billing/credits/get-available-document-credit-offers.use-case';
+import type { DocumentCreditOfferResponse } from 'src/billing/credits/document-credit-offer.interface';
 import { CancelSubscriptionUseCase } from 'src/billing/subscriptions/cancel-subscription.use-case';
 import { ResumeSubscriptionUseCase } from 'src/billing/subscriptions/resume-subscription.use-case';
 import type { SubscriptionScheduleResponse } from 'src/billing/subscriptions/subscription-schedule.interface';
@@ -22,6 +26,9 @@ import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs'
 import { ApiGetBillingState } from './docs/api-get-billing-state.docs';
 import { ApiCancelSubscription } from './docs/api-cancel-subscription.docs';
 import { ApiResumeSubscription } from './docs/api-resume-subscription.docs';
+import { ApiGetDocumentCreditOffers } from './docs/api-get-document-credit-offers.docs';
+import { ApiCreateDocumentCreditCheckout } from './docs/api-create-document-credit-checkout.docs';
+import { CreateDocumentCreditCheckoutDto } from './dto/create-document-credit-checkout.dto';
 
 /**
  * Endpoints autenticados del catálogo y la compra.
@@ -38,6 +45,8 @@ export class PaymentsController {
     private readonly createSubscriptionCheckout: CreateSubscriptionCheckoutUseCase,
     private readonly getSubscriptionState: GetSubscriptionStateUseCase,
     private readonly getBillingAccess: GetBillingAccessUseCase,
+    private readonly getDocumentCreditOffers: GetAvailableDocumentCreditOffersUseCase,
+    private readonly createDocumentCreditCheckout: CreateDocumentCreditCheckoutUseCase,
     private readonly cancelSubscription: CancelSubscriptionUseCase,
     private readonly resumeSubscription: ResumeSubscriptionUseCase,
   ) {}
@@ -80,6 +89,58 @@ export class PaymentsController {
         email: user.email,
         accountId,
         priceId: dto.priceId,
+      }),
+    };
+  }
+
+  /**
+   * Paquetes de documentos que la cuenta activa puede comprar, según su plan vigente.
+   *
+   * Vive junto al resto del catálogo y la compra, y no bajo `billing/`, porque es exactamente eso:
+   * el catálogo que se le puede vender a quien pregunta. La historia proponía `/billing/...`, pero
+   * hoy no hay ningún controller público de `billing` —sólo el interno de periodos— y abrir uno
+   * para un GET dejaría la misma funcionalidad repartida entre dos rutas base.
+   *
+   * Lleva `X-Account-Id` porque el plan es de la CUENTA activa: el mismo usuario ve ofertas
+   * distintas según esté trabajando en su cuenta personal o en una organización.
+   */
+  @Get('document-credit-offers')
+  @ApiGetDocumentCreditOffers()
+  async documentCreditOffers(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+  ): Promise<BaseResponse<DocumentCreditOfferResponse[]>> {
+    return {
+      success: true,
+      message: 'Paquetes de documentos obtenidos correctamente',
+      data: await this.getDocumentCreditOffers.execute({
+        userId: user.sub,
+        accountId,
+      }),
+    };
+  }
+
+  /**
+   * Abre el Checkout para comprar uno de esos paquetes.
+   *
+   * Recibe el id del catálogo LOCAL y no un `price_...`: el precio de Stripe lo resuelve el
+   * servidor a partir de la fila validada, de modo que el cliente no puede elegir qué se cobra.
+   */
+  @Post('document-credits/checkout')
+  @ApiCreateDocumentCreditCheckout()
+  async documentCreditsCheckout(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+    @Body() dto: CreateDocumentCreditCheckoutDto,
+  ): Promise<BaseResponse<DocumentCreditCheckoutResponse>> {
+    return {
+      success: true,
+      message: 'Sesión de Checkout creada correctamente',
+      data: await this.createDocumentCreditCheckout.execute({
+        userId: user.sub,
+        email: user.email,
+        accountId,
+        catalogPriceId: dto.catalogPriceId,
       }),
     };
   }

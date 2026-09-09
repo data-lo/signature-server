@@ -17,6 +17,7 @@ import { SubscriptionBillingHistoryEntity } from './subscription-billing-history
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { CatalogSyncService } from '../catalog/catalog-sync.service';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
+import { RegisterDocumentCreditPurchaseUseCase } from '../credits/register-document-credit-purchase.use-case';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
@@ -165,6 +166,12 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         BillingCatalogService,
         CheckoutOrderService,
         CatalogSyncService,
+        /**
+         * Escucha el mismo `checkout.session.completed` que la suscripción y se descarta solo por
+         * `session.mode`. Va en la cadena real —y no como doble— para que este flujo compruebe de
+         * paso que las sesiones de suscripción NO acaban acreditando un lote de compra suelta.
+         */
+        RegisterDocumentCreditPurchaseUseCase,
         { provide: StripeWebhookSignatureVerifierService, useValue: verifier },
         // El router solo lo usa para expandir el producto de un evento `price.*`, que este
         // flujo no ejercita; se provee para poder construir la cadena real.

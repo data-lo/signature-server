@@ -41,6 +41,25 @@ export class SubscriptionPriceNotAvailableException extends NotFoundException {
 }
 
 /**
+ * El paquete de documentos pedido no se le puede vender a esta cuenta.
+ *
+ * **Un solo error para cinco causas distintas, a propósito**: que el precio no exista, que esté
+ * dado de baja, que no sea un paquete de documentos, que no sea de pago único, o que sea de otro
+ * plan. Distinguirlas en la respuesta le diría a quien manipula el `catalogPriceId` exactamente
+ * qué probar a continuación —"existe pero es de otro plan" es media respuesta—, y para el
+ * usuario legítimo las cinco significan lo mismo: esa oferta no está en su lista. El motivo real
+ * queda en el log.
+ *
+ * 404 y no 403: desde la cuenta que pregunta, un paquete de otro plan sencillamente no forma
+ * parte de su catálogo.
+ */
+export class DocumentCreditOfferNotAvailableException extends NotFoundException {
+  constructor() {
+    super('El paquete de documentos seleccionado no está disponible.');
+  }
+}
+
+/**
  * El propietario facturable ya tiene una suscripción vigente (`billing_profile.status = ACTIVE`)
  * y está pidiendo otra.
  *
