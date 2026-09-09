@@ -25,21 +25,33 @@ const CURRENT_PERIOD_LOT_PRIORITY = 100;
 
 export interface RegisterSubscriptionBillingInput {
   billingProfileId: string;
+  /**
+   * Define el origen del cobro: Stripe o manual.
+   *
+   * No es sólo una etiqueta del historial: decide con qué campo se comprueba la idempotencia
+   * (`stripeInvoiceId` o `externalReference`), qué `billing_source` queda en el perfil, y si se
+   * limpia `cancel_at_period_end`.
+   */
   source: BILLING_SOURCE_ENUM;
+  /** Plan concedido por este periodo; debe existir en `plans`. */
   planType: string;
   /** En la unidad mínima de la moneda (centavos), igual que Stripe y que `checkout_orders`. */
   amount: number;
   currency: string;
   periodStart: Date;
   periodEnd: Date;
+  /** Cuándo entró el dinero. Se separa del periodo: un cobro puede capturarse con retraso. */
   paidAt: Date;
   /** Documentos a acreditar. Si se omite, los que declare el plan. */
   documentsGranted?: number | null;
   stripeCustomerId?: string | null;
   stripeSubscriptionId?: string | null;
+  /** Clave de idempotencia de un cobro de Stripe, y obligatoria en ese camino. */
   stripeInvoiceId?: string | null;
   stripePaymentIntentId?: string | null;
+  /** Clave de idempotencia de un cobro manual: el folio del comprobante externo. */
   externalReference?: string | null;
+  /** Quién capturó el cobro manual. Junto con el folio, es la evidencia que exige el CHECK. */
   createdByUserId?: string | null;
   notes?: string | null;
 }
@@ -54,27 +66,34 @@ export interface RegisterSubscriptionBillingResult {
  * Anota un periodo PAGADO: emite sus créditos, lo registra en el historial y deja el
  * `billing_profile` describiendo lo que está vigente ahora.
  *
- * **Es el único sitio donde una suscripción concede saldo**, y da igual quién haya cobrado. Un
- * `invoice.paid` de Stripe y una transferencia capturada a mano por administración terminan los
- * dos acá con los mismos efectos; lo único que cambia es de dónde salen los datos y qué rastro
- * queda (`stripe_invoice_id` en un caso, `external_reference` / `created_by_user_id` en el otro).
- * Tenerlo centralizado es lo que impide que los dos caminos se separen: cuando el saldo se
- * emitía dentro del adaptador de Stripe, cualquier cobro fuera de Stripe habría necesitado su
- * propia copia de la lógica de arrastre, historial y actualización del perfil — y bastaría con
- * que una de las dos copias cambiara para que un cliente manual dejara de recibir lo mismo que
- * uno de Stripe.
+ * @remarks
+ * Flujo:
  *
- * **Todo ocurre en UNA transacción, con el perfil bloqueado.** El lote de créditos, el renglón
- * del historial, el vínculo con la orden de compra y la actualización del perfil quedan los
- * cuatro o no queda ninguno; a medias, el cliente vería documentos que ningún periodo justifica,
- * o un periodo cobrado sin saldo. El bloqueo pesimista serializa además los cobros del mismo
- * perfil, que es lo que hace fiable la comprobación de idempotencia: leerla fuera dejaría una
+ * 1. Valida la coherencia de la entrada fuera de la transacción, porque no consulta nada.
+ * 2. Abre transacción y bloquea el perfil (`pessimistic_write`); sin perfil no hay nada que
+ *    facturar.
+ * 3. Comprueba la idempotencia: por `stripe_invoice_id` si el cobro es de Stripe, por la
+ *    referencia externa si es manual. Si ya estaba registrado, no escribe nada.
+ * 4. Resuelve el plan del catálogo.
+ * 5. Emite el `credit_lot` del periodo, arrastrando antes como `ROLLOVER` el saldo sin gastar.
+ * 6. Vincula la orden de Checkout que originó el alta con el lote recién emitido.
+ * 7. Escribe el renglón de `subscription_billing_history`.
+ * 8. Actualiza el perfil: plan, estado `ACTIVE`, periodo vigente y `billing_source`.
+ *
+ * **Es el único sitio donde una suscripción concede saldo**, y da igual quién haya cobrado. Un
+ * `invoice.paid` de Stripe y una transferencia capturada a mano terminan los dos aquí con los
+ * mismos efectos; lo único que cambia es de dónde salen los datos y qué rastro queda. Tenerlo
+ * centralizado impide que los dos caminos se separen: con la emisión dentro del adaptador de
+ * Stripe, un cobro manual habría necesitado su propia copia del arrastre, el historial y la
+ * actualización del perfil.
+ *
+ * **Todo ocurre en UNA transacción, con el perfil bloqueado.** Lote, historial, vínculo con la
+ * orden y perfil quedan los cuatro o no queda ninguno; a medias, el cliente vería documentos que
+ * ningún periodo justifica, o un periodo cobrado sin saldo. El bloqueo serializa además los
+ * cobros del mismo perfil, que es lo que hace fiable el paso 3: comprobarlo fuera dejaría una
  * ventana en la que dos entregas simultáneas de la misma factura pasarían las dos.
  *
- * **La idempotencia se comprueba, no se asume.** Por `stripe_invoice_id` cuando el cobro viene de
- * Stripe —que reintenta las entregas durante días— y por la referencia manual cuando lo captura
- * una persona, que es igual de capaz de enviar el formulario dos veces. Ambas tienen además su
- * índice único en la base como última red.
+ * Las dos claves de idempotencia tienen además su índice único en la base, como última red.
  */
 @Injectable()
 export class RegisterSubscriptionBillingUseCase {
@@ -85,6 +104,16 @@ export class RegisterSubscriptionBillingUseCase {
     private readonly checkoutOrderService: CheckoutOrderService,
   ) {}
 
+  /**
+   * Ejecuta el caso de uso.
+   *
+   * @param input Periodo cobrado, su origen, el plan concedido y la evidencia del cobro.
+   * @returns El renglón del historial y si el periodo ya estaba registrado de antes.
+   * @throws {InvalidBillingRegistrationException} Cuando el importe, la moneda, las fechas, los
+   *   documentos o la evidencia que exige el origen no son coherentes.
+   * @throws {BillingProfileNotFoundForRegistrationException} Cuando el perfil no existe.
+   * @throws {PlanNotFoundForRegistrationException} Cuando el plan no está en el catálogo.
+   */
   async execute(
     input: RegisterSubscriptionBillingInput,
   ): Promise<RegisterSubscriptionBillingResult> {
@@ -121,11 +150,7 @@ export class RegisterSubscriptionBillingUseCase {
 
       const lot = await this.issueCreditLot(manager, input, plan);
 
-      /**
-       * El vínculo con la compra se resuelve ANTES de escribir el historial porque el id que
-       * devuelve es una de sus columnas. Devuelve `null` en una renovación o en un cobro manual:
-       * en ninguno de los dos hubo una sesión de Checkout que apuntar.
-       */
+      // Antes del historial porque el id que devuelve es una de sus columnas.
       const checkoutOrderId =
         await this.checkoutOrderService.linkCompletedSubscriptionToCreditSlot(
           {
@@ -155,18 +180,22 @@ export class RegisterSubscriptionBillingUseCase {
   }
 
   /**
-   * Emite el lote del periodo, o REUTILIZA el que esa misma factura ya hubiera emitido.
+   * Emite el lote del periodo, o reutiliza el que esa misma factura ya hubiera emitido.
    *
-   * El caso de reutilización no es teórico: `credit_lots.stripe_invoice_id` viene de antes de que
+   * @remarks
+   * La reutilización no es teórica: `credit_lots.stripe_invoice_id` viene de antes de que
    * existiera el historial, así que en una base que ya operaba pueden existir lotes de facturas
-   * que nunca dejaron renglón. Una re-entrega de una de ellas encontraría el historial vacío,
-   * intentaría emitir un lote nuevo y chocaría contra el índice único de esa columna, tumbando el
-   * webhook en bucle. Reutilizando el lote, el cobro queda registrado sin duplicar ni un
-   * documento.
+   * sin renglón. Una re-entrega encontraría el historial vacío, intentaría emitir otro lote y
+   * chocaría contra el índice único, tumbando el webhook en bucle.
    *
-   * El arrastre del periodo anterior va DENTRO del `if` a propósito: sólo tiene sentido cuando de
-   * verdad se emite saldo nuevo. Ejecutarlo al reutilizar reetiquetaría como ROLLOVER un lote que
-   * sigue siendo el del periodo vigente.
+   * El arrastre queda después de esa comprobación a propósito: sólo tiene sentido cuando de
+   * verdad se emite saldo nuevo, y ejecutarlo al reutilizar reetiquetaría como `ROLLOVER` un lote
+   * que sigue siendo el del periodo vigente.
+   *
+   * @param manager Transacción en curso.
+   * @param input Periodo que se factura.
+   * @param plan Plan resuelto, que aporta los documentos por periodo si no vienen en la entrada.
+   * @returns El lote del periodo vigente.
    */
   private async issueCreditLot(
     manager: EntityManager,
@@ -209,10 +238,14 @@ export class RegisterSubscriptionBillingUseCase {
   }
 
   /**
-   * Convierte en ROLLOVER el saldo vigente que quede sin gastar.
+   * Convierte en `ROLLOVER` el saldo vigente que quede sin gastar.
    *
-   * Sólo los lotes con `remaining > 0`: un lote agotado no arrastra nada y reetiquetarlo sólo
-   * ensuciaría el historial de cómo se consumió cada periodo.
+   * @remarks
+   * Sólo los lotes con `remaining > 0`: uno agotado no arrastra nada y reetiquetarlo ensuciaría
+   * el historial de cómo se consumió cada periodo.
+   *
+   * @param manager Transacción en curso.
+   * @param billingProfileId Perfil cuyo periodo anterior se arrastra.
    */
   private async rolloverPreviousPeriod(
     manager: EntityManager,
@@ -274,28 +307,29 @@ export class RegisterSubscriptionBillingUseCase {
   }
 
   /**
-   * Deja el perfil describiendo lo vigente. Es la mitad del reparto de trabajo con el historial:
-   * acá vive el ESTADO ACTUAL —una sola fila, siempre el plan y el periodo de ahora—, allá el
-   * registro de cada periodo que se cobró.
+   * Deja el perfil describiendo lo vigente.
    *
-   * **Los ids de Stripe sólo se escriben si el cobro vino de Stripe**, y nunca se borran: un
-   * cobro manual no los aporta, y ponerlos a `null` desde acá tiraría el vínculo con cobros
-   * reales que todavía hay que poder consultar. Por eso el `spread` condicionado en vez de
-   * asignarlos siempre.
+   * @remarks
+   * Es la mitad del reparto con el historial: aquí vive el ESTADO ACTUAL —una fila, el plan y el
+   * periodo de ahora—, allá el registro de cada periodo cobrado.
    *
-   * **`cancel_at_period_end` se limpia sólo en el camino MANUAL.** Un periodo facturado a mano
-   * sustituye cualquier intención previa de no renovar: si administración acaba de cobrar el mes
-   * siguiente, el perfil no puede seguir anunciando que el servicio termina. En el camino de
-   * Stripe esa bandera la gobierna el proveedor a través de `customer.subscription.updated`, y
-   * pisarla desde un cobro contradiría una baja que el cliente sí pidió — `invoice.paid` del
-   * periodo vigente llega DESPUÉS de que se programe la cancelación, y limpiarla ahí revocaría en
-   * silencio la decisión del cliente.
+   * Los ids de Stripe sólo se escriben si el cobro vino de Stripe, y nunca se borran: un cobro
+   * manual no los aporta, y ponerlos a `null` tiraría el vínculo con cobros reales que todavía
+   * hay que poder consultar.
    *
-   * **`billing_source` pasa a decir quién factura AHORA.** El perfil nace en `FREE` —nadie le
-   * cobra— y este cobro es justo el momento en que deja de ser cierto. Se toma del origen del
-   * cobro y no de la presencia de los `stripe_*`, porque un perfil que estuvo en Stripe y hoy se
-   * factura a mano conserva esos ids y quedaría contando como STRIPE — el caso exacto que la
-   * columna existe para distinguir.
+   * `cancel_at_period_end` se limpia sólo en el camino MANUAL: un periodo facturado a mano
+   * sustituye cualquier intención previa de no renovar. En Stripe esa bandera la gobierna el
+   * proveedor, y `invoice.paid` del periodo vigente llega DESPUÉS de programarse la cancelación
+   * — limpiarla ahí revocaría en silencio una baja que el cliente sí pidió.
+   *
+   * `billing_source` se toma del origen del cobro y no de la presencia de los `stripe_*`: un
+   * perfil que estuvo en Stripe y hoy se factura a mano conserva esos ids, y contaría como
+   * STRIPE justo el caso que la columna existe para distinguir.
+   *
+   * @param manager Transacción en curso.
+   * @param profile Perfil ya bloqueado.
+   * @param input Periodo que se factura.
+   * @param plan Plan que queda vigente.
    */
   private async updateProfile(
     manager: EntityManager,
@@ -326,14 +360,14 @@ export class RegisterSubscriptionBillingUseCase {
   /**
    * Busca el renglón que ya represente este cobro.
    *
-   * Se hace DENTRO de la transacción y DESPUÉS de bloquear el perfil: comprobarlo antes dejaría
-   * una ventana en la que dos entregas simultáneas de la misma factura pasarían las dos.
+   * @remarks
+   * Un cobro manual sin folio no se puede desduplicar, y devuelve `null`. No es un descuido: sin
+   * referencia externa no hay clave que distinga "el mismo cobro otra vez" de "un segundo cobro
+   * idéntico" — dos meses seguidos del mismo plan por el mismo importe son legítimamente iguales.
    *
-   * **Un cobro manual sin folio no se puede desduplicar** y aquí se devuelve `null`. No es un
-   * descuido: sin referencia externa no hay ninguna clave que distinga "el mismo cobro otra vez"
-   * de "un segundo cobro idéntico al primero" —dos meses seguidos del mismo plan por el mismo
-   * importe son legítimamente iguales—. Por eso el endpoint manual pide folio siempre que exista
-   * uno, y por eso el CHECK de la tabla exige al menos folio o autor.
+   * @param manager Transacción en curso, con el perfil ya bloqueado.
+   * @param input Cobro que se intenta registrar.
+   * @returns El periodo ya registrado, o `null` si es la primera vez.
    */
   private async findAlreadyRegistered(
     manager: EntityManager,
@@ -365,11 +399,14 @@ export class RegisterSubscriptionBillingUseCase {
   /**
    * Valida lo que ningún constraint puede explicar bien después.
    *
+   * @remarks
    * Todas estas reglas existen también en la base (`CHK_..._amount`, `CHK_..._period`,
    * `CHK_..._origin_evidence`), y no es duplicación ociosa: la base protege la integridad pase lo
    * que pase, y esto convierte el fallo en un 400 con el motivo concreto en vez de en una
-   * violación de constraint a mitad de transacción, que llega al log como un error de Postgres
-   * sin decir qué campo venía mal. Corre FUERA de la transacción porque no consulta nada.
+   * violación de constraint a mitad de transacción.
+   *
+   * @param input Entrada a validar.
+   * @throws {InvalidBillingRegistrationException} Con el motivo concreto del rechazo.
    */
   private assertInputIsCoherent(input: RegisterSubscriptionBillingInput): void {
     if (!Number.isInteger(input.amount) || input.amount < 0) {

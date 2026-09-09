@@ -31,12 +31,30 @@ import { DocumentTransactionService } from '../document-transaction.service';
 import { DocumentService } from '../document.service';
 
 /**
- * `POST /document`: sube el PDF a MinIO, calcula su hash y da de alta el documento junto con sus
- * colaboradores (firmantes, observadores y revisores).
+ * Da de alta un documento con sus colaboradores (firmantes, observadores y revisores).
  *
- * El documento nace en CREATED, todavía sin salir a firmar: el alta y el envío son dos pasos
- * distintos justamente para que quien lo crea pueda acomodar las posiciones de firma antes de
- * que nadie reciba nada.
+ * @remarks
+ * Flujo:
+ *
+ * 1. Comprueba que el usuario sea miembro activo de la cuenta del header.
+ * 2. Valida el archivo: que venga y que no pase del tamaño máximo.
+ * 3. Rechaza participantes repetidos, por id y por correo, entre los tres roles.
+ * 4. Rechaza un documento con el mismo nombre ya pendiente de firma del mismo autor.
+ * 5. Sube el PDF a MinIO, cuenta sus páginas y calcula el hash original.
+ * 6. Guarda el documento y sus colaboradores, anclados a la cuenta personal del invitado.
+ * 7. Abre la transacción de auditoría del documento y publica el evento de creación.
+ *
+ * El documento nace en `CREATED`, todavía sin salir a firmar: el alta y el envío son dos pasos
+ * distintos para que quien lo crea pueda acomodar las posiciones de firma antes de que nadie
+ * reciba nada.
+ *
+ * **No consume ningún crédito de documento.** Es el flujo antiguo, anterior a la facturación por
+ * documento; quien cobra es `CreateDocumentSignatureFlowUseCase`
+ * (`POST /documents/signatures`), que es el que usa el frontend. Por lo mismo este alta tampoco
+ * fija el tipo de firma del documento, y sus filas quedan con `signature_type` en `null`.
+ *
+ * Sólo los firmantes necesitan cuenta en la plataforma —les hace falta firma e INE registradas—;
+ * observadores y revisores pueden invitarse sólo por correo.
  */
 @Injectable()
 export class CreateDocumentUseCase {
@@ -58,6 +76,22 @@ export class CreateDocumentUseCase {
     private readonly documentService: DocumentService,
   ) {}
 
+  /**
+   * Ejecuta el caso de uso.
+   *
+   * @param createdBy Usuario que crea el documento.
+   * @param accountId Cuenta activa (`X-Account-Id`) en la que queda el documento.
+   * @param createDocumentDto Participantes por rol y coordenadas de firma.
+   * @param file PDF subido en el multipart.
+   * @param ip IP del solicitante, que se guarda en el documento y en cada colaborador como
+   *   evidencia del alta.
+   * @returns El documento creado con sus participantes y una URL temporal para verlo.
+   * @throws {BadRequestException} Cuando falta el header de cuenta activa, no viene archivo, el
+   *   PDF pasa del tamaño máximo, hay participantes repetidos, o el autor ya tiene un documento
+   *   con ese nombre pendiente de firma.
+   * @throws {ForbiddenException} Cuando el usuario no es miembro activo de la cuenta.
+   * @throws {NotFoundException} Cuando alguno de los participantes no existe.
+   */
   async execute(
     createdBy: string,
     accountId: string,
@@ -96,9 +130,6 @@ export class CreateDocumentUseCase {
         signatureCoordinates,
       } = createDocumentDto;
 
-      // Solo los firmantes deben tener cuenta en la plataforma (necesitan firma/INE
-      // registradas para poder firmar) — watchers y reviewers sí pueden invitarse solo por
-      // email, ya que no necesitan cuenta para observar/revisar.
       const allParticipantIds = [
         ...signerIds,
         ...(watcherIds ?? []),
@@ -144,9 +175,7 @@ export class CreateDocumentUseCase {
         allParticipantIds.map((userId) => this.userService.findOne(userId)),
       );
 
-      // Los collaborators anclan a la cuenta PERSONAL del invitado, no a su userId crudo (ver
-      // docblock de CollaboratorEntity.accountId) — se resuelve una sola vez por participante
-      // aquí, antes de crear las filas.
+      // Los collaborators anclan a la cuenta PERSONAL del invitado, no a su userId crudo.
       const accountIdByUserId = new Map<string, string>(
         await Promise.all(
           [...uniqueParticipantIds].map(

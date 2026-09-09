@@ -28,11 +28,11 @@ import { AdvancedSignatureInput, DocumentService } from '../document.service';
 /**
  * Lo que el firmante necesita saber en cuanto su firma queda registrada.
  *
- * `documentCompleted` responde la única pregunta que el llamador no puede contestar solo: si esta
- * firma cerró el documento o si todavía faltan participantes. Antes esa diferencia viajaba
- * únicamente en el `message` —dos textos distintos para dos desenlaces distintos— y leerla desde
- * el cliente obligaba a comparar cadenas en español que existen para mostrarse, no para
- * ramificar: cambiarles una coma habría roto la pantalla en silencio.
+ * @remarks
+ * `documentCompleted` responde lo único que el llamador no puede contestar solo. Antes esa
+ * diferencia viajaba sólo en el `message`, y ramificar desde el cliente obligaba a comparar
+ * cadenas en español que existen para mostrarse: cambiarles una coma rompía la pantalla en
+ * silencio.
  */
 export interface SignedDocumentData {
   id: string;
@@ -44,15 +44,34 @@ export interface SignedDocumentData {
 }
 
 /**
- * `PATCH /document/:id/sign`: registra la firma del usuario autenticado.
+ * Registra la firma del usuario autenticado sobre un documento pendiente.
  *
- * Es la acción central del producto y su orden importa: se valida la e.firma antes de reclamar
- * el turno, se reclama el turno con un UPDATE condicionado antes de tocar MinIO, y se estampa
- * el PDF antes de dar la firma por buena. Cada uno de esos límites existe para que un fallo a
- * media operación no deje al firmante marcado como que ya firmó sin una firma detrás.
+ * @remarks
+ * Flujo:
  *
- * Si soy el último firmante pendiente, acá mismo se finaliza el documento: se estampa, se sella
- * y se avisa a todos.
+ * 1. Exige la geolocalización: una firma sin esa evidencia no debe registrarse por ninguna vía.
+ * 2. Comprueba que el documento esté en `PENDING`.
+ * 3. Resuelve —o vincula— al colaborador firmante y valida permisos: que sea firmante, que no
+ *    haya respondido ya, y que sea su turno si el documento es secuencial.
+ * 4. Valida la credencial de firma: e.firma completa en firma avanzada, firma registrada en
+ *    simple.
+ * 5. Exige el código de verificación si el documento lo pide.
+ * 6. Reclama el turno con un `UPDATE` condicionado a `PENDING` — el punto sin retorno.
+ * 7. Guarda la evidencia de la firma: geolocalización, y el resultado de e.firma o el snapshot
+ *    inmutable de la imagen de firma.
+ * 8. Si era el último firmante pendiente, finaliza el documento (estampa, sella y notifica) y
+ *    publica el evento; si no, avisa al siguiente en turno.
+ *
+ * **El orden de los pasos 4, 6 y 8 es la garantía central.** Validar la credencial ANTES de
+ * reclamar el turno evita dejar al colaborador marcado como firmado sin una firma válida detrás
+ * —una contraseña incorrecta es el fallo más común y se espera que el firmante reintente—, y
+ * finalizar antes de dar la firma por buena permite reintentar si el estampado falla.
+ *
+ * **Doble firma.** La comprobación en memoria del paso 3 no cierra la carrera entre dos
+ * peticiones casi simultáneas del mismo firmante (doble clic, dos pestañas, reintento por
+ * timeout): las dos pueden pasarla antes de que cualquiera escriba. Lo que la cierra es el
+ * `UPDATE` condicionado del paso 6, y va antes de tocar MinIO para que la petición perdedora no
+ * deje estampado, correos ni auditoría duplicados.
  */
 @Injectable()
 export class SignDocumentUseCase {
@@ -69,15 +88,29 @@ export class SignDocumentUseCase {
     private readonly documentService: DocumentService,
   ) {}
 
+  /**
+   * Ejecuta el caso de uso.
+   *
+   * @param documentId Documento que se firma.
+   * @param currentUserId Usuario autenticado que firma.
+   * @param advancedSignatureInput Certificado, llave y contraseña de la e.firma. Sólo se usa —y
+   *   sólo hace falta— cuando el firmante tiene `signatureType` FIEL.
+   * @param geolocation Ubicación declarada por el dispositivo del firmante, obligatoria como
+   *   evidencia de la firma.
+   * @returns El documento firmado y si esta firma lo dejó completo.
+   * @throws {BadRequestException} Cuando falta la geolocalización, el documento no está en
+   *   `PENDING`, el firmante ya respondió, el documento exige un código de verificación que no se
+   *   validó, o otra petición reclamó el turno primero.
+   * @throws {ForbiddenException} Cuando el usuario no es firmante del documento o todavía no es
+   *   su turno.
+   */
   async execute(
     documentId: string,
     currentUserId: string,
     advancedSignatureInput?: AdvancedSignatureInput,
     geolocation?: GeolocationDto,
   ): Promise<BaseResponse<SignedDocumentData>> {
-    // La ubicación es obligatoria para firmar. El DTO ya la exige (400 desde ValidationPipe),
-    // pero se revalida aquí porque `sign()` también se invoca desde otros puntos internos y una
-    // firma sin esta evidencia no debe poder registrarse por ninguna vía.
+    // Se revalida aunque el DTO ya la exija: este método también se invoca desde otros puntos.
     if (!geolocation) {
       throw new BadRequestException(
         'La geolocalización es obligatoria para poder firmar el documento',
@@ -118,11 +151,6 @@ export class SignDocumentUseCase {
       );
     }
 
-    // La validación de e.firma (contraseña, vigencia del certificado, cadena de confianza,
-    // correspondencia llave/certificado — todo vía EfirmaService) corre ANTES del claim atómico
-    // a propósito: si falla (contraseña incorrecta es el caso más común, se espera que el
-    // firmante reintente), no debe dejar al colaborador marcado como SIGNED sin una firma válida
-    // detrás. Para firma simple, el equivalente es `assertCanSignWithSimpleSignature`.
     let advancedSignatureResult: SignatureResult | null = null;
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       advancedSignatureResult =
@@ -136,9 +164,7 @@ export class SignDocumentUseCase {
       );
     }
 
-    // Gateo por código de verificación (ver plan de migración ER-V2, Fase 7): opt-in por
-    // documento vía requiresVerification (default false) — si está apagado, el flujo de firma
-    // sigue exactamente igual que siempre, sin ningún riesgo para el caso dominante.
+    // Opt-in por documento: apagado, el flujo de firma sigue igual que siempre.
     if (document.requiresVerification) {
       const hasVerified = await this.verificationCodeService.hasConsumedCode(
         documentId,
@@ -152,13 +178,7 @@ export class SignDocumentUseCase {
       }
     }
 
-    // Claim atómico (bug corregido): un UPDATE condicionado a status=PENDING es lo único que
-    // realmente cierra la ventana de carrera entre dos peticiones casi simultáneas para el
-    // mismo firmante (doble clic, dos pestañas, reintento por timeout) — la validación en
-    // memoria de arriba (`myParticipant.status !== PENDING`) no alcanza porque ambas peticiones
-    // pueden pasarla antes de que cualquiera escriba. Si `affected !== 1`, alguien más ya ganó
-    // la carrera; se aborta aquí, antes de tocar MinIO/estampado/correos, así que no hay
-    // estampado duplicado, correos duplicados a todos los colaboradores, ni auditoría duplicada.
+    // `affected !== 1` significa que otra petición ya reclamó el turno.
     const claim = await this.collaboratorRepository.update(
       { id: myParticipant.id, status: SIGNEE_STATUS_ENUM.PENDING },
       { status: SIGNEE_STATUS_ENUM.SIGNED, signedAt: new Date() },
@@ -168,47 +188,34 @@ export class SignDocumentUseCase {
     }
     myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
     myParticipant.signedAt = new Date();
-    // Evidencia declarada por el dispositivo del firmante (navigator.geolocation), no verificada
-    // independientemente por el servidor. Siempre presente: firmar sin ubicación se rechaza al
-    // inicio de este método y en el DTO.
+    // Evidencia declarada por el dispositivo, no verificada por el servidor.
     myParticipant.geoLoc = geolocation;
 
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
-      // Resultado ya validado arriba (antes del claim) — solo se persiste. No contiene la llave
-      // privada ni la contraseña, ver docblock de `CollaboratorEntity.advancedSignature`.
+      // Ya validado antes del claim; nunca contiene la llave privada ni la contraseña.
       myParticipant.advancedSignature = advancedSignatureResult;
     } else {
-      // Snapshot inmutable tomado AHORA, en el momento real de la firma — ver docblock de
-      // `signatureSnapshotObjectKey` y la migración asociada. Sin esto, finalizeSignedDocument()
-      // (que corre después, cuando firma el ÚLTIMO firmante) volvería a leer la firma EN VIVO de
-      // cada colaborador, y un firmante que desactivó su firma entre que firmó y que el último
-      // terminó quedaría con un PNG en blanco estampado en el PDF legal final, sin ningún error.
-      // Se toma después del claim a propósito: si el claim se pierde, no se desperdicia esta
-      // llamada a MinIO.
+      /**
+       * Copia inmutable de la imagen de firma, tomada en el momento real de la firma.
+       *
+       * Sin ella, `finalizeSignedDocument` —que corre cuando firma el ÚLTIMO— releería la firma
+       * EN VIVO de cada colaborador, y quien la hubiera desactivado entre medias quedaría con un
+       * PNG en blanco estampado en el PDF legal, sin ningún error. Va después del claim para no
+       * gastar la llamada a MinIO si el turno se pierde.
+       */
       myParticipant.signatureSnapshotObjectKey =
         await this.documentService.snapshotSignatureImage(
           myParticipant.account!.user as UserEntity,
         );
 
       /**
-       * Se persiste ACÁ y no en el `save` del final del método.
+       * Se escribe ya, y no en el `save` del final: el sellado corre dentro de
+       * `finalizeSignedDocument` y RELEE los firmantes de la base para armar la evidencia del
+       * PSC. Sin esta escritura, el snapshot del último firmante llegaba en NULL y la evidencia
+       * se sellaba con su firma en vivo mientras el PDF se estampaba con el snapshot — las dos
+       * rúbricas que el snapshot existe para garantizar que sean la misma.
        *
-       * El sellado de firma simple corre dentro de `finalizeSignedDocument` —antes de ese save— y
-       * RELEE los firmantes de la base para armar la evidencia que manda al PSC
-       * (`SendCompletedSimpleSignatureToSealUseCase.findDocumentWithSigners`). Con el snapshot
-       * todavía sin escribir, el del último firmante llegaba en NULL y el caso de uso caía a la
-       * firma EN VIVO de su perfil.
-       *
-       * El estampado, en cambio, sí veía el snapshot: recibe el arreglo de colaboradores por
-       * referencia y lee el valor en memoria. Es decir que el PDF se firmaba con el snapshot y la
-       * evidencia se sellaba con la firma en vivo — dos rúbricas que el snapshot existe justamente
-       * para garantizar que sean la misma. Coinciden mientras el usuario no cambie su firma, así
-       * que la divergencia no se manifestaba como error sino como una evidencia que podía no
-       * corresponder al documento.
-       *
-       * Un UPDATE puntual en vez de adelantar el `save` completo: ese save persiste además la
-       * geolocalización y, en firma avanzada, la firma electrónica, y moverlo entero cambiaría
-       * cuándo se escriben cosas que no tienen nada que ver con esto.
+       * Un UPDATE puntual y no adelantar el `save` completo, que persiste además cosas ajenas.
        */
       await this.collaboratorRepository.update(myParticipant.id, {
         signatureSnapshotObjectKey: myParticipant.signatureSnapshotObjectKey,
@@ -220,15 +227,10 @@ export class SignDocumentUseCase {
         c.id !== myParticipant.id && c.status === SIGNEE_STATUS_ENUM.PENDING,
     );
 
-    // Si soy el último firmante pendiente, estampo y finalizo el documento ANTES de
-    // registrar mi firma: si el estampado falla, ni el colaborador ni el documento
-    // quedan marcados como firmados, y la firma puede reintentarse sin quedar atascada.
     document.completedSignersCount = (document.completedSignersCount ?? 0) + 1;
 
     if (remainingSigners.length === 0) {
-      // finalizeSignedDocument guarda `document` (ya con completedSignersCount incrementado) y
-      // sella con Seal Service antes de armar la hoja de evidencia, para que la constancia
-      // NOM-151 alcance a imprimirse en ella.
+      // Sella antes de armar la hoja de evidencia, para que la constancia NOM-151 quepa en ella.
       await this.documentService.finalizeSignedDocument(
         document,
         signerCollaborators,

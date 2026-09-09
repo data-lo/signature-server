@@ -23,8 +23,16 @@ import { DocumentService } from '../document.service';
 
 /** Lo que el caso de uso necesita: quién pregunta, desde qué cuenta, y qué quiere ver. */
 export interface GetDocumentsParams {
+  /** Usuario autenticado. De él sale también el correo con el que se busca su participación. */
   userId: string;
+  /** Cuenta activa (`X-Account-Id`): acota lo visible al contexto en el que está trabajando. */
   accountId: string;
+  /**
+   * Recorte, búsqueda, orden y paginación.
+   *
+   * `view` escoge un subconjunto de lo visible y NUNCA lo amplía; el acceso lo decide la cuenta
+   * activa, no el filtro.
+   */
   filters: GetDocumentsQueryDto;
 }
 
@@ -62,19 +70,27 @@ const SORT_COLUMNS: Record<DOCUMENT_SORT_FIELD_ENUM, string> = {
 };
 
 /**
- * `GET /document`: la ÚNICA consulta de documentos del producto.
+ * Lista los documentos que la cuenta activa puede ver, con búsqueda, recorte, orden y paginación.
  *
- * Antes servía a tres pantallas que se repartían la bandeja —"Por firmar", "Enviados para firma"
- * y "Completados"— y cada una llegaba con su propia receta de parámetros
- * (`participantEmail`+`status`, `email`, `participantEmail`+`status`). Eso dejaba la definición
- * de cada sección en el cliente: el servidor no sabía qué era "por firmar", sólo obedecía la
- * combinación que le mandaran. Por eso las tres eran incombinables entre sí —no había manera de
- * buscar "contrato" en las tres a la vez— y ninguna podía ordenarse.
+ * @remarks
+ * Flujo:
  *
- * Ahora el recorte lo nombra `view` y lo resuelve este caso de uso. Lo importante es que `view`
- * **no decide el acceso**: primero se aplica lo que el usuario puede ver —su cuenta activa, lo
- * que creó, aquello en lo que participa— y `view` sólo escoge un subconjunto de eso. Un `view`
- * distinto no puede ampliar lo visible; en el peor caso lo deja vacío.
+ * 1. Exige el header de cuenta activa y comprueba que quien pregunta sea miembro de ella, antes
+ *    de mirar un solo filtro.
+ * 2. Valida los rangos de fecha.
+ * 3. Resuelve el correo del usuario en el servidor, que es con el que se busca su participación.
+ * 4. Aplica la VISIBILIDAD: cuenta activa, lo que creó y aquello en lo que participa.
+ * 5. Aplica el `view` pedido y excluye lo que este usuario archivó.
+ * 6. Suma los filtros opcionales: id, estados, búsqueda, participante y rangos de fecha.
+ * 7. Pagina, ordena con desempate estable y arma la respuesta; opcionalmente firma URLs de MinIO.
+ *
+ * **`view` no decide el acceso.** El orden de los pasos 4 y 5 es la garantía: primero se acota lo
+ * que el usuario puede ver y sólo después se escoge un subconjunto. Un `view` distinto no puede
+ * ampliar lo visible; en el peor caso lo deja vacío.
+ *
+ * Sustituye a las tres consultas que se repartían la bandeja, cada una con su propia receta de
+ * parámetros. Aquello dejaba la definición de cada sección en el cliente —el servidor no sabía
+ * qué era "por firmar"—, hacía las tres incombinables entre sí y ninguna se podía ordenar.
  */
 @Injectable()
 export class GetDocumentsUseCase {
@@ -87,6 +103,15 @@ export class GetDocumentsUseCase {
     private readonly documentService: DocumentService,
   ) {}
 
+  /**
+   * Ejecuta el caso de uso.
+   *
+   * @param params Quién pregunta, desde qué cuenta y con qué filtros.
+   * @returns La página de documentos con su paginación.
+   * @throws {BadRequestException} Cuando falta el header de cuenta activa o un rango de fechas
+   *   termina antes de empezar.
+   * @throws {ForbiddenException} Cuando el usuario no es miembro activo de la cuenta.
+   */
   async execute({ userId, accountId, filters }: GetDocumentsParams) {
     if (!accountId) {
       throw new BadRequestException(
@@ -94,10 +119,6 @@ export class GetDocumentsUseCase {
       );
     }
 
-    /**
-     * La cuenta activa se comprueba ANTES de mirar un solo filtro: si quien pregunta no es
-     * miembro de ella, no hay consulta que valga la pena armar. Lanza `ForbiddenException`.
-     */
     const activeAccount = await this.accountMemberService.assertIsActiveMember(
       userId,
       accountId,
@@ -124,17 +145,12 @@ export class GetDocumentsUseCase {
     this.assertValidDateRange(signedFrom, signedTo, 'firma');
 
     /**
-     * El correo del usuario se resuelve ACÁ y no llega por query.
+     * El correo sale del servidor y no de la query: pedírselo al cliente sería confiarle de quién
+     * es la bandeja. Hace falta porque un firmante invitado por correo no tiene cuenta vinculada
+     * todavía, así que su fila en `collaborators` sólo tiene el email.
      *
-     * Es la pieza que cada pantalla segmentada mandaba a mano (`participantEmail=<mi correo>`) y
-     * hace falta porque un firmante invitado por correo todavía no tiene cuenta vinculada: hasta
-     * que algo la vincula, su fila en `collaborators` sólo tiene el email. Pedírselo al cliente
-     * significaba además confiar en él para decidir de quién es la bandeja — cualquiera podía
-     * escribir el correo de otra persona y ver qué documentos le tocan.
-     *
-     * Se compara en minúsculas: `users.email` se guarda normalizado, pero `collaborators.email`
-     * conserva lo que tecleó quien invitó (ver el bug "las solicitudes FIEL sin 2FA no aparecen
-     * en Por firmar").
+     * En minúsculas: `users.email` se guarda normalizado, pero `collaborators.email` conserva lo
+     * que tecleó quien invitó.
      */
     const caller = await this.userService.findOne(userId);
     const callerEmail = caller.email?.toLowerCase() ?? null;
@@ -142,9 +158,7 @@ export class GetDocumentsUseCase {
     const qb = this.documentRepository
       .createQueryBuilder('document')
       .leftJoinAndSelect('document.requestedBy', 'requester')
-      // El RFC no vive en `users` sino en `personal_information` (ver UserEntity): el listado lo
-      // muestra como texto secundario bajo el nombre en la columna "Creado por", así que se trae
-      // en el mismo query en vez de resolverlo documento por documento.
+      // El RFC vive en `personal_information`, y el listado lo muestra bajo el nombre del creador.
       .leftJoinAndSelect(
         'requester.personalInformation',
         'requesterPersonalInfo',
@@ -153,9 +167,7 @@ export class GetDocumentsUseCase {
       .leftJoinAndSelect('collaborator.account', 'collaboratorAccount')
       .leftJoinAndSelect('collaboratorAccount.user', 'collaboratorUser')
       .orderBy(SORT_COLUMNS[sortBy], sortDirection)
-      // Desempate estable: sin él, dos documentos con el mismo valor en el campo ordenado pueden
-      // salir en distinto orden entre una página y la siguiente, y entonces uno se repite
-      // mientras otro no aparece nunca.
+      // Desempate estable: sin él, un documento se repite entre páginas mientras otro no sale.
       .addOrderBy('document.id', sortDirection)
       .skip((page - 1) * limit)
       .take(limit);
@@ -173,15 +185,7 @@ export class GetDocumentsUseCase {
     }
 
     if (search) {
-      /**
-       * Una sola caja para dos cosas distintas —el nombre del archivo y quién participa— porque
-       * es lo que la persona tiene en la cabeza cuando busca: se acuerda de "el convenio" o de
-       * "el de Isaay", no de en qué columna vive cada uno.
-       *
-       * `:search` es un parámetro preparado, así que un `%` o una comilla en lo que se teclee
-       * viaja como texto y no como sintaxis. Los comodines los pone el servidor alrededor del
-       * valor.
-       */
+      // Una caja para nombre y participantes: es lo que la persona tiene en la cabeza al buscar.
       qb.andWhere(
         new Brackets((where) => {
           where

@@ -6,19 +6,24 @@ import { DocumentCreditOfferResponse } from './document-credit-offer.interface';
 /**
  * Paquetes de documentos que la cuenta activa puede comprar HOY, según su plan vigente.
  *
+ * @remarks
+ * Flujo:
+ *
+ * 1. Resuelve el propietario facturable, comprobando la membresía en la cuenta activa.
+ * 2. Busca su `billing_profile`. Sin perfil, o sin plan vigente, no hay ofertas.
+ * 3. Consulta el catálogo por `eligible_plan_type` igual al plan del perfil.
+ * 4. Descarta las ofertas sin `stripe_price_id`: no se pueden llevar a Checkout.
+ *
  * **El plan decide el precio, no sólo la visibilidad.** La misma oferta vale distinto en Free,
- * Plus y Premium, y eso vive como filas distintas de `catalog_prices` con su `eligible_plan_type`.
- * Por eso esta consulta filtra por el plan del perfil resuelto en el servidor y nunca por nada que
- * llegue en la petición: es la mitad de la regla que impide comprar el paquete de Premium desde
- * una cuenta Free (la otra mitad la aplica el checkout, que vuelve a validar).
+ * Plus y Premium, y eso vive como filas distintas de `catalog_prices`. Por eso se filtra por el
+ * plan del perfil resuelto en el servidor y nunca por nada que llegue en la petición: es la mitad
+ * de la regla que impide comprar el paquete de Premium desde una cuenta Free — la otra la aplica
+ * el checkout, que vuelve a validar.
  *
- * **Devolver una lista vacía es una respuesta normal**, no un error: un plan al que todavía no le
- * han configurado paquetes es un estado corriente del catálogo, y la pantalla lo dibuja como "no
- * hay paquetes disponibles para tu plan".
+ * **Una lista vacía es una respuesta normal**, no un error: un plan al que todavía no le han
+ * configurado paquetes es un estado corriente del catálogo.
  *
- * No crea perfil: es una consulta, y crear filas al mirar una pantalla convertiría un GET en algo
- * con efectos. Una cuenta sin perfil —o con un perfil sin plan— no tiene plan contra el que
- * comparar, así que no tiene ofertas.
+ * No crea perfil: crear filas al mirar una pantalla convertiría un GET en algo con efectos.
  */
 @Injectable()
 export class GetAvailableDocumentCreditOffersUseCase {
@@ -32,19 +37,13 @@ export class GetAvailableDocumentCreditOffersUseCase {
   ) {}
 
   /**
-   * Lista las ofertas de documentos compatibles con el plan de la cuenta activa.
+   * Ejecuta el caso de uso.
    *
-   * @param input - Usuario autenticado y cuenta activa (`X-Account-Id`), que juntos deciden a qué
-   *   propietario facturable se le está preguntando.
+   * @param input Usuario autenticado y cuenta activa, que juntos deciden a qué propietario
+   *   facturable se le está preguntando.
    * @returns Las ofertas vendibles, de la más barata a la más cara; vacío si el plan no tiene
    *   ninguna configurada, si la cuenta no tiene perfil, o si su perfil no tiene plan.
-   *
-   * @throws {ForbiddenException} Si el usuario no pertenece a la cuenta activa (lo lanza
-   *   `BillingOwnerService.resolveOwner`).
-   *
-   * @example
-   * const ofertas = await useCase.execute({ userId: user.sub, accountId });
-   * // [{ catalogPriceId: 'uuid', name: 'Documento adicional', documentsGranted: 1, ... }]
+   * @throws {ForbiddenException} Cuando el usuario no pertenece a la cuenta activa.
    */
   async execute(input: {
     userId: string;
@@ -57,12 +56,7 @@ export class GetAvailableDocumentCreditOffersUseCase {
 
     const profile = await this.billingOwnerService.findProfileByOwner(owner);
 
-    /**
-     * Sin plan no hay tarifa que aplicar. No se cae a `free` por defecto —aunque hoy toda cuenta
-     * nazca con perfil gratuito— por la misma razón que `GetBillingAccessUseCase` deja
-     * `currentPlanType` en `null`: inventar un plan aquí ofrecería las tarifas de Free a una
-     * cuenta cuyo estado real es "todavía no lo sé".
-     */
+    // No se cae a `free` por defecto: inventar un plan ofrecería tarifas por un estado desconocido.
     if (!profile?.currentPlanType) {
       this.logger.debug(
         `La cuenta ${input.accountId} no tiene plan vigente; no hay paquetes de documentos que ofrecer.`,
@@ -76,12 +70,7 @@ export class GetAvailableDocumentCreditOffersUseCase {
         owner,
       );
 
-    /**
-     * Una oferta sin precio publicado en Stripe no se puede llevar a Checkout: se ofrecería un
-     * botón que revienta al pulsarlo. Se filtra acá y no en el catálogo porque allí la ausencia
-     * es legítima —un importe administrado sólo en nuestra base—; lo que no es legítimo es
-     * VENDERLA.
-     */
+    // En el catálogo la ausencia es legítima; lo que no lo es es ofrecer la oferta en venta.
     const vendibles = prices.filter((price) => Boolean(price.stripePriceId));
 
     if (vendibles.length !== prices.length) {
