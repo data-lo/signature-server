@@ -234,16 +234,21 @@ describe('DocumentController', () => {
     expect(response.send).toHaveBeenCalledWith(content);
   });
 
-  it('findAll delega en GetDocumentsUseCase con el userId y el X-Account-Id', () => {
-    const query = { page: 1, limit: 10 } as any;
+  /**
+   * El controlador no interpreta los filtros ni deduce de quién es la bandeja: el usuario y la
+   * cuenta activa salen del contexto autenticado —nunca de la query— y todo lo demás viaja tal
+   * cual al caso de uso.
+   */
+  it('findAll delega en GetDocumentsUseCase el usuario, la cuenta activa y los filtros', () => {
+    const query = { page: 1, limit: 25, view: 'all' } as any;
 
     controller.findAll(user, 'account-1', query);
 
-    expect(useCase(GetDocumentsUseCase).execute).toHaveBeenCalledWith(
-      'user-1',
-      'account-1',
-      query,
-    );
+    expect(useCase(GetDocumentsUseCase).execute).toHaveBeenCalledWith({
+      userId: 'user-1',
+      accountId: 'account-1',
+      filters: query,
+    });
   });
 
   it('findOne delega en GetDocumentUseCase con el userId autenticado', () => {
