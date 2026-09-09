@@ -10,6 +10,16 @@ export interface PaymentService {
   priceId: string;
   /** `prod_...`: el producto al que pertenece el precio. */
   productId: string;
+  /**
+   * Plan del catálogo al que corresponde este producto (`premium`, `plus`, ...), tomado de la
+   * metadata de Stripe. `null` cuando el producto no la trae — un paquete suelto, o un plan al
+   * que nadie se la puso todavía.
+   *
+   * Es la MISMA llave que `billing_profiles.current_plan_type`, y esa correspondencia es su
+   * única razón de existir: sin ella, quien mira el catálogo no puede saber cuál de las tarjetas
+   * es el plan que ya tiene contratado.
+   */
+  planType: string | null;
   name: string;
   description: string | null;
   /** Importe en la unidad mínima de la moneda (centavos), tal como lo maneja Stripe. */

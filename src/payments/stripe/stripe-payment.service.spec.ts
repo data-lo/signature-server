@@ -67,6 +67,7 @@ describe('StripePaymentService', () => {
         {
           priceId: 'price_mensual',
           productId: 'prod_1',
+          planType: 'pro',
           name: 'Plan Pro',
           description: 'Firma ilimitada',
           unitAmount: 49900,
@@ -76,6 +77,69 @@ describe('StripePaymentService', () => {
           imageUrl: 'https://files.stripe.com/plan-pro.png',
         },
       ]);
+    });
+
+    /**
+     * El `planType` es lo que permite reconocer, en la pantalla de planes, cuál de las tarjetas
+     * es el plan ya contratado: se compara con `currentPlanType` del estado de facturación. Si
+     * no saliera del catálogo, el frontend tendría que deducirlo del nombre del producto.
+     */
+    it('expone el planType declarado en la metadata del producto', async () => {
+      const [servicio] = await service.listPublicPlans();
+
+      expect(servicio.planType).toBe('pro');
+    });
+
+    /** Misma convención que `CatalogSyncService`, que acepta las dos claves. */
+    it('acepta planCode cuando el producto no declara planType', async () => {
+      mockPricesList.mockResolvedValue({
+        data: [
+          precio({
+            product: {
+              id: 'prod_1',
+              name: 'Plan Premium',
+              description: null,
+              active: true,
+              images: [],
+              metadata: {
+                catalogType: 'plan',
+                visibility: 'true',
+                planCode: 'premium',
+              },
+            },
+          }),
+        ],
+      });
+
+      const [servicio] = await service.listPublicPlans();
+
+      expect(servicio.planType).toBe('premium');
+    });
+
+    /**
+     * Un producto sin la metadata sale con `planType: null` en vez de quedarse fuera del
+     * catálogo: se sigue pudiendo contratar, sólo que la pantalla no podrá marcarlo como plan
+     * actual. Dejarlo fuera castigaría al usuario por un campo que se olvidó en el dashboard.
+     */
+    it('devuelve planType null cuando el producto no declara ninguna de las dos claves', async () => {
+      mockPricesList.mockResolvedValue({
+        data: [
+          precio({
+            product: {
+              id: 'prod_1',
+              name: 'Plan Suelto',
+              description: null,
+              active: true,
+              images: [],
+              metadata: { catalogType: 'plan', visibility: 'true' },
+            },
+          }),
+        ],
+      });
+
+      const [servicio] = await service.listPublicPlans();
+
+      expect(servicio.planType).toBeNull();
     });
 
     it('pide sólo precios activos y expande el producto en la misma llamada', async () => {

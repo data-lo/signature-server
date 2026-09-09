@@ -11,6 +11,16 @@
 export interface PaymentServiceResponse {
   /** `price_...`: es lo que el frontend devuelve al pedir la sesión de Checkout. */
   priceId: string;
+  /**
+   * Plan del catálogo al que corresponde la tarjeta (`premium`, `plus`, ...), para poder
+   * compararla con `currentPlanType` de `/payments/billing-state` y marcar cuál es el plan
+   * vigente de la cuenta. `null` cuando el producto no declara la metadata.
+   *
+   * Es lo ÚNICO interno que se deja salir, y a propósito: sin esta llave el frontend tendría que
+   * adivinar el plan por el nombre del producto, que ventas puede renombrar en cualquier momento
+   * sin que nadie lo note hasta que el badge aparezca en la tarjeta equivocada.
+   */
+  planType: string | null;
   name: string;
   description: string | null;
   /** Importe en la unidad mínima de la moneda (centavos). */

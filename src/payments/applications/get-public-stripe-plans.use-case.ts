@@ -4,8 +4,16 @@ import { PaymentService } from '../interfaces/payment-service.interface';
 import { PaymentServiceResponse } from '../interfaces/payment-service-response.interface';
 import { StripePaymentService } from '../stripe/stripe-payment.service';
 
-/** Clave única del catálogo público: es el mismo para todos, no depende de quién pregunte. */
-export const PUBLIC_STRIPE_PLANS_CACHE_KEY = 'payments:public-stripe-plans';
+/**
+ * Clave única del catálogo público: es el mismo para todos, no depende de quién pregunte.
+ *
+ * **El sufijo de versión sube cuando cambia la FORMA de la respuesta.** Lo cacheado es el JSON
+ * ya normalizado, así que tras un despliegue que agrega un campo —`planType`, en `v2`— las
+ * entradas viejas seguirían sirviéndose sin él durante lo que reste del TTL, y la pantalla de
+ * planes pasaría diez minutos sin poder reconocer el plan contratado. Cambiar la clave deja esas
+ * entradas huérfanas, que caducan solas.
+ */
+export const PUBLIC_STRIPE_PLANS_CACHE_KEY = 'payments:public-stripe-plans:v2';
 
 /** 10 minutos. Un cambio de precio en el dashboard tarda como mucho eso en verse. */
 export const PUBLIC_STRIPE_PLANS_CACHE_TTL_SECONDS = 600;
@@ -115,6 +123,7 @@ export class GetPublicStripePlansUseCase {
   private toResponse(plan: PaymentService): PaymentServiceResponse {
     return {
       priceId: plan.priceId,
+      planType: plan.planType,
       name: plan.name,
       description: plan.description,
       unitAmount: plan.unitAmount,
