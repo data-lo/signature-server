@@ -48,6 +48,7 @@ import { SubmitDocumentForCancellationUseCase } from './applications/submit-docu
 import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
+import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 
 // Enums
 import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
@@ -80,6 +81,7 @@ import { ApiSubmitDocumentForCancellation } from './docs/api-submit-document-for
 import { ApiConfirmDocumentCancellation } from './docs/api-confirm-document-cancellation.docs';
 import { ApiUpdateDocument } from './docs/api-update-document.docs';
 import { ApiDeleteDocument } from './docs/api-delete-document.docs';
+import { ApiArchiveDocument } from './docs/api-archive-document.docs';
 import { ApiGetPublicSealArtifact } from './docs/api-get-public-seal-artifact.docs';
 import { ApiGetPublicDocumentAuditXml } from './docs/api-get-public-document-audit-xml.docs';
 
@@ -109,6 +111,7 @@ export class DocumentController {
     private readonly confirmCancellationUseCase: ConfirmDocumentCancellationUseCase,
     private readonly updateDocument: UpdateDocumentUseCase,
     private readonly deleteDocument: DeleteDocumentUseCase,
+    private readonly archiveCompletedDocument: ArchiveCompletedDocumentUseCase,
   ) {}
 
   @Get('file/:id')
@@ -336,6 +339,18 @@ export class DocumentController {
     @Param('id') id: string,
   ) {
     return this.confirmCancellationUseCase.execute(id, user.sub);
+  }
+
+  /**
+   * Va ANTES de `@Patch(':id')`/`@Delete(':id')` por el mismo motivo que el resto de las rutas
+   * con sufijo: Nest resuelve por orden de declaración y `:id` sin sufijo casaría primero.
+   * `POST` y no `PATCH` porque no modifica el documento: crea (o renueva) la preferencia de
+   * archivado de quien llama.
+   */
+  @Post(':id/archive')
+  @ApiArchiveDocument()
+  archive(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.archiveCompletedDocument.execute(id, user.sub);
   }
 
   @Patch(':id')

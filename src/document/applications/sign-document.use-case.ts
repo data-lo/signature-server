@@ -26,6 +26,24 @@ import { VerificationCodeService } from '../verification-code.service';
 import { AdvancedSignatureInput, DocumentService } from '../document.service';
 
 /**
+ * Lo que el firmante necesita saber en cuanto su firma queda registrada.
+ *
+ * `documentCompleted` responde la única pregunta que el llamador no puede contestar solo: si esta
+ * firma cerró el documento o si todavía faltan participantes. Antes esa diferencia viajaba
+ * únicamente en el `message` —dos textos distintos para dos desenlaces distintos— y leerla desde
+ * el cliente obligaba a comparar cadenas en español que existen para mostrarse, no para
+ * ramificar: cambiarles una coma habría roto la pantalla en silencio.
+ */
+export interface SignedDocumentData {
+  id: string;
+  /**
+   * `true` si esta firma fue la última que faltaba y el documento quedó completo; `false` si
+   * quedan firmantes pendientes. Es el estado DESPUÉS de esta firma, no el que tenía al entrar.
+   */
+  documentCompleted: boolean;
+}
+
+/**
  * `PATCH /document/:id/sign`: registra la firma del usuario autenticado.
  *
  * Es la acción central del producto y su orden importa: se valida la e.firma antes de reclamar
@@ -56,7 +74,7 @@ export class SignDocumentUseCase {
     currentUserId: string,
     advancedSignatureInput?: AdvancedSignatureInput,
     geolocation?: GeolocationDto,
-  ): Promise<BaseResponse<{ id: string }>> {
+  ): Promise<BaseResponse<SignedDocumentData>> {
     // La ubicación es obligatoria para firmar. El DTO ya la exige (400 desde ValidationPipe),
     // pero se revalida aquí porque `sign()` también se invoca desde otros puntos internos y una
     // firma sin esta evidencia no debe poder registrarse por ninguna vía.
@@ -278,14 +296,14 @@ export class SignDocumentUseCase {
         success: true,
         message:
           'Firma registrada correctamente. Se notificó al siguiente firmante.',
-        data: { id: documentId },
+        data: { id: documentId, documentCompleted: false },
       };
     }
 
     return {
       success: true,
       message: 'Documento firmado exitosamente por todos los firmantes',
-      data: { id: documentId },
+      data: { id: documentId, documentCompleted: true },
     };
   }
 }
