@@ -22,6 +22,7 @@ import { SubmitDocumentForCancellationUseCase } from './applications/submit-docu
 import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
+import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 
 type Mocked = { execute: jest.Mock };
 
@@ -44,6 +45,7 @@ const USE_CASES = [
   ConfirmDocumentCancellationUseCase,
   UpdateDocumentUseCase,
   DeleteDocumentUseCase,
+  ArchiveCompletedDocumentUseCase,
 ];
 
 describe('DocumentController', () => {
@@ -360,6 +362,14 @@ describe('DocumentController', () => {
       'user-1',
       dto,
     );
+  });
+
+  it('archive delega en ArchiveCompletedDocumentUseCase con el userId autenticado', () => {
+    controller.archive(user, 'doc-1');
+
+    expect(
+      useCase(ArchiveCompletedDocumentUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1');
   });
 
   it('remove delega en DeleteDocumentUseCase con el userId autenticado', () => {

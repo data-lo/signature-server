@@ -41,6 +41,7 @@ import { ConfirmDocumentCancellationUseCase } from './applications/confirm-docum
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
+import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -67,6 +68,7 @@ import { CreateDocumentSignatureFlowUseCase } from './applications/create-docume
     UpdateDocumentUseCase,
     DeleteDocumentUseCase,
     CreateDocumentSignatureFlowUseCase,
+    ArchiveCompletedDocumentUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -74,11 +76,12 @@ import { CreateDocumentSignatureFlowUseCase } from './applications/create-docume
       CollaboratorEntity,
       VerificationCodeEntity,
       /**
-       * Todavía no la inyecta nadie —esta historia es sólo el modelo— pero tiene que estar
-       * nombrada acá igual: con `autoLoadEntities: true` (ver `app.module.ts`) TypeORM sólo carga
-       * el metadata de una entidad si algún `forFeature()` la menciona, y que exista su archivo
-       * `.entity.ts` no basta. Sin esto, `synchronize` no crearía la tabla en desarrollo y las
-       * relaciones hacia `documents` y `users` no se construirían.
+       * La inyecta `ArchiveCompletedDocumentUseCase`, y además tiene que estar nombrada acá
+       * porque con `autoLoadEntities: true` (ver `app.module.ts`) TypeORM sólo carga el metadata
+       * de una entidad si algún `forFeature()` la menciona: que exista su archivo `.entity.ts`
+       * no basta. Sin esto, `synchronize` no crearía la tabla en desarrollo, las relaciones
+       * hacia `documents` y `users` no se construirían, y el `leftJoin` del listado
+       * (`GetDocumentsUseCase`) no sabría a qué tabla apunta el alias.
        */
       DocumentUserPreferenceEntity,
     ]),
