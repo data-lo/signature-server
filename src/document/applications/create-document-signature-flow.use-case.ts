@@ -40,6 +40,7 @@ import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.consta
 import { EmailService } from 'src/shared/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
+import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
 import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
@@ -57,6 +58,42 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
   [PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE]: SIGNATURE_TYPE_ENUM.SIMPLE,
   [PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED]: SIGNATURE_TYPE_ENUM.FIEL,
 };
+
+/**
+ * Vocabulario de documentos -> vocabulario comercial. `fiel` y `ADVANCED` son el mismo tipo de
+ * firma con el nombre que le da cada módulo: el dominio de documentos habla de la FIEL del SAT y
+ * facturación habla de firma avanzada.
+ */
+const SIGNATURE_TYPE_DOMAIN_TO_BILLING: Record<
+  SIGNATURE_TYPE_ENUM,
+  BILLING_SIGNATURE_TYPE_ENUM
+> = {
+  [SIGNATURE_TYPE_ENUM.SIMPLE]: BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
+  [SIGNATURE_TYPE_ENUM.FIEL]: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+};
+
+/**
+ * Traduce el tipo de firma de un documento al vocabulario de facturación.
+ *
+ * Es el único punto que cruza esa frontera: el resto del módulo de documentos usa
+ * `SIGNATURE_TYPE_ENUM` y facturación no conoce ese enum. Un documento sin tipo de firma se
+ * traduce a `null` en vez de a un valor por defecto — el recibo debe decir "no se decidió" y no
+ * inventar una firma simple que nadie eligió.
+ *
+ * @param signatureType - Tipo de firma tal como está guardado en `documents.signature_type`.
+ * @returns El tipo equivalente para el recibo de crédito, o `null` si el documento no tiene uno.
+ *
+ * @example
+ * ```ts
+ * toBillingSignatureType(SIGNATURE_TYPE_ENUM.FIEL); // BILLING_SIGNATURE_TYPE_ENUM.ADVANCED
+ * toBillingSignatureType(null); // null
+ * ```
+ */
+function toBillingSignatureType(
+  signatureType: SIGNATURE_TYPE_ENUM | null,
+): BILLING_SIGNATURE_TYPE_ENUM | null {
+  return signatureType ? SIGNATURE_TYPE_DOMAIN_TO_BILLING[signatureType] : null;
+}
 
 /**
  * `requiresDifferentSignatures` es el mismo dato que `documentData.signatureType` con otro
@@ -93,7 +130,9 @@ export interface CreateDocumentSignaturesResult {
  *
  * El tipo de firma es del documento, no de cada firmante (historia "Selección de tipo de firma al
  * crear documentos"): llega en `documentData.signatureType`, admite solo SIMPLE o ADVANCED, y se
- * copia igual a todos los SIGNER — no existe el documento con firmas de tipos distintos.
+ * copia igual a todos los SIGNER — no existe el documento con firmas de tipos distintos. Desde
+ * `AddSignatureTypeToDocuments1784300000049` se guarda además en el propio documento, que es de
+ * donde lo lee el recibo de crédito.
  *
  * Crea Document -> Collaborator (+ SimpleSignature por firmante, con su arreglo `signatures` —
  * ver historia "Ubicación de firmas por usuario") -> Notification -> verification_code dentro de
@@ -251,6 +290,13 @@ export class CreateDocumentSignatureFlowUseCase {
           totalSigners,
           isSequential,
           isIndexable,
+          /**
+           * El tipo de firma se guarda EN el documento, y no sólo copiado en cada firmante como
+           * hasta ahora: es una decisión del documento y quien la necesite —el recibo de crédito,
+           * aquí abajo— debe poder leerla de una sola fila en vez de deducirla de sus
+           * colaboradores.
+           */
+          signatureType: documentSignatureType,
         }),
       );
 
@@ -265,7 +311,18 @@ export class CreateDocumentSignatureFlowUseCase {
        * después, y el usuario habría pagado por un documento que no existe.
        */
       await this.consumeDocumentCredit.execute(
-        { documentId: document.id, accountId, userId: createdBy },
+        {
+          documentId: document.id,
+          accountId,
+          userId: createdBy,
+          /**
+           * Del documento ya guardado, no de `documentSignatureType` ni del payload: el recibo
+           * tiene que decir con qué se firma el documento que realmente quedó escrito. Si una
+           * regla futura corrigiera el tipo al guardar, el cobro seguiría contando lo mismo que
+           * la fila.
+           */
+          signatureType: toBillingSignatureType(document.signatureType),
+        },
         manager,
       );
 
