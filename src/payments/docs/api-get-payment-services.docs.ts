@@ -7,7 +7,7 @@ export function ApiGetPaymentServices() {
     ApiOperation({
       summary: 'Consultar el catálogo público de planes',
       description:
-        "Devuelve los planes activos del proveedor de pagos —sus productos con metadata catalogType='plan' y visibility='true'— con lo necesario para pintar las tarjetas: nombre, descripción, importe, moneda, periodicidad, priceId e imagen. La respuesta se cachea 10 minutos, así que un cambio hecho en el dashboard del proveedor puede tardar ese tiempo en verse. El plan gratuito no aparece: no se administra en el proveedor. NO crea ninguna sesión de pago: la URL de Checkout se genera al comprar.",
+        "Devuelve los planes activos del proveedor de pagos —sus productos con metadata catalogType='plan' y visibility='true'— con lo necesario para pintar las tarjetas: nombre, descripción, importe, moneda, periodicidad, priceId, planType e imagen. `planType` es la llave del plan en el catálogo (la metadata `planType`/`planCode` del producto) y sirve para casar la tarjeta con el `currentPlanType` de `/payments/billing-state`; es `null` si el producto no la declara. La respuesta se cachea 10 minutos, así que un cambio hecho en el dashboard del proveedor puede tardar ese tiempo en verse. El plan gratuito no aparece: no se administra en el proveedor. NO crea ninguna sesión de pago: la URL de Checkout se genera al comprar.",
     }),
     ApiResponse({ status: 200, description: 'Catálogo público de planes.' }),
     ApiResponse({

@@ -288,6 +288,7 @@ export class StripePaymentService {
     return {
       priceId: price.id,
       productId: product.id,
+      planType: this.resolvePlanType(product),
       name: product.name,
       description: product.description ?? null,
       unitAmount: price.unit_amount ?? null,
@@ -296,6 +297,25 @@ export class StripePaymentService {
       intervalCount: price.recurring?.interval_count ?? null,
       imageUrl: product.images?.[0] ?? null,
     };
+  }
+
+  /**
+   * Plan del catálogo declarado en la metadata del producto.
+   *
+   * **Misma convención y mismo orden que `CatalogSyncService.resolvePlanType`**, y eso es lo que
+   * importa: los dos leen el mismo producto de Stripe, así que si uno aceptara `planCode` y el
+   * otro no, el catálogo público y la tabla `plans` acabarían nombrando el mismo plan de dos
+   * formas distintas y la tarjeta del plan contratado dejaría de reconocerse.
+   *
+   * El `||` encadenado descarta de paso la cadena vacía, que es lo que deja en la metadata quien
+   * borra el valor en el dashboard sin quitar la clave.
+   */
+  private resolvePlanType(product: Stripe.Product): string | null {
+    return (
+      product.metadata?.planType?.trim() ||
+      product.metadata?.planCode?.trim() ||
+      null
+    );
   }
 
   /**

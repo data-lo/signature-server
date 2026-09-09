@@ -12,6 +12,7 @@ import {
 const PLAN = {
   priceId: 'price_mensual',
   productId: 'prod_1',
+  planType: 'pro',
   name: 'Plan Pro',
   description: 'Firma ilimitada',
   unitAmount: 49900,
@@ -21,9 +22,15 @@ const PLAN = {
   imageUrl: 'https://files.stripe.com/plan-pro.png',
 };
 
-/** Lo mismo, recortado a lo que viaja al navegador: sin `productId`. */
+/**
+ * Lo mismo, recortado a lo que viaja al navegador: sin `productId`.
+ *
+ * `planType` SÍ sale, y es la única llave interna que se deja salir: sin ella la pantalla de
+ * planes no puede reconocer cuál de las tarjetas es el plan ya contratado.
+ */
 const RESPUESTA = {
   priceId: 'price_mensual',
+  planType: 'pro',
   name: 'Plan Pro',
   description: 'Firma ilimitada',
   unitAmount: 49900,
@@ -68,6 +75,17 @@ describe('GetPublicStripePlansUseCase', () => {
       expect(plans).toEqual([RESPUESTA]);
       // El `productId` es interno del proveedor: no sale hacia el navegador.
       expect(plans[0]).not.toHaveProperty('productId');
+    });
+
+    /**
+     * Se afirma aparte y no sólo dentro del `toEqual` de arriba: `toEqual` ignora las propiedades
+     * en `undefined`, así que si el recorte dejara de copiar `planType` la comparación seguiría
+     * pasando y la pantalla de planes se quedaría sin poder marcar el plan contratado.
+     */
+    it('deja salir el planType, que es lo que identifica el plan contratado', async () => {
+      const [plan] = await useCase.execute();
+
+      expect(plan.planType).toBe('pro');
     });
 
     it('guarda el resultado en Redis con un TTL de 10 minutos', async () => {
