@@ -227,10 +227,22 @@ export class InvalidBillingRegistrationException extends BadRequestException {
  *
  * El mensaje no dice qué plan hace falta: eso depende de la tabla comercial vigente y anunciarlo
  * desde el error obligaría a mantener la lista en dos sitios. La pantalla de planes ya la tiene.
+ *
+ * **`message` es la excepción a esa regla, no su abandono.** Hay flujos donde producto redactó la
+ * negativa palabra por palabra —crear una organización responde "No disponible en plan Free.
+ * Contrata un plan para crear una organización."— y esa copia tiene que salir tal cual del backend,
+ * porque el frontend la muestra sin reescribirla. Se pasa por parámetro en vez de tener una
+ * excepción por acción: el status, la causa que se registra y el camino comercial son los mismos, y
+ * lo único que cambia es la frase.
  */
 export class PlanActionNotIncludedException extends ForbiddenException {
-  constructor(action: string, planType: string | null) {
-    super('Tu plan actual no incluye esta funcionalidad.');
+  /**
+   * @param action Acción del plan que se pidió, con el mismo símbolo que viaja al frontend.
+   * @param planType Plan resuelto de la cuenta activa; `null` cuando no tiene perfil.
+   * @param message Copia específica del flujo. Se omite salvo que producto la haya redactado.
+   */
+  constructor(action: string, planType: string | null, message?: string) {
+    super(message ?? 'Tu plan actual no incluye esta funcionalidad.');
     this.cause = `La acción ${action} no está habilitada para el plan ${planType ?? '(sin plan)'}.`;
   }
 }
