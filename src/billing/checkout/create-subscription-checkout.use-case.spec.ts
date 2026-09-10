@@ -1,12 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { CreateSubscriptionCheckoutUseCase } from './create-subscription-checkout.use-case';
 import { CheckoutOrderService } from './checkout-order.service';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { StripeCustomerService } from '../profiles/stripe-customer.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
-import { BillingProfileEntity } from '../profiles/billing-profile.entity';
 import { BILLING_INTERVAL_ENUM } from '../enums/billing-interval.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import {
