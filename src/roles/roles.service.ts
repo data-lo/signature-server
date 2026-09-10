@@ -60,6 +60,13 @@ export class RolesService {
    * actions) y a MEMBER solo DOCUMENT:READ/CREATE, así que reemplazar un check "es ADMIN" por
    * "tiene el permiso X" no cambia el comportamiento actual — pero sí permite que un futuro rol
    * custom de organización con permisos parciales funcione sin tocar el código que llama esto.
+   *
+   * **Ignora el `scope`**: pregunta por resource+action y acepta cualquier alcance. Con la
+   * rejilla de `seed:roles` (todo `ANY`) daba igual, pero el catálogo de permisos estáticos
+   * (`npm run seed:static-permissions`, ver `src/roles/static-permission-catalog.ts`) ya
+   * distingue `OWN` de `ORGANIZATION`, así que quien necesite esa diferencia tendrá que
+   * consultar también el alcance — es parte del ticket de RBAC efectivo, no de la carga del
+   * catálogo, y hoy ninguna ruta pregunta por permisos de DOCUMENT.
    */
   async hasPermission(
     roleId: string | null | undefined,

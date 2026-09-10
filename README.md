@@ -95,7 +95,8 @@ Y la documentación interactiva de la API en <http://localhost:3000/api/v1/docs>
 - **Todas las rutas cuelgan de `/api/v1`**, menos `/health` y `/`, que quedan fuera del prefijo a propósito (ver `api-prefix.constants.ts`).
 - **Los buckets de MinIO se crean solos** en la primera subida; no hay que darlos de alta en la consola.
 - **Una base que ya existía necesita un paso previo.** Si tu Postgres se creó cuando la aplicación corría con `synchronize: true`, sus tablas están al día pero el historial de migraciones no, y el arranque fallaría con `column "..." already exists`. Se alinea una sola vez con `npm run build && npm run migration:baseline:prod -- --confirm` (ver «Comandos disponibles»). Una base nueva no lo necesita.
-- **El seed de roles no es automático.** Para poblar el catálogo RBAC: `npm run seed:roles`.
+- **El seed de roles no es automático.** Para poblar el catálogo RBAC: `npm run seed:roles`, y después
+  `npm run seed:static-permissions` para el catálogo de permisos estáticos de organización (sección 3).
 
 ---
 
@@ -118,9 +119,10 @@ Y la documentación interactiva de la API en <http://localhost:3000/api/v1/docs>
 | `npm run migration:run` / `migration:revert` | Aplica las pendientes / revierte la última. |
 | `npm run migration:baseline -- --confirm` | Marca las pendientes como aplicadas **sin ejecutarlas**. Sólo para adoptar las migraciones en una base que ya existía; sin `--confirm` únicamente lista. |
 | `npm run seed:roles` | Puebla el catálogo RBAC. Idempotente. |
+| `npm run seed:static-permissions` | Carga el catálogo de permisos estáticos de organización (7 permisos + matriz ADMIN/MEMBER). Idempotente y aditivo. Acepta `-- --prune-superseded`. |
 | `npm run seed:documents` | Documentos de prueba, uno por estatus, para ejercitar los filtros del frontend. Necesita el usuario fixture `PRIMARY_TEST_EMAIL` con su cuenta PERSONAL. |
 
-Los seeds y el baseline tienen variante `:prod` (`seed:roles:prod`, `migration:baseline:prod`) que corre el `.js` compilado sin `ts-node`, para usarlas dentro de la imagen de producción.
+Los seeds y el baseline tienen variante `:prod` (`seed:roles:prod`, `seed:static-permissions:prod`, `migration:baseline:prod`) que corre el `.js` compilado sin `ts-node`, para usarlas dentro de la imagen de producción.
 
 **Sobre `npm run lint`:** hoy no sirve como filtro. El repositorio está guardado con CRLF y la configuración de Prettier espera LF, así que ESLint reporta unos **31 400 errores**, de los cuales **31 360 son `Delete ␍`** y sólo 33 son problemas de formato reales. Con ese ruido, un error auténtico es indistinguible. En CI pasa porque el checkout de Linux usa LF. Arreglarlo es añadir un `.gitattributes` con `* text eol=lf` y correr un `--fix` de una sola pasada.
 
@@ -464,6 +466,49 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 
 **Seed** (`npm run seed:roles`, `src/scripts/seed-roles.ts`, mismo patrón standalone que `seed:documents`): puebla `ADMIN`/`MEMBER` (`isSystemRole: true`, `organizationId: null`), los 3 `resources` (`DOCUMENT`/`ORGANIZATION`/`USER`), las 4 `actions` (`CREATE`/`READ`/`UPDATE`/`DELETE`), y `role_permissions`: `ADMIN` con las 12 combinaciones resource×action (`scope: ANY`), `MEMBER` solo con `READ`+`CREATE` sobre `DOCUMENT`. Idempotente: cada tabla se busca por su clave natural antes de insertar (`key`/`name`, o el par de FKs en las pivote), así que correrlo varias veces no duplica filas — verificado corriéndolo dos veces seguidas contra Postgres local (mismos conteos: 2/3/4/12/14).
 
+#### Catálogo de permisos estáticos de organización
+
+`npm run seed:static-permissions` (`src/scripts/seed-static-permissions.ts`; la definición vive en `src/roles/static-permission-catalog.ts`, no en el script, porque el futuro RBAC efectivo leerá de ahí las claves con las que proteger endpoints).
+
+Es el catálogo de lo que una **membresía de organización** (`accounts` con `organizationId` y `roleId`) podrá hacer. Hoy sólo carga datos: **no protege ningún endpoint ni cambia la UI**. Las cuentas personales no participan — el catálogo se usará sólo al autorizar membresías con `organizationId`.
+
+| Permiso | `resource` + `action` + `scope` | Qué habilita |
+|---|---|---|
+| `DOCUMENT.CREATE` | `DOCUMENT` + `CREATE` + `ANY` | Crear documentos o borradores dentro de la organización activa. |
+| `DOCUMENT.READ_OWN` | `DOCUMENT` + `READ` + `OWN` | Consultar documentos propios o donde el miembro sea firmante. |
+| `DOCUMENT.READ_ORGANIZATION` | `DOCUMENT` + `READ` + `ORGANIZATION` | Consultar documentos de toda la organización. |
+| `DOCUMENT.SEND_SIGNATURE_REQUEST` | `DOCUMENT` + `SEND_SIGNATURE_REQUEST` + `ANY` | Enviar solicitudes de firma de documentos autorizados. |
+| `DOCUMENT.SIGN_SELF` | `DOCUMENT` + `SIGN` + `SELF` | Firmar en nombre propio e incluirse como firmante. |
+| `DOCUMENT.APPROVE` | `DOCUMENT` + `APPROVE` + `ANY` | Aprobar o autorizar documentos cuando el flujo existente lo soporte. |
+| `MEMBER.INVITE` | `MEMBER` + `INVITE` + `ANY` | Invitar miembros a la organización activa. |
+
+| Rol | Permisos |
+|---|---|
+| `ADMIN` | Los siete. |
+| `MEMBER` | `DOCUMENT.CREATE`, `DOCUMENT.READ_OWN` y `DOCUMENT.SIGN_SELF`. |
+
+`MEMBER` se queda a propósito sin lectura de toda la organización, sin envío de solicitudes, sin aprobación y sin invitación.
+
+**Sin migración.** Sólo inserta y relaciona filas en tablas que ya existen. Lo único nuevo son valores de enum de TypeScript —`RESOURCE_KEY_ENUM.MEMBER`; `SEND_SIGNATURE_REQUEST`/`SIGN`/`APPROVE`/`INVITE` en `ACTION_KEY_ENUM`; `OWN`/`ORGANIZATION`/`SELF` en `PERMISSION_SCOPE_ENUM`— y ninguno de los tres se persiste como enum de Postgres (`resources.key`, `actions.key` y `permissions.scope` son varchar). La descripción de cada permiso vive en código: `permissions` no tiene columna `description` y agregarla habría sido cambiar el esquema para un texto que sólo se lee en la consola y en esta tabla.
+
+**Qué toca y qué no.** Idempotente y aditivo: busca cada fila por su clave natural antes de insertarla (`key`, `name`+`isSystemRole`, `resource_id`+`action_id`+`scope`, `role_id`+`permission_id`), reutiliza los roles `ADMIN`/`MEMBER` existentes sin tocar su `id` —es una FK real desde `accounts.role_id`— y sólo actualiza la `description` de un recurso o acción del catálogo si cambió. No borra nada: la rejilla de `seed:roles`, los permisos sobre `ORGANIZATION`/`USER` y cualquier rol custom de organización quedan intactos. `organization_permissions` es un sistema paralelo de nombres libres y no se toca (ver arriba).
+
+**El único conflicto real: `MEMBER → DOCUMENT+READ+ANY`.** Es la fila que sembró `seed:roles`, y al no distinguir alcance equivale a la lectura global que la matriz le niega a `MEMBER`. El script **la detecta y avisa, pero no la borra** — borrar configuración existente sin que nadie lo pida no es cosa de un seed. Para revocarla:
+
+```bash
+npm run seed:static-permissions -- --prune-superseded
+```
+
+El barrido es exigente a propósito: sólo mira roles de sistema, y dentro de ellos sólo los pares recurso+acción que el catálogo **redefine** con alcances explícitos (hoy `DOCUMENT`+`READ`, partido en `OWN` y `ORGANIZATION`). `DOCUMENT`+`UPDATE`/`DELETE` de `ADMIN` se preservan aunque sean del mismo recurso, porque el catálogo no los cubre; las asignaciones sobre `ORGANIZATION` —las que consultan hoy `AccountService` y `OrganizationPermissionsService`— y los roles custom quedan fuera por construcción. Hoy ninguna ruta consulta permisos de `DOCUMENT`, así que revocar esa fila no cambia el comportamiento de nada; conviene hacerlo antes de que el RBAC efectivo empiece a leer el catálogo.
+
+**Cuándo correrlo.** Después de las migraciones y de `seed:roles`, con la base alcanzable, nunca durante el `RUN` del build:
+
+- **Local / desarrollo:** una vez tras traerse la rama, y de nuevo cada vez que el catálogo cambie.
+- **Staging y producción:** en cada despliegue que traiga cambios del catálogo, como paso posterior al arranque del contenedor (`npm run seed:static-permissions:prod`, ver «Seed en Docker»). Correrlo de más es inofensivo: sin cambios, no escribe.
+- **`--prune-superseded`:** una sola vez por ambiente, deliberadamente, tras confirmar que nadie depende de la fila heredada.
+
+**Pruebas** (`src/scripts/seed-static-permissions.spec.ts`, 9 casos con repositorios en memoria): la matriz resultante es exactamente la de la tabla, tres corridas seguidas no crean ni una fila de más, los roles existentes se reutilizan sin cambiar de `id`, lo ajeno al catálogo sobrevive, y la asignación heredada se detecta sin borrarse por defecto y se revoca con la bandera.
+
 ### `auth` (`/api/v1/auth`) — mucho más grande que solo login/registro
 
 | Endpoint | Servicio |
@@ -687,6 +732,7 @@ npm run migration:revert                                         # revierte la �
 ```bash
 docker compose up -d              # o el compose real del entorno (staging/prod)
 docker exec <nombre-o-id-del-contenedor-api> npm run seed:roles:prod
+docker exec <nombre-o-id-del-contenedor-api> npm run seed:static-permissions:prod
 docker exec <nombre-o-id-del-contenedor-api> npm run seed:documents:prod   # requiere el usuario fixture PRIMARY_TEST_EMAIL, ver src/scripts/seed-documents.ts — normalmente solo seed:roles:prod aplica en un ambiente real
 ```
 
