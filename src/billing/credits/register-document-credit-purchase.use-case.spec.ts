@@ -8,10 +8,18 @@ import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 
 /**
- * Una sesión de Stripe ya completada. Por defecto es una compra de documentos de este flujo; cada
- * prueba estropea lo que necesita.
+ * Construye una sesión de Stripe ya completada para las pruebas; por defecto es una compra de
+ * documentos, y cada prueba sobrescribe lo que necesita.
+ *
+ * @param overrides - Campos que reemplazan a los del objeto por defecto.
+ * @returns La sesión lista para pasarla al caso de uso.
+ *
+ * @example
+ * const s = sesion({ mode: 'subscription' });
  */
-function sesion(overrides: Record<string, unknown> = {}) {
+function sesion(
+  overrides: Record<string, unknown> = {},
+): Stripe.Checkout.Session {
   return {
     id: 'cs_test_123',
     mode: 'payment',
