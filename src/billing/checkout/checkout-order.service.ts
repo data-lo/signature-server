@@ -56,6 +56,57 @@ export class CheckoutOrderService {
   }
 
   /**
+   * Registra la orden PENDING de una compra suelta de documentos.
+   *
+   * Es la misma tabla y el mismo ciclo que la suscripción; lo único que cambia es el `kind`, que
+   * es lo que después distingue qué hay que hacer al confirmarse el pago: una suscripción activa
+   * un plan, un ADD_ON acredita un lote de documentos y no toca el plan en absoluto.
+   *
+   * Se escribe ANTES de mandar al usuario a Stripe, a propósito: si se registrara al volver, un
+   * pago cuyo navegador nunca regresó —se cerró la pestaña— quedaría cobrado y sin rastro local
+   * que reconciliar.
+   *
+   * @param input - Perfil que compra, oferta del catálogo, sesión de Stripe recién abierta e
+   *   importe cobrado.
+   * @returns La orden registrada, en `PENDING`.
+   *
+   * @example
+   * await this.checkoutOrderService.registerPendingDocumentCredits({
+   *   billingProfileId: profile.id,
+   *   catalogPriceId: catalogPrice.id,
+   *   stripeCheckoutSessionId: sessionId,
+   *   amount: catalogPrice.amount,
+   *   currency: catalogPrice.currency,
+   * });
+   */
+  async registerPendingDocumentCredits(input: {
+    billingProfileId: string;
+    catalogPriceId: string;
+    stripeCheckoutSessionId: string;
+    amount: number;
+    currency: string;
+  }): Promise<CheckoutOrderEntity> {
+    const order = await this.checkoutOrderRepository.save(
+      this.checkoutOrderRepository.create({
+        billingProfileId: input.billingProfileId,
+        catalogPriceId: input.catalogPriceId,
+        kind: CHECKOUT_KIND_ENUM.ADD_ON,
+        stripeCheckoutSessionId: input.stripeCheckoutSessionId,
+        stripePaymentIntentId: null,
+        status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
+        amount: input.amount,
+        currency: input.currency,
+      }),
+    );
+
+    this.logger.log(
+      `Orden de créditos ${order.id} registrada como PENDING para el perfil ${input.billingProfileId}.`,
+    );
+
+    return order;
+  }
+
+  /**
    * Cierra la orden cuando Stripe confirma que la sesión se completó.
    *
    * Idempotente por diseño: el `WHERE` exige que siga en PENDING, así que una re-entrega del
@@ -66,12 +117,19 @@ export class CheckoutOrderService {
    * prueba desde el dashboard de Stripe, por ejemplo). El evento en sí sigue siendo válido y su
    * efecto importante —vincular el perfil con el cliente y la suscripción— ya ocurrió.
    */
-  async markCompleted(input: {
-    stripeCheckoutSessionId: string;
-    stripePaymentIntentId: string | null;
-    stripeSubscriptionId: string | null;
-  }): Promise<void> {
-    const result = await this.checkoutOrderRepository.update(
+  async markCompleted(
+    input: {
+      stripeCheckoutSessionId: string;
+      stripePaymentIntentId: string | null;
+      stripeSubscriptionId: string | null;
+    },
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(CheckoutOrderEntity)
+      : this.checkoutOrderRepository;
+
+    const result = await repository.update(
       {
         stripeCheckoutSessionId: input.stripeCheckoutSessionId,
         status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
@@ -150,11 +208,18 @@ export class CheckoutOrderService {
    * Cubre el orden inverso: `invoice.paid` pudo crear el slot antes de que llegara Checkout.
    * Actualiza sólo esa sesión y nunca reemplaza un vínculo que ya existía.
    */
-  async linkCheckoutSessionToCreditSlot(input: {
-    stripeCheckoutSessionId: string;
-    creditSlotId: string;
-  }): Promise<void> {
-    await this.checkoutOrderRepository.update(
+  async linkCheckoutSessionToCreditSlot(
+    input: {
+      stripeCheckoutSessionId: string;
+      creditSlotId: string;
+    },
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(CheckoutOrderEntity)
+      : this.checkoutOrderRepository;
+
+    await repository.update(
       {
         stripeCheckoutSessionId: input.stripeCheckoutSessionId,
         status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,

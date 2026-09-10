@@ -17,6 +17,10 @@ import { BillingCatalogService } from './catalog/billing-catalog.service';
 import { BillingOwnerService } from './profiles/billing-owner.service';
 import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
+import { CreateDocumentCreditCheckoutUseCase } from './checkout/create-document-credit-checkout.use-case';
+import { StripeCustomerService } from './profiles/stripe-customer.service';
+import { GetAvailableDocumentCreditOffersUseCase } from './credits/get-available-document-credit-offers.use-case';
+import { RegisterDocumentCreditPurchaseUseCase } from './credits/register-document-credit-purchase.use-case';
 import { GetBillingAccessUseCase } from './entitlements/get-billing-access.use-case';
 import { AssertPlanActionUseCase } from './entitlements/assert-plan-action.use-case';
 import { ConsumeDocumentCreditUseCase } from './credits/consume-document-credit.use-case';
@@ -71,8 +75,12 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     CatalogSyncService,
     BillingCatalogService,
     BillingOwnerService,
+    StripeCustomerService,
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
+    CreateDocumentCreditCheckoutUseCase,
+    GetAvailableDocumentCreditOffersUseCase,
+    RegisterDocumentCreditPurchaseUseCase,
     GetBillingAccessUseCase,
     AssertPlanActionUseCase,
     ConsumeDocumentCreditUseCase,
@@ -87,8 +95,12 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     CatalogSyncService,
     BillingCatalogService,
     BillingOwnerService,
+    StripeCustomerService,
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
+    CreateDocumentCreditCheckoutUseCase,
+    GetAvailableDocumentCreditOffersUseCase,
+    RegisterDocumentCreditPurchaseUseCase,
     GetBillingAccessUseCase,
     AssertPlanActionUseCase,
     ConsumeDocumentCreditUseCase,
