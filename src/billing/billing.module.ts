@@ -14,15 +14,13 @@ import { CreditLotEntity } from './credits/credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from './credits/document-credit-consumption.entity';
 import { CatalogSyncService } from './catalog/catalog-sync.service';
 import { BillingCatalogService } from './catalog/billing-catalog.service';
-import { BillingOwnerService } from './profiles/billing-owner.service';
 import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
 import { CreateDocumentCreditCheckoutUseCase } from './checkout/create-document-credit-checkout.use-case';
 import { StripeCustomerService } from './profiles/stripe-customer.service';
 import { GetAvailableDocumentCreditOffersUseCase } from './credits/get-available-document-credit-offers.use-case';
 import { RegisterDocumentCreditPurchaseUseCase } from './credits/register-document-credit-purchase.use-case';
-import { GetBillingAccessUseCase } from './entitlements/get-billing-access.use-case';
-import { AssertPlanActionUseCase } from './entitlements/assert-plan-action.use-case';
+import { BillingEntitlementsModule } from './entitlements/billing-entitlements.module';
 import { ConsumeDocumentCreditUseCase } from './credits/consume-document-credit.use-case';
 import { SubscriptionBillingService } from './subscriptions/subscription-billing.service';
 import { SubscriptionBillingHistoryEntity } from './subscriptions/subscription-billing-history.entity';
@@ -69,20 +67,24 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
       UserEntity,
     ]),
     forwardRef(() => PaymentsModule),
+    /**
+     * De acá salen `BillingOwnerService`, `GetBillingAccessUseCase` y `AssertPlanActionUseCase`,
+     * que se movieron a su propio módulo para que quien sólo necesita autorizar una acción no
+     * tenga que importar éste con Stripe dentro. Se re-exporta más abajo para no romper a quien
+     * ya los inyectaba importando `BillingModule`.
+     */
+    BillingEntitlementsModule,
   ],
   controllers: [InternalSubscriptionBillingController],
   providers: [
     CatalogSyncService,
     BillingCatalogService,
-    BillingOwnerService,
     StripeCustomerService,
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
     CreateDocumentCreditCheckoutUseCase,
     GetAvailableDocumentCreditOffersUseCase,
     RegisterDocumentCreditPurchaseUseCase,
-    GetBillingAccessUseCase,
-    AssertPlanActionUseCase,
     ConsumeDocumentCreditUseCase,
     SubscriptionBillingService,
     RegisterSubscriptionBillingUseCase,
@@ -92,17 +94,15 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     FinalizeSubscriptionFromStripeUseCase,
   ],
   exports: [
+    BillingEntitlementsModule,
     CatalogSyncService,
     BillingCatalogService,
-    BillingOwnerService,
     StripeCustomerService,
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
     CreateDocumentCreditCheckoutUseCase,
     GetAvailableDocumentCreditOffersUseCase,
     RegisterDocumentCreditPurchaseUseCase,
-    GetBillingAccessUseCase,
-    AssertPlanActionUseCase,
     ConsumeDocumentCreditUseCase,
     SubscriptionBillingService,
     RegisterSubscriptionBillingUseCase,

@@ -16,28 +16,36 @@ const SIN_SUSCRIPCION: UserSubscriptionState = {
 /**
  * Estado de la suscripción de la CUENTA ACTIVA, leído de `billing_profiles`.
  *
- * **El cambio de fondo es de dónde sale la verdad.** Antes se leía `account_subscriptions`, y de
- * ahí venía el síntoma que se reportó: quien acababa de pagar seguía viendo su suscripción
- * inactiva. No era un fallo de la pantalla, era que miraba la tabla que ya no manda — el cobro
- * lo confirma el webhook `invoice.paid` sobre `billing_profiles`, que es donde se pone
- * `status = ACTIVE` y se emiten los documentos del periodo, mientras `account_subscriptions`
- * sobrevive sólo por compatibilidad y no refleja esa activación.
+ * @remarks
+ * Flujo:
  *
- * **El segundo cambio es a quién se describe.** La consulta anterior resolvía la cuenta con un
- * `findOne` por `userId` y sin `accountId`, así que a un usuario con cuenta personal y
- * organización le devolvía siempre el estado de una de las dos —la que la base sacara primero—
- * sin importar en cuál estuviera trabajando. Ahora el propietario sale del `X-Account-Id` que el
- * usuario tiene seleccionado, vía `resolveOwner`, que de paso comprueba que pertenezca de verdad
- * a esa cuenta: sin esa validación, cambiar un valor de la petición dejaría leer la suscripción
- * de una organización ajena.
+ * 1. Resuelve el propietario facturable desde el usuario y la cuenta activa, comprobando de paso
+ *    la membresía: sin eso, cambiar un valor de la petición dejaría leer la suscripción de una
+ *    organización ajena.
+ * 2. Busca su `billing_profile`. Sin perfil responde el estado "nunca intentó pagar".
+ * 3. Proyecta el perfil al contrato de la pantalla.
  *
- * **No crea el perfil.** Es una consulta de lectura: preguntar "¿qué plan tengo?" no puede dar
- * de alta filas de facturación. El perfil se crea al contratar.
+ * La verdad sale de `billing_profiles` y no de `account_subscriptions`: el cobro lo confirma el
+ * webhook `invoice.paid` sobre el perfil, y aquella tabla sobrevive sólo por compatibilidad sin
+ * reflejar la activación — de ahí venía el síntoma de "pagué y sigo inactivo".
+ *
+ * **No crea el perfil**: preguntar qué plan se tiene no puede dar de alta filas de facturación.
+ *
+ * @deprecated Sustituido por `GetBillingAccessUseCase` (`GET /payments/billing-state`), que
+ * responde esto y además el saldo, los beneficios y los límites en una sola consulta.
  */
 @Injectable()
 export class GetSubscriptionStateUseCase {
   constructor(private readonly billingOwnerService: BillingOwnerService) {}
 
+  /**
+   * Ejecuta el caso de uso.
+   *
+   * @param input Usuario autenticado y cuenta activa, que juntos deciden por qué propietario
+   *   facturable se pregunta.
+   * @returns El estado de la suscripción; el estado vacío si la cuenta no tiene perfil.
+   * @throws {ForbiddenException} Cuando el usuario no pertenece a la cuenta activa.
+   */
   async execute(input: {
     userId: string;
     accountId: string;
@@ -54,20 +62,12 @@ export class GetSubscriptionStateUseCase {
     }
 
     return {
-      /**
-       * Sólo ACTIVE. Los demás estados conservan su `planType` —sigue siendo el plan del que se
-       * habla— pero ninguno habilita lo que se paga: `INCOMPLETE` es un checkout sin cobrar,
-       * `PAST_DUE` un cobro que falló y `CANCELED` una baja.
-       */
+      // Sólo ACTIVE habilita lo que se paga; los demás conservan el plan para nombrarlo.
       hasActiveSubscription:
         profile.status === BILLING_PROFILE_STATUS_ENUM.ACTIVE,
       planType: profile.currentPlanType,
       status: profile.status,
-      /**
-       * No se cruza con `hasActiveSubscription`: son dos preguntas distintas y la pantalla
-       * necesita las dos por separado. Una suscripción con la baja programada está activa Y no se
-       * renovará, y colapsarlas dejaría al usuario sin saber cuál de las dos cosas está viendo.
-       */
+      // No se cruza con `hasActiveSubscription`: una baja programada sigue activa Y no se renueva.
       cancelAtPeriodEnd: profile.cancelAtPeriodEnd,
       currentPeriodStart: profile.currentPeriodStart,
       currentPeriodEnd: profile.currentPeriodEnd,

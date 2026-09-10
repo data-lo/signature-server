@@ -17,6 +17,7 @@ import { RolesModule } from 'src/roles/roles.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
 import { OrganizationPermissionsModule } from 'src/organization-permissions/organization-permissions.module';
 import { BillingProvisioningModule } from 'src/billing/billing-provisioning.module';
+import { BillingEntitlementsModule } from 'src/billing/entitlements/billing-entitlements.module';
 
 // Use cases
 import { CreateAccountUseCase } from './applications/create-account.use-case';
@@ -50,6 +51,9 @@ import { RevokeAccountAccessUseCase } from './applications/revoke-account-access
     // Sólo el alta del perfil Free: deliberadamente NO se importa `BillingModule`, que traería
     // Stripe y el catálogo a un flujo que no habla con el proveedor.
     BillingProvisioningModule,
+    // Mismo criterio para autorizar: crear una organización pregunta si el plan de la cuenta
+    // activa la incluye (ver `CreateOrganizationUseCase`), y eso se lee de la base, no de Stripe.
+    BillingEntitlementsModule,
   ],
   controllers: [
     AccountController,

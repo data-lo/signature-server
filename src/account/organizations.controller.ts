@@ -57,8 +57,12 @@ export class OrganizationsController {
 
   @Post()
   @ApiCreateOrganization()
-  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateOrganizationDto) {
-    return this.createOrganization.execute(user.sub, dto);
+  create(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+    @Body() dto: CreateOrganizationDto,
+  ) {
+    return this.createOrganization.execute(user.sub, accountId, dto);
   }
 
   @Post('invite')

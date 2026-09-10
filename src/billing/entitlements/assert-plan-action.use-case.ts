@@ -18,6 +18,12 @@ export interface AssertPlanActionInput {
    * cada llamada en vez de heredar un valor por omisión que nadie miró.
    */
   requiredCredits?: number;
+  /**
+   * Qué se le dice al usuario cuando el plan no incluye la acción. Se omite salvo que producto
+   * haya redactado la negativa de ese flujo (ver `PlanActionNotIncludedException`): sin él sale
+   * el mensaje genérico, que es el correcto para casi todo.
+   */
+  deniedMessage?: string;
 }
 
 /**
@@ -69,6 +75,7 @@ export class AssertPlanActionUseCase {
       throw new PlanActionNotIncludedException(
         input.action,
         access.currentPlanType,
+        input.deniedMessage,
       );
     }
 

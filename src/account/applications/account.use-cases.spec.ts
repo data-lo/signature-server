@@ -16,6 +16,8 @@ import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { OrganizationInvitationService } from '../organization-invitation.service';
 
+import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
+
 import { CreateOrganizationUseCase } from './create-organization.use-case';
 import { UpdateAccountUseCase } from './update-account.use-case';
 import { GetAccountUseCase } from './get-account.use-case';
@@ -133,6 +135,15 @@ describe('casos de uso de cuentas y organizaciones', () => {
           provide: OrganizationInvitationService,
           useValue: organizationInvitationService,
         },
+        {
+          /**
+           * Acá el permiso se da por concedido: lo que se prueba en este archivo es el ALTA. Que
+           * un plan Free —o una cuenta sin perfil— no llegue nunca hasta ella lo cubre
+           * `create-organization-plan-gate.spec.ts`, que monta la comprobación de verdad.
+           */
+          provide: AssertPlanActionUseCase,
+          useValue: { execute: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
 
@@ -144,6 +155,8 @@ describe('casos de uso de cuentas y organizaciones', () => {
 
   describe('CreateOrganizationUseCase', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
+    /** La cuenta activa desde la que se pide el alta, no la que se está creando. */
+    const ACTIVE_ACCOUNT_ID = 'account-activa-1';
 
     function mockFullAccountLookup() {
       accountRepository.findOne.mockResolvedValue({
@@ -161,7 +174,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       mockFullAccountLookup();
       redisService.get.mockResolvedValue(null);
 
-      const result = await createOrganization.execute('user-1', dto);
+      const result = await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto);
 
       expect(dataSource.createQueryRunner).toHaveBeenCalled();
       expect(queryRunner.startTransaction).toHaveBeenCalled();
@@ -189,7 +202,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       mockFullAccountLookup();
       redisService.get.mockResolvedValue(null);
 
-      await createOrganization.execute('user-1', {
+      await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, {
         ...dto,
         address: 'Av. Reforma 123, CDMX',
         rfc: 'ACM010101AAA',
@@ -211,7 +224,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       mockFullAccountLookup();
       redisService.get.mockResolvedValue(null);
 
-      await createOrganization.execute('user-1', dto);
+      await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto);
 
       expect(queryRunner.manager.save.mock.calls[0][0]).toMatchObject({
         address: null,
@@ -228,7 +241,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
         .mockResolvedValueOnce({ id: 'org-1' })
         .mockRejectedValueOnce(new Error('duplicate key value'));
 
-      await expect(createOrganization.execute('user-1', dto)).rejects.toThrow(
+      await expect(createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto)).rejects.toThrow(
         'duplicate key value',
       );
       expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
@@ -240,7 +253,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       userRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        createOrganization.execute('missing-user', dto),
+        createOrganization.execute('missing-user', ACTIVE_ACCOUNT_ID, dto),
       ).rejects.toThrow(NotFoundException);
       expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
     });

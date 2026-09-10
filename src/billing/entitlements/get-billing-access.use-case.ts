@@ -13,12 +13,11 @@ import type { BillingAccessResponse } from './plan-entitlements.types';
 /**
  * Lo que ve una cuenta que nunca pasó por facturación.
  *
- * **No es un error ni un 404**: toda cuenta existe antes de tener perfil, y la pantalla que
- * pregunta es justamente la primera que se dibuja. Se responde con los beneficios del plan
- * gratuito —lo mínimo que cualquiera tiene— y con los campos del PERFIL en nulo, porque no hay
- * perfil que describir. `currentPlanType: null` no se rellena con `'free'` a propósito: sería
- * afirmar que existe una fila con ese plan, y quien necesite saber qué puede hacer ya lo tiene
- * en `actions`, sin deducirlo del nombre del plan.
+ * @remarks
+ * No es un error ni un 404: toda cuenta existe antes de tener perfil. Se responde con los
+ * beneficios del plan gratuito y los campos del PERFIL en nulo, porque no hay perfil que
+ * describir. `currentPlanType` queda en `null` y no en `'free'`: rellenarlo afirmaría que existe
+ * una fila con ese plan, y quien necesite saber qué puede hacer ya lo tiene en `actions`.
  */
 function accesoSinPerfil(): BillingAccessResponse {
   const { actions, limits } = resolvePlanEntitlements(null);
@@ -41,25 +40,28 @@ function accesoSinPerfil(): BillingAccessResponse {
 /**
  * Estado comercial completo de la cuenta activa: suscripción, saldo, beneficios y límites.
  *
- * **Es la fuente única del frontend, y por eso responde de más.** Antes hacían falta dos
- * consultas —`/payments/subscription` para el estado y `/payments/billing-state` para el plan—
- * que salían del MISMO `billing_profile` y podían dibujarse desfasadas entre sí: dos peticiones,
- * dos cachés, dos momentos. Acá el estado, el saldo y lo que se puede hacer con ellos se leen en
- * una sola respuesta, que es como se usan.
+ * @remarks
+ * Flujo:
  *
- * **Los beneficios se resuelven del plan, no se consultan.** `PLAN_ENTITLEMENTS` es un mapa
- * estático (ver su docblock), así que este caso de uso no necesita ningún servicio intermedio
- * para leerlo: lo resuelve directo. Cuando los beneficios se negocien por cuenta y dejen de
- * depender sólo del plan, ahí hará falta el servicio; hoy sería una indirección vacía.
+ * 1. Resuelve el propietario facturable, comprobando que el usuario pertenezca a la cuenta del
+ *    header: sin eso, cambiar un valor en la petición dejaría leer el plan y el saldo de una
+ *    organización ajena.
+ * 2. Busca su `billing_profile`. Si no existe, responde el acceso del plan gratuito.
+ * 3. Suma en paralelo el saldo de documentos vigente y el origen del último periodo cobrado.
+ * 4. Compone la respuesta resolviendo los beneficios del plan del perfil.
  *
- * **Lo que responde NO autoriza.** `actions` existe para que la pantalla sepa qué dibujar,
- * habilitar u ofrecer como mejora. Cada acción protegida vuelve a validarse en el backend contra
- * este mismo mapa cuando se ejecuta (ver `AssertPlanActionUseCase`), porque un cliente puede
- * mandar la petición sin haber pedido nunca esta respuesta.
+ * **Es la fuente única del frontend, y por eso responde de más.** Antes hacían falta dos consultas
+ * al MISMO `billing_profile` que podían dibujarse desfasadas entre sí; aquí el estado, el saldo y
+ * lo que se puede hacer con ellos se leen juntos, que es como se usan.
  *
- * **No crea el perfil.** Es una lectura que se dispara al entrar y al cambiar de cuenta; dar de
- * alta una fila por cada cuenta que alguien sólo miró ensuciaría `billing_profiles` y haría que
- * el caso "sin perfil" no volviera a darse nunca. El perfil se crea al contratar.
+ * **Lo que responde NO autoriza.** `actions` existe para que la pantalla sepa qué dibujar. Cada
+ * acción protegida vuelve a validarse en el backend cuando se ejecuta (ver
+ * `AssertPlanActionUseCase`), porque un cliente puede mandar la petición sin haber pedido nunca
+ * esta respuesta.
+ *
+ * **No crea el perfil**: es una lectura que se dispara al entrar y al cambiar de cuenta, y dar de
+ * alta una fila por cada cuenta que alguien sólo miró ensuciaría `billing_profiles`. El perfil se
+ * crea al contratar.
  */
 @Injectable()
 export class GetBillingAccessUseCase {
@@ -71,16 +73,18 @@ export class GetBillingAccessUseCase {
     private readonly billingHistoryRepository: Repository<SubscriptionBillingHistoryEntity>,
   ) {}
 
+  /**
+   * Ejecuta el caso de uso.
+   *
+   * @param input Usuario autenticado y cuenta activa, que juntos deciden por qué propietario
+   *   facturable se pregunta.
+   * @returns El estado comercial de la cuenta; para una cuenta sin perfil, el del plan gratuito.
+   * @throws {ForbiddenException} Cuando el usuario no pertenece a la cuenta activa.
+   */
   async execute(input: {
     userId: string;
     accountId: string;
   }): Promise<BillingAccessResponse> {
-    /**
-     * `resolveOwner` hace dos cosas imprescindibles: comprueba que el usuario pertenezca de
-     * verdad a la cuenta del header —sin eso, cambiar un valor en la petición dejaría leer el
-     * plan y el saldo de una organización ajena— y traduce la membresía al propietario, que es
-     * quien decide si se consulta por `personal_account_id` o por `organization_id`.
-     */
     const owner = await this.billingOwnerService.resolveOwner(
       input.userId,
       input.accountId,
@@ -92,11 +96,7 @@ export class GetBillingAccessUseCase {
       return accesoSinPerfil();
     }
 
-    /**
-     * Las dos consultas que cuelgan del perfil no dependen entre sí, así que van juntas: son la
-     * diferencia entre una respuesta y dos idas y vueltas a la base en el camino que el frontend
-     * recorre en cada carga del dashboard.
-     */
+    // No dependen entre sí, y este camino se recorre en cada carga del dashboard.
     const [creditsAvailable, billingSource] = await Promise.all([
       this.contarCreditosDisponibles(profile.id),
       this.resolverOrigenDelUltimoCobro(profile.id),
@@ -116,32 +116,18 @@ export class GetBillingAccessUseCase {
 
     return {
       billingProfileId: profile.id,
-      /**
-       * Sólo `ACTIVE`. Los demás estados conservan su plan —sigue siendo el último contratado y
-       * la pantalla necesita nombrarlo— pero ninguno habilita lo que se paga: `INCOMPLETE` es un
-       * checkout sin cobrar, `PAST_DUE` un cobro que falló, `CANCELED` una baja y `FREE` el plan
-       * gratuito, que está vigente sin ser una suscripción.
-       */
+      // Sólo ACTIVE habilita lo que se paga; los demás estados conservan el plan para nombrarlo.
       hasActiveSubscription:
         profile.status === BILLING_PROFILE_STATUS_ENUM.ACTIVE,
       currentPlanType: profile.currentPlanType,
       status: profile.status,
       billingSource,
-      /**
-       * No se cruza con `hasActiveSubscription`: son dos preguntas distintas y la pantalla
-       * necesita las dos por separado. Una suscripción con la baja programada está activa Y no
-       * se renovará, y colapsarlas dejaría al usuario sin saber cuál de las dos está viendo.
-       */
+      // No se cruza con `hasActiveSubscription`: una baja programada sigue activa Y no se renueva.
       cancelAtPeriodEnd: profile.cancelAtPeriodEnd,
       currentPeriodStart: profile.currentPeriodStart,
       currentPeriodEnd: profile.currentPeriodEnd,
       creditsAvailable,
-      /**
-       * Los beneficios salen del plan del PERFIL y no de `hasActiveSubscription`. Un perfil en
-       * `PAST_DUE` conserva su `premium` y con él sus acciones: cortarle el producto por un
-       * cobro que falló —y que Stripe todavía está reintentando— es una decisión comercial que
-       * nadie tomó, y tomarla acá de forma implícita la escondería en un booleano.
-       */
+      // Salen del plan del PERFIL: un PAST_DUE conserva sus acciones mientras Stripe reintenta.
       actions,
       limits,
     };
@@ -150,27 +136,24 @@ export class GetBillingAccessUseCase {
   /**
    * Documentos que la cuenta puede consumir HOY.
    *
-   * Suma `remaining` de todos los lotes del perfil, sin distinguir su origen: para quien va a
-   * firmar, un documento del periodo, uno arrastrado del anterior y uno comprado suelto valen
-   * exactamente lo mismo. La distinción existe en `credit_lots.origin` porque determina el ORDEN
-   * en que se gastan —eso lo resuelve el consumo, no esta cuenta.
+   * @remarks
+   * Suma `remaining` de todos los lotes sin distinguir su origen: para quien va a firmar, un
+   * documento del periodo, uno arrastrado y uno comprado suelto valen lo mismo. El origen decide
+   * el ORDEN en que se gastan, y eso lo resuelve el consumo.
    *
-   * **Se filtra por `expires_at` y no por `period_end`**, aunque los dos suenen a caducidad. Un
-   * lote `ROLLOVER` es, por definición, uno cuyo periodo YA terminó y que sigue siendo bueno:
-   * filtrar por `period_end` le borraría al cliente el saldo que se le prometió arrastrar.
-   * `expires_at` es la única fecha que dice de verdad hasta cuándo sirve, y nula significa que
-   * no caduca.
+   * Se filtra por `expires_at` y no por `period_end`: un lote `ROLLOVER` es, por definición, uno
+   * cuyo periodo ya terminó y que sigue siendo bueno, así que filtrar por el periodo le borraría
+   * al cliente el saldo que se le prometió arrastrar.
+   *
+   * @param billingProfileId Perfil cuyo saldo se suma.
+   * @returns El total utilizable hoy; `0` cuando no hay ningún lote vigente.
    */
   private async contarCreditosDisponibles(
     billingProfileId: string,
   ): Promise<number> {
     const vigente = { billingProfileId, remaining: MoreThan(0) };
 
-    /**
-     * Dos condiciones en OR (el arreglo), y no una: "sin caducidad" y "caduca más adelante" son
-     * dos filas distintas en SQL —`NULL > NOW()` no es verdadero, es nulo— y expresarlo con un
-     * solo `where` dejaría fuera justo los lotes que nunca caducan, que son la mayoría.
-     */
+    // El arreglo es un OR: `NULL > NOW()` es nulo, no falso, y dejaría fuera los que no caducan.
     const total = await this.creditLotRepository.sum('remaining', [
       { ...vigente, expiresAt: IsNull() },
       { ...vigente, expiresAt: MoreThan(new Date()) },
@@ -183,19 +166,18 @@ export class GetBillingAccessUseCase {
   /**
    * Por dónde entró el dinero del último periodo cobrado.
    *
-   * **No sale del perfil porque el perfil no lo guarda**: `billing_source` es una columna de
-   * `subscription_billing_history`, donde cada periodo declara su origen (ver
-   * `BILLING_SOURCE_ENUM`). Deducirlo de `stripe_subscription_id` sería más barato y estaría
-   * mal: un perfil que estuvo en Stripe conserva sus ids como referencia histórica aunque hoy se
-   * le facture a mano, así que quedaría contando como STRIPE justo el caso que hay que
-   * distinguir.
+   * @remarks
+   * Sale de `subscription_billing_history` y no del perfil, que no lo guarda. Deducirlo de
+   * `stripe_subscription_id` sería más barato y estaría mal: un perfil que estuvo en Stripe
+   * conserva sus ids aunque hoy se le facture a mano, y contaría como STRIPE justo el caso que
+   * hay que distinguir.
    *
-   * `null` cuando no hay ningún periodo cobrado, que es lo que le pasa a toda cuenta gratuita: no
-   * es "se desconoce", es que todavía no lo cobró nadie.
+   * Se ordena por `period_start` y no por `paid_at`: se busca el periodo más reciente, no el
+   * cobro más reciente — una transferencia capturada con retraso tiene `paid_at` posterior al de
+   * un periodo que empezó después.
    *
-   * Se ordena por `period_start` y no por `paid_at` porque lo que se busca es el periodo más
-   * reciente, no el cobro más reciente: una transferencia capturada con retraso tiene `paid_at`
-   * posterior al de un periodo que empezó después.
+   * @param billingProfileId Perfil cuyo historial se consulta.
+   * @returns El origen del último periodo, o `null` si todavía no lo cobró nadie.
    */
   private async resolverOrigenDelUltimoCobro(
     billingProfileId: string,

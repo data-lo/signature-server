@@ -7,6 +7,7 @@ import { InsufficientDocumentCreditsException } from '../exceptions/billing.exce
 import { BILLING_SIGNATURE_TYPE_ENUM } from '../enums/billing-signature-type.enum';
 
 export interface ConsumeDocumentCreditInput {
+  /** Documento que se cobra. Es la llave de idempotencia: `document_id` es único en el recibo. */
   documentId: string;
   /** Cuenta activa (`X-Account-Id`): decide a QUÉ propietario se le cobra. */
   accountId: string;
@@ -14,14 +15,11 @@ export interface ConsumeDocumentCreditInput {
   /**
    * Con qué tipo de firma se creó el documento, en vocabulario comercial.
    *
-   * **Lo manda quien crea el documento, leído de la fila ya guardada** (`documents.signature_type`),
-   * nunca del payload del cliente: el recibo tiene que decir por qué se cobró realmente, y un
-   * cliente que mintiera en este campo falsearía la facturación sin tocar el documento.
+   * Lo manda quien crea el documento leyéndolo de `documents.signature_type`, nunca del payload
+   * del cliente: un cliente que mintiera aquí falsearía la facturación sin tocar el documento.
    *
-   * Opcional porque no todo documento tiene tipo de firma —el flujo viejo no lo pide, y los
-   * anteriores a la columna no lo tienen—: sin él el crédito se descuenta igual y el recibo queda
-   * con `signature_type` en `null`. Cobrar es lo que no puede fallar; anotar con qué se firma es
-   * información para facturación, no una condición del cobro.
+   * Opcional porque no todo documento tiene tipo de firma; sin él el crédito se descuenta igual y
+   * el recibo queda en `null`. Cobrar es lo que no puede fallar.
    */
   signatureType?: BILLING_SIGNATURE_TYPE_ENUM | null;
 }
@@ -32,24 +30,30 @@ const CREDITS_PER_DOCUMENT = 1;
 /**
  * Gasta un crédito de documento y deja constancia de con cuál se pagó.
  *
+ * @remarks
+ * Flujo:
+ *
+ * 1. Busca el consumo del documento. Si existe, lo devuelve sin descontar nada.
+ * 2. Resuelve el propietario facturable, comprobando de paso que el usuario pertenezca a la
+ *    cuenta activa.
+ * 3. Obtiene su `billing_profile`; sin perfil no hay saldo que gastar.
+ * 4. Descuenta un crédito del primer lote utilizable (ver `spendOneCredit`).
+ * 5. Escribe la fila de `document_credit_consumptions` con el lote, el perfil y el tipo de firma.
+ *
  * **Corre dentro de la transacción de quien crea el documento**, y por eso recibe un
- * `EntityManager` en vez de abrir el suyo: si el consumo falla —no hay saldo, la fila del recibo
- * choca contra el índice—, el documento tiene que desaparecer con él. Con transacción propia se
- * podría quedar un documento creado y sin pagar, o un crédito gastado sin documento, que son las
- * dos mitades del mismo error. Sin `manager`, abre una por su cuenta para poder usarse suelto.
+ * `EntityManager` en vez de abrir el suyo: si el consumo falla, el documento tiene que
+ * desaparecer con él. Con transacción propia podría quedar un documento creado y sin pagar, o un
+ * crédito gastado sin documento, que son las dos mitades del mismo error. Sin `manager`, abre una
+ * por su cuenta para poder usarse suelto.
  *
- * **Cómo se evita que dos peticiones gasten el último crédito.** No se lee el saldo para después
- * decidir: se descuenta con un `UPDATE ... WHERE remaining > 0`, y es el motor quien resuelve la
- * carrera. La condición se evalúa sobre la fila ya bloqueada por la propia escritura, así que de
- * dos transacciones simultáneas sobre el mismo lote una descuenta y la otra ve `affected: 0` y
- * pasa al lote siguiente. Un `SELECT` previo seguido de un `save` —el orden intuitivo— dejaría a
- * las dos leyendo `remaining: 1` y descontando las dos.
+ * **Doble consumo.** La comprobación del paso 1 no basta contra dos peticiones simultáneas —las
+ * dos podrían no encontrar nada—, así que el respaldo real es el índice único de `document_id`:
+ * la segunda revienta al insertar, dentro de la transacción, sin dejar nada descontado.
  *
- * **El reintento no cobra dos veces.** Antes de tocar nada se busca el consumo del documento, y
- * si existe se devuelve tal cual. La comprobación no basta por sí sola contra dos peticiones a la
- * vez —las dos podrían no encontrarlo— y por eso el respaldo real es el índice único de
- * `document_id`: la segunda revienta al insertar, dentro de la transacción, sin haber descontado
- * nada que quede escrito.
+ * **Carrera por el último crédito.** El descuento del paso 4 no lee el saldo para después
+ * decidir: va como `UPDATE ... WHERE remaining > 0` y es el motor quien resuelve la carrera sobre
+ * la fila que la propia escritura bloquea. Un `SELECT` previo seguido de un `save` dejaría a dos
+ * transacciones leyendo `remaining: 1` y descontando las dos.
  */
 @Injectable()
 export class ConsumeDocumentCreditUseCase {
@@ -61,34 +65,18 @@ export class ConsumeDocumentCreditUseCase {
   ) {}
 
   /**
-   * Descuenta un crédito de documento y devuelve el recibo del consumo.
+   * Ejecuta el caso de uso.
    *
-   * Si el documento ya tenía recibo, devuelve el que existe sin descontar nada: el alta de un
-   * documento se reintenta con frecuencia y cobrar dos veces por lo mismo es peor que fallar.
-   *
-   * @param input - Documento a cobrar, cuenta activa y usuario que lo crea; opcionalmente el tipo
-   *   de firma del documento, que se anota en el recibo.
-   * @param manager - Transacción de quien crea el documento. Sin él abre una propia, y entonces el
+   * @param input Documento a cobrar, cuenta activa y usuario que lo crea; opcionalmente el tipo
+   *   de firma, que se anota en el recibo.
+   * @param manager Transacción de quien crea el documento. Sin él abre una propia, y entonces el
    *   consumo queda confirmado aunque el documento se deshaga después.
    * @returns El consumo escrito, o el que ya existía para ese documento.
-   *
-   * @throws {InsufficientDocumentCreditsException} Si la cuenta no tiene perfil de facturación o
-   *   ningún lote con saldo utilizable.
-   * @throws {ForbiddenException} Si el usuario no pertenece a la cuenta activa (lo lanza
-   *   `BillingOwnerService.resolveOwner`).
-   *
-   * @example
-   * ```ts
-   * await this.consumeDocumentCredit.execute(
-   *   {
-   *     documentId: document.id,
-   *     accountId,
-   *     userId: createdBy,
-   *     signatureType: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
-   *   },
-   *   manager,
-   * );
-   * ```
+   * @throws {InsufficientDocumentCreditsException} Cuando la cuenta no tiene perfil de
+   *   facturación o ningún lote con saldo utilizable. Es la misma respuesta en los dos casos:
+   *   para quien crea el documento significan lo mismo, y distinguirlas expondría cómo está
+   *   montada la facturación por dentro.
+   * @throws {ForbiddenException} Cuando el usuario no pertenece a la cuenta activa.
    */
   async execute(
     input: ConsumeDocumentCreditInput,
@@ -105,14 +93,7 @@ export class ConsumeDocumentCreditUseCase {
   ): Promise<DocumentCreditConsumptionEntity> {
     const consumptions = manager.getRepository(DocumentCreditConsumptionEntity);
 
-    /**
-     * Reintento del mismo documento: se devuelve el consumo que ya existe. Cobrar de nuevo por
-     * algo que ya se pagó es peor que fallar, porque nadie lo nota.
-     *
-     * Tampoco se le reescribe el `signature_type` al recibo que ya está: es constancia de un
-     * cobro consumado, y un consumo escrito antes de que existiera este dato se queda como
-     * quedó. Rellenarlo aquí modificaría registros históricos por el camino más silencioso.
-     */
+    // Al recibo existente no se le reescribe nada: es constancia de un cobro ya consumado.
     const existing = await consumptions.findOne({
       where: { documentId: input.documentId },
     });
@@ -124,11 +105,7 @@ export class ConsumeDocumentCreditUseCase {
       return existing;
     }
 
-    /**
-     * `resolveOwner` comprueba de paso que el usuario pertenezca a la cuenta activa. Sin eso, un
-     * `X-Account-Id` ajeno cargaría el documento al saldo de otra organización — que es la forma
-     * más barata de gastarle los créditos a alguien.
-     */
+    // Sin la comprobación de membresía, un `X-Account-Id` ajeno cobraría a otra organización.
     const owner = await this.billingOwnerService.resolveOwner(
       input.userId,
       input.accountId,
@@ -136,16 +113,7 @@ export class ConsumeDocumentCreditUseCase {
 
     const profile = await this.billingOwnerService.findProfileByOwner(owner);
 
-    /**
-     * Sin perfil no hay saldo que gastar. Se responde lo mismo que si estuviera agotado: para
-     * quien crea el documento las dos situaciones son "no puedes crearlo, consigue documentos",
-     * y distinguirlas en el mensaje sólo expondría cómo está montada la facturación por dentro.
-     * El detalle que sirve para depurar viaja en `cause`.
-     *
-     * `available: 0` en los dos casos, y es literal: sin perfil no hay ni un lote que sumar, y
-     * cuando los hay pero ninguno acepta el descuento, el saldo utilizable HOY es cero aunque la
-     * tabla tenga filas —caducadas, o vaciadas por otra petición entre la consulta y el UPDATE—.
-     */
+    // El detalle que sirve para depurar viaja en `cause`, no en el mensaje al usuario.
     if (!profile) {
       throw new InsufficientDocumentCreditsException(
         CREDITS_PER_DOCUMENT,
@@ -170,11 +138,7 @@ export class ConsumeDocumentCreditUseCase {
         billingProfileId: profile.id,
         creditLotId,
         creditsConsumed: CREDITS_PER_DOCUMENT,
-        /**
-         * `?? null` y no un default: un documento sin tipo de firma deja el recibo en `null`, que
-         * es lo que significa —no se decidió—. Traducirlo a SIMPLE contaría como firma simple
-         * documentos que no la eligieron, y ese error no se vería hasta un corte de facturación.
-         */
+        // `null` significa "no se decidió"; traducirlo a SIMPLE falsearía el corte de facturación.
         signatureType: input.signatureType ?? null,
         consumedAt: new Date(),
       }),
@@ -188,20 +152,19 @@ export class ConsumeDocumentCreditUseCase {
   }
 
   /**
-   * Descuenta un crédito del primer lote que lo acepte y devuelve cuál fue, o `null` si no queda
-   * ninguno.
+   * Descuenta un crédito del primer lote que lo acepte.
    *
-   * **El orden de gasto es "lo que se pierde antes, primero".** `priority` descendente pone por
-   * delante los créditos del periodo facturado (`priority` 100, ver
-   * `RegisterSubscriptionBillingUseCase`) frente a los comprados sueltos y a los de bienvenida,
-   * que valen igual pero no caducan con el periodo; entre lotes de la misma prioridad manda la
-   * caducidad más próxima, y a igualdad de todo, el más viejo. Al revés —gastando primero lo
-   * comprado— el cliente perdería al cerrar el mes unos créditos que le sobraban mientras
-   * conservaba los que ya había pagado aparte.
+   * @remarks
+   * El orden de gasto es "lo que se pierde antes, primero": `priority` descendente pone por
+   * delante los créditos del periodo facturado (100, ver `RegisterSubscriptionBillingUseCase`)
+   * frente a los comprados sueltos y a los de bienvenida, que no caducan con el periodo; a
+   * igualdad de prioridad manda la caducidad más próxima y después el lote más viejo. Al revés,
+   * el cliente perdería al cerrar el mes los créditos que le sobraban mientras conservaba los que
+   * había pagado aparte.
    *
-   * Se recorren los candidatos en vez de quedarse con el primero porque entre que se leyó la
-   * lista y se intenta descontar, otra transacción puede haber vaciado alguno: `affected: 0`
-   * significa exactamente eso, y el siguiente lote sigue siendo una respuesta válida.
+   * @param manager Transacción en curso.
+   * @param billingProfileId Perfil cuyo saldo se gasta.
+   * @returns El lote del que se descontó, o `null` si ninguno aceptó el descuento.
    */
   private async spendOneCredit(
     manager: EntityManager,
@@ -220,17 +183,13 @@ export class ConsumeDocumentCreditUseCase {
       .addOrderBy('lot.created_at', 'ASC')
       .getRawMany<{ id: string }>();
 
+    // Otra transacción pudo vaciar un candidato entre la lista y el UPDATE: se prueba el siguiente.
     for (const { id } of candidates) {
       const result = await manager
         .createQueryBuilder()
         .update(CreditLotEntity)
         .set({ remaining: () => '"remaining" - 1' })
-        /**
-         * `remaining > 0` va en el WHERE y no en una comprobación previa: es la condición que
-         * convierte el descuento en atómico. Quitarla dejaría el saldo en negativo en cuanto dos
-         * peticiones coincidieran — y `CHK_credit_lots_remaining` reventaría en su cara con un
-         * error de constraint en vez de con el 409 que corresponde.
-         */
+        // `remaining > 0` en el WHERE es lo que hace atómico el descuento.
         .where('id = :id', { id })
         .andWhere('remaining > 0')
         .execute();

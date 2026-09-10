@@ -68,11 +68,20 @@ describe('OrganizationsController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('create delega en CreateOrganizationUseCase con el userId del JWT', () => {
+  /**
+   * El `X-Account-Id` viaja porque el alta se autoriza contra el plan de la cuenta ACTIVA (ver
+   * `CreateOrganizationUseCase`), no contra el usuario: la misma persona puede tener plan en su
+   * organización y estar en Free en su cuenta personal.
+   */
+  it('create delega en CreateOrganizationUseCase con el userId del JWT y el accountId activo', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
-    controller.create(user, dto);
+    controller.create(user, 'account-1', dto);
 
-    expect(createOrganization.execute).toHaveBeenCalledWith('user-1', dto);
+    expect(createOrganization.execute).toHaveBeenCalledWith(
+      'user-1',
+      'account-1',
+      dto,
+    );
   });
 
   /**

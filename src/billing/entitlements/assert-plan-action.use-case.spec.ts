@@ -96,6 +96,38 @@ describe('AssertPlanActionUseCase', () => {
       },
     );
 
+    /**
+     * La copia por defecto no nombra ningún flujo, así que hay negativas que producto redacta
+     * entera —crear una organización— y tienen que salir tal cual del backend: el frontend las
+     * muestra sin reescribirlas.
+     */
+    it('usa la copia del flujo cuando se le pasa una', async () => {
+      getBillingAccess.execute.mockResolvedValue(accesoCon('free', 10));
+
+      const fallo = await useCase
+        .execute({
+          userId: 'user-1',
+          accountId: 'account-1',
+          action: PLAN_ACTION_ENUM.ORGANIZATION_ACCOUNT,
+          deniedMessage: 'No disponible en plan Free.',
+        })
+        .catch((error: PlanActionNotIncludedException) => error);
+
+      expect(
+        (fallo as PlanActionNotIncludedException).getResponse(),
+      ).toMatchObject({ message: 'No disponible en plan Free.' });
+    });
+
+    it('cae al mensaje genérico cuando el flujo no redactó ninguno', async () => {
+      const fallo = await assert(PLAN_ACTION_ENUM.CUSTOM_BRANDING).catch(
+        (error: PlanActionNotIncludedException) => error,
+      );
+
+      expect(
+        (fallo as PlanActionNotIncludedException).getResponse(),
+      ).toMatchObject({ message: 'Tu plan actual no incluye esta funcionalidad.' });
+    });
+
     it.each([
       ['enterprise', PLAN_ACTION_ENUM.CUSTOM_BRANDING],
       ['partners', PLAN_ACTION_ENUM.CASE_FILE_GROUPING],
