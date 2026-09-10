@@ -13,14 +13,14 @@ import { DataSource, Repository } from 'typeorm';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { CreateSignatureDto } from './dto/create-signature.dto';
-import { MinioService } from 'src/shared/minio/minio.service';
+import { MinioService } from 'src/common/minio/minio.service';
 import 'multer';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import {
   MAX_IMAGE_FILE_SIZE_BYTES,
   MAX_PDF_FILE_SIZE_BYTES,
-} from 'src/shared/constants/file-upload.constants';
+} from 'src/common/constants/file-upload.constants';
 import sharp = require('sharp');
 import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 

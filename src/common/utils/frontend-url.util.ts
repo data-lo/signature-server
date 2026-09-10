@@ -1,7 +1,7 @@
 /**
  * Base del frontend, normalizada. Única fuente de `FRONTEND_URL` para todo el backend.
  *
- * Vive en `shared/` y no junto a los enlaces de documentos porque la variable es transversal: la
+ * Vive en `common/` y no junto a los enlaces de documentos porque la variable es transversal: la
  * consumen los correos de firma, las invitaciones a organización, las URLs de retorno de Stripe y
  * el origin de CORS. Cada uno leía `process.env.FRONTEND_URL` por su cuenta y solo el de
  * documentos quitaba la diagonal final, así que un valor con `/` al final —que es lo natural de

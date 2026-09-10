@@ -12,7 +12,7 @@ import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 
 /**
  * Respalda con persistencia real al OTPService ya existente (ver plan de migración ER-V2,
- * Fase 7) — src/shared/otp/otp.service.ts generaba códigos desde su creación pero no tenía
+ * Fase 7) — src/common/otp/otp.service.ts generaba códigos desde su creación pero no tenía
  * ningún caller: `generate()` crea un secreto efímero y descarta el resultado sin guardarlo,
  * y `verify()` es una comparación de strings directa (no valida TOTP real contra un secreto
  * persistido). La expiración real (`expiredAt`) y el estado de uso (`isUsed`) los gobierna

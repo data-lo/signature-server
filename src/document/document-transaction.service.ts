@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { DocumentTransactionEntity } from './entities/document-transaction.entity';
-import { HashService } from 'src/shared/hash/hash.service';
+import { HashService } from 'src/common/hash/hash.service';
 
 /**
  * Namespace fijo para el advisory lock de Postgres usado al encadenar (distinto del namespace de

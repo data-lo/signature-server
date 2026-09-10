@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import {
   MAX_IMAGE_FILE_SIZE_BYTES,
   MAX_PDF_FILE_SIZE_BYTES,
-} from 'src/shared/constants/file-upload.constants';
+} from 'src/common/constants/file-upload.constants';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 
 import { SignatureService } from '../signature.service';

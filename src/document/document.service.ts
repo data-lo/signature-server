@@ -24,24 +24,24 @@ import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 
 // Interfaces & payloads
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
-import { SignatureCoordinates } from 'src/shared/document-signing/interfaces/signature-coordinates.interface';
+import { DEFAULT_COORDINATES } from 'src/common/document-signing/interfaces/default-signing-coordinates.interface';
+import { SignatureCoordinates } from 'src/common/document-signing/interfaces/signature-coordinates.interface';
 import type {
   LegacySignatureCoordinates,
   SignaturePositionRecord,
 } from 'src/signature/entities/simple-signature.entity';
 
 // Services
-import { MinioService } from '../shared/minio/minio.service';
-import { HashService } from '../shared/hash/hash.service';
+import { MinioService } from '../common/minio/minio.service';
+import { HashService } from '../common/hash/hash.service';
 import { UserService } from '../user/user.service';
-import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
+import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
 import { SignatureService } from 'src/signature/signature.service';
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 import { AuditService } from 'src/audit/audit.service';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { PublicSignerData } from './interfaces/responses/document-public-view-response';
@@ -65,7 +65,7 @@ import {
 } from './services/signature-qr.service';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
-import { MAX_EFIRMA_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
+import { MAX_EFIRMA_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';

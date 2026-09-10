@@ -11,10 +11,10 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { AuditService } from 'src/audit/audit.service';
 import { AuditAction } from 'src/audit/schema/audit-document';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
-import { EmailService } from 'src/shared/email/email.service';
-import { MinioService } from 'src/shared/minio/minio.service';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
-import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
+import { EmailService } from 'src/common/email/email.service';
+import { MinioService } from 'src/common/minio/minio.service';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
+import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
 
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';

@@ -18,7 +18,7 @@ import { PersonalInformationEntity } from './entities/personal-information.entit
 import { EmailVerificationCodeEntity } from './entities/email-verification-code.entity';
 import { EmailVerificationCodeService } from './email-verification-code.service';
 import { SignatureModule } from 'src/signature/signature.module';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 import { AccountModule } from 'src/account/account.module';
 
 @Module({

@@ -31,7 +31,7 @@ import { toBillingOwner } from 'src/billing/profiles/billing-owner.util';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { RedisService } from 'src/common/redis/redis.service';
 import { AccountData } from './interfaces/response/account-response';
 
 const ACCOUNTS_CATALOG_KEY_PREFIX = 'accounts:';

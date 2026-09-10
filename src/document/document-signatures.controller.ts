@@ -16,7 +16,7 @@ import { ClientIp } from 'src/ip/ip.decorator';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
-import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 
 // Docs
 import { ApiCreateDocumentSignatureFlow } from './docs/api-create-document-signature-flow.docs';

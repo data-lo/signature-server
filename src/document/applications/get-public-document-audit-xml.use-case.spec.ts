@@ -5,8 +5,8 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 
-import { MinioService } from 'src/shared/minio/minio.service';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { MinioService } from 'src/common/minio/minio.service';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 
 import { DocumentService } from '../document.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';

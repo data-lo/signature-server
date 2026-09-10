@@ -62,7 +62,7 @@ import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 
 // Interfaces
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
-import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 
 // Docs
 import { ApiGetDocumentFileUrl } from './docs/api-get-document-file-url.docs';

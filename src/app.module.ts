@@ -18,7 +18,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AuditModule } from './audit/audit.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { IpInterceptor } from './ip/ip.interceptor';
-import { SharedModule } from './shared/shared.module';
+import { SharedModule } from './common/shared.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { HealthModule } from './health/health.module';

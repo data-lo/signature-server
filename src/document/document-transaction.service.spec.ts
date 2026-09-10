@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentTransactionService } from './document-transaction.service';
 import { DocumentTransactionEntity } from './entities/document-transaction.entity';
-import { HashService } from 'src/shared/hash/hash.service';
+import { HashService } from 'src/common/hash/hash.service';
 
 function createMockRepository() {
   return {

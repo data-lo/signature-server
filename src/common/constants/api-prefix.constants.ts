@@ -4,11 +4,6 @@ import type { INestApplication } from '@nestjs/common';
  * Prefijo global de la API HTTP. Se aplica una sola vez en el arranque
  * (`applyGlobalApiPrefix`) en vez de repetirse dentro de cada `@Controller()`.
  *
- * Antes convivían las dos formas: unos controladores declaraban `@Controller('api/v1/users')`
- * y otros `@Controller('user')` a secas, así que la misma API respondía en `/api/v1/...` y en
- * `/...` según el módulo. Centralizarlo evita que el próximo controlador vuelva a elegir, y
- * evita el error inverso —dejar el `api/v1` local con el prefijo global puesto— que produce
- * rutas `/api/v1/api/v1/...`.
  */
 export const GLOBAL_API_PREFIX = 'api/v1';
 

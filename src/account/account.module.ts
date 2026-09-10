@@ -12,7 +12,7 @@ import { AccountEntity } from './entities/account.entity';
 import { OrganizationEntity } from './entities/organization.entity';
 import { OrganizationInvitationEntity } from './entities/organization-invitation.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 import { RolesModule } from 'src/roles/roles.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
 import { OrganizationPermissionsModule } from 'src/organization-permissions/organization-permissions.module';

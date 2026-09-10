@@ -8,7 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { IS_SKIP_JWT_KEY } from '../decorators/skip-jwt-auth.decorator';
-import { RedisService } from '../../shared/redis/redis.service';
+import { RedisService } from '../../common/redis/redis.service';
 import { JwtPayload } from '../interfaces/jwt-payload.interface';
 import { tokenValidAfterKey } from '../utils/token-valid-after.util';
 

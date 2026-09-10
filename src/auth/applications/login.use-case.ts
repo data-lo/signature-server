@@ -6,7 +6,7 @@ import {
 
 import { AccountService } from 'src/account/account.service';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { PasswordService } from 'src/shared/password/password.service';
+import { PasswordService } from 'src/common/password/password.service';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { UserService } from 'src/user/user.service';
 
