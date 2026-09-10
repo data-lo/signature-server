@@ -5,12 +5,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { RoleEntity } from './entities/role.entity';
 import { RolePermissionEntity } from './entities/role-permission.entity';
 import { SYSTEM_ROLE_NAME_ENUM } from './enums/system-role-name.enum';
 import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from './enums/action-key.enum';
+import { RolePermissionData } from './interfaces/response/permission-response';
+import {
+  comparePermissionKeys,
+  toPermissionData,
+} from './permission-catalog.util';
 
 @Injectable()
 export class RolesService {
@@ -40,6 +45,94 @@ export class RolesService {
     }
 
     return role;
+  }
+
+  /**
+   * Resuelve un rol que una organización puede asignar a sus miembros: uno del sistema
+   * (ADMIN/MEMBER) o uno propio de esa misma organización.
+   *
+   * Un rol de OTRA organización se trata como inexistente en vez de como prohibido: quien
+   * administra una organización no tiene por qué saber qué roles existen en las demás, y
+   * distinguir "no existe" de "no es tuyo" filtraría justamente eso.
+   *
+   * @param roleId - Identificador del rol que se quiere asignar.
+   * @param organizationId - Organización activa desde la que se asigna.
+   * @returns El rol, listo para asignarse a una membresía de esa organización.
+   *
+   * @throws {NotFoundException} Si el rol no existe, o existe pero pertenece a otra organización.
+   *
+   * @example
+   * ```ts
+   * const role = await rolesService.findAssignableRoleOrFail(dto.roleId, 'org-1');
+   * ```
+   */
+  async findAssignableRoleOrFail(
+    roleId: string,
+    organizationId: string,
+  ): Promise<RoleEntity> {
+    const role = await this.roleRepository.findOne({ where: { id: roleId } });
+
+    const belongsToAnotherOrganization =
+      !!role &&
+      !role.isSystemRole &&
+      role.organizationId !== null &&
+      role.organizationId !== organizationId;
+
+    if (!role || belongsToAnotherOrganization) {
+      throw new NotFoundException(
+        `Rol con ID ${roleId} no encontrado para esta organización`,
+      );
+    }
+
+    return role;
+  }
+
+  /**
+   * Permisos que otorga cada uno de los roles pedidos, agrupados por rol.
+   *
+   * Se resuelve en UNA consulta para todos los roles en vez de una por rol: la tabla de miembros
+   * pide los permisos de cada fila y hacerlo de a uno multiplicaría las consultas por el número
+   * de miembros. Los permisos vienen ordenados con el catálogo estático primero (ver
+   * `comparePermissionKeys`), que es el orden en que la pantalla los lista.
+   *
+   * @param roleIds - Identificadores de rol a resolver; los repetidos se consultan una sola vez.
+   * @returns Un mapa `roleId → permisos`. Un rol sin permisos no aparece en el mapa.
+   *
+   * @throws {QueryFailedError} Si la consulta contra Postgres falla.
+   *
+   * @example
+   * ```ts
+   * const byRole = await rolesService.listPermissionsByRoleIds(['role-1', 'role-2']);
+   * const adminPermissions = byRole.get('role-1') ?? [];
+   * ```
+   */
+  async listPermissionsByRoleIds(
+    roleIds: string[],
+  ): Promise<Map<string, RolePermissionData[]>> {
+    const uniqueRoleIds = [...new Set(roleIds)];
+    const grouped = new Map<string, RolePermissionData[]>();
+
+    // `In([])` genera SQL inválido en TypeORM, y de todas formas no hay nada que consultar.
+    if (uniqueRoleIds.length === 0) return grouped;
+
+    const grants = await this.rolePermissionRepository.find({
+      where: { roleId: In(uniqueRoleIds) },
+      relations: { permission: { resource: true, action: true } },
+    });
+
+    for (const grant of grants) {
+      const permissions = grouped.get(grant.roleId) ?? [];
+      permissions.push(toPermissionData(grant.permission));
+      grouped.set(grant.roleId, permissions);
+    }
+
+    for (const permissions of grouped.values()) {
+      permissions.sort((first, second) =>
+        comparePermissionKeys(first.key, second.key),
+      );
+    }
+
+    return grouped;
   }
 
   /** Verifica que un roleId exista (usado al validar el body de account-member). */
