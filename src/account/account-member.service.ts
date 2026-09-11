@@ -139,31 +139,32 @@ export class AccountMemberService {
   }
 
   /**
-   * Shape delgado para la sección de gestión de miembros (ver historia [STORY] Gestión de
-   * Miembros: Listado, Edición de Roles y Eliminación en Organización) — email/rfc/rol/fecha de
-   * ingreso, en vez de la AccountEntity completa. `email` ya vive en `accounts` (sincronizado
-   * desde la credencial única del usuario, decisión D6 del plan ER-V2) así que no hace falta
-   * tocar `users` para eso; `rfc` sí requiere el join `accounts -> users -> personal_information`
-   * porque solo vive ahí. Solo devuelve miembros activos — un miembro eliminado (soft-delete) no
-   * debe reaparecer en la tabla de gestión.
+   * Proyecta filas de `accounts` al shape que consume la pantalla de gestión de miembros.
+   *
+   * `email` ya vive en `accounts` (sincronizado desde la credencial única del usuario, decisión
+   * D6 del plan ER-V2); `rfc` sí obliga al join `accounts -> users -> personal_information`.
+   * Los permisos NO se guardan por miembro: se derivan del rol, y se resuelven en una sola
+   * consulta para todos los roles presentes (ver `RolesService.listPermissionsByRoleIds`) en vez
+   * de una por fila.
+   *
+   * @param members - Membresías ya cargadas con sus relaciones `user.personalInformation` y `role`.
+   * @returns Una fila por membresía, con su rol, su estado y los permisos que ese rol otorga hoy.
+   *
+   * @throws {QueryFailedError} Si falla la consulta de permisos.
+   *
+   * @example
+   * ```ts
+   * const rows = await this.toDetailedMembers([membership]);
+   * ```
    */
-  /**
-   * Shape delgado para la sección de gestión de miembros (ver historia [STORY] Gestión de
-   * Miembros: Listado, Edición de Roles y Eliminación en Organización) — email/rfc/rol/fecha de
-   * ingreso, en vez de la AccountEntity completa. `email` ya vive en `accounts` (sincronizado
-   * desde la credencial única del usuario, decisión D6 del plan ER-V2) así que no hace falta
-   * tocar `users` para eso; `rfc` sí requiere el join `accounts -> users -> personal_information`
-   * porque solo vive ahí. Solo devuelve miembros activos — un miembro eliminado (soft-delete) no
-   * debe reaparecer en la tabla de gestión.
-   */
-  async listDetailedByOrganization(
-    organizationId: string,
+  private async toDetailedMembers(
+    members: AccountEntity[],
   ): Promise<OrganizationMemberData[]> {
-    const members = await this.accountRepository.find({
-      where: { organizationId, isActive: true },
-      relations: { user: { personalInformation: true }, role: true },
-      order: { joinedAt: 'ASC' },
-    });
+    const permissionsByRole = await this.rolesService.listPermissionsByRoleIds(
+      members
+        .map((member) => member.roleId)
+        .filter((roleId): roleId is string => !!roleId),
+    );
 
     return members.map((member) => ({
       accountId: member.id,
@@ -172,7 +173,113 @@ export class AccountMemberService {
       rfc: member.user?.personalInformation?.rfc ?? null,
       role: member.role ? { id: member.role.id, name: member.role.name } : null,
       joinedAt: member.joinedAt,
+      status: member.status,
+      isActive: member.isActive,
+      permissions: member.roleId
+        ? (permissionsByRole.get(member.roleId) ?? [])
+        : [],
     }));
+  }
+
+  /**
+   * Miembros de una organización para la pantalla de gestión, con rol, estado y permisos
+   * derivados.
+   *
+   * Por defecto sólo los activos: un miembro dado de baja no debe reaparecer en la tabla como si
+   * siguiera dentro. `includeInactive` los trae de vuelta —con su `status` real— para la vista de
+   * administración, que necesita poder explicar por qué un correo ya no puede volver a agregarse.
+   *
+   * @param organizationId - Organización cuyos miembros se listan.
+   * @param options - `includeInactive: true` para incluir también las membresías dadas de baja.
+   * @returns Los miembros ordenados por fecha de ingreso ascendente.
+   *
+   * @throws {QueryFailedError} Si la consulta contra Postgres falla.
+   *
+   * @example
+   * ```ts
+   * const members = await accountMemberService.listDetailedByOrganization('org-1', {
+   *   includeInactive: true,
+   * });
+   * ```
+   */
+  async listDetailedByOrganization(
+    organizationId: string,
+    options: { includeInactive?: boolean } = {},
+  ): Promise<OrganizationMemberData[]> {
+    const members = await this.accountRepository.find({
+      where: {
+        organizationId,
+        ...(options.includeInactive ? {} : { isActive: true }),
+      },
+      relations: { user: { personalInformation: true }, role: true },
+      order: { joinedAt: 'ASC' },
+    });
+
+    return this.toDetailedMembers(members);
+  }
+
+  /**
+   * Una membresía concreta con el mismo shape que la lista.
+   *
+   * Se usa al dar de alta a alguien, para devolver la fila ya lista para pintar en la tabla sin
+   * que el frontend tenga que recargar toda la lista para saber qué acaba de crear.
+   *
+   * @param accountId - Identificador de la membresía.
+   * @returns La membresía con su rol, su estado y los permisos derivados.
+   *
+   * @throws {NotFoundException} Si la membresía no existe o es una cuenta personal.
+   *
+   * @example
+   * ```ts
+   * const member = await accountMemberService.findDetailedMembership(created.id);
+   * ```
+   */
+  async findDetailedMembership(
+    accountId: string,
+  ): Promise<OrganizationMemberData> {
+    const member = await this.accountRepository.findOne({
+      where: { id: accountId },
+      relations: { user: { personalInformation: true }, role: true },
+    });
+
+    if (!member || !member.organizationId) {
+      throw new NotFoundException(
+        `Membresía con ID ${accountId} no encontrada`,
+      );
+    }
+
+    const [detailed] = await this.toDetailedMembers([member]);
+
+    return detailed;
+  }
+
+  /**
+   * Usuario por correo, exigiendo que ya esté registrado.
+   *
+   * El alta directa de un miembro pide correo y no `userId`: quien administra la organización
+   * conoce el correo de su compañero, no su UUID. Si no hay nadie registrado con ese correo el
+   * camino correcto es la invitación, y el mensaje de error lo dice.
+   *
+   * @param email - Correo del usuario a agregar.
+   * @returns El usuario registrado con ese correo.
+   *
+   * @throws {NotFoundException} Si no existe ningún usuario con ese correo.
+   *
+   * @example
+   * ```ts
+   * const user = await accountMemberService.findUserByEmailOrFail('ana@empresa.com');
+   * ```
+   */
+  async findUserByEmailOrFail(email: string): Promise<UserEntity> {
+    const user = await this.userRepository.findOne({ where: { email } });
+
+    if (!user) {
+      throw new NotFoundException(
+        `No existe un usuario registrado con el correo ${email}. Invítalo con "Invitar miembro" para que se registre.`,
+      );
+    }
+
+    return user;
   }
 
   /** Escribe sólo los campos presentes; `status` se mantiene coherente con `isActive`. */

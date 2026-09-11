@@ -21,6 +21,15 @@ export class GetSystemRolesUseCase {
   async execute(): Promise<BaseResponse<RoleData[]>> {
     const roles = await this.rolesService.listSystemRoles();
 
+    /**
+     * Los permisos viajan con cada rol y no en un endpoint aparte: la pantalla de miembros los
+     * necesita para TODOS los roles a la vez —los muestra al elegir uno en el selector, antes de
+     * confirmar— y pedirlos rol por rol obligaría a una llamada por opción del desplegable.
+     */
+    const permissionsByRole = await this.rolesService.listPermissionsByRoleIds(
+      roles.map((role) => role.id),
+    );
+
     return {
       success: true,
       message: 'Roles del sistema obtenidos correctamente',
@@ -28,6 +37,7 @@ export class GetSystemRolesUseCase {
         id: role.id,
         name: role.name,
         isSystemRole: role.isSystemRole,
+        permissions: permissionsByRole.get(role.id) ?? [],
       })),
     };
   }

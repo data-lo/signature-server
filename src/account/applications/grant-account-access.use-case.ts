@@ -32,7 +32,15 @@ export class GrantAccountAccessUseCase {
       ACTION_KEY_ENUM.CREATE,
     );
 
-    await this.rolesService.findByIdOrFail(dto.roleId);
+    /**
+     * Mismo criterio que el alta desde la pantalla de miembros: el rol tiene que ser del sistema
+     * o de ESA organización. Aceptar un rol custom de otra movería sus permisos a un tenant que
+     * no lo definió.
+     */
+    await this.rolesService.findAssignableRoleOrFail(
+      dto.roleId,
+      dto.organizationId,
+    );
 
     /**
      * La membresía existente se busca sin filtrar por `isActive`: quien fue dado de baja

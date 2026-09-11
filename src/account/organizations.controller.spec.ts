@@ -3,6 +3,7 @@ import { OrganizationsController } from './organizations.controller';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
+import { AddOrganizationMemberUseCase } from './applications/add-organization-member.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
@@ -13,6 +14,7 @@ describe('OrganizationsController', () => {
   let controller: OrganizationsController;
   let createOrganization: { execute: jest.Mock };
   let inviteOrganizationMember: { execute: jest.Mock };
+  let addOrganizationMember: { execute: jest.Mock };
   let getOrganizationMemberList: { execute: jest.Mock };
   let updateAccountMember: { execute: jest.Mock };
   let revokeAccountAccess: { execute: jest.Mock };
@@ -30,6 +32,7 @@ describe('OrganizationsController', () => {
   beforeEach(async () => {
     createOrganization = { execute: jest.fn() };
     inviteOrganizationMember = { execute: jest.fn() };
+    addOrganizationMember = { execute: jest.fn() };
     getOrganizationMemberList = { execute: jest.fn() };
     updateAccountMember = { execute: jest.fn() };
     revokeAccountAccess = { execute: jest.fn() };
@@ -43,6 +46,10 @@ describe('OrganizationsController', () => {
         {
           provide: InviteOrganizationMemberUseCase,
           useValue: inviteOrganizationMember,
+        },
+        {
+          provide: AddOrganizationMemberUseCase,
+          useValue: addOrganizationMember,
         },
         {
           provide: GetOrganizationMemberListUseCase,
@@ -106,6 +113,32 @@ describe('OrganizationsController', () => {
     expect(getOrganizationMemberList.execute).toHaveBeenCalledWith(
       'user-1',
       'org-1',
+      false,
+    );
+  });
+
+  it('findMembers propaga includeInactive cuando la vista de administración lo pide', () => {
+    controller.findMembers(user, 'org-1', true);
+
+    expect(getOrganizationMemberList.execute).toHaveBeenCalledWith(
+      'user-1',
+      'org-1',
+      true,
+    );
+  });
+
+  /**
+   * El alta directa recibe la organización por `X-Account-Id` y no por el body: el DTO ni
+   * siquiera tiene `organizationId`, que es lo que impide dar de alta en una organización ajena.
+   */
+  it('addMember delega en AddOrganizationMemberUseCase con el accountId activo', () => {
+    const dto = { email: 'nueva@empresa.com', roleId: 'role-2' };
+    controller.addMember(user, 'account-1', dto);
+
+    expect(addOrganizationMember.execute).toHaveBeenCalledWith(
+      'user-1',
+      'account-1',
+      dto,
     );
   });
 
