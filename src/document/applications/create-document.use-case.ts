@@ -74,7 +74,7 @@ export class CreateDocumentUseCase {
     private readonly accountMemberService: AccountMemberService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly documentService: DocumentService,
-  ) {}
+  ) { }
 
   /**
    * Ejecuta el caso de uso.
@@ -105,11 +105,11 @@ export class CreateDocumentUseCase {
           'Falta el header X-Account-Id de la cuenta activa',
         );
       }
-      const activeAccount =
-        await this.accountMemberService.assertIsActiveMember(
-          createdBy,
-          accountId,
-        );
+
+      const activeAccount = await this.accountMemberService.assertIsActiveMember(
+        createdBy,
+        accountId,
+      );
 
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');
@@ -136,10 +136,9 @@ export class CreateDocumentUseCase {
         ...(reviewerIds ?? []),
       ];
       const uniqueParticipantIds = new Set(allParticipantIds);
+
       if (uniqueParticipantIds.size !== allParticipantIds.length) {
-        throw new BadRequestException(
-          'No puedes seleccionar al mismo usuario más de una vez entre firmantes, watchers y reviewers',
-        );
+        throw new BadRequestException('Cada participante debe tener un solo rol; no puede repetirse entre firmantes, observadores y revisores.',);
       }
 
       const allParticipantEmails = [

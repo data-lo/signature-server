@@ -11,8 +11,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
 import { CreateDocumentSignaturesDto } from './dto/create-document-signatures.dto';
 
-import { IpInterceptor } from 'src/ip/ip.interceptor';
-import { ClientIp } from 'src/ip/ip.decorator';
+import { RequestIpInterceptor } from 'src/common/interceptors/request-ip.interceptor';
+import { ClientIp } from 'src/common/interceptors/request-ip.decorator';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
@@ -43,7 +43,7 @@ export class DocumentSignaturesController {
       // `MulterOptions` de @types/multer todavía no la declara.
       defParamCharset: 'utf8',
     } as Parameters<typeof FileInterceptor>[1]),
-    IpInterceptor,
+    RequestIpInterceptor,
   )
   async create(
     @CurrentUser() user: JwtPayload,

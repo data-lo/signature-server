@@ -17,7 +17,7 @@ import { AuthModule } from './auth/auth.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuditModule } from './audit/audit.module';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { IpInterceptor } from './ip/ip.interceptor';
+import { RequestIpInterceptor } from './common/interceptors/request-ip.interceptor';
 import { SharedModule } from './common/shared.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
@@ -111,7 +111,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     AppService,
     {
       provide: APP_INTERCEPTOR,
-      useClass: IpInterceptor,
+      useClass: RequestIpInterceptor,
     },
     SharedModule,
   ],
