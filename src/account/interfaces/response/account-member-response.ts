@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from '../../../interfaces/api-response.dto';
+import { RolePermissionData } from 'src/roles/interfaces/response/permission-response';
+import { ACCOUNT_STATUS_ENUM } from '../../enums/account-status.enum';
 
 export class AccountMemberData {
   @ApiProperty({
@@ -97,6 +99,31 @@ export class OrganizationMemberData {
 
   @ApiProperty({ example: '2023-10-25T10:00:00Z', nullable: true })
   joinedAt: Date | null;
+
+  @ApiProperty({
+    enum: ACCOUNT_STATUS_ENUM,
+    example: ACCOUNT_STATUS_ENUM.ACTIVE,
+    description: 'Estado de la membresía dentro de la organización',
+  })
+  status: ACCOUNT_STATUS_ENUM;
+
+  @ApiProperty({
+    example: true,
+    description: 'Si la membresía sigue vigente',
+  })
+  isActive: boolean;
+
+  @ApiProperty({
+    type: [RolePermissionData],
+    description:
+      'Permisos que el miembro tiene HOY por su rol. Son informativos: esta historia no los aplica todavía en los endpoints funcionales',
+  })
+  permissions: RolePermissionData[];
+}
+
+export class OrganizationMemberResponse extends BaseResponse<OrganizationMemberData> {
+  @ApiProperty({ type: OrganizationMemberData })
+  data: OrganizationMemberData;
 }
 
 export class OrganizationMemberListResponse extends BaseResponse<

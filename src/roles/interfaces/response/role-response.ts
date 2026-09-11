@@ -1,6 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 
+import { RolePermissionData } from './permission-response';
+
 export class RoleData {
   @ApiProperty({
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
@@ -18,6 +20,13 @@ export class RoleData {
       'Si es un rol del sistema (seed) o uno propio de una organización',
   })
   isSystemRole: boolean;
+
+  @ApiProperty({
+    type: [RolePermissionData],
+    description:
+      'Permisos estáticos que otorga el rol, derivados de role_permissions. Es lo que la pantalla de miembros muestra antes de confirmar una asignación',
+  })
+  permissions: RolePermissionData[];
 }
 
 export class RoleListResponse extends BaseResponse<RoleData[]> {

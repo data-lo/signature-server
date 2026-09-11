@@ -95,7 +95,8 @@ Y la documentación interactiva de la API en <http://localhost:3000/api/v1/docs>
 - **Todas las rutas cuelgan de `/api/v1`**, menos `/health` y `/`, que quedan fuera del prefijo a propósito (ver `api-prefix.constants.ts`).
 - **Los buckets de MinIO se crean solos** en la primera subida; no hay que darlos de alta en la consola.
 - **Una base que ya existía necesita un paso previo.** Si tu Postgres se creó cuando la aplicación corría con `synchronize: true`, sus tablas están al día pero el historial de migraciones no, y el arranque fallaría con `column "..." already exists`. Se alinea una sola vez con `npm run build && npm run migration:baseline:prod -- --confirm` (ver «Comandos disponibles»). Una base nueva no lo necesita.
-- **El seed de roles no es automático.** Para poblar el catálogo RBAC: `npm run seed:roles`.
+- **El seed de roles no es automático.** Para poblar el catálogo RBAC: `npm run seed:roles`, y después
+  `npm run seed:static-permissions` para el catálogo de permisos estáticos de organización (sección 3).
 
 ---
 
@@ -118,9 +119,10 @@ Y la documentación interactiva de la API en <http://localhost:3000/api/v1/docs>
 | `npm run migration:run` / `migration:revert` | Aplica las pendientes / revierte la última. |
 | `npm run migration:baseline -- --confirm` | Marca las pendientes como aplicadas **sin ejecutarlas**. Sólo para adoptar las migraciones en una base que ya existía; sin `--confirm` únicamente lista. |
 | `npm run seed:roles` | Puebla el catálogo RBAC. Idempotente. |
+| `npm run seed:static-permissions` | Carga el catálogo de permisos estáticos de organización (7 permisos + matriz ADMIN/MEMBER). Idempotente y aditivo. Acepta `-- --prune-superseded`. |
 | `npm run seed:documents` | Documentos de prueba, uno por estatus, para ejercitar los filtros del frontend. Necesita el usuario fixture `PRIMARY_TEST_EMAIL` con su cuenta PERSONAL. |
 
-Los seeds y el baseline tienen variante `:prod` (`seed:roles:prod`, `migration:baseline:prod`) que corre el `.js` compilado sin `ts-node`, para usarlas dentro de la imagen de producción.
+Los seeds y el baseline tienen variante `:prod` (`seed:roles:prod`, `seed:static-permissions:prod`, `migration:baseline:prod`) que corre el `.js` compilado sin `ts-node`, para usarlas dentro de la imagen de producción.
 
 **Sobre `npm run lint`:** hoy no sirve como filtro. El repositorio está guardado con CRLF y la configuración de Prettier espera LF, así que ESLint reporta unos **31 400 errores**, de los cuales **31 360 son `Delete ␍`** y sólo 33 son problemas de formato reales. Con ese ruido, un error auténtico es indistinguible. En CI pasa porque el checkout de Linux usa LF. Arreglarlo es añadir un `.gitattributes` con `* text eol=lf` y correr un `--fix` de una sola pasada.
 
@@ -430,7 +432,9 @@ El JWT ahora incluye `nationalId` (CURP) como claim estable (ver sección 4) par
 
 **`POST /api/v1/organizations/invite`** (`AccountService.inviteMember` + `OrganizationInvitationService.create`, orquestados desde el controller a propósito para no crear una dependencia circular) — **ya no es solo validación**: recibe `{email, roleId}`, exige el header `X-Account-Id`, valida ADMIN (`ORGANIZATION:CREATE`) sobre la cuenta activa, que sea de tipo `ORGANIZATION`, y que el `roleId` exista. Si todo pasa, **persiste** una fila `OrganizationInvitationEntity` (`PENDING`, token único, expira en 7 días) y publica `organization.member.invited` en Kafka — `OrganizationInvitationEventsConsumer` (ver Kafka más abajo) despacha el correo real de forma asíncrona. Ver módulo `organization-invitations` para el flujo de aceptación.
 
-**`GET /:organizationId/members`** (`AccountMemberService.findMembersForOrganizationDetailed`): shape delgado (`accountId`, `userId`, `email`, `rfc`, `role: {id,name} | null`, `joinedAt`), solo miembros activos, exige `ORGANIZATION:READ`.
+**`POST /api/v1/organizations/members`** (`AddOrganizationMemberUseCase`): alta **directa** de alguien que ya tiene cuenta, hermana de `invite` — aquella crea una invitación por correo para quien todavía no está registrado, ésta agrega de una vez a quien ya está dentro. Recibe `{email, roleId, position?}`; la organización sale del header `X-Account-Id` y **nunca del body** (el DTO no tiene `organizationId`), que es lo que impide dar de alta en una organización ajena. Exige `ORGANIZATION:CREATE` sobre la cuenta activa y que sea de tipo `ORGANIZATION`. Errores diferenciados: `404` si no hay usuario con ese correo (el mensaje sugiere invitarlo) o si el rol no existe / es de otra organización; `409` si esa persona ya tiene membresía, con mensaje distinto según siga activa o esté dada de baja. Al terminar refresca el catálogo de cuentas cacheado del nuevo miembro (`appendAccountToCatalog`), igual que hace el flujo de invitación al aceptarse. Responde la membresía ya proyectada, con su rol, su estado y los permisos derivados.
+
+**`GET /:organizationId/members`** (`AccountMemberService.listDetailedByOrganization`): shape delgado (`accountId`, `userId`, `email`, `rfc`, `role: {id,name} | null`, `joinedAt`, `status`, `isActive`, `permissions[]`), exige `ORGANIZATION:READ`. Por defecto solo miembros activos; `?includeInactive=true` trae también las membresías dadas de baja con su `status` real, para que la pantalla de administración pueda explicar por qué un correo ya no se puede volver a agregar. Los `permissions` son los del **rol** de cada miembro —no se guardan permisos por persona— y se resuelven en **una** consulta para todos los roles de la tabla (`RolesService.listPermissionsByRoleIds`), no una por fila.
 
 **`PATCH /members/:accountId/role`** / **`DELETE /members/:accountId`**: alias sobre `AccountMemberService.update()`/`remove()` (mismos checks RBAC `ORGANIZATION:UPDATE`/`DELETE`) — protegidos por `assertNotLastAdmin`: si el objetivo es el único ADMIN activo de la organización, ambas operaciones responden `409 Conflict` (no hay rol `OWNER` separado de `ADMIN`, así que "no dejar la organización sin dueño" se implementa como "no dejar la organización sin ADMIN").
 
@@ -460,9 +464,58 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 
 `AccountEntity.roleId` (antes `AccountMemberEntity.roleId`, previo a la fusión — migración `ReplaceAccountMemberRoleWithRoleId` — ver Pendientes/Resuelto) es una FK real a este catálogo — ya no son dos sistemas paralelos. Centraliza las 5 entidades de control de acceso: `RoleEntity`, `ResourceEntity`, `ActionEntity`, `PermissionEntity`, `RolePermissionEntity` (tabla pivote).
 
-`RolesService.findAllSystemRoles()`: `roleRepository.find({ where: { isSystemRole: true } })`, ordenado por `name`. `RolesController` expone `GET /api/v1/roles` (JWT, sin check de ownership — es un catálogo de solo lectura, no datos de una cuenta concreta) devolviendo `{id, name, isSystemRole}` por rol; pensado para poblar el modal de invitar miembros en el frontend. También expone (sin controlador propio) `findSystemRoleByName(name)` — usado por `AccountService` al asignar el rol ADMIN por defecto a una membresía nueva — y `findByIdOrFail(id)` — usado por `AccountMemberService` para validar el `roleId` recibido en `create()`/`update()`.
+`RolesService.listSystemRoles()`: `roleRepository.find({ where: { isSystemRole: true } })`, ordenado por `name`. `RolesController` expone `GET /api/v1/roles` (JWT, sin check de ownership — es un catálogo de solo lectura, no datos de una cuenta concreta) devolviendo `{id, name, isSystemRole, permissions[]}` por rol; pensado para poblar los selectores de rol del frontend. También expone (sin controlador propio) `findSystemRoleByName(name)` — usado por `AccountService` al asignar el rol ADMIN por defecto a una membresía nueva —, `findByIdOrFail(id)` y `findAssignableRoleOrFail(roleId, organizationId)`.
+
+**Los permisos viajan dentro de cada rol** y no en un endpoint aparte: la pantalla de miembros los necesita para todos los roles a la vez (los muestra al elegir uno, antes de confirmar), y pedirlos rol por rol sería una llamada por opción del desplegable.
+
+**`findAssignableRoleOrFail(roleId, organizationId)`**: un rol es asignable si es del sistema o de ESA organización. Un rol custom de otra se trata como **inexistente** (404) y no como prohibido (403): quien administra una organización no tiene por qué saber qué roles existen en las demás, y distinguir los dos casos filtraría justamente eso. Lo usan las tres rutas que asignan rol (`POST /organizations/members`, `POST /account-member`, `PATCH /organizations/members/:accountId/role`).
+
+**`listPermissionsByRoleIds(roleIds)`**: los permisos de varios roles en una sola consulta, agrupados por rol. La clave (`DOCUMENT.READ_OWN`) y la descripción en lenguaje de negocio se **derivan** de `resource.key`+`action.key`+`scope` en `src/roles/permission-catalog.util.ts` — `permissions` no tiene columnas para eso y agregarlas habría sido un cambio de esquema para un texto que sólo se lee en la UI. El alcance `ANY` no se sufija; los permisos fuera del catálogo estático (la rejilla CRUD de `seed:roles`) llegan con `isStaticCatalog: false` y una descripción genérica armada con los textos de su recurso y su acción, para que la pantalla pueda listarlos aparte o resumirlos.
 
 **Seed** (`npm run seed:roles`, `src/scripts/seed-roles.ts`, mismo patrón standalone que `seed:documents`): puebla `ADMIN`/`MEMBER` (`isSystemRole: true`, `organizationId: null`), los 3 `resources` (`DOCUMENT`/`ORGANIZATION`/`USER`), las 4 `actions` (`CREATE`/`READ`/`UPDATE`/`DELETE`), y `role_permissions`: `ADMIN` con las 12 combinaciones resource×action (`scope: ANY`), `MEMBER` solo con `READ`+`CREATE` sobre `DOCUMENT`. Idempotente: cada tabla se busca por su clave natural antes de insertar (`key`/`name`, o el par de FKs en las pivote), así que correrlo varias veces no duplica filas — verificado corriéndolo dos veces seguidas contra Postgres local (mismos conteos: 2/3/4/12/14).
+
+#### Catálogo de permisos estáticos de organización
+
+`npm run seed:static-permissions` (`src/scripts/seed-static-permissions.ts`; la definición vive en `src/roles/static-permission-catalog.ts`, no en el script, porque el futuro RBAC efectivo leerá de ahí las claves con las que proteger endpoints).
+
+Es el catálogo de lo que una **membresía de organización** (`accounts` con `organizationId` y `roleId`) podrá hacer. Hoy sólo carga datos: **no protege ningún endpoint ni cambia la UI**. Las cuentas personales no participan — el catálogo se usará sólo al autorizar membresías con `organizationId`.
+
+| Permiso | `resource` + `action` + `scope` | Qué habilita |
+|---|---|---|
+| `DOCUMENT.CREATE` | `DOCUMENT` + `CREATE` + `ANY` | Crear documentos o borradores dentro de la organización activa. |
+| `DOCUMENT.READ_OWN` | `DOCUMENT` + `READ` + `OWN` | Consultar documentos propios o donde el miembro sea firmante. |
+| `DOCUMENT.READ_ORGANIZATION` | `DOCUMENT` + `READ` + `ORGANIZATION` | Consultar documentos de toda la organización. |
+| `DOCUMENT.SEND_SIGNATURE_REQUEST` | `DOCUMENT` + `SEND_SIGNATURE_REQUEST` + `ANY` | Enviar solicitudes de firma de documentos autorizados. |
+| `DOCUMENT.SIGN_SELF` | `DOCUMENT` + `SIGN` + `SELF` | Firmar en nombre propio e incluirse como firmante. |
+| `DOCUMENT.APPROVE` | `DOCUMENT` + `APPROVE` + `ANY` | Aprobar o autorizar documentos cuando el flujo existente lo soporte. |
+| `MEMBER.INVITE` | `MEMBER` + `INVITE` + `ANY` | Invitar miembros a la organización activa. |
+
+| Rol | Permisos |
+|---|---|
+| `ADMIN` | Los siete. |
+| `MEMBER` | `DOCUMENT.CREATE`, `DOCUMENT.READ_OWN` y `DOCUMENT.SIGN_SELF`. |
+
+`MEMBER` se queda a propósito sin lectura de toda la organización, sin envío de solicitudes, sin aprobación y sin invitación.
+
+**Sin migración.** Sólo inserta y relaciona filas en tablas que ya existen. Lo único nuevo son valores de enum de TypeScript —`RESOURCE_KEY_ENUM.MEMBER`; `SEND_SIGNATURE_REQUEST`/`SIGN`/`APPROVE`/`INVITE` en `ACTION_KEY_ENUM`; `OWN`/`ORGANIZATION`/`SELF` en `PERMISSION_SCOPE_ENUM`— y ninguno de los tres se persiste como enum de Postgres (`resources.key`, `actions.key` y `permissions.scope` son varchar). La descripción de cada permiso vive en código: `permissions` no tiene columna `description` y agregarla habría sido cambiar el esquema para un texto que sólo se lee en la consola y en esta tabla.
+
+**Qué toca y qué no.** Idempotente y aditivo: busca cada fila por su clave natural antes de insertarla (`key`, `name`+`isSystemRole`, `resource_id`+`action_id`+`scope`, `role_id`+`permission_id`), reutiliza los roles `ADMIN`/`MEMBER` existentes sin tocar su `id` —es una FK real desde `accounts.role_id`— y sólo actualiza la `description` de un recurso o acción del catálogo si cambió. No borra nada: la rejilla de `seed:roles`, los permisos sobre `ORGANIZATION`/`USER` y cualquier rol custom de organización quedan intactos. `organization_permissions` es un sistema paralelo de nombres libres y no se toca (ver arriba).
+
+**El único conflicto real: `MEMBER → DOCUMENT+READ+ANY`.** Es la fila que sembró `seed:roles`, y al no distinguir alcance equivale a la lectura global que la matriz le niega a `MEMBER`. El script **la detecta y avisa, pero no la borra** — borrar configuración existente sin que nadie lo pida no es cosa de un seed. Para revocarla:
+
+```bash
+npm run seed:static-permissions -- --prune-superseded
+```
+
+El barrido es exigente a propósito: sólo mira roles de sistema, y dentro de ellos sólo los pares recurso+acción que el catálogo **redefine** con alcances explícitos (hoy `DOCUMENT`+`READ`, partido en `OWN` y `ORGANIZATION`). `DOCUMENT`+`UPDATE`/`DELETE` de `ADMIN` se preservan aunque sean del mismo recurso, porque el catálogo no los cubre; las asignaciones sobre `ORGANIZATION` —las que consultan hoy `AccountService` y `OrganizationPermissionsService`— y los roles custom quedan fuera por construcción. Hoy ninguna ruta consulta permisos de `DOCUMENT`, así que revocar esa fila no cambia el comportamiento de nada; conviene hacerlo antes de que el RBAC efectivo empiece a leer el catálogo.
+
+**Cuándo correrlo.** Después de las migraciones y de `seed:roles`, con la base alcanzable, nunca durante el `RUN` del build:
+
+- **Local / desarrollo:** una vez tras traerse la rama, y de nuevo cada vez que el catálogo cambie.
+- **Staging y producción:** en cada despliegue que traiga cambios del catálogo, como paso posterior al arranque del contenedor (`npm run seed:static-permissions:prod`, ver «Seed en Docker»). Correrlo de más es inofensivo: sin cambios, no escribe.
+- **`--prune-superseded`:** una sola vez por ambiente, deliberadamente, tras confirmar que nadie depende de la fila heredada.
+
+**Pruebas** (`src/scripts/seed-static-permissions.spec.ts`, 9 casos con repositorios en memoria): la matriz resultante es exactamente la de la tabla, tres corridas seguidas no crean ni una fila de más, los roles existentes se reutilizan sin cambiar de `id`, lo ajeno al catálogo sobrevive, y la asignación heredada se detecta sin borrarse por defecto y se revoca con la bandera.
 
 ### `auth` (`/api/v1/auth`) — mucho más grande que solo login/registro
 
@@ -687,6 +740,7 @@ npm run migration:revert                                         # revierte la �
 ```bash
 docker compose up -d              # o el compose real del entorno (staging/prod)
 docker exec <nombre-o-id-del-contenedor-api> npm run seed:roles:prod
+docker exec <nombre-o-id-del-contenedor-api> npm run seed:static-permissions:prod
 docker exec <nombre-o-id-del-contenedor-api> npm run seed:documents:prod   # requiere el usuario fixture PRIMARY_TEST_EMAIL, ver src/scripts/seed-documents.ts — normalmente solo seed:roles:prod aplica en un ambiente real
 ```
 

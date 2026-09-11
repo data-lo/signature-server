@@ -47,8 +47,16 @@ export class UpdateAccountMemberUseCase {
       );
     }
 
+    /**
+     * El rol se valida contra la organización de la membresía, no sólo por existencia: un rol
+     * custom de otra organización existe en la tabla, y aceptarlo aquí sería mover permisos de un
+     * tenant a otro por el simple hecho de conocer su identificador.
+     */
     if (dto.roleId) {
-      await this.rolesService.findByIdOrFail(dto.roleId);
+      await this.rolesService.findAssignableRoleOrFail(
+        dto.roleId,
+        member.organizationId as string,
+      );
     }
 
     await this.accountMemberService.applyMembershipUpdate(id, dto);

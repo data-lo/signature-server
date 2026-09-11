@@ -21,20 +21,47 @@ import { PERMISSION_SCOPE_ENUM } from '../roles/enums/permission-scope.enum';
  * registros: cada entidad se busca por su clave natural (key/name, o el par
  * resourceId+actionId+scope / roleId+permissionId para las tablas pivote)
  * antes de insertarla.
+ *
+ * Es la rejilla CRUD original (3 recursos × 4 acciones, todo con scope ANY) y
+ * lo que consultan hoy los checks de ORGANIZATION en `account` y
+ * `organization-permissions`. El catálogo de permisos de negocio vive aparte,
+ * en `src/roles/static-permission-catalog.ts` (`npm run seed:static-permissions`).
  */
 
-const RESOURCE_DESCRIPTIONS: Record<RESOURCE_KEY_ENUM, string> = {
+/**
+ * Recursos y acciones que siembra ESTE seed, enumerados a mano en vez de recorrer los enums.
+ * Los enums crecieron con el catálogo estático (MEMBER, SIGN, APPROVE, INVITE...) y recorrerlos
+ * haría que este script sembrara permisos que nunca sembró y que no le corresponden.
+ */
+const LEGACY_RESOURCE_KEYS = [
+  RESOURCE_KEY_ENUM.DOCUMENT,
+  RESOURCE_KEY_ENUM.ORGANIZATION,
+  RESOURCE_KEY_ENUM.USER,
+] as const;
+
+const LEGACY_ACTION_KEYS = [
+  ACTION_KEY_ENUM.CREATE,
+  ACTION_KEY_ENUM.READ,
+  ACTION_KEY_ENUM.UPDATE,
+  ACTION_KEY_ENUM.DELETE,
+] as const;
+
+const RESOURCE_DESCRIPTIONS: Record<
+  (typeof LEGACY_RESOURCE_KEYS)[number],
+  string
+> = {
   [RESOURCE_KEY_ENUM.DOCUMENT]: 'Documentos para firma electrónica',
   [RESOURCE_KEY_ENUM.ORGANIZATION]: 'Cuentas de tipo organización',
   [RESOURCE_KEY_ENUM.USER]: 'Usuarios de la plataforma',
 };
 
-const ACTION_DESCRIPTIONS: Record<ACTION_KEY_ENUM, string> = {
-  [ACTION_KEY_ENUM.CREATE]: 'Crear un recurso nuevo',
-  [ACTION_KEY_ENUM.READ]: 'Consultar un recurso existente',
-  [ACTION_KEY_ENUM.UPDATE]: 'Actualizar un recurso existente',
-  [ACTION_KEY_ENUM.DELETE]: 'Eliminar un recurso existente',
-};
+const ACTION_DESCRIPTIONS: Record<(typeof LEGACY_ACTION_KEYS)[number], string> =
+  {
+    [ACTION_KEY_ENUM.CREATE]: 'Crear un recurso nuevo',
+    [ACTION_KEY_ENUM.READ]: 'Consultar un recurso existente',
+    [ACTION_KEY_ENUM.UPDATE]: 'Actualizar un recurso existente',
+    [ACTION_KEY_ENUM.DELETE]: 'Eliminar un recurso existente',
+  };
 
 async function upsertRole(
   dataSource: DataSource,
@@ -53,7 +80,7 @@ async function upsertRole(
 
 async function upsertResource(
   dataSource: DataSource,
-  key: RESOURCE_KEY_ENUM,
+  key: (typeof LEGACY_RESOURCE_KEYS)[number],
 ): Promise<ResourceEntity> {
   const resourceRepository = dataSource.getRepository(ResourceEntity);
   const existing = await resourceRepository.findOne({ where: { key } });
@@ -66,7 +93,7 @@ async function upsertResource(
 
 async function upsertAction(
   dataSource: DataSource,
-  key: ACTION_KEY_ENUM,
+  key: (typeof LEGACY_ACTION_KEYS)[number],
 ): Promise<ActionEntity> {
   const actionRepository = dataSource.getRepository(ActionEntity);
   const existing = await actionRepository.findOne({ where: { key } });
@@ -140,13 +167,13 @@ async function main() {
 
   console.log('Creando/verificando resources...');
   const resources = new Map<RESOURCE_KEY_ENUM, ResourceEntity>();
-  for (const key of Object.values(RESOURCE_KEY_ENUM)) {
+  for (const key of LEGACY_RESOURCE_KEYS) {
     resources.set(key, await upsertResource(dataSource, key));
   }
 
   console.log('Creando/verificando actions...');
   const actions = new Map<ACTION_KEY_ENUM, ActionEntity>();
-  for (const key of Object.values(ACTION_KEY_ENUM)) {
+  for (const key of LEGACY_ACTION_KEYS) {
     actions.set(key, await upsertAction(dataSource, key));
   }
 

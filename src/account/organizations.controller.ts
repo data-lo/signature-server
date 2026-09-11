@@ -5,8 +5,10 @@ import {
   Delete,
   Get,
   Param,
+  ParseBoolPipe,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 
 // Swagger
@@ -20,6 +22,7 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 // Use cases
 import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
+import { AddOrganizationMemberUseCase } from './applications/add-organization-member.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
@@ -29,12 +32,14 @@ import { AssignMemberPermissionsUseCase } from 'src/organization-permissions/app
 // DTOs
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
+import { AddOrganizationMemberDto } from './dto/add-organization-member.dto';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
 import { AssignMemberPermissionsDto } from 'src/organization-permissions/dto/assign-member-permissions.dto';
 
 // Docs
 import { ApiCreateOrganization } from './docs/api-create-organization.docs';
 import { ApiInviteOrganizationMember } from './docs/api-invite-organization-member.docs';
+import { ApiAddOrganizationMember } from './docs/api-add-organization-member.docs';
 import { ApiGetOrganizationMemberList } from './docs/api-get-organization-member-list.docs';
 import { ApiUpdateOrganizationMemberRole } from './docs/api-update-organization-member-role.docs';
 import { ApiRemoveOrganizationMember } from './docs/api-remove-organization-member.docs';
@@ -48,6 +53,7 @@ export class OrganizationsController {
   constructor(
     private readonly createOrganization: CreateOrganizationUseCase,
     private readonly inviteOrganizationMember: InviteOrganizationMemberUseCase,
+    private readonly addOrganizationMember: AddOrganizationMemberUseCase,
     private readonly getOrganizationMemberList: GetOrganizationMemberListUseCase,
     private readonly updateAccountMember: UpdateAccountMemberUseCase,
     private readonly revokeAccountAccess: RevokeAccountAccessUseCase,
@@ -75,13 +81,34 @@ export class OrganizationsController {
     return this.inviteOrganizationMember.execute(user.sub, accountId, dto);
   }
 
+  /**
+   * Alta directa, hermana de `POST invite`: aquella crea una invitación por correo para quien
+   * todavía no tiene cuenta; ésta agrega de una vez a quien ya está registrado. La organización
+   * sale del header `X-Account-Id`, nunca del body.
+   */
+  @Post('members')
+  @ApiAddOrganizationMember()
+  addMember(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+    @Body() dto: AddOrganizationMemberDto,
+  ) {
+    return this.addOrganizationMember.execute(user.sub, accountId, dto);
+  }
+
   @Get(':organizationId/members')
   @ApiGetOrganizationMemberList()
   findMembers(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
+    @Query('includeInactive', new ParseBoolPipe({ optional: true }))
+    includeInactive?: boolean,
   ) {
-    return this.getOrganizationMemberList.execute(user.sub, organizationId);
+    return this.getOrganizationMemberList.execute(
+      user.sub,
+      organizationId,
+      includeInactive ?? false,
+    );
   }
 
   @Patch('members/:accountId/role')
