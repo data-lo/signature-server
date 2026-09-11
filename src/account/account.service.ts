@@ -72,6 +72,11 @@ export class AccountService {
    * `email`/`password` se copian del usuario porque son la credencial única sincronizada
    * (decisión D6 del plan ER-V2): el login resuelve contra `accounts`, así que una fila sin
    * esos campos sería una cuenta con la que su dueño no podría entrar.
+   *
+   * **Sólo la cuenta PERSONAL nace con perfil Free.** Una cuenta de organización se guarda sin
+   * `billing_profile`: las organizaciones nacen sin plan, sin plan Free y sin créditos de
+   * bienvenida, y contratan su plan desde Planes. Aprovisionarla aquí dejaría al alta genérica
+   * (`CreateAccountUseCase`) regalándole el plan Free por la puerta de atrás.
    */
   async saveAccount(params: {
     userId: string;
@@ -81,9 +86,8 @@ export class AccountService {
     user: UserEntity;
   }): Promise<AccountEntity> {
     /**
-     * La transacción es nueva y la trae esta historia: desde que toda cuenta nace con su
-     * `billing_profile`, guardar la fila sola dejaría una cuenta sin estado comercial si el
-     * perfil fallara — el hueco que este cambio existe para cerrar.
+     * Va en transacción porque la cuenta personal nace con su `billing_profile`: guardar la fila
+     * sola dejaría una cuenta sin estado comercial si el perfil fallara.
      *
      * Sigue quedando FUERA la organización que el caso de uso crea antes de llamar acá: ese
      * reparto es el que ya tenía el endpoint (ver `CreateAccountUseCase`) y no lo toca esta
@@ -104,10 +108,12 @@ export class AccountService {
         }),
       );
 
-      await this.billingProfileProvisioning.provisionFreeProfile(
-        manager,
-        toBillingOwner(account),
-      );
+      if (account.accountType === ACCOUNT_TYPE_ENUM.PERSONAL) {
+        await this.billingProfileProvisioning.provisionFreeProfile(
+          manager,
+          toBillingOwner(account),
+        );
+      }
 
       return account;
     });
@@ -318,16 +324,11 @@ export class AccountService {
       );
 
       /**
-       * El propietario del dinero es la ORGANIZACIÓN, no la membresía de quien la creó: el
-       * perfil se ata a `organization_id` para que todos sus miembros compartan un solo estado
-       * comercial y un solo saldo. Va en la misma transacción que la organización y su
-       * administrador, por el mismo motivo que ellas van juntas.
+       * Sin `billing_profile`, a propósito: la organización nace sin plan, sin plan Free y sin
+       * créditos de bienvenida. El perfil se crea cuando contrata (lo abre
+       * `CreateSubscriptionCheckoutUseCase`), y hasta entonces `GetBillingAccessUseCase` le
+       * responde todas las acciones en `false`.
        */
-      await this.billingProfileProvisioning.provisionFreeProfile(
-        queryRunner.manager,
-        { personalAccountId: null, organizationId: organization.id },
-      );
-
       await queryRunner.commitTransaction();
 
       return this.findByIdOrFail(account.id);

@@ -16,7 +16,7 @@ import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { OrganizationInvitationService } from '../organization-invitation.service';
 
-import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
+import { AccountMemberService } from '../account-member.service';
 
 import { CreateOrganizationUseCase } from './create-organization.use-case';
 import { UpdateAccountUseCase } from './update-account.use-case';
@@ -73,6 +73,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
     hasPermission: jest.Mock;
   };
   let organizationInvitationService: { create: jest.Mock };
+  let billingProfileProvisioning: { provisionFreeProfile: jest.Mock };
 
   let createOrganization: CreateOrganizationUseCase;
   let updateAccount: UpdateAccountUseCase;
@@ -101,6 +102,11 @@ describe('casos de uso de cuentas y organizaciones', () => {
     organizationInvitationService = {
       create: jest.fn().mockResolvedValue(undefined),
     };
+    billingProfileProvisioning = {
+      provisionFreeProfile: jest
+        .fn()
+        .mockResolvedValue({ id: 'perfil-free-1' }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -122,14 +128,9 @@ describe('casos de uso de cuentas y organizaciones', () => {
         { provide: RedisService, useValue: redisService },
         { provide: RolesService, useValue: rolesService },
         {
-          // Toda cuenta nace con su perfil Free; acá sólo interesa que el alta siga funcionando,
-          // el contenido del perfil lo cubre `BillingProfileProvisioningService`.
+          // Sólo la cuenta personal nace con perfil Free; acá se comprueba que la organización no.
           provide: BillingProfileProvisioningService,
-          useValue: {
-            provisionFreeProfile: jest
-              .fn()
-              .mockResolvedValue({ id: 'perfil-free-1' }),
-          },
+          useValue: billingProfileProvisioning,
         },
         {
           provide: OrganizationInvitationService,
@@ -137,12 +138,15 @@ describe('casos de uso de cuentas y organizaciones', () => {
         },
         {
           /**
-           * Acá el permiso se da por concedido: lo que se prueba en este archivo es el ALTA. Que
-           * un plan Free —o una cuenta sin perfil— no llegue nunca hasta ella lo cubre
-           * `create-organization-plan-gate.spec.ts`, que monta la comprobación de verdad.
+           * La pertenencia a la cuenta activa se da por concedida: acá se prueba el ALTA. Los casos
+           * de permiso los cubre `create-organization.use-case.spec.ts`.
            */
-          provide: AssertPlanActionUseCase,
-          useValue: { execute: jest.fn().mockResolvedValue(undefined) },
+          provide: AccountMemberService,
+          useValue: {
+            assertIsActiveMember: jest
+              .fn()
+              .mockResolvedValue({ id: 'account-activa-1' }),
+          },
         },
       ],
     }).compile();
@@ -174,7 +178,11 @@ describe('casos de uso de cuentas y organizaciones', () => {
       mockFullAccountLookup();
       redisService.get.mockResolvedValue(null);
 
-      const result = await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto);
+      const result = await createOrganization.execute(
+        'user-1',
+        ACTIVE_ACCOUNT_ID,
+        dto,
+      );
 
       expect(dataSource.createQueryRunner).toHaveBeenCalled();
       expect(queryRunner.startTransaction).toHaveBeenCalled();
@@ -196,6 +204,22 @@ describe('casos de uso de cuentas y organizaciones', () => {
       expect(result.success).toBe(true);
       expect(result.data.roleId).toBe('admin-role-1');
       expect(result.data.isActive).toBe(true);
+    });
+
+    /**
+     * La organización nace sin estado comercial: ni `billing_profile`, ni plan Free, ni créditos
+     * de bienvenida. La transacción escribe sólo la organización y la membresía de su ADMIN.
+     */
+    it('no aprovisiona perfil de facturación ni créditos para la organización nueva', async () => {
+      mockFullAccountLookup();
+      redisService.get.mockResolvedValue(null);
+
+      await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto);
+
+      expect(
+        billingProfileProvisioning.provisionFreeProfile,
+      ).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(2);
     });
 
     it('persiste los campos opcionales de perfil de organizacion cuando se envian', async () => {
@@ -241,9 +265,9 @@ describe('casos de uso de cuentas y organizaciones', () => {
         .mockResolvedValueOnce({ id: 'org-1' })
         .mockRejectedValueOnce(new Error('duplicate key value'));
 
-      await expect(createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto)).rejects.toThrow(
-        'duplicate key value',
-      );
+      await expect(
+        createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto),
+      ).rejects.toThrow('duplicate key value');
       expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
       expect(queryRunner.release).toHaveBeenCalled();

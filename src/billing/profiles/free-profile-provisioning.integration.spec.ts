@@ -242,15 +242,33 @@ describe('Alta del perfil Free (integración)', () => {
     });
   });
 
+  /**
+   * Las organizaciones nacen SIN estado comercial: ni perfil, ni plan Free, ni créditos de
+   * bienvenida. Contratan su plan desde Planes, y hasta entonces no tienen accesos.
+   */
   describe('alta de organización', () => {
-    it('deja un perfil atado a organization_id, no a la membresía de quien la creó', async () => {
+    it('no crea billing_profile para la organización', async () => {
       await altaDeOrganizacion();
 
-      const organizacion = manager.filasDe(OrganizationEntity)[0];
+      expect(manager.filasDe(OrganizationEntity)).toHaveLength(1);
+      expect(perfiles()).toHaveLength(0);
+    });
+
+    it('no siembra el plan free ni emite créditos de bienvenida', async () => {
+      await altaDeOrganizacion();
+
+      expect(manager.filasDe(PlanEntity)).toHaveLength(0);
+      expect(manager.filasDe(CreditLotEntity)).toHaveLength(0);
+    });
+
+    it('la cuenta personal conserva su perfil Free aunque el mismo usuario cree una organización', async () => {
+      const { account } = await altaDeCuentaPersonal();
+      await altaDeOrganizacion();
+
       expect(perfiles()).toHaveLength(1);
       expect(perfiles()[0]).toMatchObject({
-        personalAccountId: null,
-        organizationId: organizacion.id,
+        personalAccountId: account.id,
+        organizationId: null,
         currentPlanType: FREE_PLAN_TYPE,
         status: BILLING_PROFILE_STATUS_ENUM.FREE,
       });
@@ -331,29 +349,23 @@ describe('Alta del perfil Free (integración)', () => {
      * evita que una cuenta recién creada exista con perfil y sin saldo, y que su primer documento
      * falle por falta de créditos que en realidad le tocaban.
      */
-    it('concede un lote de bienvenida por propietario, con sus 3 documentos', async () => {
+    it('concede el lote de bienvenida sólo a la cuenta personal, con sus 3 documentos', async () => {
       await altaDeCuentaPersonal();
       await altaDeOrganizacion();
 
       const lotes = manager.filasDe(CreditLotEntity);
 
-      // Uno por propietario: la cuenta personal y la organización tienen saldos distintos.
-      expect(lotes).toHaveLength(2);
-      lotes.forEach((lote) => {
-        expect(lote.origin).toBe(CREDIT_LOT_ORIGIN_ENUM.FREE_GRANT);
-        expect(lote.issued).toBe(FREE_WELCOME_DOCUMENT_CREDITS);
-        expect(lote.remaining).toBe(FREE_WELCOME_DOCUMENT_CREDITS);
-        // Sin caducidad ni cobro detrás: no lo emitió ningún periodo facturado.
-        expect(lote.expiresAt ?? null).toBeNull();
-        expect(lote.stripeInvoiceId ?? null).toBeNull();
-      });
+      // Uno solo: la organización nace sin perfil y sin créditos de bienvenida.
+      expect(lotes).toHaveLength(1);
+      expect(lotes[0].origin).toBe(CREDIT_LOT_ORIGIN_ENUM.FREE_GRANT);
+      expect(lotes[0].issued).toBe(FREE_WELCOME_DOCUMENT_CREDITS);
+      expect(lotes[0].remaining).toBe(FREE_WELCOME_DOCUMENT_CREDITS);
+      // Sin caducidad ni cobro detrás: no lo emitió ningún periodo facturado.
+      expect(lotes[0].expiresAt ?? null).toBeNull();
+      expect(lotes[0].stripeInvoiceId ?? null).toBeNull();
 
-      // Cada lote cuelga del perfil de su propietario, no de la cuenta que hizo el alta.
-      expect(lotes.map((lote) => lote.billingProfileId).sort()).toEqual(
-        perfiles()
-          .map((perfil) => perfil.id)
-          .sort(),
-      );
+      // Cuelga del perfil de la cuenta personal, el único que existe.
+      expect(lotes[0].billingProfileId).toBe(perfiles()[0].id);
     });
 
     it('deja los identificadores de Stripe en null', async () => {
