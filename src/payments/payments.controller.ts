@@ -125,6 +125,9 @@ export class PaymentsController {
    *
    * Recibe el id del catálogo LOCAL y no un `price_...`: el precio de Stripe lo resuelve el
    * servidor a partir de la fila validada, de modo que el cliente no puede elegir qué se cobra.
+   *
+   * La cantidad sí la elige el cliente, pero sólo multiplica ese precio: el caso de uso la valida
+   * (entero, de 1 a `MAX_DOCUMENT_CREDITS_PER_PURCHASE`) y calcula el importe total.
    */
   @Post('document-credits/checkout')
   @ApiCreateDocumentCreditCheckout()
@@ -141,6 +144,7 @@ export class PaymentsController {
         email: user.email,
         accountId,
         catalogPriceId: dto.catalogPriceId,
+        quantity: dto.quantity,
       }),
     };
   }

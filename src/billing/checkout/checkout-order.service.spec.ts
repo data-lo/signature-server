@@ -58,6 +58,35 @@ describe('CheckoutOrderService', () => {
     });
   });
 
+  describe('registerPendingDocumentCredits', () => {
+    /**
+     * La orden guarda la cantidad validada y el importe TOTAL: son los dos datos contra los que el
+     * webhook concilia lo que Stripe dice que se cobró.
+     */
+    it('registra la orden ADD_ON/PENDING con la cantidad y el importe total', async () => {
+      await service.registerPendingDocumentCredits({
+        billingProfileId: 'profile-1',
+        catalogPriceId: 'catalog-price-1',
+        stripeCheckoutSessionId: 'cs_1',
+        quantity: 5,
+        amount: 19500,
+        currency: 'mxn',
+      });
+
+      expect(checkoutOrderRepository.save).toHaveBeenCalledWith({
+        billingProfileId: 'profile-1',
+        catalogPriceId: 'catalog-price-1',
+        kind: CHECKOUT_KIND_ENUM.ADD_ON,
+        stripeCheckoutSessionId: 'cs_1',
+        stripePaymentIntentId: null,
+        status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
+        quantity: 5,
+        amount: 19500,
+        currency: 'mxn',
+      });
+    });
+  });
+
   describe('markCompleted', () => {
     it('cierra sólo la orden que sigue PENDING', async () => {
       await service.markCompleted({
