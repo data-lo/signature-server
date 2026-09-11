@@ -4,7 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { VerificationCodeService } from './verification-code.service';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
-import { OTPService } from 'src/shared/otp/otp.service';
+import { OTPService } from 'src/common/otp/otp.service';
 
 function createMockRepository() {
   return {

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { collaboratorEmail } from '../utils/collaborator-display.util';

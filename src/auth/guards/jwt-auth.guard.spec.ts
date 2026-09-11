@@ -2,7 +2,7 @@ import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { JwtAuthGuard } from './jwt-auth.guard';
-import { RedisService } from '../../shared/redis/redis.service';
+import { RedisService } from '../../common/redis/redis.service';
 
 function buildContext(headers: Record<string, string> = {}): ExecutionContext {
   const request = { headers, user: undefined };

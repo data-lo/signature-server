@@ -12,7 +12,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
 import axios from 'axios';
 
-import { applyGlobalApiPrefix } from './../src/shared/constants/api-prefix.constants';
+import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
 import { DocumentController } from './../src/document/document.controller';
 import { DocumentService } from './../src/document/document.service';
 import { SignDocumentUseCase } from './../src/document/applications/sign-document.use-case';
@@ -26,12 +26,12 @@ import { DOCUMENT_STATUS_ENUM } from './../src/document/enum/document-status.enu
 import { COLABORATOR_TYPE_ENUM } from './../src/document/enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from './../src/document/enum/signee-status.enum';
 import { SIGNATURE_TYPE_ENUM } from './../src/document/enum/signature-type.enum';
-import { MinioService } from './../src/shared/minio/minio.service';
-import { HashService } from './../src/shared/hash/hash.service';
+import { MinioService } from './../src/common/minio/minio.service';
+import { HashService } from './../src/common/hash/hash.service';
 import { UserService } from './../src/user/user.service';
-import { PdfSignatureService } from './../src/shared/document-signing/document-signing.service';
+import { PdfSignatureService } from './../src/common/document-signing/document-signing.service';
 import { SignatureService } from './../src/signature/signature.service';
-import { EmailService } from './../src/shared/email/email.service';
+import { EmailService } from './../src/common/email/email.service';
 import { AuditService } from './../src/audit/audit.service';
 import { DocumentEventsProducer } from './../src/kafka/document-events.producer';
 import { AccountMemberService } from './../src/account/account-member.service';

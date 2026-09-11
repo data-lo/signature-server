@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DocumentTransactionEntity } from './entities/document-transaction.entity';
 import { DocumentTransactionService } from './document-transaction.service';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 
 /**
  * Módulo independiente de DocumentModule/KafkaModule para evitar un import circular:

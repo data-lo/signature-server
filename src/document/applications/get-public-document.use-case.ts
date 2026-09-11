@@ -2,8 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { MinioService } from 'src/shared/minio/minio.service';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { MinioService } from 'src/common/minio/minio.service';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { UserService } from 'src/user/user.service';
 
 import { CollaboratorEntity } from '../entities/collaborator.entity';

@@ -1,4 +1,4 @@
-import { SignatureCoordinates } from 'src/shared/document-signing/interfaces/signature-coordinates.interface';
+import { SignatureCoordinates } from 'src/common/document-signing/interfaces/signature-coordinates.interface';
 import {
   Column,
   CreateDateColumn,

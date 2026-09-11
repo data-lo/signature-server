@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { AuditService } from './audit.service';
 import { AuditDocument } from './schema/audit-document';
-import { HashService } from '../shared/hash/hash.service';
+import { HashService } from '../common/hash/hash.service';
 
 describe('AuditService', () => {
   let service: AuditService;

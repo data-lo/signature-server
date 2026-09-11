@@ -7,7 +7,7 @@ import { GetDocumentAuditTrailUseCase } from './applications/get-document-audit-
 import { GetDecryptedAuditRecordsUseCase } from './applications/get-decrypted-audit-records.use-case';
 import { GetAuditRecordsUseCase } from './applications/get-audit-records.use-case';
 import { AuditDocument, AuditSchema } from './schema/audit-document';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 
 @Module({
   imports: [

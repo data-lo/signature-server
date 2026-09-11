@@ -12,7 +12,7 @@ import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 
 // Services
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 
 // Utilities
 import {

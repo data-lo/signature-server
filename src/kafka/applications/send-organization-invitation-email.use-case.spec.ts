@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrganizationInvitationEventsConsumer } from '../organization-invitation-events.controller';
 import { SendOrganizationInvitationEmailUseCase } from './send-organization-invitation-email.use-case';
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 import type { OrganizationInvitationEventPayload } from '../organization-invitation.topics';
 
 describe('OrganizationInvitationEventsConsumer', () => {

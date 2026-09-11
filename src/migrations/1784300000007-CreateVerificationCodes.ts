@@ -2,7 +2,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /**
  * Migración ER-V2, Fase 7 (ver plan de migración): conecta el OTPService ya existente
- * (src/shared/otp/otp.service.ts, implementado desde antes de esta migración pero sin ningún
+ * (src/common/otp/otp.service.ts, implementado desde antes de esta migración pero sin ningún
  * caller) a una tabla real con expiración/estado de uso persistidos.
  *
  * También elimina `documents.verification_code_id`: confirmado por grep de todo el código que

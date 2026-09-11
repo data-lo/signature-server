@@ -52,8 +52,8 @@ import { ArchiveCompletedDocumentUseCase } from './applications/archive-document
 
 // Enums
 import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
-import { IpInterceptor } from 'src/ip/ip.interceptor';
-import { ClientIp } from 'src/ip/ip.decorator';
+import { RequestIpInterceptor } from 'src/common/interceptors/request-ip.interceptor';
+import { ClientIp } from 'src/common/interceptors/request-ip.decorator';
 
 // Decorators
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
@@ -62,7 +62,7 @@ import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 
 // Interfaces
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
-import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 
 // Docs
 import { ApiGetDocumentFileUrl } from './docs/api-get-document-file-url.docs';
@@ -112,19 +112,13 @@ export class DocumentController {
     private readonly updateDocument: UpdateDocumentUseCase,
     private readonly deleteDocument: DeleteDocumentUseCase,
     private readonly archiveCompletedDocument: ArchiveCompletedDocumentUseCase,
-  ) {}
+  ) { }
 
   @Get('file/:id')
   @ApiGetDocumentFileUrl()
   async getDocumentUrl(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    /**
-     * `?download=true` pide la URL para BAJAR el archivo, con el nombre del documento; sin el
-     * parámetro se devuelve la de siempre, para mostrarlo en el visor. Es un query y no una ruta
-     * aparte porque lo único que cambia entre los dos casos es la cabecera con la que responde
-     * MinIO: mismo permiso, mismo bucket, mismo objeto.
-     */
     @Query('download') download?: string,
   ) {
     return this.getDocumentFileUrl.execute(id, user.sub, {
@@ -201,10 +195,8 @@ export class DocumentController {
   @Post()
   @ApiCreateDocument()
   @UseInterceptors(
-    FileInterceptor('file', {
-      limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES },
-    }),
-    IpInterceptor,
+    FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES }, }),
+    RequestIpInterceptor,
   )
   async create(
     @CurrentUser() user: JwtPayload,
@@ -294,7 +286,7 @@ export class DocumentController {
 
   @Post(':id/verification-codes')
   @ApiRequestVerificationCode()
-  @UseInterceptors(IpInterceptor)
+  @UseInterceptors(RequestIpInterceptor)
   requestVerificationCode(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,

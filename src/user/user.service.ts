@@ -24,15 +24,15 @@ import { SIGNING_CREDENTIAL_STATUS_ENUM } from './enums/signing-credential-statu
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { SignatureService } from 'src/signature/signature.service';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
+import { RedisService } from 'src/common/redis/redis.service';
 import { AccountService } from 'src/account/account.service';
-import { EmailService } from 'src/shared/email/email.service';
-import { maskEmail } from 'src/shared/utils/mask-email.util';
+import { EmailService } from 'src/common/email/email.service';
+import { maskEmail } from 'src/common/utils/mask-email.util';
 import {
   formatOptionalPersonName,
   formatPersonName,
-} from 'src/shared/utils/format-person-name.util';
+} from 'src/common/utils/format-person-name.util';
 import { EmailVerificationCodeService } from './email-verification-code.service';
 import { SignupPendingVerificationData } from './interfaces/response/signup-pending-verification-response';
 

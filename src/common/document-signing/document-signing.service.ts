@@ -276,7 +276,7 @@ export class PdfSignatureService {
       this.logger.warn(
         'Perfil ICC sRGB no encontrado. El OutputIntent será omitido y el documento ' +
           'no será completamente conforme con PDF/A-2B. Coloque sRGB.icc en ' +
-          'src/shared/document-signing/resources/sRGB.icc',
+          'src/common/document-signing/resources/sRGB.icc',
       );
       return;
     }
@@ -546,7 +546,7 @@ export class PdfSignatureService {
 //
 // 1. Importar DocumentSigningModule en el módulo que lo necesite:
 //
-//    import { DocumentSigningModule } from 'src/shared/document-signing/document-signing.module';
+//    import { DocumentSigningModule } from 'src/common/document-signing/document-signing.module';
 //
 //    @Module({
 //      imports: [DocumentSigningModule],
@@ -555,8 +555,8 @@ export class PdfSignatureService {
 //
 // 2. Inyectar PdfSignatureService en el servicio o controlador destino:
 //
-//    import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
-//    import { SignatureCoordinates } from 'src/shared/document-signing/interfaces/signature-coordinates.interface';
+//    import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
+//    import { SignatureCoordinates } from 'src/common/document-signing/interfaces/signature-coordinates.interface';
 //
 //    @Injectable()
 //    export class DocumentService {
@@ -590,7 +590,7 @@ export class PdfSignatureService {
 //
 // PERFIL ICC sRGB (requerido para conformidad PDF/A-2B completa):
 //   Descargar de: https://www.color.org/srgbprofiles.xalter
-//   Guardar como: src/shared/document-signing/resources/sRGB.icc
+//   Guardar como: src/common/document-signing/resources/sRGB.icc
 //   El build de NestJS copia automáticamente *.icc a dist/ (configurado en nest-cli.json).
 //   Sin el perfil ICC, el documento tendrá metadatos XMP PDF/A-2B pero le faltará el
 //   OutputIntent, por lo que no pasará un validador estricto de PDF/A-2B.
