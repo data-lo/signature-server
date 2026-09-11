@@ -89,3 +89,22 @@ export class IdentityVerificationBlockedException extends ForbiddenException {
     );
   }
 }
+
+/**
+ * No se pudieron procesar las imágenes de la INE que acompañan a una identidad aprobada: faltan en
+ * el veredicto, no se pudieron descargar o validar, o no se pudieron guardar en el bucket privado.
+ *
+ * 500 a propósito: se lanza DENTRO del procesamiento del webhook de Didit, antes de marcar nada
+ * como aprobado, así que la entrega queda en FAILED, se responde 5xx y Didit la reintenta — y como
+ * `webhook_events` sólo corta las entregas PROCESSED, el reintento vuelve a correr completo.
+ *
+ * **El motivo nunca incluye URLs, llaves de MinIO ni contenido de las imágenes**: termina en
+ * `webhook_events.error` y en los logs.
+ */
+export class IdentityDocumentImagesProcessingException extends InternalServerErrorException {
+  constructor(reason: string) {
+    super(
+      `No se pudieron procesar las imágenes de la INE verificada: ${reason}.`,
+    );
+  }
+}

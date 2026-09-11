@@ -7,6 +7,7 @@ import { IdentityVerificationEntity } from '../entities/identity-verification.en
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
 import { UpdateSigningCredentialStatusUseCase } from './update-signing-credential-status.use-case';
+import { StoreVerifiedIdentityImagesUseCase } from './store-verified-identity-images.use-case';
 
 /**
  * Traducción del vocabulario de Didit al del dominio.
@@ -93,6 +94,7 @@ export class ProcessDiditVerificationResultUseCase {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly updateSigningCredentialStatus: UpdateSigningCredentialStatusUseCase,
+    private readonly storeVerifiedIdentityImages: StoreVerifiedIdentityImagesUseCase,
   ) {}
 
   async execute(payload: Record<string, unknown>): Promise<void> {
@@ -157,6 +159,20 @@ export class ProcessDiditVerificationResultUseCase {
     }
 
     const isTerminal = TERMINAL_STATUSES.includes(status);
+
+    /**
+     * Las imágenes de la INE se guardan ANTES de marcar nada como aprobado: una identidad no queda
+     * completada si faltan las imágenes que la acreditan. Si esto falla, lanza sin haber tocado el
+     * intento ni la credencial; la entrega queda en FAILED y el reintento de Didit vuelve a correr
+     * completo. Es idempotente: un intento ya guardado no se descarga otra vez.
+     */
+    if (status === IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED) {
+      await this.storeVerifiedIdentityImages.execute({
+        userId: attempt.userId,
+        verificationId: attempt.id,
+        decision: this.asObject(payload.decision),
+      });
+    }
 
     await this.identityVerificationRepository.update(attempt.id, {
       status,

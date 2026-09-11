@@ -10,8 +10,10 @@ import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
 import { SIGNEE_STATUS_ENUM } from '../../enum/signee-status.enum';
 import { VERIFICATION_EVENT_ENUM } from '../../enum/verification-event.enum';
+import { detectImageContentType } from 'src/shared/utils/image-content-type.util';
 import {
   SimpleSignatureDTO,
+  SimpleSignatureMedia,
   SimpleSignerSignature,
 } from '../dto/simple-signature.dto';
 import { IncompleteSimpleSignatureDataException } from '../exceptions/seal.exceptions';
@@ -93,7 +95,13 @@ export class SendCompletedSimpleSignatureToSealUseCase {
       ),
     };
 
-    const response = await this.sealApiService.sendSimpleSignatures(dto);
+    let response: SealDocumentResponse;
+    try {
+      response = await this.sealApiService.sendSimpleSignatures(dto);
+    } finally {
+      // Las imágenes de la INE no se conservan más allá del envío, salga bien o mal.
+      this.releaseIdentityDocumentImages(dto);
+    }
 
     // Sólo el documento, el número de firmantes y el resultado: nada del contenido del DTO.
     this.logger.log(
@@ -147,20 +155,30 @@ export class SendCompletedSimpleSignatureToSealUseCase {
   private findDocumentWithSigners(
     documentId: string,
   ): Promise<DocumentEntity | null> {
-    return this.documentRepository
-      .createQueryBuilder('document')
-      .leftJoinAndSelect(
-        'document.collaborators',
-        'collaborator',
-        'collaborator.colaborator_type = :signerType',
-        { signerType: COLABORATOR_TYPE_ENUM.SIGNER },
-      )
-      .leftJoinAndSelect('collaborator.account', 'account')
-      .leftJoinAndSelect('account.user', 'user')
-      .leftJoinAndSelect('user.personalInformation', 'personalInformation')
-      .leftJoinAndSelect('user.signature', 'signature')
-      .where('document.id = :documentId', { documentId })
-      .getOne();
+    return (
+      this.documentRepository
+        .createQueryBuilder('document')
+        .leftJoinAndSelect(
+          'document.collaborators',
+          'collaborator',
+          'collaborator.colaborator_type = :signerType',
+          { signerType: COLABORATOR_TYPE_ENUM.SIGNER },
+        )
+        .leftJoinAndSelect('collaborator.account', 'account')
+        .leftJoinAndSelect('account.user', 'user')
+        .leftJoinAndSelect('user.personalInformation', 'personalInformation')
+        /**
+         * Las llaves de la INE son `select: false` en la entidad: no viajan con la relación salvo que
+         * se pidan, y éste es uno de los dos únicos lugares que las piden.
+         */
+        .addSelect([
+          'personalInformation.frontImageKey',
+          'personalInformation.backImageKey',
+        ])
+        .leftJoinAndSelect('user.signature', 'signature')
+        .where('document.id = :documentId', { documentId })
+        .getOne()
+    );
   }
 
   /**
@@ -255,10 +273,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
       verificationData: await this.resolveVerificationData(documentId, signer),
       signatureMedia: {
         signatureImage: await this.resolveSignatureImage(signer),
-        /**
-         * Anverso y reverso de la INE: todavía no se descargan de Didit, así que se omiten. Su
-         * ausencia no bloquea el envío — ver `SimpleSignatureMedia`.
-         */
+        ...(await this.resolveIdentityDocumentImages(signer)),
       },
     };
   }
@@ -340,6 +355,127 @@ export class SendCompletedSimpleSignatureToSealUseCase {
 
     // Base64 y no bytes crudos: el cuerpo del envío es JSON. Ver `SimpleSignatureMedia`.
     return image.toString('base64');
+  }
+
+  /**
+   * Baja de MinIO el anverso y el reverso de la INE verificada del firmante y los devuelve en Base64.
+   *
+   * Salen del bucket privado `identity-documents`, por las llaves que guardó el webhook de Didit.
+   * **Nunca se usa la URL del proveedor ni se manda una URL de MinIO**: Seal Service recibe el
+   * contenido, en Base64 sin prefijo `data:` —su contrato, igual que `signatureImage`—.
+   *
+   * Si falta alguna de las dos llaves, no se manda nada: una INE a medias no puede viajar como si
+   * fuera la evidencia completa del firmante.
+   *
+   * @param signer - Colaborador firmante, con `account.user.personalInformation` cargado.
+   * @returns Las dos imágenes en Base64, listas para `signatureMedia`.
+   *
+   * @throws {IncompleteSimpleSignatureDataException} Si falta la llave frontal o la trasera, o si lo
+   *   almacenado no es una imagen.
+   * @throws {Error} Si MinIO no puede entregar alguno de los dos archivos.
+   *
+   * @example
+   * ```ts
+   * const images = await this.resolveIdentityDocumentImages(signer);
+   * images.identityDocumentFrontImage; // '/9j/4AAQ...'
+   * ```
+   */
+  private async resolveIdentityDocumentImages(
+    signer: CollaboratorEntity,
+  ): Promise<
+    Pick<
+      SimpleSignatureMedia,
+      'identityDocumentFrontImage' | 'identityDocumentBackImage'
+    >
+  > {
+    const personalInformation = signer.account?.user?.personalInformation;
+
+    if (!personalInformation?.frontImageKey) {
+      throw new IncompleteSimpleSignatureDataException(
+        'la imagen frontal de la INE verificada',
+        signer.id,
+      );
+    }
+
+    if (!personalInformation.backImageKey) {
+      throw new IncompleteSimpleSignatureDataException(
+        'la imagen trasera de la INE verificada',
+        signer.id,
+      );
+    }
+
+    return {
+      identityDocumentFrontImage: await this.readIdentityDocumentImage(
+        personalInformation.frontImageKey,
+        'frontal',
+        signer.id,
+      ),
+      identityDocumentBackImage: await this.readIdentityDocumentImage(
+        personalInformation.backImageKey,
+        'trasera',
+        signer.id,
+      ),
+    };
+  }
+
+  /**
+   * Lee una cara de la INE del bucket privado, comprueba que sea una imagen y la convierte a Base64
+   * en memoria, borrando los bytes en cuanto ya no hacen falta.
+   *
+   * @param objectKey - Llave interna del objeto en `identity-documents`.
+   * @param side - Cara de la INE, para el mensaje de error.
+   * @param collaboratorId - Firmante, para el mensaje de error.
+   * @returns La imagen en Base64, sin prefijo.
+   *
+   * @throws {IncompleteSimpleSignatureDataException} Si lo almacenado no es JPEG, PNG ni WebP.
+   * @throws {Error} Si MinIO no puede entregar el archivo.
+   *
+   * @example
+   * ```ts
+   * const front = await this.readIdentityDocumentImage(key, 'frontal', signer.id);
+   * ```
+   */
+  private async readIdentityDocumentImage(
+    objectKey: string,
+    side: 'frontal' | 'trasera',
+    collaboratorId: string,
+  ): Promise<string> {
+    const image = await this.minioService.getSensitiveObject(
+      BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS,
+      objectKey,
+    );
+
+    try {
+      if (!detectImageContentType(image)) {
+        throw new IncompleteSimpleSignatureDataException(
+          `una imagen ${side} de INE válida (el archivo almacenado no es una imagen)`,
+          collaboratorId,
+        );
+      }
+
+      return image.toString('base64');
+    } finally {
+      image.fill(0);
+    }
+  }
+
+  /**
+   * Suelta las imágenes de la INE del DTO una vez enviado, para que no sobrevivan en memoria más
+   * allá de la petición a Seal Service.
+   *
+   * @param dto - DTO ya enviado (o cuyo envío falló).
+   * @returns Nada; deja vacíos los campos de la INE.
+   *
+   * @example
+   * ```ts
+   * this.releaseIdentityDocumentImages(dto);
+   * ```
+   */
+  private releaseIdentityDocumentImages(dto: SimpleSignatureDTO): void {
+    for (const signature of dto.signatures) {
+      signature.signatureMedia.identityDocumentFrontImage = '';
+      signature.signatureMedia.identityDocumentBackImage = '';
+    }
   }
 
   private isPng(image: Buffer): boolean {

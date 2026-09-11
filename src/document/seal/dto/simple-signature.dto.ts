@@ -50,12 +50,13 @@ export interface SimpleSignatureMedia {
    */
   signatureImage: string;
   /**
-   * Anverso y reverso de la identificación oficial, en Base64.
+   * Anverso de la INE verificada por Didit, en Base64 sin prefijo `data:` (el contrato de Seal
+   * Service, que lo incluye tal cual en el XML canónico que sella).
    *
-   * Ausentes en esta etapa: la descarga de las imágenes de INE desde Didit todavía no existe.
-   * Se declaran opcionales —y no como cadena vacía— para que Seal Service distinga "no lo
-   * tenemos" de "lo tenemos y está vacío", y su ausencia nunca bloquea el envío.
+   * Obligatorio: sale del bucket privado `identity-documents` por la llave de
+   * `personal_information`, y si falta el caso de uso no envía nada. Nunca es una URL.
    */
-  identityDocumentFrontImage?: string;
-  identityDocumentBackImage?: string;
+  identityDocumentFrontImage: string;
+  /** Reverso de la INE verificada, con las mismas reglas que `identityDocumentFrontImage`. */
+  identityDocumentBackImage: string;
 }
