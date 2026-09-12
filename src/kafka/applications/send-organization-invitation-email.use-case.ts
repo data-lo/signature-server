@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-import { EmailService } from 'src/shared/email/email.service';
-import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
+import { EmailService } from 'src/common/email/email.service';
+import { frontendBaseUrl } from 'src/common/utils/frontend-url.util';
 
 import { OrganizationInvitationEventPayload } from '../organization-invitation.topics';
 

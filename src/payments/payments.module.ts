@@ -7,7 +7,7 @@ import { StripeWebhookService } from './stripe/stripe-webhook.service';
 import { GetPublicStripePlansUseCase } from './applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { PaymentsController } from './payments.controller';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 
 /**
  * Dominio de pagos: catálogo de servicios, compra y estado de la suscripción.

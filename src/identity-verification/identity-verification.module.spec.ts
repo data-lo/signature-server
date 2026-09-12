@@ -1,4 +1,4 @@
-import { setTestModuleGraphEnv } from 'src/shared/testing/module-graph-env';
+import { setTestModuleGraphEnv } from 'src/common/testing/module-graph-env';
 import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';

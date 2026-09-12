@@ -8,7 +8,7 @@ import { CollaboratorEntity } from './entities/collaborator.entity';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { DocumentUserPreferenceEntity } from './preferences/document-user-preference.entity';
 import { VerificationCodeService } from './verification-code.service';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 import { UserModule } from 'src/user/user.module';
 import { SignatureModule } from 'src/signature/signature.module';
 import { AuditModule } from 'src/audit/audit.module';

@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { AuditDocument, AuditAction } from './schema/audit-document';
-import { HashService } from '../shared/hash/hash.service';
+import { HashService } from '../common/hash/hash.service';
 
 export interface AuditQuery {
   id?: string;

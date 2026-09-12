@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, IsNull, Repository } from 'typeorm';
 import { VerificationCodeEntity } from './entities/verification-code.entity';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
-import { OTPService } from 'src/shared/otp/otp.service';
+import { OTPService } from 'src/common/otp/otp.service';
 
 const CODE_VALIDITY_MINUTES = 15;
 

@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { OrganizationInvitationService } from 'src/account/organization-invitation.service';
-import { PasswordService } from 'src/shared/password/password.service';
-import { TurnstileService } from 'src/shared/turnstile/turnstile.service';
+import { PasswordService } from 'src/common/password/password.service';
+import { TurnstileService } from 'src/common/turnstile/turnstile.service';
 import { UserService } from 'src/user/user.service';
 
 import { RegisterDto } from '../dto/register.dto';

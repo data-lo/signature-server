@@ -2,7 +2,7 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 
 import { AccountService } from 'src/account/account.service';
-import { PasswordService } from 'src/shared/password/password.service';
+import { PasswordService } from 'src/common/password/password.service';
 import { UserService } from 'src/user/user.service';
 
 import { AuthService } from '../auth.service';

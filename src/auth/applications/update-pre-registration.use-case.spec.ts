@@ -1,7 +1,7 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { PasswordService } from 'src/shared/password/password.service';
+import { PasswordService } from 'src/common/password/password.service';
 import { UserService } from 'src/user/user.service';
 
 import { UpdatePreRegistrationUseCase } from './update-pre-registration.use-case';

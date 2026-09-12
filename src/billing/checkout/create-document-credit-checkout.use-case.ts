@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
+import { frontendBaseUrl } from 'src/common/utils/frontend-url.util';
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { StripeCustomerService } from '../profiles/stripe-customer.service';

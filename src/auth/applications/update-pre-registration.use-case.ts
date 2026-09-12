@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { PasswordService } from 'src/shared/password/password.service';
+import { PasswordService } from 'src/common/password/password.service';
 import { SignupPendingVerificationData } from 'src/user/interfaces/response/signup-pending-verification-response';
 import { UserService } from 'src/user/user.service';
 

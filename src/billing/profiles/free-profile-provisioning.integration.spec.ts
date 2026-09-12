@@ -7,7 +7,7 @@ import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { RolesService } from 'src/roles/roles.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { RedisService } from 'src/common/redis/redis.service';
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
 import { BillingProfileProvisioningService } from './billing-profile-provisioning.service';
 import { BillingProfileEntity } from './billing-profile.entity';

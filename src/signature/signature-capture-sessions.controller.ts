@@ -17,7 +17,7 @@ import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 // Interfaces
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 import { SignatureCaptureSessionCreated } from './interfaces/signature-capture-session-created.interface';
 import { SignatureCaptureSessionStatus } from './interfaces/signature-capture-session-status.interface';
 

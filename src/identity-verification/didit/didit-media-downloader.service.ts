@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   detectImageContentType,
   type SupportedImageContentType,
-} from 'src/shared/utils/image-content-type.util';
+} from 'src/common/utils/image-content-type.util';
 import { IdentityDocumentImagesProcessingException } from '../exceptions/identity-verification.exceptions';
 
 /**

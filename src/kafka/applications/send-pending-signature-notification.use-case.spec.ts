@@ -8,7 +8,7 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 import type { NotificationEventPayload } from '../notification-events.topics';
 
 function createMockRepository() {

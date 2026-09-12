@@ -1,6 +1,6 @@
 import { of } from 'rxjs';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
-import { IpInterceptor } from './ip.interceptor';
+import { RequestIpInterceptor } from './request-ip.interceptor';
 
 function buildContext(request: any): ExecutionContext {
   return {
@@ -12,11 +12,11 @@ function buildContext(request: any): ExecutionContext {
 
 const nextHandler: CallHandler = { handle: () => of('ok') };
 
-describe('IpInterceptor', () => {
-  let interceptor: IpInterceptor;
+describe('RequestIpInterceptor', () => {
+  let interceptor: RequestIpInterceptor;
 
   beforeEach(() => {
-    interceptor = new IpInterceptor();
+    interceptor = new RequestIpInterceptor();
   });
 
   it('should be defined', () => {

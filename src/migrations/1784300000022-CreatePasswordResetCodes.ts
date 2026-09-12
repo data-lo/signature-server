@@ -4,7 +4,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Historia "Recuperación de Contraseña mediante Código de Verificación OTP": tabla de
  * OTPs de recuperación de contraseña, keyed por `user_id` en vez de
  * `document_id`/`signer_id` (ver "verification_codes", la misma idea pero para firma
- * de documentos). Se usa el mismo `OTPService` genérico (src/shared/otp/otp.service.ts)
+ * de documentos). Se usa el mismo `OTPService` genérico (src/common/otp/otp.service.ts)
  * para generar/comparar el código.
  */
 export class CreatePasswordResetCodes1784300000022 implements MigrationInterface {

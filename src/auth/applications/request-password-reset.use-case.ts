@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 import { UserService } from 'src/user/user.service';
 
 import { ForgotPasswordDto } from '../dto/forgot-password.dto';

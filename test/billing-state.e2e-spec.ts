@@ -8,7 +8,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
 
-import { applyGlobalApiPrefix } from './../src/shared/constants/api-prefix.constants';
+import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
 import { PaymentsController } from './../src/payments/payments.controller';
 import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-public-stripe-plans.use-case';
 import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';

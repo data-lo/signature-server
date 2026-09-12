@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { MinioService } from 'src/shared/minio/minio.service';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { MinioService } from 'src/common/minio/minio.service';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { DocumentEntity } from '../../entities/document.entity';
 import { CollaboratorEntity } from '../../entities/collaborator.entity';
 import { VerificationCodeEntity } from '../../entities/verification-code.entity';
@@ -10,7 +10,7 @@ import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
 import { SIGNEE_STATUS_ENUM } from '../../enum/signee-status.enum';
 import { VERIFICATION_EVENT_ENUM } from '../../enum/verification-event.enum';
-import { detectImageContentType } from 'src/shared/utils/image-content-type.util';
+import { detectImageContentType } from 'src/common/utils/image-content-type.util';
 import {
   SimpleSignatureDTO,
   SimpleSignatureMedia,

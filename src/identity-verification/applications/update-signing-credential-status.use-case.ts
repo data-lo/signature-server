@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { RedisService } from 'src/common/redis/redis.service';
 import { InvalidSigningCredentialTransitionException } from '../exceptions/identity-verification.exceptions';
 
 const S = SIGNING_CREDENTIAL_STATUS_ENUM;
