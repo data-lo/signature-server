@@ -7,6 +7,7 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { AccountService } from './account.service';
 import { RolesService } from 'src/roles/roles.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+import { DuplicateOrganizationMembershipException } from './exceptions/organization.exceptions';
 
 const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
 const MEMBER_ROLE = { id: 'member-role-1', name: SYSTEM_ROLE_NAME_ENUM.MEMBER };
@@ -105,6 +106,68 @@ describe('AccountMemberService', () => {
       await expect(
         service.assertIsActiveMember('user-1', 'account-1'),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+  describe('saveMembership', () => {
+    const DTO = {
+      organizationId: 'org-1',
+      userId: 'user-1',
+      roleId: MEMBER_ROLE.id,
+    };
+    const INVITED_USER = {
+      id: 'user-1',
+      email: 'invitado@empresa.com',
+      password: 'hashed-pw',
+    } as UserEntity;
+
+    it('guarda la membresía activa, con su rol y sus credenciales sincronizadas', async () => {
+      await service.saveMembership(DTO as never, INVITED_USER);
+
+      expect(accountRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          organizationId: 'org-1',
+          roleId: MEMBER_ROLE.id,
+          isActive: true,
+          email: INVITED_USER.email,
+          password: INVITED_USER.password,
+        }),
+      );
+    });
+
+    /**
+     * Los casos de uso comprueban antes si ya existe la membresía, pero leer y después escribir
+     * no aguanta dos peticiones a la vez: ambas leen "no existe" y ambas insertan. La segunda
+     * choca contra el índice único de `accounts` y tiene que salir como el mismo 409 que habría
+     * dado la comprobación, no como un 500 con el texto de Postgres.
+     */
+    it('traduce el choque contra el índice único a un 409 de membresía duplicada', async () => {
+      accountRepository.save.mockRejectedValue(
+        Object.assign(
+          new Error('duplicate key value violates unique constraint'),
+          {
+            code: '23505',
+            constraint: 'UQ_accounts_user_id_organization_id',
+          },
+        ),
+      );
+
+      await expect(
+        service.saveMembership(DTO as never, INVITED_USER),
+      ).rejects.toThrow(DuplicateOrganizationMembershipException);
+    });
+
+    /** Cualquier otro fallo de escritura sigue saliendo tal cual: no todo 500 es un duplicado. */
+    it('no disfraza de duplicado un error distinto', async () => {
+      accountRepository.save.mockRejectedValue(
+        Object.assign(new Error('null value in column "email"'), {
+          code: '23502',
+        }),
+      );
+
+      await expect(
+        service.saveMembership(DTO as never, INVITED_USER),
+      ).rejects.toThrow('null value in column "email"');
     });
   });
 });

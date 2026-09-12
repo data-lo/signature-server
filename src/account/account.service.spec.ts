@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AccountService } from './account.service';
@@ -7,6 +11,8 @@ import { OrganizationEntity } from './entities/organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { RedisService } from 'src/common/redis/redis.service';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
+import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
+import { OrganizationAdminAssignmentFailedException } from './exceptions/organization.exceptions';
 import { RolesService } from 'src/roles/roles.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
@@ -174,6 +180,74 @@ describe('AccountService', () => {
       expect(queryRunner.manager.save).toHaveBeenCalledTimes(2);
       expect(queryRunner.commitTransaction).toHaveBeenCalled();
       expect(queryRunner.release).toHaveBeenCalled();
+    });
+
+    /**
+     * Lo que hace administrador al creador, campo por campo.
+     *
+     * Hasta acá sólo se comprobaba que hubiera DOS saves y un commit, que es cierto tanto si la
+     * membresía nace con el rol ADMIN como si nace sin rol, inactiva o apuntando a otra
+     * organización. Sin esto, perder la asignación del rol no rompe ninguna prueba: rompe el
+     * acceso del administrador en producción, y sólo se nota al abrir la pantalla de miembros.
+     */
+    it('deja al creador vinculado a la organización nueva, activo y con el rol ADMIN', async () => {
+      const organization = { id: 'org-nueva-1' };
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce(organization)
+        .mockImplementation(async (data) => ({
+          id: 'cuenta-admin-1',
+          ...data,
+        }));
+      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-admin-1' });
+
+      await service.saveOrganizationWithAdminAccount(
+        CURRENT_USER as never,
+        dto as never,
+      );
+
+      expect(rolesService.findSystemRoleByName).toHaveBeenCalledWith(
+        SYSTEM_ROLE_NAME_ENUM.ADMIN,
+      );
+      const [, membership] = queryRunner.manager.create.mock.calls;
+      expect(membership[0]).toBe(AccountEntity);
+      expect(membership[1]).toMatchObject({
+        userId: CURRENT_USER.id,
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: organization.id,
+        roleId: ADMIN_ROLE.id,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        isActive: true,
+        // Credenciales sincronizadas desde el usuario (decisión D6): no hay contraseña aparte
+        // por organización.
+        email: CURRENT_USER.email,
+        password: CURRENT_USER.password,
+      });
+      // `joinedAt` es lo que ordena la tabla de miembros; sin él, el administrador cae al final.
+      expect(membership[1].joinedAt).toBeInstanceOf(Date);
+    });
+
+    /**
+     * El rol se resuelve antes de abrir la transacción: si el RBAC no está sembrado no se llega
+     * a insertar nada, y el mensaje que sale es el del usuario —no "corre npm run seed:roles",
+     * que es una instrucción para quien opera el servidor—.
+     */
+    it('responde un error claro y no crea nada si no puede resolver el rol ADMIN', async () => {
+      rolesService.findSystemRoleByName.mockRejectedValue(
+        new InternalServerErrorException(
+          'El rol de sistema ADMIN no está sembrado. Corre "npm run seed:roles".',
+        ),
+      );
+
+      await expect(
+        service.saveOrganizationWithAdminAccount(
+          CURRENT_USER as never,
+          dto as never,
+        ),
+      ).rejects.toThrow(OrganizationAdminAssignmentFailedException);
+
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
     });
 
     /**
