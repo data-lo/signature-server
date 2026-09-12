@@ -7,20 +7,69 @@ import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { SubscriptionBillingHistoryEntity } from '../subscriptions/subscription-billing-history.entity';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { BillingProfileEntity } from '../profiles/billing-profile.entity';
-import { resolvePlanEntitlements } from './plan-entitlements.config';
-import type { BillingAccessResponse } from './plan-entitlements.types';
+import type { BillingOwner } from '../profiles/billing-owner.util';
+import {
+  NO_PLAN_ENTITLEMENTS,
+  resolvePlanEntitlements,
+} from './plan-entitlements.config';
+import type {
+  BillingAccessResponse,
+  PlanEntitlements,
+} from './plan-entitlements.types';
 
 /**
- * Lo que ve una cuenta que nunca pasó por facturación.
+ * Resuelve los beneficios de un propietario a partir del plan de su perfil.
+ *
+ * Una ORGANIZACIÓN sin plan —sin `billing_profile`, o con un perfil que se abrió al iniciar un
+ * Checkout y nunca se pagó— recibe `NO_PLAN_ENTITLEMENTS`, no los del gratuito: las organizaciones
+ * nacen sin plan Free y no pueden hacer nada hasta contratar. Las organizaciones que ya existían no
+ * cambian: todas tienen perfil con plan (`free` o de pago).
+ *
+ * Una cuenta personal sin plan conserva el gratuito, y un plan que la tabla comercial no conoce
+ * sigue cayendo a Free para cualquiera (ver `resolvePlanEntitlements`).
+ *
+ * @param owner - Propietario facturable: cuenta personal u organización.
+ * @param planType - Plan del perfil, o `null` si no tiene perfil o su perfil no tiene plan.
+ * @returns Las acciones y los límites que corresponden.
+ *
+ * @example
+ * ```ts
+ * resolveOwnerEntitlements({ personalAccountId: null, organizationId: 'org-1' }, null); // NO_PLAN_ENTITLEMENTS
+ * resolveOwnerEntitlements({ personalAccountId: 'acc-1', organizationId: null }, null); // plan free
+ * ```
+ */
+function resolveOwnerEntitlements(
+  owner: BillingOwner,
+  planType: string | null,
+): PlanEntitlements {
+  if (owner.organizationId && planType === null) {
+    return NO_PLAN_ENTITLEMENTS;
+  }
+
+  return resolvePlanEntitlements(planType);
+}
+
+/**
+ * Construye la respuesta de una cuenta que nunca pasó por facturación.
  *
  * @remarks
- * No es un error ni un 404: toda cuenta existe antes de tener perfil. Se responde con los
- * beneficios del plan gratuito y los campos del PERFIL en nulo, porque no hay perfil que
- * describir. `currentPlanType` queda en `null` y no en `'free'`: rellenarlo afirmaría que existe
- * una fila con ese plan, y quien necesite saber qué puede hacer ya lo tiene en `actions`.
+ * No es un error ni un 404: toda cuenta existe antes de tener perfil. Los campos del PERFIL van en
+ * nulo, porque no hay perfil que describir. `currentPlanType` queda en `null` y no en `'free'`:
+ * rellenarlo afirmaría que existe una fila con ese plan.
+ *
+ * Una cuenta personal sin perfil responde los beneficios del gratuito; una organización sin
+ * perfil, ninguno (ver `resolveOwnerEntitlements`).
+ *
+ * @param owner - Propietario facturable sin `billing_profile`.
+ * @returns El estado comercial sin perfil, sin saldo y con los beneficios que le corresponden.
+ *
+ * @example
+ * ```ts
+ * accessWithoutProfile({ personalAccountId: null, organizationId: 'org-1' }).actions.signInOrder; // false
+ * ```
  */
-function accesoSinPerfil(): BillingAccessResponse {
-  const { actions, limits } = resolvePlanEntitlements(null);
+function accessWithoutProfile(owner: BillingOwner): BillingAccessResponse {
+  const { actions, limits } = resolveOwnerEntitlements(owner, null);
 
   return {
     billingProfileId: null,
@@ -46,7 +95,8 @@ function accesoSinPerfil(): BillingAccessResponse {
  * 1. Resuelve el propietario facturable, comprobando que el usuario pertenezca a la cuenta del
  *    header: sin eso, cambiar un valor en la petición dejaría leer el plan y el saldo de una
  *    organización ajena.
- * 2. Busca su `billing_profile`. Si no existe, responde el acceso del plan gratuito.
+ * 2. Busca su `billing_profile`. Si no existe, responde el plan gratuito a una cuenta personal y
+ *    ningún acceso a una organización, que nace sin plan.
  * 3. Suma en paralelo el saldo de documentos vigente y el origen del último periodo cobrado.
  * 4. Compone la respuesta resolviendo los beneficios del plan del perfil.
  *
@@ -78,7 +128,8 @@ export class GetBillingAccessUseCase {
    *
    * @param input Usuario autenticado y cuenta activa, que juntos deciden por qué propietario
    *   facturable se pregunta.
-   * @returns El estado comercial de la cuenta; para una cuenta sin perfil, el del plan gratuito.
+   * @returns El estado comercial de la cuenta. Sin perfil: el del plan gratuito para una cuenta
+   *   personal, y sin plan y con todas las acciones en `false` para una organización.
    * @throws {ForbiddenException} Cuando el usuario no pertenece a la cuenta activa.
    */
   async execute(input: {
@@ -93,7 +144,7 @@ export class GetBillingAccessUseCase {
     const profile = await this.billingOwnerService.findProfileByOwner(owner);
 
     if (!profile) {
-      return accesoSinPerfil();
+      return accessWithoutProfile(owner);
     }
 
     // No dependen entre sí, y este camino se recorre en cada carga del dashboard.
@@ -102,15 +153,22 @@ export class GetBillingAccessUseCase {
       this.resolverOrigenDelUltimoCobro(profile.id),
     ]);
 
-    return this.construirRespuesta(profile, creditsAvailable, billingSource);
+    return this.construirRespuesta(
+      profile,
+      owner,
+      creditsAvailable,
+      billingSource,
+    );
   }
 
   private construirRespuesta(
     profile: BillingProfileEntity,
+    owner: BillingOwner,
     creditsAvailable: number,
     billingSource: BILLING_SOURCE_ENUM | null,
   ): BillingAccessResponse {
-    const { actions, limits } = resolvePlanEntitlements(
+    const { actions, limits } = resolveOwnerEntitlements(
+      owner,
       profile.currentPlanType,
     );
 

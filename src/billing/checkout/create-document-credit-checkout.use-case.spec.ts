@@ -6,7 +6,11 @@ import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { StripeCustomerService } from '../profiles/stripe-customer.service';
 import { BillingCatalogService } from '../catalog/billing-catalog.service';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
-import { DocumentCreditOfferNotAvailableException } from '../exceptions/billing.exceptions';
+import {
+  DocumentCreditOfferNotAvailableException,
+  InvalidDocumentCreditQuantityException,
+} from '../exceptions/billing.exceptions';
+import { MAX_DOCUMENT_CREDITS_PER_PURCHASE } from '../credits/document-credit-quantity';
 
 const PERSONAL_OWNER = {
   personalAccountId: 'account-1',
@@ -87,12 +91,13 @@ describe('CreateDocumentCreditCheckoutUseCase', () => {
     useCase = module.get(CreateDocumentCreditCheckoutUseCase);
   });
 
-  const comprar = (catalogPriceId = 'catalog-price-1') =>
+  const comprar = (catalogPriceId = 'catalog-price-1', quantity = 1) =>
     useCase.execute({
       userId: 'user-1',
       email: 'juan@mail.com',
       accountId: 'account-1',
       catalogPriceId,
+      quantity,
     });
 
   describe('compra correcta', () => {
@@ -128,6 +133,7 @@ describe('CreateDocumentCreditCheckoutUseCase', () => {
             billingProfileId: 'perfil-1',
             catalogPriceId: 'catalog-price-1',
             catalogItemId: 'catalog-item-1',
+            quantity: '1',
             accountId: 'account-1',
           },
         }),
@@ -147,6 +153,7 @@ describe('CreateDocumentCreditCheckoutUseCase', () => {
         billingProfileId: 'perfil-1',
         catalogPriceId: 'catalog-price-1',
         stripeCheckoutSessionId: 'cs_test_123',
+        quantity: 1,
         amount: 3900,
         currency: 'mxn',
       });
@@ -268,6 +275,96 @@ describe('CreateDocumentCreditCheckoutUseCase', () => {
     expect(stripeCustomerService.resolveForProfile).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'perfil-1' }),
       'juan@mail.com',
+    );
+  });
+
+  describe('cantidad de documentos', () => {
+    it('una sola unidad cobra el precio unitario y la manda bloqueada a Stripe', async () => {
+      await comprar('catalog-price-1', 1);
+
+      expect(paymentGateway.createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({ priceId: 'price_extra_doc', quantity: 1 }),
+      );
+      expect(
+        checkoutOrderService.registerPendingDocumentCredits,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ quantity: 1, amount: 3900 }),
+      );
+    });
+
+    /** Un solo Price sirve para cualquier cantidad: no se pide un precio distinto por cantidad. */
+    it('varias unidades multiplican el precio del catálogo con el mismo Price', async () => {
+      await comprar('catalog-price-1', 5);
+
+      expect(paymentGateway.createCheckoutSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          priceId: 'price_extra_doc',
+          quantity: 5,
+          metadata: expect.objectContaining({ quantity: '5' }),
+        }),
+      );
+      expect(
+        checkoutOrderService.registerPendingDocumentCredits,
+      ).toHaveBeenCalledWith({
+        billingProfileId: 'perfil-1',
+        catalogPriceId: 'catalog-price-1',
+        stripeCheckoutSessionId: 'cs_test_123',
+        quantity: 5,
+        amount: 19500,
+        currency: 'mxn',
+      });
+    });
+
+    it('acepta el máximo permitido', async () => {
+      await expect(
+        comprar('catalog-price-1', MAX_DOCUMENT_CREDITS_PER_PURCHASE),
+      ).resolves.toEqual({
+        checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_123',
+      });
+      expect(
+        checkoutOrderService.registerPendingDocumentCredits,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ quantity: 100, amount: 390000 }),
+      );
+    });
+
+    /** El importe sale SIEMPRE del catálogo; la cantidad sólo lo multiplica. */
+    it('calcula el importe con el precio unitario vigente del catálogo', async () => {
+      billingCatalogService.findSellableDocumentCreditPrice.mockResolvedValue(
+        precioDeCreditos({ amount: 2500 }),
+      );
+
+      await comprar('catalog-price-1', 3);
+
+      expect(
+        checkoutOrderService.registerPendingDocumentCredits,
+      ).toHaveBeenCalledWith(expect.objectContaining({ amount: 7500 }));
+    });
+
+    /**
+     * Una cantidad inválida se rechaza antes de todo: ni se resuelve el perfil, ni se consulta el
+     * catálogo, ni se abre sesión en Stripe, ni se registra orden.
+     */
+    it.each([
+      ['cero', 0],
+      ['negativa', -1],
+      ['decimal', 2.5],
+      ['superior al máximo', MAX_DOCUMENT_CREDITS_PER_PURCHASE + 1],
+    ])(
+      'rechaza una cantidad %s sin tocar la base ni Stripe',
+      async (_caso, quantity) => {
+        await expect(comprar('catalog-price-1', quantity)).rejects.toThrow(
+          InvalidDocumentCreditQuantityException,
+        );
+        expect(billingOwnerService.resolveOwner).not.toHaveBeenCalled();
+        expect(
+          billingCatalogService.findSellableDocumentCreditPrice,
+        ).not.toHaveBeenCalled();
+        expect(paymentGateway.createCheckoutSession).not.toHaveBeenCalled();
+        expect(
+          checkoutOrderService.registerPendingDocumentCredits,
+        ).not.toHaveBeenCalled();
+      },
     );
   });
 });

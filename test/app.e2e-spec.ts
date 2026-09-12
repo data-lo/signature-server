@@ -37,11 +37,12 @@ describe('AppController (e2e)', () => {
     await app?.close();
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  it('/ (GET) devuelve el estado del andamiaje de la API', () => {
+    return request(app.getHttpServer()).get('/').expect(200).expect({
+      status: 'online',
+      message: 'API de la plataforma de Signature',
+      version: '1.0.0',
+    });
   });
 
   /**

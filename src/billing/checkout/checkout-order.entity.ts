@@ -18,6 +18,7 @@ import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum'
 @Entity('checkout_orders')
 @Index('IDX_checkout_orders_stripe_subscription', ['stripeSubscriptionId'])
 @Check('CHK_checkout_orders_amount', '"amount" >= 0')
+@Check('CHK_checkout_orders_quantity', '"quantity" > 0')
 export class CheckoutOrderEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -71,6 +72,17 @@ export class CheckoutOrderEntity {
   })
   status: CHECKOUT_ORDER_STATUS_ENUM;
 
+  /**
+   * Unidades del `catalog_price` cobradas en esta orden.
+   *
+   * Una suscripción siempre es 1. Una compra de documentos es la cantidad que eligió el usuario y
+   * que validó el servidor, y es contra lo que el webhook compara la cantidad que Stripe reporta
+   * como pagada antes de acreditar. Un solo Price de Stripe sirve para cualquier cantidad.
+   */
+  @Column({ type: 'integer', default: 1 })
+  quantity: number;
+
+  /** Importe TOTAL esperado, en centavos: precio unitario del catálogo × `quantity`. */
   @Column({ type: 'integer' })
   amount: number;
 

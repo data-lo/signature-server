@@ -66,23 +66,31 @@ export class CheckoutOrderService {
    * pago cuyo navegador nunca regresó —se cerró la pestaña— quedaría cobrado y sin rastro local
    * que reconciliar.
    *
-   * @param input - Perfil que compra, oferta del catálogo, sesión de Stripe recién abierta e
-   *   importe cobrado.
+   * **`quantity` y `amount` llegan juntos y ya calculados**: la orden guarda la cantidad que validó
+   * el servidor y el importe TOTAL esperado (precio unitario del catálogo × `quantity`). Son los
+   * dos datos contra los que el webhook concilia lo que Stripe dice que se cobró antes de acreditar.
+   *
+   * @param input - Perfil que compra, oferta del catálogo, sesión de Stripe recién abierta,
+   *   unidades compradas e importe total esperado.
    * @returns La orden registrada, en `PENDING`.
    *
    * @example
+   * ```ts
    * await this.checkoutOrderService.registerPendingDocumentCredits({
    *   billingProfileId: profile.id,
    *   catalogPriceId: catalogPrice.id,
    *   stripeCheckoutSessionId: sessionId,
-   *   amount: catalogPrice.amount,
+   *   quantity: 5,
+   *   amount: catalogPrice.amount * 5,
    *   currency: catalogPrice.currency,
    * });
+   * ```
    */
   async registerPendingDocumentCredits(input: {
     billingProfileId: string;
     catalogPriceId: string;
     stripeCheckoutSessionId: string;
+    quantity: number;
     amount: number;
     currency: string;
   }): Promise<CheckoutOrderEntity> {
@@ -94,13 +102,15 @@ export class CheckoutOrderService {
         stripeCheckoutSessionId: input.stripeCheckoutSessionId,
         stripePaymentIntentId: null,
         status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
+        quantity: input.quantity,
         amount: input.amount,
         currency: input.currency,
       }),
     );
 
     this.logger.log(
-      `Orden de créditos ${order.id} registrada como PENDING para el perfil ${input.billingProfileId}.`,
+      `Orden de créditos ${order.id} registrada como PENDING para el perfil ${input.billingProfileId}: ` +
+        `${input.quantity} unidad(es) por ${input.amount} ${input.currency}.`,
     );
 
     return order;
