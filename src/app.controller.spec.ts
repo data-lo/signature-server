@@ -15,11 +15,7 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    /**
-     * La raíz dejó de devolver el "Hello World!" de la plantilla de Nest: ahora es la sonda de
-     * estado de la API (`AppService.getHello`), con su versión y su mensaje.
-     */
-    it('devuelve el estado de la API', () => {
+    it('devuelve el estado del andamiaje de la API', () => {
       expect(appController.getHello()).toEqual({
         status: 'online',
         message: 'API de la plataforma de Signature',
