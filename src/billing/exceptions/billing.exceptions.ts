@@ -286,3 +286,34 @@ export class InsufficientDocumentCreditsException extends HttpException {
       (detail ? ` ${detail}` : '');
   }
 }
+
+/**
+ * La cantidad de documentos pedida para una compra suelta no es válida: no es entera, es cero o
+ * negativa, o supera el máximo por compra.
+ *
+ * **La respuesta dice a qué campo pertenece (`field: 'quantity'`)**, y es la diferencia con el
+ * resto de este archivo. El formulario de compra necesita pintar el mensaje debajo del selector de
+ * cantidad —y no como un aviso genérico— sin adivinarlo por el texto; con el campo explícito, el
+ * frontend lo asocia con `setError('quantity', ...)` y cambiar la redacción no rompe nada.
+ *
+ * `maxQuantity` viaja por la misma razón: si el máximo del backend se mueve antes que el del
+ * frontend, la pantalla tiene el número real sin volver a desplegarse.
+ *
+ * 400 y no 422: el resto de validaciones de entrada de la API responden 400 (`ValidationPipe`), y
+ * un status distinto sólo para esto obligaría al cliente a tratar dos formas del mismo problema.
+ */
+export class InvalidDocumentCreditQuantityException extends BadRequestException {
+  /**
+   * @param message - Motivo concreto, redactado para mostrarse tal cual al usuario.
+   * @param maxQuantity - Máximo de documentos por compra vigente en el servidor.
+   */
+  constructor(message: string, maxQuantity: number) {
+    super({
+      statusCode: HttpStatus.BAD_REQUEST,
+      message,
+      error: 'Bad Request',
+      field: 'quantity',
+      maxQuantity,
+    });
+  }
+}

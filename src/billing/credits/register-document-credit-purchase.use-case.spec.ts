@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
+import { BadGatewayException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import type Stripe from 'stripe';
+import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
+import type { CheckoutSessionLineItem } from 'src/payments/interfaces/checkout-session-line-item.interface';
 import { RegisterDocumentCreditPurchaseUseCase } from './register-document-credit-purchase.use-case';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
@@ -27,21 +30,56 @@ function sesion(
     metadata: {
       billingProfileId: 'perfil-1',
       catalogPriceId: 'catalog-price-1',
+      quantity: '1',
     },
     ...overrides,
   } as unknown as Stripe.Checkout.Session;
 }
 
-/** La orden ADD_ON que se registró antes de mandar al usuario a Stripe. */
+/**
+ * La orden ADD_ON que se registró antes de mandar al usuario a Stripe. Por defecto, UNA unidad del
+ * paquete de 5 documentos a $299.
+ *
+ * @param overrides - Campos que reemplazan a los de la orden por defecto.
+ * @returns La orden, con su `catalogPrice` cargado como lo trae el caso de uso.
+ *
+ * @example
+ * const o = orden({ creditSlotId: 'lote-1' });
+ */
 function orden(overrides: Record<string, unknown> = {}) {
   return {
     id: 'orden-1',
     creditSlotId: null,
     kind: CHECKOUT_KIND_ENUM.ADD_ON,
+    quantity: 1,
+    amount: 29900,
+    currency: 'mxn',
     catalogPrice: {
       catalogItemId: 'catalog-item-1',
+      stripePriceId: 'price_pack_5',
       catalogItem: { documentCreditPack: { documentsGranted: 5 } },
     },
+    ...overrides,
+  };
+}
+
+/**
+ * Una línea cobrada según Stripe; por defecto, la que cuadra con la orden por defecto.
+ *
+ * @param overrides - Campos que reemplazan a los de la línea por defecto.
+ * @returns La línea tal como la devuelve `listCheckoutSessionLineItems`.
+ *
+ * @example
+ * const l = linea({ quantity: 4 });
+ */
+function linea(
+  overrides: Partial<CheckoutSessionLineItem> = {},
+): CheckoutSessionLineItem {
+  return {
+    stripePriceId: 'price_pack_5',
+    quantity: 1,
+    amountSubtotal: 29900,
+    currency: 'mxn',
     ...overrides,
   };
 }
@@ -52,19 +90,55 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
     markCompleted: jest.Mock;
     linkCheckoutSessionToCreditSlot: jest.Mock;
   };
+  let paymentGateway: { listCheckoutSessionLineItems: jest.Mock };
   let ordenEncontrada: ReturnType<typeof orden> | null;
+  /** Lo que Stripe dice que se cobró en la sesión. */
+  let lineas: CheckoutSessionLineItem[];
   /** Lotes "en la base", para poder afirmar cuántos se emitieron en total. */
   let lotes: Record<string, unknown>[];
   let lotePorPaymentIntent: Record<string, unknown> | null;
 
+  /**
+   * Deja preparada la compra del criterio de aceptación: 5 unidades del documento suelto
+   * (`documentsGranted=1`, $39 c/u), pagadas tal cual se validaron.
+   *
+   * @returns Nada; ajusta la orden y las líneas de la prueba en curso.
+   *
+   * @example
+   * compraDeCincoDocumentosSueltos();
+   */
+  function compraDeCincoDocumentosSueltos(): void {
+    ordenEncontrada = orden({
+      quantity: 5,
+      amount: 19500,
+      catalogPrice: {
+        catalogItemId: 'catalog-item-1',
+        stripePriceId: 'price_extra_doc',
+        catalogItem: { documentCreditPack: { documentsGranted: 1 } },
+      },
+    });
+    lineas = [
+      linea({
+        stripePriceId: 'price_extra_doc',
+        quantity: 5,
+        amountSubtotal: 19500,
+      }),
+    ];
+  }
+
   beforeEach(async () => {
     ordenEncontrada = orden();
+    lineas = [linea()];
     lotes = [];
     lotePorPaymentIntent = null;
 
     checkoutOrderService = {
       markCompleted: jest.fn().mockResolvedValue(undefined),
       linkCheckoutSessionToCreditSlot: jest.fn().mockResolvedValue(undefined),
+    };
+
+    paymentGateway = {
+      listCheckoutSessionLineItems: jest.fn(async () => lineas),
     };
 
     const creditLotRepository = {
@@ -96,6 +170,7 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: DataSource, useValue: dataSource },
         { provide: CheckoutOrderService, useValue: checkoutOrderService },
+        { provide: StripePaymentService, useValue: paymentGateway },
       ],
     }).compile();
 
@@ -114,6 +189,48 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
         remaining: 5,
         stripePaymentIntentId: 'pi_123',
       });
+    });
+
+    /** El criterio de aceptación, literal. */
+    it('un pago de 5 unidades acredita exactamente 5 documentos cuando documentsGranted=1', async () => {
+      compraDeCincoDocumentosSueltos();
+
+      await useCase.handleCheckoutSessionCompleted(sesion());
+
+      expect(lotes).toHaveLength(1);
+      expect(lotes[0]).toMatchObject({ issued: 5, remaining: 5 });
+    });
+
+    it('multiplica los documentos del paquete por la cantidad pagada', async () => {
+      ordenEncontrada = orden({
+        quantity: 3,
+        amount: 89700,
+        catalogPrice: {
+          catalogItemId: 'catalog-item-10',
+          stripePriceId: 'price_pack_10',
+          catalogItem: { documentCreditPack: { documentsGranted: 10 } },
+        },
+      });
+      lineas = [
+        linea({
+          stripePriceId: 'price_pack_10',
+          quantity: 3,
+          amountSubtotal: 89700,
+        }),
+      ];
+
+      await useCase.handleCheckoutSessionCompleted(sesion());
+
+      expect(lotes[0]).toMatchObject({ issued: 30, remaining: 30 });
+    });
+
+    /** La cantidad que se acredita es la que Stripe cobró: hay que preguntársela. */
+    it('lee de Stripe las líneas cobradas de esa sesión', async () => {
+      await useCase.handleCheckoutSessionCompleted(sesion());
+
+      expect(paymentGateway.listCheckoutSessionLineItems).toHaveBeenCalledWith(
+        'cs_test_123',
+      );
     });
 
     /**
@@ -172,18 +289,52 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
     });
   });
 
+  /**
+   * Con `adjustable_quantity` apagado lo cobrado y lo validado no deberían discrepar nunca. Si lo
+   * hacen, acreditar cualquiera de los dos números sería adivinar: no se acredita, la orden se
+   * queda en PENDING y el caso queda en el log para resolverse a mano.
+   */
+  describe('lo cobrado no cuadra con la orden', () => {
+    it.each([
+      ['otra cantidad', [linea({ quantity: 4 })]],
+      ['otro precio de Stripe', [linea({ stripePriceId: 'price_otro' })]],
+      ['otro importe', [linea({ amountSubtotal: 100 })]],
+      ['otra moneda', [linea({ currency: 'usd' })]],
+      ['ninguna línea', []],
+      ['más de una línea', [linea(), linea()]],
+    ])('no acredita si Stripe reporta %s', async (_caso, reportadas) => {
+      lineas = reportadas;
+
+      await useCase.handleCheckoutSessionCompleted(sesion());
+
+      expect(lotes).toHaveLength(0);
+      expect(checkoutOrderService.markCompleted).not.toHaveBeenCalled();
+    });
+
+    it('acepta la moneda aunque Stripe y el catálogo difieran en mayúsculas', async () => {
+      lineas = [linea({ currency: 'MXN' })];
+
+      await useCase.handleCheckoutSessionCompleted(sesion());
+
+      expect(lotes).toHaveLength(1);
+    });
+  });
+
   describe('webhook duplicado', () => {
     /**
      * Primera capa de idempotencia, y la que corta la reentrega normal: la orden ya quedó
-     * vinculada a su lote.
+     * vinculada a su lote. Ni siquiera se le pregunta a Stripe.
      */
-    it('no acredita otra vez si la orden ya tiene su lote', async () => {
+    it('no acredita otra vez ni consulta a Stripe si la orden ya tiene su lote', async () => {
       ordenEncontrada = orden({ creditSlotId: 'lote-ya-emitido' });
 
       await useCase.handleCheckoutSessionCompleted(sesion());
 
       expect(lotes).toHaveLength(0);
       expect(checkoutOrderService.markCompleted).not.toHaveBeenCalled();
+      expect(
+        paymentGateway.listCheckoutSessionLineItems,
+      ).not.toHaveBeenCalled();
     });
 
     /**
@@ -204,14 +355,17 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
       );
     });
 
-    /** Dos entregas seguidas del mismo evento acreditan UNA vez. */
+    /** Dos entregas seguidas del mismo pago de 5 unidades acreditan 5 documentos, no 10. */
     it('dos entregas del mismo evento acreditan un solo lote', async () => {
+      compraDeCincoDocumentosSueltos();
+
       await useCase.handleCheckoutSessionCompleted(sesion());
       // La segunda entrega encuentra la orden ya vinculada, como en la base real.
-      ordenEncontrada = orden({ creditSlotId: 'lote-1' });
+      ordenEncontrada = { ...ordenEncontrada!, creditSlotId: 'lote-1' };
       await useCase.handleCheckoutSessionCompleted(sesion());
 
       expect(lotes).toHaveLength(1);
+      expect(lotes[0]).toMatchObject({ issued: 5 });
     });
   });
 
@@ -223,6 +377,9 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
 
       expect(lotes).toHaveLength(0);
       expect(checkoutOrderService.markCompleted).not.toHaveBeenCalled();
+      expect(
+        paymentGateway.listCheckoutSessionLineItems,
+      ).not.toHaveBeenCalled();
     });
 
     it('ignora una sesión sin billingProfileId en la metadata', async () => {
@@ -242,6 +399,22 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
   });
 
   /**
+   * No poder leer a Stripe sí se arregla reintentando: el error se propaga para que el webhook
+   * falle y Stripe vuelva a entregarlo, sin haber acreditado nada a medias.
+   */
+  it('propaga el fallo al leer a Stripe para que se reintente la entrega', async () => {
+    paymentGateway.listCheckoutSessionLineItems.mockRejectedValue(
+      new BadGatewayException(),
+    );
+
+    await expect(
+      useCase.handleCheckoutSessionCompleted(sesion()),
+    ).rejects.toBeInstanceOf(BadGatewayException);
+    expect(lotes).toHaveLength(0);
+    expect(checkoutOrderService.markCompleted).not.toHaveBeenCalled();
+  });
+
+  /**
    * Acreditar de menos estafa a quien pagó y acreditar de más regala documentos: sin saber
    * cuántos concede el paquete, no se elige ningún número.
    */
@@ -249,6 +422,7 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
     ordenEncontrada = orden({
       catalogPrice: {
         catalogItemId: 'catalog-item-1',
+        stripePriceId: 'price_pack_5',
         catalogItem: { documentCreditPack: null },
       },
     });
