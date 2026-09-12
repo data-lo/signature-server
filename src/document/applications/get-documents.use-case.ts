@@ -79,7 +79,7 @@ const SORT_COLUMNS: Record<DOCUMENT_SORT_FIELD_ENUM, string> = {
  *    de mirar un solo filtro.
  * 2. Valida los rangos de fecha.
  * 3. Resuelve el correo del usuario en el servidor, que es con el que se busca su participación.
- * 4. Aplica la VISIBILIDAD: cuenta activa, lo que creó y aquello en lo que participa.
+ * 4. Aplica la VISIBILIDAD: la cuenta activa (o su organización) y aquello en lo que participa.
  * 5. Aplica el `view` pedido y excluye lo que este usuario archivó.
  * 6. Suma los filtros opcionales: id, estados, búsqueda, participante y rangos de fecha.
  * 7. Pagina, ordena con desempate estable y arma la respuesta; opcionalmente firma URLs de MinIO.
@@ -295,11 +295,21 @@ export class GetDocumentsUseCase {
   /**
    * Lo que este usuario puede ver, y que ningún filtro puede ensanchar.
    *
-   * Son tres caminos y basta uno: el documento pertenece a la cuenta desde la que mira (o a su
-   * organización), lo creó él, o participa en él. El tercero no sobra — casi ningún documento que
-   * me toca firmar pertenece a MI cuenta, sino a la de quien lo mandó — y por eso las tres
-   * condiciones van en un `OR` dentro de un mismo paréntesis: sueltas, el `AND` de cualquier
-   * filtro posterior se mezclaría con ellas y el resultado dejaría de significar lo mismo.
+   * Son dos caminos y basta uno: el documento pertenece a la cuenta desde la que mira (o a su
+   * organización), o participa en él. El segundo no sobra — casi ningún documento que me toca
+   * firmar pertenece a MI cuenta, sino a la de quien lo mandó — y por eso las dos condiciones van
+   * en un `OR` dentro de un mismo paréntesis: sueltas, el `AND` de cualquier filtro posterior se
+   * mezclaría con ellas y el resultado dejaría de significar lo mismo.
+   *
+   * **Había un tercer camino, `document.createdBy = :userId`, y se quitó a propósito.** No
+   * dependía de la cuenta, así que al cambiar de contexto seguía mostrando lo que el usuario
+   * hubiera creado en cualquier otro: los documentos de su cuenta personal aparecían dentro de la
+   * organización, y la lista no cambiaba al cambiar de cuenta (bug "El listado de documentos no
+   * se actualiza al cambiar de cuenta activa"). Quien crea un documento sigue viéndolo desde la
+   * cuenta en la que lo creó —es la dueña del documento— y también si participa en él.
+   *
+   * El `view` `created_by_me` no se ve afectado: filtra por `createdBy` DENTRO de lo ya visible
+   * (ver `applyView`), así que sigue listando lo que el usuario mandó a firmar en esta cuenta.
    */
   private applyVisibility(
     qb: SelectQueryBuilder<DocumentEntity>,
@@ -322,12 +332,10 @@ export class GetDocumentsUseCase {
           where.where('document.accountId = :accountId', { accountId });
         }
 
-        where
-          .orWhere('document.createdBy = :userId', { userId })
-          .orWhere(this.callerIsParticipantSubquery(), {
-            userId,
-            callerEmail,
-          });
+        where.orWhere(this.callerIsParticipantSubquery(), {
+          userId,
+          callerEmail,
+        });
       }),
     );
   }

@@ -788,7 +788,7 @@ describe('casos de uso de documentos', () => {
      * la cuenta de quien lo mandó, no a la mía (bug corregido en su momento con un caso especial
      * para `participantEmail`, que ahora es parte de la regla).
      */
-    it('limita lo visible a la cuenta activa, lo creado por el usuario y aquello en lo que participa', async () => {
+    it('limita lo visible a la cuenta activa y aquello en lo que participa', async () => {
       const qb = createMockQueryBuilder();
 
       await list({}, qb);
@@ -803,9 +803,36 @@ describe('casos de uso de documentos', () => {
 
       expect(visibility).toEqual([
         'document.accountId = :accountId',
-        'document.createdBy = :userId',
         expect.stringContaining('SELECT c.document_id FROM collaborators c'),
       ]);
+    });
+
+    /**
+     * Bug corregido: "El listado de documentos no se actualiza al cambiar de cuenta activa".
+     *
+     * La visibilidad tenía una tercera vía, `document.createdBy = :userId`, que no dependía de la
+     * cuenta. Con ella, cambiar de contexto no cambiaba la lista: los documentos creados en la
+     * cuenta personal seguían saliendo dentro de la organización, y el usuario lo veía como que
+     * el listado no se recargaba —cuando sí lo hacía, y el servidor devolvía lo mismo—.
+     *
+     * Se comprueba sobre el grupo de acceso y no sobre el conjunto de condiciones: `createdBy`
+     * SIGUE apareciendo como condición suelta cuando el `view` es `created_by_me`, y ahí es
+     * correcto porque filtra dentro de lo ya visible en lugar de ampliarlo.
+     */
+    it('no deja ver lo creado en otra cuenta: createdBy no es una vía de acceso', async () => {
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb);
+
+      const visibility = qb.andWhere.mock.calls
+        .map(([condition]: [unknown]) =>
+          typeof condition === 'string' ? [] : bracketConditions(condition),
+        )
+        .find((conditions: string[]) =>
+          conditions.some((sql) => sql.includes('document.accountId')),
+        );
+
+      expect(visibility).not.toContain('document.createdBy = :userId');
     });
 
     it('usa la organización en lugar de la cuenta cuando la cuenta activa pertenece a una', async () => {
@@ -901,7 +928,8 @@ describe('casos de uso de documentos', () => {
         await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
 
         // Las condiciones sueltas son las que agrega la vista; las agrupadas son el acceso, que
-        // se aplica siempre (y donde `createdBy` aparece como una de sus tres vías).
+        // se aplica siempre (la cuenta activa y la participación). `createdBy` ya no es una vía
+        // de acceso: sólo aparece suelto, como filtro del `view` `created_by_me`.
         const viewConditions = qb.andWhere.mock.calls
           .map(([condition]: [unknown]) => condition)
           .filter((condition: unknown) => typeof condition === 'string');
