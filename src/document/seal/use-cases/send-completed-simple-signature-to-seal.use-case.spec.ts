@@ -47,6 +47,20 @@ const PNG_BYTES = Buffer.concat([
   Buffer.from('contenido-de-la-rubrica'),
 ]);
 
+/** Llaves internas de la INE verificada, como las guarda el webhook de Didit. */
+const FRONT_IMAGE_KEY = 'pi-1/verif-1/front.jpg';
+const BACK_IMAGE_KEY = 'pi-1/verif-1/back.jpg';
+
+/** JPEG mínimos (`FF D8 FF`) y distintos entre sí, para distinguir anverso de reverso. */
+const JPEG_FRONT = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+  Buffer.from('anverso-de-la-ine'),
+]);
+const JPEG_BACK = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+  Buffer.from('reverso-de-la-ine'),
+]);
+
 function givenSigner(overrides: Record<string, unknown> = {}) {
   return {
     id: 'collab-1',
@@ -65,6 +79,8 @@ function givenSigner(overrides: Record<string, unknown> = {}) {
           curp: 'RAMJ850101MDFXXX01',
           name: 'Juana',
           lastName: 'Ramírez Soto',
+          frontImageKey: FRONT_IMAGE_KEY,
+          backImageKey: BACK_IMAGE_KEY,
         },
         signature: { signatureObjectKey: 'firma-en-vivo.png' },
       },
@@ -87,7 +103,12 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
   let useCase: SendCompletedSimpleSignatureToSealUseCase;
   let documentQueryBuilder: { getOne: jest.Mock };
   let verificationCodeQueryBuilder: { getOne: jest.Mock };
-  let minioService: { getFileInBytesFormat: jest.Mock };
+  let minioService: {
+    getFileInBytesFormat: jest.Mock;
+    getSensitiveObject: jest.Mock;
+  };
+  /** Buffers de la INE que entregó MinIO, para comprobar que se borran después del envío. */
+  let deliveredIdentityImages: Buffer[];
   let sealApiService: { sendSimpleSignatures: jest.Mock };
   let sealRepository: {
     create: jest.Mock;
@@ -104,6 +125,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
     const builder: Record<string, unknown> = { getOne };
     for (const method of [
       'leftJoinAndSelect',
+      'addSelect',
       'where',
       'andWhere',
       'orderBy',
@@ -121,8 +143,17 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
         usedAt: new Date('2026-08-20T15:03:00.000Z'),
       }),
     };
+    deliveredIdentityImages = [];
     minioService = {
       getFileInBytesFormat: jest.fn().mockResolvedValue(PNG_BYTES),
+      // Una copia por lectura: el caso de uso borra los bytes, y no deben borrarse las constantes.
+      getSensitiveObject: jest.fn(async (_bucket: string, key: string) => {
+        const image = Buffer.from(
+          key === FRONT_IMAGE_KEY ? JPEG_FRONT : JPEG_BACK,
+        );
+        deliveredIdentityImages.push(image);
+        return image;
+      }),
     };
     sealApiService = {
       sendSimpleSignatures: jest.fn().mockResolvedValue(SEAL_RESPONSE),
@@ -238,13 +269,69 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
       );
     });
 
-    it('omite las imágenes de la INE sin impedir el envío', async () => {
+    /**
+     * Envío exitoso: el anverso y el reverso salen del bucket privado por sus llaves internas y
+     * viajan en Base64 sin prefijo, como la rúbrica.
+     */
+    it('baja de MinIO la INE verificada y la manda en Base64', async () => {
+      let sentMedia: Record<string, string> = {};
+      sealApiService.sendSimpleSignatures.mockImplementation(
+        async (dto: { signatures: { signatureMedia: object }[] }) => {
+          // Se copia en el momento del envío: después, el caso de uso vacía estos campos.
+          sentMedia = { ...dto.signatures[0].signatureMedia } as Record<
+            string,
+            string
+          >;
+          return SEAL_RESPONSE;
+        },
+      );
+
       await useCase.execute(DOCUMENT_ID);
 
-      const media = sentDto().signatures[0].signatureMedia;
-      expect(media.identityDocumentFrontImage).toBeUndefined();
-      expect(media.identityDocumentBackImage).toBeUndefined();
-      expect(media.signatureImage).toEqual(expect.any(String));
+      expect(minioService.getSensitiveObject).toHaveBeenCalledWith(
+        BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS,
+        FRONT_IMAGE_KEY,
+      );
+      expect(minioService.getSensitiveObject).toHaveBeenCalledWith(
+        BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS,
+        BACK_IMAGE_KEY,
+      );
+      expect(sentMedia.identityDocumentFrontImage).toBe(
+        JPEG_FRONT.toString('base64'),
+      );
+      expect(sentMedia.identityDocumentBackImage).toBe(
+        JPEG_BACK.toString('base64'),
+      );
+      expect(sentMedia.identityDocumentFrontImage).not.toMatch(/^data:/);
+    });
+
+    it('no manda a Seal Service URLs ni llaves de MinIO', async () => {
+      let serialized = '';
+      sealApiService.sendSimpleSignatures.mockImplementation(
+        async (dto: unknown) => {
+          serialized = JSON.stringify(dto);
+          return SEAL_RESPONSE;
+        },
+      );
+
+      await useCase.execute(DOCUMENT_ID);
+
+      expect(serialized).not.toContain(FRONT_IMAGE_KEY);
+      expect(serialized).not.toContain(BACK_IMAGE_KEY);
+      expect(serialized).not.toMatch(/https?:\/\//);
+    });
+
+    it('borra de memoria las imágenes de la INE después del envío', async () => {
+      await useCase.execute(DOCUMENT_ID);
+
+      expect(deliveredIdentityImages).toHaveLength(2);
+      for (const image of deliveredIdentityImages) {
+        expect(image.every((byte) => byte === 0)).toBe(true);
+      }
+      expect(sentDto().signatures[0].signatureMedia).toMatchObject({
+        identityDocumentFrontImage: '',
+        identityDocumentBackImage: '',
+      });
     });
 
     it('arma una firma por cada firmante requerido', async () => {
@@ -402,6 +489,72 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
     it('el archivo almacenado no es un PNG', async () => {
       documentQueryBuilder.getOne.mockResolvedValue(givenDocument());
       minioService.getFileInBytesFormat.mockResolvedValue(
+        Buffer.from('%PDF-1.7 esto no es una imagen'),
+      );
+
+      await expect(useCase.execute(DOCUMENT_ID)).rejects.toBeInstanceOf(
+        IncompleteSimpleSignatureDataException,
+      );
+      expect(sealApiService.sendSimpleSignatures).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Imagen faltante: una INE a medias no puede viajar como la evidencia completa del firmante, y
+     * sin llave no se llega ni a leer MinIO.
+     */
+    it.each([
+      ['frontal', { frontImageKey: null }],
+      ['trasera', { backImageKey: null }],
+      ['frontal y trasera', { frontImageKey: null, backImageKey: null }],
+    ])(
+      'falta la llave de la imagen %s de la INE',
+      async (_caso, missingKeys) => {
+        const signer = givenSigner();
+        Object.assign(
+          (signer.account.user as Record<string, any>).personalInformation,
+          missingKeys,
+        );
+        documentQueryBuilder.getOne.mockResolvedValue(
+          givenDocument({ collaborators: [signer] }),
+        );
+
+        await expect(useCase.execute(DOCUMENT_ID)).rejects.toBeInstanceOf(
+          IncompleteSimpleSignatureDataException,
+        );
+        expect(minioService.getSensitiveObject).not.toHaveBeenCalled();
+        expect(sealApiService.sendSimpleSignatures).not.toHaveBeenCalled();
+      },
+    );
+
+    it('el mensaje de la INE faltante señala el dato sin exponer llaves', async () => {
+      const signer = givenSigner();
+      (
+        signer.account.user as Record<string, any>
+      ).personalInformation.backImageKey = null;
+      documentQueryBuilder.getOne.mockResolvedValue(
+        givenDocument({ collaborators: [signer] }),
+      );
+
+      const error = await useCase.execute(DOCUMENT_ID).catch((e: Error) => e);
+
+      expect((error as Error).message).toContain('imagen trasera de la INE');
+      expect((error as Error).message).not.toContain(FRONT_IMAGE_KEY);
+    });
+
+    /** Fallo de MinIO: sin las dos imágenes no se envía nada. */
+    it('MinIO no puede entregar la INE', async () => {
+      documentQueryBuilder.getOne.mockResolvedValue(givenDocument());
+      minioService.getSensitiveObject.mockRejectedValue(
+        new Error('No se pudo leer un objeto sensible de MinIO (NoSuchKey).'),
+      );
+
+      await expect(useCase.execute(DOCUMENT_ID)).rejects.toThrow('NoSuchKey');
+      expect(sealApiService.sendSimpleSignatures).not.toHaveBeenCalled();
+    });
+
+    it('el archivo de la INE almacenado no es una imagen', async () => {
+      documentQueryBuilder.getOne.mockResolvedValue(givenDocument());
+      minioService.getSensitiveObject.mockResolvedValue(
         Buffer.from('%PDF-1.7 esto no es una imagen'),
       );
 

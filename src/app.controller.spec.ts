@@ -15,8 +15,12 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('devuelve el estado del andamiaje de la API', () => {
+      expect(appController.getHello()).toEqual({
+        status: 'online',
+        message: 'API de la plataforma de Signature',
+        version: '1.0.0',
+      });
     });
   });
 });

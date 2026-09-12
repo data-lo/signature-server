@@ -7,6 +7,7 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { PersonalInformationEntity } from 'src/user/entities/personal-information.entity';
 import { RedisService } from 'src/common/redis/redis.service';
 import { PlanEntity } from 'src/billing/catalog/plan.entity';
 import { CatalogItemEntity } from 'src/billing/catalog/catalog-item.entity';
@@ -70,6 +71,8 @@ describe('WebhooksModule', () => {
       .overrideProvider(getRepositoryToken(IdentityVerificationEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(UserEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(PersonalInformationEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(PlanEntity))
       .useValue(repositoryStub)

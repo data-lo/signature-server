@@ -11,6 +11,9 @@ import { GetFileResponse } from './interfaces/minio.get-file-response.interface'
 import { BUCKET_TYPES_ENUM } from './enums/bucket-types.enum';
 import { buildAttachmentDisposition } from './content-disposition.util';
 
+/** Bucket privado de la INE verificada cuando `MINIO_IDENTITY_DOCUMENTS_BUCKET` no está definido. */
+export const DEFAULT_IDENTITY_DOCUMENTS_BUCKET = 'identity-documents';
+
 /**
  * Los metadatos de un objeto viajan como cabeceras HTTP `x-amz-meta-*`, que solo admiten ASCII
  * imprimible. Un nombre como "José Pérez" se enviaría en latin1 y llegaría corrupto, y un
@@ -39,6 +42,7 @@ export class MinioService {
   MINIO_REJECTED_DOCUMENTS_BUCKET: any;
   MINIO_OFICIAL_CARDS_BUCKET: any;
   MINIO_SIGNATURE_IMAGES_BUCKET: any;
+  MINIO_IDENTITY_DOCUMENTS_BUCKET: string;
 
   MINIO_HOST: any;
   MINIO_PORT: any;
@@ -143,6 +147,11 @@ export class MinioService {
     this.MINIO_OFICIAL_CARDS_BUCKET = process.env.MINIO_OFICIAL_CARDS_BUCKET;
     this.MINIO_SIGNATURE_IMAGES_BUCKET =
       process.env.MINIO_SIGNATURE_IMAGES_BUCKET;
+    // Con valor por defecto y no en la lista obligatoria de arriba: agregar una variable nueva a
+    // esa lista tumbaría el arranque de todo entorno que todavía no la declare.
+    this.MINIO_IDENTITY_DOCUMENTS_BUCKET =
+      process.env.MINIO_IDENTITY_DOCUMENTS_BUCKET ||
+      DEFAULT_IDENTITY_DOCUMENTS_BUCKET;
     this.MINIO_HOST = process.env.MINIO_HOST;
     this.MINIO_PORT = process.env.MINIO_PORT;
     this.MINIO_API = process.env.MINIO_API;
@@ -212,9 +221,118 @@ export class MinioService {
         return this.MINIO_OFICIAL_CARDS_BUCKET;
       case BUCKET_TYPES_ENUM.SIGNATURE_IMAGES:
         return this.MINIO_SIGNATURE_IMAGES_BUCKET;
+      case BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS:
+        return this.MINIO_IDENTITY_DOCUMENTS_BUCKET;
       default:
         throw new Error('Tipo de bucket no reconocido');
     }
+  }
+
+  /**
+   * Guarda un objeto con datos personales sensibles —la INE verificada— sin dejar rastro de su
+   * llave ni de su contenido en los logs.
+   *
+   * Existe aparte de `uploadObject` porque aquél registra el nombre y la llave de cada objeto que
+   * sube, y eso no puede pasar con un documento de identidad. El bucket se crea si no existe
+   * (`ensureBucketExists`) y MinIO lo crea PRIVADO: sin política de acceso anónimo, sólo se lee con
+   * las credenciales del servicio. Tampoco se ofrece ningún método que firme URLs sobre él.
+   *
+   * @param bucketType - Bucket de destino; hoy sólo `IDENTITY_DOCUMENTS`.
+   * @param objectKey - Llave interna del objeto (UUIDs, sin datos del titular).
+   * @param content - Bytes del objeto.
+   * @param contentType - Tipo MIME ya validado del contenido.
+   * @returns Nada; si regresa, el objeto quedó guardado.
+   *
+   * @throws {Error} Con un mensaje genérico y el código de MinIO, sin la llave, si no se pudo guardar.
+   *
+   * @example
+   * ```ts
+   * await minioService.putSensitiveObject(BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS, key, buffer, 'image/jpeg');
+   * ```
+   */
+  async putSensitiveObject(
+    bucketType: BUCKET_TYPES_ENUM,
+    objectKey: string,
+    content: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const minioPrivateClient = this.getMinioPrivateClient();
+    const bucketName = this.getBucketByType(bucketType);
+
+    try {
+      await this.ensureBucketExists(minioPrivateClient, bucketName);
+      await minioPrivateClient.putObject(
+        bucketName,
+        objectKey,
+        content,
+        content.length,
+        { 'Content-Type': contentType },
+      );
+    } catch (error) {
+      throw new Error(
+        `No se pudo almacenar un objeto sensible en MinIO (${this.describeMinioError(error)}).`,
+      );
+    }
+  }
+
+  /**
+   * Lee completo un objeto con datos personales sensibles, sin registrar su llave ni su contenido.
+   *
+   * Es la lectura hermana de `putSensitiveObject`: `getFileInBytesFormat` escribe en el log los
+   * metadatos del objeto y, al fallar, su llave dentro del mensaje de error.
+   *
+   * @param bucketType - Bucket de origen; hoy sólo `IDENTITY_DOCUMENTS`.
+   * @param objectKey - Llave interna del objeto.
+   * @returns Los bytes del objeto. Quien lo recibe es responsable de no conservarlos más de lo necesario.
+   *
+   * @throws {Error} Con un mensaje genérico y el código de MinIO (p. ej. `NoSuchKey`), sin la llave.
+   *
+   * @example
+   * ```ts
+   * const image = await minioService.getSensitiveObject(BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS, key);
+   * ```
+   */
+  async getSensitiveObject(
+    bucketType: BUCKET_TYPES_ENUM,
+    objectKey: string,
+  ): Promise<Buffer> {
+    const minioPrivateClient = this.getMinioPrivateClient();
+    const bucketName = this.getBucketByType(bucketType);
+
+    try {
+      const dataStream = await minioPrivateClient.getObject(
+        bucketName,
+        objectKey,
+      );
+
+      return await new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        dataStream.on('data', (chunk: Buffer) => chunks.push(chunk));
+        dataStream.on('end', () => resolve(Buffer.concat(chunks)));
+        dataStream.on('error', reject);
+      });
+    } catch (error) {
+      throw new Error(
+        `No se pudo leer un objeto sensible de MinIO (${this.describeMinioError(error)}).`,
+      );
+    }
+  }
+
+  /**
+   * Reduce un error de MinIO a su código, que es lo único que se puede registrar de él sin arriesgar
+   * la llave del objeto (los mensajes del SDK la incluyen).
+   *
+   * @param error - Lo que lanzó el SDK.
+   * @returns El código (`NoSuchKey`, `AccessDenied`...) o una descripción genérica.
+   *
+   * @example
+   * ```ts
+   * this.describeMinioError({ code: 'NoSuchKey' }); // 'NoSuchKey'
+   * ```
+   */
+  private describeMinioError(error: unknown): string {
+    const code = (error as { code?: unknown })?.code;
+    return typeof code === 'string' && code ? code : 'error desconocido';
   }
 
   checkSignatureFileObjects(files: Array<Express.Multer.File>) {

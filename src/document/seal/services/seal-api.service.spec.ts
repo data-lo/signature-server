@@ -88,7 +88,11 @@ const SIMPLE_DTO: SimpleSignatureDTO = {
         verificationMethod: 'EMAIL_OTP',
         usedAt: '2026-08-20T15:03:00.000Z',
       },
-      signatureMedia: { signatureImage: 'iVBORw0KGgo=' },
+      signatureMedia: {
+        signatureImage: 'iVBORw0KGgo=',
+        identityDocumentFrontImage: '/9j/4AAQ-anverso',
+        identityDocumentBackImage: '/9j/4AAQ-reverso',
+      },
     },
   ],
 };

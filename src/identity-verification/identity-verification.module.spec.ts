@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { PersonalInformationEntity } from 'src/user/entities/personal-information.entity';
 import { IdentityVerificationModule } from './identity-verification.module';
 import { IdentityVerificationEntity } from './entities/identity-verification.entity';
 import { IdentityVerificationsController } from './identity-verifications.controller';
@@ -33,6 +34,8 @@ describe('IdentityVerificationModule', () => {
       .overrideProvider(getRepositoryToken(IdentityVerificationEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(UserEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(PersonalInformationEntity))
       .useValue(repositoryStub)
       .compile();
 

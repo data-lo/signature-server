@@ -11,6 +11,8 @@ import {
 import { IdentityVerificationEntity } from '../entities/identity-verification.entity';
 import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verification-provider.enum';
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
+import { StoreVerifiedIdentityImagesUseCase } from './store-verified-identity-images.use-case';
+import { IdentityDocumentImagesProcessingException } from '../exceptions/identity-verification.exceptions';
 
 const SESSION_ID = 'ses_1';
 const USER_ID = 'user-1';
@@ -21,6 +23,7 @@ describe('ProcessDiditVerificationResultUseCase', () => {
   let identityVerificationRepository: { findOne: jest.Mock; update: jest.Mock };
   let userRepository: { update: jest.Mock; findOne: jest.Mock };
   let updateSigningCredentialStatus: { applyIfAllowed: jest.Mock };
+  let storeVerifiedIdentityImages: { execute: jest.Mock };
 
   function givenAttempt(
     status = IDENTITY_VERIFICATION_STATUS_ENUM.IN_PROGRESS,
@@ -44,6 +47,9 @@ describe('ProcessDiditVerificationResultUseCase', () => {
     updateSigningCredentialStatus = {
       applyIfAllowed: jest.fn().mockResolvedValue(true),
     };
+    storeVerifiedIdentityImages = {
+      execute: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -57,10 +63,97 @@ describe('ProcessDiditVerificationResultUseCase', () => {
           provide: UpdateSigningCredentialStatusUseCase,
           useValue: updateSigningCredentialStatus,
         },
+        {
+          provide: StoreVerifiedIdentityImagesUseCase,
+          useValue: storeVerifiedIdentityImages,
+        },
       ],
     }).compile();
 
     useCase = module.get(ProcessDiditVerificationResultUseCase);
+  });
+
+  /**
+   * La identidad no queda completada si faltan las imágenes de la INE que la acreditan: se guardan
+   * antes de tocar el intento o la credencial, y si fallan no se aprueba nada.
+   */
+  describe('imágenes de la INE verificada', () => {
+    const decision = {
+      id_verifications: [
+        {
+          front_image: 'https://media.didit.me/front.jpg',
+          back_image: 'https://media.didit.me/back.jpg',
+        },
+      ],
+    };
+
+    it('guarda las imágenes del intento aprobado antes de marcarlo como aprobado', async () => {
+      givenAttempt();
+
+      await useCase.execute({
+        session_id: SESSION_ID,
+        status: 'Approved',
+        decision,
+      });
+
+      expect(storeVerifiedIdentityImages.execute).toHaveBeenCalledWith({
+        userId: USER_ID,
+        verificationId: ATTEMPT_ID,
+        decision,
+      });
+      expect(
+        storeVerifiedIdentityImages.execute.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        identityVerificationRepository.update.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('si no se pueden guardar, no aprueba nada y propaga el error para que Didit reintente', async () => {
+      givenAttempt();
+      storeVerifiedIdentityImages.execute.mockRejectedValue(
+        new IdentityDocumentImagesProcessingException(
+          'la imagen trasera respondió HTTP 403',
+        ),
+      );
+
+      await expect(
+        useCase.execute({
+          session_id: SESSION_ID,
+          status: 'Approved',
+          decision,
+        }),
+      ).rejects.toBeInstanceOf(IdentityDocumentImagesProcessingException);
+
+      expect(identityVerificationRepository.update).not.toHaveBeenCalled();
+      expect(userRepository.update).not.toHaveBeenCalled();
+      expect(
+        updateSigningCredentialStatus.applyIfAllowed,
+      ).not.toHaveBeenCalled();
+    });
+
+    /** El reintento pasa por el guardado, que es idempotente por intento. */
+    it('un Approved reentregado sobre un intento ya aprobado vuelve a pasar por el guardado idempotente', async () => {
+      givenAttempt(IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED);
+
+      await useCase.execute({
+        session_id: SESSION_ID,
+        status: 'Approved',
+        decision,
+      });
+
+      expect(storeVerifiedIdentityImages.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['Declined', 'In Review', 'Expired', 'Abandoned'])(
+      'no descarga imágenes con un resultado %s',
+      async (status) => {
+        givenAttempt();
+
+        await useCase.execute({ session_id: SESSION_ID, status });
+
+        expect(storeVerifiedIdentityImages.execute).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('aprobación', () => {

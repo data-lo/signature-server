@@ -213,6 +213,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       };
       for (const method of [
         'leftJoinAndSelect',
+        'addSelect',
         'where',
         'andWhere',
         'orderBy',

@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { PersonalInformationEntity } from 'src/user/entities/personal-information.entity';
 import { SharedModule } from 'src/common/shared.module';
 import { IdentityVerificationEntity } from './entities/identity-verification.entity';
 import { DiditApiService } from './didit/didit-api.service';
+import { DiditMediaDownloaderService } from './didit/didit-media-downloader.service';
+import { StoreVerifiedIdentityImagesUseCase } from './applications/store-verified-identity-images.use-case';
 import { StartDiditVerificationUseCase } from './applications/start-didit-verification.use-case';
 import { GetCurrentIdentityVerificationUseCase } from './applications/get-current-identity-verification.use-case';
 import { ProcessDiditVerificationResultUseCase } from './applications/process-didit-verification-result.use-case';
@@ -34,12 +37,19 @@ import { IdentityVerificationsController } from './identity-verifications.contro
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([IdentityVerificationEntity, UserEntity]),
+    TypeOrmModule.forFeature([
+      IdentityVerificationEntity,
+      UserEntity,
+      // Sólo para escribir las llaves de la INE verificada (ver StoreVerifiedIdentityImagesUseCase).
+      PersonalInformationEntity,
+    ]),
     SharedModule,
   ],
   controllers: [IdentityVerificationsController],
   providers: [
     DiditApiService,
+    DiditMediaDownloaderService,
+    StoreVerifiedIdentityImagesUseCase,
     StartDiditVerificationUseCase,
     GetCurrentIdentityVerificationUseCase,
     ProcessDiditVerificationResultUseCase,

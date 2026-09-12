@@ -25,4 +25,10 @@ export enum BUCKET_TYPES_ENUM {
   REJECTED_DOCUMENTS = 'rejected_documents',
   OFICIAL_CARDS = 'oficial_cards',
   SIGNATURE_IMAGES = 'signature_images',
+  /**
+   * Imágenes frontal y trasera de la INE verificadas por Didit. Bucket PRIVADO: sólo lo leen y
+   * escriben servicios internos (el guardado tras el webhook y el envío a Seal Service), y nunca se
+   * firman URLs permanentes sobre él. Ver `MinioService.putSensitiveObject`.
+   */
+  IDENTITY_DOCUMENTS = 'identity_documents',
 }
