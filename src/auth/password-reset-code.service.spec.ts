@@ -3,7 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { PasswordResetCodeService } from './password-reset-code.service';
 import { PasswordResetCodeEntity } from './entities/password-reset-code.entity';
-import { OTPService } from 'src/shared/otp/otp.service';
+import { OTPService } from 'src/common/otp/otp.service';
 
 function createMockRepository() {
   return {

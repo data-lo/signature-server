@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { AppModule } from './../src/app.module';
-import { applyGlobalApiPrefix } from './../src/shared/constants/api-prefix.constants';
+import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
 
 /**
  * Levantar el `AppModule` COMPLETO tarda bastante más que el timeout de 5 s que trae jest por

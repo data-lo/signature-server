@@ -5,7 +5,7 @@ import { SkipJwtAuth } from './auth/decorators/skip-jwt-auth.decorator';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(private readonly appService: AppService) { }
 
   /**
    * Saludo de sanidad del andamiaje de Nest, ya excluido del Swagger (`ApiGetHello`). Sin datos
@@ -15,7 +15,7 @@ export class AppController {
   @Get()
   @ApiGetHello()
   @SkipJwtAuth()
-  getHello(): string {
+  getHello(): { status: string, message: string, version: string } {
     return this.appService.getHello();
   }
 }

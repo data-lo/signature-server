@@ -43,7 +43,7 @@ describe('document-access-url.util', () => {
   });
 
   // La normalización de `FRONTEND_URL` (diagonal final, espacios, fallback) se prueba en
-  // `shared/utils/frontend-url.util.spec.ts`, que es donde vive ahora. Acá solo se verifica que
+  // `common/utils/frontend-url.util.spec.ts`, que es donde vive ahora. Acá solo se verifica que
   // estos enlaces la apliquen — un `//` en medio dejaría el correo con una URL rota.
   describe('normalización de la base', () => {
     it('quita las diagonales finales para no generar URLs con //', () => {

@@ -1,4 +1,4 @@
-import { setTestModuleGraphEnv } from 'src/shared/testing/module-graph-env';
+import { setTestModuleGraphEnv } from 'src/common/testing/module-graph-env';
 import { Global, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
@@ -7,7 +7,7 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { RedisService } from 'src/common/redis/redis.service';
 import { PlanEntity } from 'src/billing/catalog/plan.entity';
 import { CatalogItemEntity } from 'src/billing/catalog/catalog-item.entity';
 import { CatalogPriceEntity } from 'src/billing/catalog/catalog-price.entity';

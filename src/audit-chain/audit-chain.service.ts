@@ -3,7 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { AuditChainEntity } from './entities/audit-chain.entity';
 import { AUDIT_TYPE_ENUM } from './enums/audit-type.enum';
-import { HashService } from 'src/shared/hash/hash.service';
+import { HashService } from 'src/common/hash/hash.service';
 
 /** Genesis Hash: chainHash de la primera fila del sistema (no hay ninguna fila anterior que encadenar). */
 export const AUDIT_CHAIN_GENESIS_HASH = '0'.repeat(64);

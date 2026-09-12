@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { RedisService } from 'src/common/redis/redis.service';
 import { PaymentService } from '../interfaces/payment-service.interface';
 import { PaymentServiceResponse } from '../interfaces/payment-service-response.interface';
 import { StripePaymentService } from '../stripe/stripe-payment.service';

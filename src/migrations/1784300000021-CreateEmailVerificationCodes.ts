@@ -4,7 +4,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Historia "Auth: Flujo de Pre-registro, Verificación OTP y Control por CURP": tabla de OTPs de
  * verificación de correo de registro, keyed por `user_id` en vez de `document_id`/`signer_id`
  * (ver "verification_codes", que es la misma idea pero para firma de documentos). Se usa el
- * mismo `OTPService` genérico (src/shared/otp/otp.service.ts) para generar/comparar el código.
+ * mismo `OTPService` genérico (src/common/otp/otp.service.ts) para generar/comparar el código.
  */
 export class CreateEmailVerificationCodes1784300000021 implements MigrationInterface {
   name = 'CreateEmailVerificationCodes1784300000021';

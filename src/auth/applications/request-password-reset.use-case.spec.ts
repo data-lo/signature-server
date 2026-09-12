@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 import { UserService } from 'src/user/user.service';
 
 import { PasswordResetCodeService } from '../password-reset-code.service';

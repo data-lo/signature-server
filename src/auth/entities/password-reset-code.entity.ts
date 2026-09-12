@@ -13,7 +13,7 @@ import { UserEntity } from '../../user/entities/user.entity';
  * mediante Código de Verificación OTP") — mismo patrón que
  * src/document/entities/verification-code.entity.ts, pero keyed por usuario en vez
  * de documento/firmante, igual que email-verification-code lo hacía para el flujo
- * de registro. Reutiliza el OTPService genérico (src/shared/otp/otp.service.ts).
+ * de registro. Reutiliza el OTPService genérico (src/common/otp/otp.service.ts).
  */
 @Entity('password_reset_codes')
 export class PasswordResetCodeEntity {

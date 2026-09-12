@@ -9,8 +9,8 @@ import { SignatureCaptureSessionEntity } from './entities/signature-capture-sess
 import { SimpleSignatureEntity } from './entities/simple-signature.entity';
 import { FielSignatureEntity } from './entities/fiel-signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { MinioService } from 'src/shared/minio/minio.service';
-import { SharedModule } from 'src/shared/shared.module';
+import { MinioService } from 'src/common/minio/minio.service';
+import { SharedModule } from 'src/common/shared.module';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 import { UploadSignatureImageUseCase } from './applications/upload-signature-image.use-case';
 import { DeleteSignatureImageUseCase } from './applications/delete-signature-image.use-case';

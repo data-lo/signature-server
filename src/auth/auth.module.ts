@@ -21,7 +21,7 @@ import { PasswordResetCodeService } from './password-reset-code.service';
 import { PasswordResetCodeEntity } from './entities/password-reset-code.entity';
 import { UserModule } from '../user/user.module';
 import { AccountModule } from '../account/account.module';
-import { SharedModule } from '../shared/shared.module';
+import { SharedModule } from '../common/shared.module';
 
 /**
  * Módulo de autenticación.
