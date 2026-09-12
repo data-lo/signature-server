@@ -9,12 +9,12 @@ export function ApiCreateOrganization() {
     ApiOperation({
       summary: 'Crear una organización',
       description:
-        'Crea de forma transaccional la Account(ORGANIZATION), su OrganizationDetail y la membresía con el rol de sistema ADMIN del usuario autenticado (el creador queda como administrador de inmediato), y refresca el catálogo de cuentas en Redis. Antes de escribir nada valida que el plan de la cuenta activa incluya la cuenta empresarial (ORGANIZATION_ACCOUNT): el plan gratuito no la incluye, y una cuenta sin perfil de facturación se trata como gratuita',
+        'Crea de forma transaccional la Account(ORGANIZATION), su OrganizationDetail y la membresía con el rol de sistema ADMIN del usuario autenticado (el creador queda como administrador de inmediato), y refresca el catálogo de cuentas en Redis. NO depende del plan: cualquier usuario que pertenezca a la cuenta activa puede crear una organización, esté en Free o sin suscripción. La organización nace SIN perfil de facturación —sin plan Free y sin créditos de bienvenida—, así que `GET /payments/billing-state` le responde sin plan y con todas las acciones en false hasta que contrate una suscripción.',
     }),
     ApiHeader({
       name: 'X-Account-Id',
       description:
-        'UUID de la cuenta activa. Es el contexto contra cuyo plan se autoriza —la cuenta personal de quien paga, o la organización desde la que se está trabajando—, no la organización que se va a crear.',
+        'UUID de la cuenta activa desde la que se pide el alta. Se valida que el usuario autenticado pertenezca a ella; no es la organización que se va a crear.',
       required: true,
     }),
     ApiResponse({
@@ -24,7 +24,8 @@ export function ApiCreateOrganization() {
     }),
     ApiResponse({
       status: 400,
-      description: 'Los datos enviados son inválidos o incompletos',
+      description:
+        'Los datos enviados son inválidos o incompletos, o falta el header X-Account-Id',
       type: BadRequestResponse,
     }),
     ApiResponse({
@@ -34,8 +35,7 @@ export function ApiCreateOrganization() {
     }),
     ApiResponse({
       status: 403,
-      description:
-        'El usuario no pertenece a la cuenta activa, o el plan de esa cuenta no incluye la cuenta empresarial (plan Free o cuenta sin perfil de facturación)',
+      description: 'El usuario no pertenece a la cuenta activa',
     }),
   );
 }

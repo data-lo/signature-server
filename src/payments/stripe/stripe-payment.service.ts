@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Stripe = require('stripe');
 import { CATALOG_TYPE_ENUM } from 'src/billing/enums/catalog-type.enum';
 import { PaymentService } from '../interfaces/payment-service.interface';
+import type { CheckoutSessionLineItem } from '../interfaces/checkout-session-line-item.interface';
 import {
   PaymentGatewayMisconfiguredException,
   PaymentGatewayUnavailableException,
@@ -135,12 +136,29 @@ export class StripePaymentService {
     successUrl: string;
     cancelUrl: string;
     metadata: Record<string, string>;
+    /**
+     * Unidades del Price que se cobran. Por omisión 1, que es lo que lleva siempre el alta de una
+     * suscripción; la compra de documentos manda la cantidad que ya validó el servidor.
+     */
+    quantity?: number;
   }): Promise<{ sessionId: string; checkoutUrl: string }> {
     try {
       const session = await this.client.checkout.sessions.create({
         mode: input.mode,
         customer: input.customerId,
-        line_items: [{ price: input.priceId, quantity: 1 }],
+        /**
+         * La cantidad se fija aquí y queda BLOQUEADA en Checkout (`adjustable_quantity` apagado):
+         * la eligió el usuario antes de salir, la validó el servidor y con ella se calculó el
+         * importe de la orden local. Dejar que se cambiara en Stripe desalinearía lo cobrado con lo
+         * registrado. Un solo Price de una unidad sirve para cualquier cantidad.
+         */
+        line_items: [
+          {
+            price: input.priceId,
+            quantity: input.quantity ?? 1,
+            adjustable_quantity: { enabled: false },
+          },
+        ],
         metadata: input.metadata,
         /**
          * La misma metadata se copia a la suscripción porque los eventos posteriores
@@ -165,6 +183,46 @@ export class StripePaymentService {
       throw this.translateError(
         error,
         `crear la sesión de Checkout para ${input.priceId}`,
+      );
+    }
+  }
+
+  /**
+   * Lee las líneas cobradas de una sesión de Checkout, con la cantidad y el importe que Stripe registró.
+   *
+   * El evento `checkout.session.completed` no trae `line_items` —Stripe sólo los incluye si se
+   * piden expandidos—, así que hay que leerlos aparte. Es lo que permite acreditar la cantidad
+   * REALMENTE pagada en vez de la que dice la orden local o la metadata.
+   *
+   * @param sessionId - Id de la sesión de Checkout (`cs_...`).
+   * @returns Las líneas de la sesión en el orden en que las devuelve Stripe; vacío si no tiene.
+   *
+   * @throws {PaymentGatewayUnavailableException} Si Stripe no responde o rechaza la consulta.
+   * @throws {PaymentGatewayMisconfiguredException} Si Stripe rechaza nuestras credenciales.
+   *
+   * @example
+   * ```ts
+   * const [line] = await paymentGateway.listCheckoutSessionLineItems('cs_test_123');
+   * line.quantity; // 5
+   * ```
+   */
+  async listCheckoutSessionLineItems(
+    sessionId: string,
+  ): Promise<CheckoutSessionLineItem[]> {
+    try {
+      const { data } =
+        await this.client.checkout.sessions.listLineItems(sessionId);
+
+      return data.map((item) => ({
+        stripePriceId: item.price?.id ?? null,
+        quantity: item.quantity ?? 0,
+        amountSubtotal: item.amount_subtotal,
+        currency: item.currency,
+      }));
+    } catch (error) {
+      throw this.translateError(
+        error,
+        `leer las líneas de la sesión de Checkout ${sessionId}`,
       );
     }
   }
