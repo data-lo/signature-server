@@ -79,7 +79,9 @@ const SORT_COLUMNS: Record<DOCUMENT_SORT_FIELD_ENUM, string> = {
  *    de mirar un solo filtro.
  * 2. Valida los rangos de fecha.
  * 3. Resuelve el correo del usuario en el servidor, que es con el que se busca su participación.
- * 4. Aplica la VISIBILIDAD: la cuenta activa (o su organización) y aquello en lo que participa.
+ * 4. Aplica la VISIBILIDAD: el contexto dueño del documento —la organización activa, o la cuenta
+ *    personal más aquello en lo que participa fuera de sus organizaciones— (ver
+ *    `applyVisibility`).
  * 5. Aplica el `view` pedido y excluye lo que este usuario archivó.
  * 6. Suma los filtros opcionales: id, estados, búsqueda, participante y rangos de fecha.
  * 7. Pagina, ordena con desempate estable y arma la respuesta; opcionalmente firma URLs de MinIO.
@@ -173,7 +175,7 @@ export class GetDocumentsUseCase {
       .take(limit);
 
     this.applyVisibility(qb, { userId, callerEmail, activeAccount, accountId });
-    this.applyView(qb, view, userId);
+    this.applyView(qb, view, { userId, callerEmail });
     this.excludeArchived(qb, userId);
 
     if (id) {
@@ -293,20 +295,37 @@ export class GetDocumentsUseCase {
   }
 
   /**
-   * Lo que este usuario puede ver, y que ningún filtro puede ensanchar.
+   * Lo que este usuario puede ver desde la cuenta activa, y que ningún filtro puede ensanchar.
    *
-   * Son dos caminos y basta uno: el documento pertenece a la cuenta desde la que mira (o a su
-   * organización), o participa en él. El segundo no sobra — casi ningún documento que me toca
-   * firmar pertenece a MI cuenta, sino a la de quien lo mandó — y por eso las dos condiciones van
-   * en un `OR` dentro de un mismo paréntesis: sueltas, el `AND` de cualquier filtro posterior se
-   * mezclaría con ellas y el resultado dejaría de significar lo mismo.
+   * **Cada documento tiene UN solo contexto dueño** —la organización que lo creó, o la cuenta
+   * personal— y se lista en ese contexto y en ningún otro. La participación no es un contexto:
+   * `collaborators.account_id` ancla siempre a la cuenta PERSONAL de quien firma (ver
+   * `CollaboratorEntity`), nunca a una membresía de organización, así que "me toca firmarlo" es
+   * una relación de la persona y se resuelve en su bandeja personal.
    *
-   * **Había un tercer camino, `document.createdBy = :userId`, y se quitó a propósito.** No
-   * dependía de la cuenta, así que al cambiar de contexto seguía mostrando lo que el usuario
-   * hubiera creado en cualquier otro: los documentos de su cuenta personal aparecían dentro de la
-   * organización, y la lista no cambiaba al cambiar de cuenta (bug "El listado de documentos no
-   * se actualiza al cambiar de cuenta activa"). Quien crea un documento sigue viéndolo desde la
-   * cuenta en la que lo creó —es la dueña del documento— y también si participa en él.
+   * De ahí las dos ramas:
+   *
+   * - **Organización**: sólo `document.organizationId`. Nada más entra, ni siquiera un documento
+   *   que este miembro tenga que firmar: si es de otra organización o de una cuenta personal, no
+   *   es de ésta.
+   * - **Personal**: los documentos de la cuenta, más aquellos en los que participa cuyo contexto
+   *   dueño NO puede alcanzar (ver `documentOutsideMyOrganizationsSubquery`). Esa segunda vía no
+   *   sobra: casi ningún documento que me toca firmar pertenece a mi cuenta, sino a la de quien
+   *   lo mandó, y sin ella un firmante externo no vería nunca lo que se le pidió firmar.
+   *
+   * Bug corregido: **"El listado de documentos no se actualiza al cambiar de cuenta activa"**. La
+   * participación se aplicaba en las DOS ramas y no dependía de la cuenta, así que entraba en
+   * cualquier contexto: dentro de una organización seguían saliendo los documentos personales del
+   * usuario y los de otras organizaciones donde firma, y al volver a la cuenta personal seguían
+   * los de la organización. La lista sí se recargaba —la `queryKey` del cliente lleva la cuenta—;
+   * lo que no cambiaba era la respuesta del servidor.
+   *
+   * Antes de eso se había quitado por lo mismo un tercer camino, `document.createdBy = :userId`,
+   * que tampoco dependía de la cuenta.
+   *
+   * **Nada queda inaccesible.** El detalle (`GET /document/:id`) no mira la cuenta activa: pide
+   * ser creador o participante (ver `GetDocumentUseCase`), así que el enlace del correo sigue
+   * abriendo y firmando igual aunque el documento se liste en otro contexto.
    *
    * El `view` `created_by_me` no se ve afectado: filtra por `createdBy` DENTRO de lo ya visible
    * (ver `applyView`), así que sigue listando lo que el usuario mandó a firmar en esta cuenta.
@@ -322,30 +341,84 @@ export class GetDocumentsUseCase {
   ): void {
     const { userId, callerEmail, activeAccount, accountId } = context;
 
+    if (activeAccount.organizationId) {
+      qb.andWhere('document.organizationId = :organizationId', {
+        organizationId: activeAccount.organizationId,
+      });
+      return;
+    }
+
+    /**
+     * Las dos vías van en un `OR` dentro de un mismo paréntesis: sueltas, el `AND` de cualquier
+     * filtro posterior se mezclaría con ellas y el resultado dejaría de significar lo mismo.
+     */
     qb.andWhere(
       new Brackets((where) => {
-        if (activeAccount.organizationId) {
-          where.where('document.organizationId = :organizationId', {
-            organizationId: activeAccount.organizationId,
-          });
-        } else {
-          where.where('document.accountId = :accountId', { accountId });
-        }
+        where.where('document.accountId = :accountId', { accountId });
 
-        where.orWhere(this.callerIsParticipantSubquery(), {
-          userId,
-          callerEmail,
-        });
+        where.orWhere(
+          new Brackets((participation) => {
+            participation
+              .where(this.callerIsParticipantSubquery(), {
+                userId,
+                callerEmail,
+              })
+              .andWhere(this.documentOutsideMyOrganizationsSubquery(), {
+                userId,
+              });
+          }),
+        );
       }),
     );
   }
 
-  /** Recorta lo visible al subconjunto que pide `view`. Nunca amplía: sólo agrega condiciones. */
+  /**
+   * "Este documento no es de ninguna organización a la que yo pertenezca."
+   *
+   * Es lo que evita que la bandeja personal repita lo que ya se lista dentro de la organización:
+   * un documento de Acme que este miembro tiene que firmar aparece en el contexto de Acme, que es
+   * su dueño, y no también en su cuenta personal. Un documento de una organización ajena —o de
+   * la cuenta personal de otra persona— sí entra: no hay otro contexto desde el que verlo.
+   *
+   * El `IS NOT NULL` del subquery no es cosmético: `NOT IN` contra un conjunto que contenga un
+   * `NULL` no devuelve `true` para nada (el resultado es `UNKNOWN`), y una sola membresía sin
+   * organización vaciaría la vía de participación entera. Con el filtro, una persona sin ninguna
+   * organización compara contra un conjunto vacío, que es `true` para todos.
+   *
+   * @returns El fragmento SQL, que espera el parámetro `:userId` ligado por quien lo use.
+   * @throws Nada: sólo arma texto.
+   *
+   * @example
+   * ```ts
+   * participation.andWhere(this.documentOutsideMyOrganizationsSubquery(), { userId });
+   * ```
+   */
+  private documentOutsideMyOrganizationsSubquery(): string {
+    return `(document.organizationId IS NULL OR document.organizationId NOT IN (
+      SELECT a.organization_id FROM accounts a
+      WHERE a.user_id = :userId
+        AND a.is_active = true
+        AND a.organization_id IS NOT NULL
+    ))`;
+  }
+
+  /**
+   * Recorta lo visible al subconjunto que pide `view`. Nunca amplía: sólo agrega condiciones.
+   *
+   * **Cada condición liga sus propios parámetros.** `requires_my_signature` usa `:userId` y
+   * `:callerEmail`, y durante un tiempo funcionó sin ligarlos porque se los encontraba puestos
+   * por la vía de participación de `applyVisibility`. Al dejar de aplicarse esa vía dentro de una
+   * organización, los marcadores llegaban a Postgres sin valor y la consulta reventaba con
+   * `syntax error at or near ":"` — un acoplamiento invisible entre dos métodos que ningún mock
+   * del query builder puede delatar, porque el SQL sólo se arma de verdad contra la base.
+   */
   private applyView(
     qb: SelectQueryBuilder<DocumentEntity>,
     view: DOCUMENT_VIEW_ENUM,
-    userId: string,
+    caller: { userId: string; callerEmail: string | null },
   ): void {
+    const { userId, callerEmail } = caller;
+
     switch (view) {
       case DOCUMENT_VIEW_ENUM.REQUIRES_MY_SIGNATURE:
         /**
@@ -366,6 +439,8 @@ export class GetDocumentsUseCase {
               AND c.status = :pendingSigneeStatus
           )`,
           {
+            userId,
+            callerEmail,
             actingTypes: ACTING_COLLABORATOR_TYPES,
             pendingSigneeStatus: SIGNEE_STATUS_ENUM.PENDING,
           },

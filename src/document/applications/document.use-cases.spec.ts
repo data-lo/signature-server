@@ -677,8 +677,18 @@ describe('casos de uso de documentos', () => {
       const recorded: string[] = [];
       const nested: any = {};
       ['where', 'orWhere', 'andWhere'].forEach((method) => {
-        nested[method] = jest.fn((sql: string) => {
-          recorded.push(sql);
+        nested[method] = jest.fn((condition: unknown) => {
+          /**
+           * Un `Brackets` DENTRO de otro: la vía de participación de la cuenta personal es un
+           * grupo propio ("participo Y el documento no es de una organización mía"), porque sus
+           * dos condiciones tienen que quedar unidas antes de entrar en el `OR` con la cuenta.
+           * Sin bajar a ese grupo, la prueba vería un objeto opaco en lugar del filtro.
+           */
+          if (typeof condition === 'string') {
+            recorded.push(condition);
+          } else {
+            recorded.push(...bracketConditions(condition));
+          }
           return nested;
         });
       });
@@ -700,6 +710,33 @@ describe('casos de uso de documentos', () => {
         id: 'account-1',
         organizationId: null,
       });
+    }
+
+    /** La cuenta activa es la membresía del usuario en una organización. */
+    function organizationAccount() {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+    }
+
+    /**
+     * El grupo de acceso de la cuenta personal, desenvuelto.
+     *
+     * Se reconoce por `document.accountId` y no por su posición entre los `andWhere`: el orden
+     * cambia en cuanto se agrega un filtro, y una prueba que dependiera de él fallaría por algo
+     * que no tiene nada que ver con la visibilidad.
+     */
+    function visibilityConditions(qb: any): string[] {
+      return (
+        qb.andWhere.mock.calls
+          .map(([condition]: [unknown]) =>
+            typeof condition === 'string' ? [] : bracketConditions(condition),
+          )
+          .find((conditions: string[]) =>
+            conditions.some((sql) => sql.includes('document.accountId')),
+          ) ?? []
+      );
     }
 
     /** El listado con los filtros indicados; el resto va con los valores por omisión del DTO. */
@@ -782,28 +819,22 @@ describe('casos de uso de documentos', () => {
     });
 
     /**
-     * El acceso es lo primero que se aplica y ningún filtro puede ensancharlo. Las tres vías van
-     * en un solo grupo `OR`: la cuenta activa, lo que creó el usuario y aquello en lo que
-     * participa. La tercera no sobra — un documento que me toca firmar casi siempre pertenece a
-     * la cuenta de quien lo mandó, no a la mía (bug corregido en su momento con un caso especial
-     * para `participantEmail`, que ahora es parte de la regla).
+     * El acceso es lo primero que se aplica y ningún filtro puede ensancharlo. En la cuenta
+     * personal son dos vías en un solo grupo `OR`: los documentos de la cuenta, y aquellos en los
+     * que participa cuyo contexto dueño no puede alcanzar. La segunda no sobra — un documento que
+     * me toca firmar casi siempre pertenece a la cuenta de quien lo mandó, no a la mía (bug
+     * corregido en su momento con un caso especial para `participantEmail`, que ahora es parte de
+     * la regla).
      */
     it('limita lo visible a la cuenta activa y aquello en lo que participa', async () => {
       const qb = createMockQueryBuilder();
 
       await list({}, qb);
 
-      const visibility = qb.andWhere.mock.calls
-        .map(([condition]: [unknown]) =>
-          typeof condition === 'string' ? [] : bracketConditions(condition),
-        )
-        .find((conditions: string[]) =>
-          conditions.some((sql) => sql.includes('document.accountId')),
-        );
-
-      expect(visibility).toEqual([
+      expect(visibilityConditions(qb)).toEqual([
         'document.accountId = :accountId',
         expect.stringContaining('SELECT c.document_id FROM collaborators c'),
+        expect.stringContaining('document.organizationId NOT IN'),
       ]);
     });
 
@@ -824,15 +855,70 @@ describe('casos de uso de documentos', () => {
 
       await list({}, qb);
 
-      const visibility = qb.andWhere.mock.calls
-        .map(([condition]: [unknown]) =>
-          typeof condition === 'string' ? [] : bracketConditions(condition),
-        )
-        .find((conditions: string[]) =>
-          conditions.some((sql) => sql.includes('document.accountId')),
-        );
+      expect(visibilityConditions(qb)).not.toContain(
+        'document.createdBy = :userId',
+      );
+    });
 
-      expect(visibility).not.toContain('document.createdBy = :userId');
+    /**
+     * Bug: **"El listado de documentos no se actualiza al cambiar de cuenta activa"**.
+     *
+     * La participación entraba en las DOS ramas de la visibilidad y no dependía de la cuenta, así
+     * que dentro de una organización seguían saliendo los documentos personales del usuario y los
+     * de OTRAS organizaciones donde firma. La lista sí se recargaba al cambiar de cuenta —la
+     * `queryKey` del cliente lleva la cuenta—; lo que no cambiaba era la respuesta del servidor.
+     *
+     * Dentro de una organización la visibilidad es UNA condición y no un grupo `OR`: no queda
+     * segunda vía por la que pueda colarse un documento ajeno.
+     */
+    it('dentro de una organización no deja entrar nada por participación: sólo sus documentos', async () => {
+      organizationAccount();
+      const qb = createMockQueryBuilder();
+
+      // `view: all` para que la única condición sobre colaboradores que pudiera aparecer fuese la
+      // de la visibilidad: la vista por omisión trae la suya —"me toca firmarlo"— y ésa recorta
+      // dentro de lo ya visible en lugar de ampliarlo.
+      await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'document.organizationId = :organizationId',
+        { organizationId: 'org-1' },
+      );
+      const participantClauses = allConditions(qb).filter((sql) =>
+        sql.includes('SELECT c.document_id FROM collaborators c'),
+      );
+      expect(participantClauses).toEqual([]);
+    });
+
+    /**
+     * La otra mitad del mismo bug, al volver a la cuenta personal: un documento de una
+     * organización a la que el usuario pertenece ya se lista DENTRO de esa organización, que es su
+     * contexto dueño, así que no debe repetirse en la bandeja personal. La participación sigue
+     * abriendo los documentos cuyo contexto no puede alcanzar —los de una organización ajena, o
+     * los de la cuenta personal de otra persona—: sin eso, un firmante externo no vería nunca lo
+     * que se le pidió firmar.
+     */
+    it('en la cuenta personal, la participación no alcanza a los documentos de sus propias organizaciones', async () => {
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb);
+
+      const participationScope = visibilityConditions(qb).find((sql) =>
+        sql.includes('document.organizationId NOT IN'),
+      );
+      expect(participationScope).toBeDefined();
+      expect(participationScope).toContain(
+        'document.organizationId IS NULL OR',
+      );
+      expect(participationScope).toContain('a.user_id = :userId');
+      // Sólo las membresías vigentes: quien salió de una organización vuelve a ver por
+      // participación lo que allí tenga que firmar.
+      expect(participationScope).toContain('a.is_active = true');
+      /**
+       * `NOT IN` contra un conjunto que contenga un `NULL` no devuelve `true` para nada, y una
+       * sola membresía personal (sin organización) vaciaría la vía de participación entera.
+       */
+      expect(participationScope).toContain('a.organization_id IS NOT NULL');
     });
 
     it('usa la organización en lugar de la cuenta cuando la cuenta activa pertenece a una', async () => {
