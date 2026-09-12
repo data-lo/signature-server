@@ -9,6 +9,7 @@ import { StripePaymentService } from './stripe-payment.service';
 const mockPricesList = jest.fn();
 const mockProductsRetrieve = jest.fn();
 const mockSessionsCreate = jest.fn();
+const mockSessionsListLineItems = jest.fn();
 const mockCustomersCreate = jest.fn();
 const mockSubscriptionsUpdate = jest.fn();
 
@@ -16,7 +17,12 @@ jest.mock('stripe', () =>
   jest.fn().mockImplementation(() => ({
     prices: { list: mockPricesList },
     products: { retrieve: mockProductsRetrieve },
-    checkout: { sessions: { create: mockSessionsCreate } },
+    checkout: {
+      sessions: {
+        create: mockSessionsCreate,
+        listLineItems: mockSessionsListLineItems,
+      },
+    },
     customers: { create: mockCustomersCreate },
     subscriptions: { update: mockSubscriptionsUpdate },
   })),
@@ -314,9 +320,9 @@ describe('StripePaymentService', () => {
     it('traduce un fallo del proveedor a 502, sin filtrar su error', async () => {
       mockSubscriptionsUpdate.mockRejectedValue(new Error('Stripe: timeout'));
 
-      await expect(
-        service.resumeSubscription('sub_1'),
-      ).rejects.toBeInstanceOf(BadGatewayException);
+      await expect(service.resumeSubscription('sub_1')).rejects.toBeInstanceOf(
+        BadGatewayException,
+      );
     });
   });
 
@@ -370,12 +376,117 @@ describe('StripePaymentService', () => {
       );
     });
 
+    it('cobra una unidad por omisión, con la cantidad bloqueada', async () => {
+      mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://x' });
+
+      await service.createCheckoutSession(input);
+
+      expect(mockSessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          line_items: [
+            {
+              price: 'price_mensual',
+              quantity: 1,
+              adjustable_quantity: { enabled: false },
+            },
+          ],
+        }),
+      );
+    });
+
+    /**
+     * Un solo Price sirve para cualquier cantidad, y la cantidad elegida antes de salir no se
+     * puede cambiar en Checkout: lo cobrado tiene que coincidir con la orden local.
+     */
+    it('manda la cantidad pedida con el mismo Price y no deja cambiarla en Checkout', async () => {
+      mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://x' });
+
+      await service.createCheckoutSession({
+        ...input,
+        mode: 'payment',
+        quantity: 5,
+      });
+
+      expect(mockSessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          line_items: [
+            {
+              price: 'price_mensual',
+              quantity: 5,
+              adjustable_quantity: { enabled: false },
+            },
+          ],
+        }),
+      );
+    });
+
     it('trata una sesión sin URL como fallo del proveedor', async () => {
       mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: null });
 
       await expect(service.createCheckoutSession(input)).rejects.toBeInstanceOf(
         BadGatewayException,
       );
+    });
+  });
+
+  describe('líneas cobradas de una sesión', () => {
+    it('devuelve el precio, la cantidad y el importe que Stripe cobró', async () => {
+      mockSessionsListLineItems.mockResolvedValue({
+        data: [
+          {
+            price: { id: 'price_extra_doc' },
+            quantity: 5,
+            amount_subtotal: 19500,
+            amount_total: 19500,
+            currency: 'mxn',
+          },
+        ],
+      });
+
+      await expect(
+        service.listCheckoutSessionLineItems('cs_1'),
+      ).resolves.toEqual([
+        {
+          stripePriceId: 'price_extra_doc',
+          quantity: 5,
+          amountSubtotal: 19500,
+          currency: 'mxn',
+        },
+      ]);
+      expect(mockSessionsListLineItems).toHaveBeenCalledWith('cs_1');
+    });
+
+    /** Sin precio o sin cantidad, la línea no puede cuadrar con ninguna orden. */
+    it('normaliza una línea sin precio ni cantidad', async () => {
+      mockSessionsListLineItems.mockResolvedValue({
+        data: [
+          {
+            price: null,
+            quantity: null,
+            amount_subtotal: 0,
+            currency: 'mxn',
+          },
+        ],
+      });
+
+      await expect(
+        service.listCheckoutSessionLineItems('cs_1'),
+      ).resolves.toEqual([
+        {
+          stripePriceId: null,
+          quantity: 0,
+          amountSubtotal: 0,
+          currency: 'mxn',
+        },
+      ]);
+    });
+
+    it('traduce un fallo del proveedor a 502 para que el webhook se reintente', async () => {
+      mockSessionsListLineItems.mockRejectedValue(new Error('timeout'));
+
+      await expect(
+        service.listCheckoutSessionLineItems('cs_1'),
+      ).rejects.toBeInstanceOf(BadGatewayException);
     });
   });
 

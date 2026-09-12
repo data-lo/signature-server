@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsUUID } from 'class-validator';
+import { IsNumber, IsUUID } from 'class-validator';
+import { MAX_DOCUMENT_CREDITS_PER_PURCHASE } from 'src/billing/credits/document-credit-quantity';
 
 export class CreateDocumentCreditCheckoutDto {
   /**
@@ -22,4 +23,30 @@ export class CreateDocumentCreditCheckoutDto {
   })
   @IsUUID()
   catalogPriceId: string;
+
+  /**
+   * Unidades de la oferta que se compran en este Checkout.
+   *
+   * **El DTO sólo exige que llegue un número** —ni texto, ni `NaN`, ni ausente—. Que sea entero,
+   * mayor que cero y no supere el máximo lo decide `assertValidDocumentCreditQuantity` dentro del
+   * caso de uso, por dos motivos: la regla tiene que valer para cualquier llamador y no sólo para
+   * HTTP, y su rechazo responde con `field: 'quantity'`, que es lo que deja al formulario pintar el
+   * mensaje debajo del selector. Un rechazo de `ValidationPipe` llega como una lista de textos sin
+   * decir de qué campo es.
+   *
+   * Sin `@Type(() => Number)` a propósito: el cliente manda un número en el JSON, y convertir un
+   * `"5"` aquí escondería a un cliente que no está transformando lo que envía.
+   */
+  @ApiProperty({
+    example: 5,
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_DOCUMENT_CREDITS_PER_PURCHASE,
+    description: `Unidades de la oferta que se compran. Entero entre 1 y ${MAX_DOCUMENT_CREDITS_PER_PURCHASE}; queda bloqueada en Stripe Checkout.`,
+  })
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'La cantidad debe ser un número.' },
+  )
+  quantity: number;
 }
