@@ -168,6 +168,41 @@ export const PLAN_ENTITLEMENTS = {
   },
 } as const satisfies Record<string, PlanEntitlements>;
 
+/**
+ * Lo que puede hacer una organización que todavía no contrató ningún plan: nada.
+ *
+ * **No es el plan gratuito.** Las organizaciones nacen sin `billing_profile` —ni plan Free ni
+ * créditos de bienvenida— y tienen que contratar una suscripción para operar; responderles los
+ * beneficios de Free les habilitaría firmar y comprar documentos sin haber contratado nada. Por eso
+ * todas las acciones van en `false` y los topes en `null`: no hay plan que los fije.
+ *
+ * Las cuentas personales no pasan por aquí: sin plan siguen respondiendo el gratuito, que es con lo
+ * que nacen.
+ */
+export const NO_PLAN_ENTITLEMENTS: PlanEntitlements = {
+  actions: {
+    [PLAN_ACTION_ENUM.SIGN_SIMPLE_AND_ADVANCED]: false,
+    [PLAN_ACTION_ENUM.SIGN_IN_ORDER]: false,
+    [PLAN_ACTION_ENUM.UNLIMITED_SIGNERS]: false,
+    [PLAN_ACTION_ENUM.REQUEST_WITNESSES]: false,
+    [PLAN_ACTION_ENUM.INTELLIGENT_SEARCH]: false,
+    [PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS]: false,
+    [PLAN_ACTION_ENUM.BULK_SIGNING]: false,
+    [PLAN_ACTION_ENUM.ORGANIZATION_ACCOUNT]: false,
+    [PLAN_ACTION_ENUM.PRE_APPROVAL]: false,
+    [PLAN_ACTION_ENUM.MIX_SIGNATURE_TYPES]: false,
+    [PLAN_ACTION_ENUM.PRIORITY_SUPPORT]: false,
+    [PLAN_ACTION_ENUM.CUSTOM_BRANDING]: false,
+    [PLAN_ACTION_ENUM.API_INTEGRATION]: false,
+    [PLAN_ACTION_ENUM.CASE_FILE_GROUPING]: false,
+    [PLAN_ACTION_ENUM.BUY_DOCUMENT_CREDITS]: false,
+  },
+  limits: {
+    [PLAN_LIMIT_ENUM.DOCUMENTS_INCLUDED_PER_PERIOD]: null,
+    [PLAN_LIMIT_ENUM.MAX_ORGANIZATION_MEMBERS]: null,
+  },
+};
+
 /** Los planes con beneficios definidos. No es el catálogo: `plans` es abierto, esto no. */
 export type EntitledPlanType = keyof typeof PLAN_ENTITLEMENTS;
 

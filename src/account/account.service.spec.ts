@@ -199,10 +199,9 @@ describe('AccountService', () => {
   });
 
   /**
-   * Toda cuenta personal y toda organización nacen con su `billing_profile` en plan Free, y
-   * nacen DENTRO de la misma transacción que las crea: o quedan las dos filas o no queda
-   * ninguna. Lo que se comprueba acá es esa atadura —qué manager recibe el aprovisionamiento— y
-   * a qué propietario se ata el perfil.
+   * Sólo la cuenta PERSONAL nace con su `billing_profile` en plan Free, y lo hace DENTRO de la
+   * transacción que la crea. Las organizaciones nacen sin perfil, sin plan Free y sin créditos de
+   * bienvenida: contratan su plan desde Planes.
    */
   describe('alta del perfil de facturación en plan Free', () => {
     it('la cuenta personal lo crea con el MISMO manager de la transacción de registro', async () => {
@@ -226,7 +225,7 @@ describe('AccountService', () => {
       });
     });
 
-    it('la organización lo ata a organization_id, no a la membresía de quien la creó', async () => {
+    it('la organización nace sin perfil de facturación', async () => {
       queryRunner.manager.save = jest
         .fn()
         .mockResolvedValueOnce({ id: 'organizacion-1' })
@@ -242,69 +241,14 @@ describe('AccountService', () => {
 
       expect(
         billingProfileProvisioning.provisionFreeProfile,
-      ).toHaveBeenCalledWith(queryRunner.manager, {
-        personalAccountId: null,
-        organizationId: 'organizacion-1',
-      });
-    });
-
-    /**
-     * El perfil va ANTES del commit: si se aprovisionara después, un fallo suyo dejaría la
-     * organización ya confirmada y sin estado comercial — el hueco que esta historia cierra.
-     */
-    it('la organización lo crea antes de confirmar la transacción', async () => {
-      queryRunner.manager.save = jest
-        .fn()
-        .mockResolvedValueOnce({ id: 'organizacion-1' })
-        .mockResolvedValueOnce({ id: 'cuenta-admin-1' });
-      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-admin-1' });
-
-      const orden: string[] = [];
-      billingProfileProvisioning.provisionFreeProfile.mockImplementation(
-        async () => {
-          orden.push('perfil');
-          return { id: 'perfil-free-1' };
-        },
-      );
-      queryRunner.commitTransaction.mockImplementation(async () => {
-        orden.push('commit');
-      });
-
-      await service.saveOrganizationWithAdminAccount(
-        CURRENT_USER as any,
-        {
-          organizationName: 'Acme',
-        } as any,
-      );
-
-      expect(orden).toEqual(['perfil', 'commit']);
-    });
-
-    it('si falla el perfil, la organización hace rollback y no se confirma', async () => {
-      queryRunner.manager.save = jest
-        .fn()
-        .mockResolvedValueOnce({ id: 'organizacion-1' })
-        .mockResolvedValueOnce({ id: 'cuenta-admin-1' });
-      billingProfileProvisioning.provisionFreeProfile.mockRejectedValue(
-        new Error('perfil no se pudo crear'),
-      );
-
-      await expect(
-        service.saveOrganizationWithAdminAccount(
-          CURRENT_USER as any,
-          {
-            organizationName: 'Acme',
-          } as any,
-        ),
-      ).rejects.toThrow('perfil no se pudo crear');
-
-      expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
-      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
-      expect(queryRunner.release).toHaveBeenCalled();
+      ).not.toHaveBeenCalled();
+      // Sólo la organización y la membresía de su administrador.
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(2);
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
     });
 
     describe('saveAccount', () => {
-      it('escribe la cuenta y su perfil en una sola transacción', async () => {
+      it('escribe la cuenta personal y su perfil en una sola transacción', async () => {
         await service.saveAccount({
           userId: 'user-1',
           accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
@@ -322,7 +266,8 @@ describe('AccountService', () => {
         });
       });
 
-      it('una cuenta de organización ata el perfil a la organización', async () => {
+      /** El alta genérica tampoco puede regalarle a una organización el plan Free. */
+      it('una cuenta de organización se guarda sin perfil de facturación', async () => {
         await service.saveAccount({
           userId: 'user-1',
           accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
@@ -331,12 +276,10 @@ describe('AccountService', () => {
           user: CURRENT_USER as any,
         });
 
+        expect(transactionManager.save).toHaveBeenCalledTimes(1);
         expect(
           billingProfileProvisioning.provisionFreeProfile,
-        ).toHaveBeenCalledWith(transactionManager, {
-          personalAccountId: null,
-          organizationId: 'organizacion-1',
-        });
+        ).not.toHaveBeenCalled();
       });
     });
   });

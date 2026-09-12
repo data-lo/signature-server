@@ -140,7 +140,7 @@ describe('GetBillingAccessUseCase', () => {
   });
 
   describe('perfil inexistente', () => {
-    it('devuelve un estado Free seguro en vez de fallar', async () => {
+    it('devuelve un estado Free seguro a una cuenta personal en vez de fallar', async () => {
       billingOwnerService.findProfileByOwner.mockResolvedValue(null);
 
       await expect(execute()).resolves.toEqual({
@@ -175,6 +175,88 @@ describe('GetBillingAccessUseCase', () => {
       await execute();
 
       expect(billingOwnerService.getOrCreateProfile).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Las organizaciones nacen sin perfil ni plan Free: hasta contratar una suscripción no pueden
+   * hacer nada, y la respuesta no las presenta como gratuitas.
+   */
+  describe('organización sin plan', () => {
+    const NO_ACTIONS = Object.fromEntries(
+      Object.values(PLAN_ACTION_ENUM).map((action) => [action, false]),
+    );
+
+    beforeEach(() => {
+      billingOwnerService.resolveOwner.mockResolvedValue(ORGANIZATION_OWNER);
+    });
+
+    it('responde sin plan, sin créditos y con todas las acciones deshabilitadas si no tiene perfil', async () => {
+      billingOwnerService.findProfileByOwner.mockResolvedValue(null);
+
+      await expect(execute('org-account-1')).resolves.toEqual({
+        billingProfileId: null,
+        hasActiveSubscription: false,
+        currentPlanType: null,
+        status: null,
+        billingSource: null,
+        cancelAtPeriodEnd: false,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        creditsAvailable: 0,
+        actions: NO_ACTIONS,
+        limits: {
+          [PLAN_LIMIT_ENUM.DOCUMENTS_INCLUDED_PER_PERIOD]: null,
+          [PLAN_LIMIT_ENUM.MAX_ORGANIZATION_MEMBERS]: null,
+        },
+      });
+    });
+
+    it('no la trata como Free ni le crea el perfil', async () => {
+      billingOwnerService.findProfileByOwner.mockResolvedValue(null);
+
+      const access = await execute('org-account-1');
+
+      expect(access.currentPlanType).toBeNull();
+      expect(access.actions).not.toEqual(PLAN_ENTITLEMENTS.free.actions);
+      expect(billingOwnerService.getOrCreateProfile).not.toHaveBeenCalled();
+    });
+
+    /** El perfil que abre un Checkout de suscripción nace sin plan hasta que el pago se confirma. */
+    it('tampoco la trata como Free si su perfil se abrió en un Checkout que nunca se pagó', async () => {
+      perfil({
+        currentPlanType: null,
+        status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
+      });
+
+      await expect(execute('org-account-1')).resolves.toMatchObject({
+        billingProfileId: 'profile-1',
+        hasActiveSubscription: false,
+        currentPlanType: null,
+        actions: NO_ACTIONS,
+      });
+    });
+
+    it('una organización con plan contratado conserva sus beneficios', async () => {
+      perfil({ currentPlanType: 'plus' });
+
+      await expect(execute('org-account-1')).resolves.toMatchObject({
+        hasActiveSubscription: true,
+        actions: PLAN_ENTITLEMENTS.plus.actions,
+      });
+    });
+
+    /** Las organizaciones que ya existían nacieron con perfil Free y no cambian. */
+    it('una organización Free existente conserva el plan gratuito', async () => {
+      perfil({
+        currentPlanType: 'free',
+        status: BILLING_PROFILE_STATUS_ENUM.FREE,
+      });
+
+      await expect(execute('org-account-1')).resolves.toMatchObject({
+        currentPlanType: 'free',
+        actions: PLAN_ENTITLEMENTS.free.actions,
+      });
     });
   });
 

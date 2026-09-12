@@ -76,9 +76,9 @@ describe('OrganizationsController', () => {
   });
 
   /**
-   * El `X-Account-Id` viaja porque el alta se autoriza contra el plan de la cuenta ACTIVA (ver
-   * `CreateOrganizationUseCase`), no contra el usuario: la misma persona puede tener plan en su
-   * organización y estar en Free en su cuenta personal.
+   * El `X-Account-Id` viaja porque el alta comprueba que el usuario pertenezca a la cuenta ACTIVA
+   * desde la que la pide (ver `CreateOrganizationUseCase`). Ya no se autoriza contra su plan:
+   * cualquier usuario puede crear una organización.
    */
   it('create delega en CreateOrganizationUseCase con el userId del JWT y el accountId activo', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
