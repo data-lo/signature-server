@@ -5,7 +5,7 @@ import { AccountService } from './account.service';
 import { AccountEntity } from './entities/account.entity';
 import { OrganizationEntity } from './entities/organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { RedisService } from 'src/common/redis/redis.service';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { RolesService } from 'src/roles/roles.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';

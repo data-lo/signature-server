@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 import { IdentityVerificationEntity } from './entities/identity-verification.entity';
 import { DiditApiService } from './didit/didit-api.service';
 import { StartDiditVerificationUseCase } from './applications/start-didit-verification.use-case';

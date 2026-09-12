@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 
 import { SignatureService } from '../signature.service';
 

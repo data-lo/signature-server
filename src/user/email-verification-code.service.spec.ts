@@ -3,7 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { EmailVerificationCodeService } from './email-verification-code.service';
 import { EmailVerificationCodeEntity } from './entities/email-verification-code.entity';
-import { OTPService } from 'src/shared/otp/otp.service';
+import { OTPService } from 'src/common/otp/otp.service';
 
 function createMockRepository() {
   return {

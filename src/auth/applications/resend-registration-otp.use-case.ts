@@ -6,8 +6,8 @@ import {
 } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { EmailService } from 'src/shared/email/email.service';
-import { maskEmail } from 'src/shared/utils/mask-email.util';
+import { EmailService } from 'src/common/email/email.service';
+import { maskEmail } from 'src/common/utils/mask-email.util';
 import { EmailVerificationCodeService } from 'src/user/email-verification-code.service';
 import { UserService } from 'src/user/user.service';
 

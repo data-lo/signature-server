@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadGatewayException, Logger } from '@nestjs/common';
-import { RedisService } from 'src/shared/redis/redis.service';
+import { RedisService } from 'src/common/redis/redis.service';
 import { StripePaymentService } from '../stripe/stripe-payment.service';
 import {
   GetPublicStripePlansUseCase,

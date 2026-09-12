@@ -2,7 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 
-import { RedisService } from '../shared/redis/redis.service';
+import { RedisService } from '../common/redis/redis.service';
 import { UserEntity } from '../user/entities/user.entity';
 import { AuthService } from './auth.service';
 

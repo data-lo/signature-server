@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EfirmaModule } from 'src/efirma/efirma.module';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
 import { VerificationCodeEntity } from '../entities/verification-code.entity';

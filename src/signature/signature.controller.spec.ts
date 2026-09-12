@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { SignatureController } from './signature.controller';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { GetSignatureFileUseCase } from './applications/get-signature-file.use-case';
 import { GetSignatureUseCase } from './applications/get-signature.use-case';
 import { UpdateSignatureUseCase } from './applications/update-signature.use-case';

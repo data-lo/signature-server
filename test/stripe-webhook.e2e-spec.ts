@@ -5,7 +5,7 @@ import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
 import Stripe = require('stripe');
 
-import { applyGlobalApiPrefix } from './../src/shared/constants/api-prefix.constants';
+import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
 import { StripeWebhookController } from './../src/webhooks/stripe-webhook.controller';
 import { ReceiveStripeWebhookUseCase } from './../src/webhooks/applications/receive-stripe-webhook.use-case';
 import { RegisterWebhookEventUseCase } from './../src/webhooks/applications/register-webhook-event.use-case';

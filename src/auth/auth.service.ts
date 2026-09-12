@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
 
-import { RedisService } from '../shared/redis/redis.service';
+import { RedisService } from '../common/redis/redis.service';
 import { UserEntity } from '../user/entities/user.entity';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { PasswordResetTokenPayload } from './interfaces/password-reset-token-payload.interface';

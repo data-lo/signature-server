@@ -13,13 +13,13 @@ import { AuditService } from 'src/audit/audit.service';
 import { AuditAction } from 'src/audit/schema/audit-document';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
-import { HashService } from 'src/shared/hash/hash.service';
-import { MinioService } from 'src/shared/minio/minio.service';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
-import { FILE_STATUS_ENUM } from 'src/shared/minio/enums/file-status-enum';
-import { PdfSignatureService } from 'src/shared/document-signing/document-signing.service';
-import { DEFAULT_COORDINATES } from 'src/shared/document-signing/interfaces/default-signing-coordinates.interface';
-import { MAX_PDF_FILE_SIZE_BYTES } from 'src/shared/constants/file-upload.constants';
+import { HashService } from 'src/common/hash/hash.service';
+import { MinioService } from 'src/common/minio/minio.service';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
+import { FILE_STATUS_ENUM } from 'src/common/minio/enums/file-status-enum';
+import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
+import { DEFAULT_COORDINATES } from 'src/common/document-signing/interfaces/default-signing-coordinates.interface';
+import { MAX_PDF_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
 import { UserService } from 'src/user/user.service';
 
 import { CreateDocumentDto } from '../dto/create-document.dto';
@@ -74,7 +74,7 @@ export class CreateDocumentUseCase {
     private readonly accountMemberService: AccountMemberService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly documentService: DocumentService,
-  ) {}
+  ) { }
 
   /**
    * Ejecuta el caso de uso.
@@ -105,11 +105,11 @@ export class CreateDocumentUseCase {
           'Falta el header X-Account-Id de la cuenta activa',
         );
       }
-      const activeAccount =
-        await this.accountMemberService.assertIsActiveMember(
-          createdBy,
-          accountId,
-        );
+
+      const activeAccount = await this.accountMemberService.assertIsActiveMember(
+        createdBy,
+        accountId,
+      );
 
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');
@@ -136,10 +136,9 @@ export class CreateDocumentUseCase {
         ...(reviewerIds ?? []),
       ];
       const uniqueParticipantIds = new Set(allParticipantIds);
+
       if (uniqueParticipantIds.size !== allParticipantIds.length) {
-        throw new BadRequestException(
-          'No puedes seleccionar al mismo usuario más de una vez entre firmantes, watchers y reviewers',
-        );
+        throw new BadRequestException('Cada participante debe tener un solo rol; no puede repetirse entre firmantes, observadores y revisores.',);
       }
 
       const allParticipantEmails = [

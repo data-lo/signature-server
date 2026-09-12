@@ -11,7 +11,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { AuditService } from 'src/audit/audit.service';
 import { AuditAction } from 'src/audit/schema/audit-document';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
-import { EmailService } from 'src/shared/email/email.service';
+import { EmailService } from 'src/common/email/email.service';
 
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';

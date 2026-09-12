@@ -8,12 +8,12 @@ import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { SignatureService } from './signature.service';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
-import { MinioService } from 'src/shared/minio/minio.service';
+import { MinioService } from 'src/common/minio/minio.service';
 import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 import {
   MAX_IMAGE_FILE_SIZE_BYTES,
   MAX_PDF_FILE_SIZE_BYTES,
-} from 'src/shared/constants/file-upload.constants';
+} from 'src/common/constants/file-upload.constants';
 
 function createMockRepository() {
   return {

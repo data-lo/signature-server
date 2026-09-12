@@ -18,7 +18,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
-import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/shared/constants/file-upload.constants';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 
 // Use cases
 import { UploadSignatureImageUseCase } from 'src/signature/applications/upload-signature-image.use-case';

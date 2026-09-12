@@ -9,12 +9,12 @@ import { UserModule } from './user/user.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
-import { MulterExceptionFilter } from './shared/filters/multer-exception.filter';
-import { frontendBaseUrl } from './shared/utils/frontend-url.util';
+import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
+import { frontendBaseUrl } from './common/utils/frontend-url.util';
 import {
   applyGlobalApiPrefix,
   GLOBAL_API_PREFIX,
-} from './shared/constants/api-prefix.constants';
+} from './common/constants/api-prefix.constants';
 
 process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
 

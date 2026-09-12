@@ -11,9 +11,9 @@
  * vincula la cuenta al colaborador y devuelve al usuario al documento correcto.
  */
 
-// La base del frontend se resuelve en `shared/utils/frontend-url.util`: la misma normalización la
+// La base del frontend se resuelve en `common/utils/frontend-url.util`: la misma normalización la
 // necesitan Stripe, las invitaciones a organización y el origin de CORS, no solo estos enlaces.
-import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
+import { frontendBaseUrl } from 'src/common/utils/frontend-url.util';
 
 /** Enlace al documento para un colaborador concreto (punto de entrada `/access-document`). */
 export function buildDocumentAccessUrl(

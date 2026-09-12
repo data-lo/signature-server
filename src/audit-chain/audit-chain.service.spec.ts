@@ -5,7 +5,7 @@ import {
   AUDIT_CHAIN_GENESIS_HASH,
 } from './audit-chain.service';
 import { AUDIT_TYPE_ENUM } from './enums/audit-type.enum';
-import { HashService } from 'src/shared/hash/hash.service';
+import { HashService } from 'src/common/hash/hash.service';
 
 function createMockRepository() {
   return {

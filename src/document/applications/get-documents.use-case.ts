@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 
 import { AccountMemberService } from 'src/account/account-member.service';
-import { MinioService } from 'src/shared/minio/minio.service';
+import { MinioService } from 'src/common/minio/minio.service';
 import { UserService } from 'src/user/user.service';
 
 import { GetDocumentsQueryDto } from '../dto/get-documents-query.dto';

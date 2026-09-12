@@ -2,7 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PasswordResetCodeEntity } from './entities/password-reset-code.entity';
-import { OTPService } from 'src/shared/otp/otp.service';
+import { OTPService } from 'src/common/otp/otp.service';
 
 const PASSWORD_RESET_CODE_VALIDITY_MINUTES = 15;
 

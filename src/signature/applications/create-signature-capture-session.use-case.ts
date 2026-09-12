@@ -4,7 +4,7 @@ import { QueryFailedError, Repository } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
 import { SigningCredentialNotReadyException } from 'src/identity-verification/exceptions/identity-verification.exceptions';
-import { frontendBaseUrl } from 'src/shared/utils/frontend-url.util';
+import { frontendBaseUrl } from 'src/common/utils/frontend-url.util';
 import { SignatureCaptureSessionEntity } from '../entities/signature-capture-session.entity';
 import { SIGNATURE_CAPTURE_CHANNEL_ENUM } from '../enums/signature-capture-channel.enum';
 import { SIGNATURE_CAPTURE_SESSION_STATUS_ENUM } from '../enums/signature-capture-session-status.enum';
