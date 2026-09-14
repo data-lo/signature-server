@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -32,6 +33,19 @@ import { RoleEntity } from 'src/roles/entities/role.entity';
  * documentos en la misma migración.
  */
 @Entity('accounts')
+/**
+ * Una sola membresía por (usuario × organización) — la garantía que traía la vieja
+ * `account_members` y que se perdió al fusionarla aquí (ver
+ * `1784300000052-AddUniqueOrganizationMembership`, que la crea en base).
+ *
+ * Parcial porque `organization_id` es NULL en las cuentas personales, y cubre también las
+ * membresías dadas de baja: revocar el acceso deja la fila con `is_active = false` y readmitir
+ * reactiva esa misma fila, en vez de insertar una segunda.
+ */
+@Index('UQ_accounts_user_id_organization_id', ['userId', 'organizationId'], {
+  unique: true,
+  where: '"organization_id" IS NOT NULL',
+})
 export class AccountEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;

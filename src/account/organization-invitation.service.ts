@@ -16,6 +16,7 @@ import { INVITATION_STATUS_ENUM } from './enums/invitation-status.enum';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { OrganizationInvitationEventsProducer } from 'src/kafka/organization-invitation.producer';
+import { isDuplicateMembershipError } from './exceptions/organization.exceptions';
 
 const INVITATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 días — sin precedente en el repo, valor razonable para un enlace de invitación por correo.
 
@@ -140,25 +141,58 @@ export class OrganizationInvitationService {
       throw new ConflictException('Ya eres miembro de esta organización');
     }
 
-    const account = await this.accountRepository.save(
-      this.accountRepository.create({
-        userId: user.id,
-        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
-        organizationId: invitation.organizationId,
-        roleId: invitation.roleId,
-        isActive: true,
-        status: ACCOUNT_STATUS_ENUM.ACTIVE,
-        email: user.email,
-        password: user.password,
-        joinedAt: new Date(),
-      }),
-    );
+    /**
+     * La comprobación de arriba lee y esto escribe: dos aceptaciones simultáneas del mismo enlace
+     * pasan las dos. La segunda choca contra el índice único de `accounts` y sale con el mismo
+     * 409 que habría dado la comprobación, en vez de con un error de Postgres.
+     */
+    const account = await this.saveMembershipOrConflict(invitation, user);
     account.organization = invitation.organization;
 
     invitation.status = INVITATION_STATUS_ENUM.ACCEPTED;
     await this.invitationRepository.save(invitation);
 
     await this.accountService.appendAccountToCatalog(user.id, account);
+  }
+
+  /**
+   * Inserta la membresía de quien acepta la invitación, traduciendo el duplicado a un 409.
+   *
+   * @param invitation - Invitación que se está consumando.
+   * @param user - Usuario que se une, resuelto por RFC.
+   * @returns La membresía guardada.
+   *
+   * @throws {ConflictException} (409) Si esa persona ya tiene membresía en la organización.
+   *
+   * @example
+   * ```ts
+   * const account = await this.saveMembershipOrConflict(invitation, user);
+   * ```
+   */
+  private async saveMembershipOrConflict(
+    invitation: OrganizationInvitationEntity,
+    user: UserEntity,
+  ): Promise<AccountEntity> {
+    try {
+      return await this.accountRepository.save(
+        this.accountRepository.create({
+          userId: user.id,
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: invitation.organizationId,
+          roleId: invitation.roleId,
+          isActive: true,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          email: user.email,
+          password: user.password,
+          joinedAt: new Date(),
+        }),
+      );
+    } catch (error) {
+      if (isDuplicateMembershipError(error)) {
+        throw new ConflictException('Ya eres miembro de esta organización');
+      }
+      throw error;
+    }
   }
 
   /** Expiración perezosa: se marca EXPIRED en el primer acceso posterior a expiresAt, no vía job programado (sin infraestructura de cron en este repo). */

@@ -26,6 +26,12 @@ import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 
+// Exceptions
+import {
+  DuplicateOrganizationMembershipException,
+  isDuplicateMembershipError,
+} from './exceptions/organization.exceptions';
+
 // Interfaces
 import { OrganizationMemberData } from './interfaces/response/account-member-response';
 
@@ -104,6 +110,26 @@ export class AccountMemberService {
    * `status` se deriva de `isActive` en vez de recibirse: son dos formas de decir lo mismo y
    * dejarlas entrar por separado permitiría guardar una membresía activa marcada como
    * suspendida.
+   *
+   * El choque contra el índice único de la base se traduce al mismo 409 que ya responden las
+   * comprobaciones previas de los casos de uso. Esas comprobaciones leen y después escriben, así
+   * que dos peticiones a la vez —un doble clic, un reintento del cliente— pasan las dos: la
+   * segunda llega hasta acá y tiene que salir como "ya es miembro", no como un 500.
+   *
+   * @param dto - Organización, usuario, rol y puesto de la membresía.
+   * @param invitedUser - Usuario invitado, de donde se copian las credenciales sincronizadas.
+   * @returns La membresía guardada.
+   *
+   * @throws {DuplicateOrganizationMembershipException} (409) Si ese usuario ya tiene una
+   *   membresía en esa organización, activa o dada de baja.
+   *
+   * @example
+   * ```ts
+   * const membership = await accountMemberService.saveMembership(
+   *   { organizationId: 'org-1', userId: 'user-1', roleId: 'role-1' },
+   *   invitedUser,
+   * );
+   * ```
    */
   async saveMembership(
     dto: CreateAccountMemberDto,
@@ -111,22 +137,29 @@ export class AccountMemberService {
   ): Promise<AccountEntity> {
     const isActive = dto.isActive ?? true;
 
-    return this.accountRepository.save(
-      this.accountRepository.create({
-        userId: dto.userId,
-        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
-        organizationId: dto.organizationId,
-        roleId: dto.roleId,
-        position: dto.position ?? null,
-        isActive,
-        status: isActive
-          ? ACCOUNT_STATUS_ENUM.ACTIVE
-          : ACCOUNT_STATUS_ENUM.SUSPENDED,
-        email: invitedUser.email,
-        password: invitedUser.password,
-        joinedAt: new Date(),
-      }),
-    );
+    try {
+      return await this.accountRepository.save(
+        this.accountRepository.create({
+          userId: dto.userId,
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: dto.organizationId,
+          roleId: dto.roleId,
+          position: dto.position ?? null,
+          isActive,
+          status: isActive
+            ? ACCOUNT_STATUS_ENUM.ACTIVE
+            : ACCOUNT_STATUS_ENUM.SUSPENDED,
+          email: invitedUser.email,
+          password: invitedUser.password,
+          joinedAt: new Date(),
+        }),
+      );
+    } catch (error) {
+      if (isDuplicateMembershipError(error)) {
+        throw new DuplicateOrganizationMembershipException();
+      }
+      throw error;
+    }
   }
 
   /** Miembros activos de una organización, como filas de `accounts`. */

@@ -16,6 +16,10 @@ import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { AccountEntity } from './entities/account.entity';
 import { OrganizationEntity } from './entities/organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { RoleEntity } from 'src/roles/entities/role.entity';
+
+// Exceptions
+import { OrganizationAdminAssignmentFailedException } from './exceptions/organization.exceptions';
 
 // Enums
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
@@ -271,24 +275,78 @@ export class AccountService {
   }
 
   /**
-   * Crea una Organización de forma transaccional: Organization (entidad propia, ver Fase 5) +
-   * Account(type=ORGANIZATION) para el usuario autenticado con el rol de sistema ADMIN (el
-   * creador queda como administrador de inmediato, igual que en la cuenta personal). Al
-   * confirmar, refresca el catálogo de cuentas cacheado en Redis.
+   * Resuelve el rol de sistema ADMIN, el que convierte al creador en administrador.
+   *
+   * Envuelve el fallo en un error propio en vez de dejar salir el de `RolesService`, que dice
+   * "el rol de sistema ADMIN no está sembrado, corre npm run seed:roles": es la instrucción
+   * correcta para quien opera el servidor y ruido inservible para quien está creando una
+   * organización desde el formulario. El detalle técnico se conserva en el log.
+   *
+   * @returns El rol de sistema ADMIN.
+   *
+   * @throws {OrganizationAdminAssignmentFailedException} (500) Si el RBAC no está sembrado o la
+   *   consulta del rol falla.
+   *
+   * @example
+   * ```ts
+   * const adminRole = await this.resolveAdminRoleOrFail();
+   * ```
    */
+  private async resolveAdminRoleOrFail(): Promise<RoleEntity> {
+    try {
+      return await this.rolesService.findSystemRoleByName(
+        SYSTEM_ROLE_NAME_ENUM.ADMIN,
+      );
+    } catch (error) {
+      this.logger.error(
+        `No se pudo resolver el rol ADMIN para asignar al creador de la organización: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      throw new OrganizationAdminAssignmentFailedException();
+    }
+  }
+
   /**
    * Crea la organización y la membresía ADMIN de su creador en una sola transacción.
    *
-   * Van juntas porque una organización sin ningún administrador no la puede gestionar nadie:
-   * si el segundo save fallara con el primero ya confirmado, quedaría una organización
-   * inaccesible y sin forma de repararla desde la API.
+   * Van juntas porque una organización sin ningún administrador no la puede gestionar nadie: si
+   * el segundo save fallara con el primero ya confirmado, quedaría una organización inaccesible
+   * y sin forma de repararla desde la API. El creador queda como administrador de inmediato,
+   * igual que en la cuenta personal.
    *
-   * El creador queda como administrador de inmediato, igual que en la cuenta personal.
+   * La membresía nace ACTIVE, con `joinedAt` y con el rol de sistema ADMIN, que el seed del RBAC
+   * crea con todas las acciones sobre todos los recursos: de ahí sale el acceso inmediato a
+   * gestionar miembros y permisos, que `assertHasOrganizationPermission` resuelve leyendo
+   * exactamente esta fila.
+   *
+   * **El rol se resuelve ANTES de abrir la transacción.** Es la única parte del alta que puede
+   * fallar por algo ajeno a los datos del formulario —el RBAC sin sembrar—, y descubrirlo
+   * después de insertar la organización sólo sirve para tener que deshacerla.
+   *
+   * @param user - Usuario autenticado, que queda como administrador de la organización nueva.
+   * @param dto - Datos de la organización: razón social, nombre y perfil opcional.
+   * @returns La membresía recién creada, releída con sus relaciones.
+   *
+   * @throws {OrganizationAdminAssignmentFailedException} (500) Si no se puede resolver el rol
+   *   ADMIN. No se crea nada: se lanza antes de abrir la transacción.
+   * @throws {Error} Cualquier fallo de escritura, tras revertir la transacción entera.
+   *
+   * @example
+   * ```ts
+   * const admin = await accountService.saveOrganizationWithAdminAccount(user, {
+   *   name: 'Acme',
+   *   organizationName: 'Acme Corp S.A. de C.V.',
+   * });
+   * admin.roleId; // el rol de sistema ADMIN
+   * ```
    */
   async saveOrganizationWithAdminAccount(
     user: UserEntity,
     dto: CreateOrganizationDto,
   ): Promise<AccountEntity> {
+    const adminRole = await this.resolveAdminRoleOrFail();
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -303,10 +361,6 @@ export class AccountService {
           phoneNumber: dto.phoneNumber ?? null,
           indexDocuments: dto.indexDocuments ?? false,
         }),
-      );
-
-      const adminRole = await this.rolesService.findSystemRoleByName(
-        SYSTEM_ROLE_NAME_ENUM.ADMIN,
       );
 
       const account = await queryRunner.manager.save(
