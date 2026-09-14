@@ -184,20 +184,25 @@ export class CollaboratorPayloadDto {
   email: string;
 
   /**
-   * Obligatorio SOLO para VIEWER. Los firmantes ya no lo mandan en ningún flujo (historia
-   * "Selección de tipo de firma al crear documentos"): en firma simple nunca se pidió, y en firma
-   * avanzada el RFC real se extrae del certificado de e.firma al momento de firmar (ver
-   * `EfirmaService.extaerRfcDeSubject`) — pedirlo al crear el documento capturaba un dato que
-   * nadie contrastaba contra el certificado. `CreateDocumentSignatureFlowUseCase` descarta lo que llegue
-   * acá para un SIGNER, así que un cliente viejo no puede reintroducirlo.
+   * Opcional incluso para VIEWER (antes era obligatorio para ese tipo; ver historia "Eliminar
+   * campo RFC de la sección de Espectadores"). Cuando llega con valor se sigue validando como
+   * string — sólo se relajó la obligatoriedad, no el formato. Los firmantes ya no lo mandan en
+   * ningún flujo (historia "Selección de tipo de firma al crear documentos"): en firma simple
+   * nunca se pidió, y en firma avanzada el RFC real se extrae del certificado de e.firma al
+   * momento de firmar (ver `EfirmaService.extaerRfcDeSubject`) — pedirlo al crear el documento
+   * capturaba un dato que nadie contrastaba contra el certificado.
+   * `CreateDocumentSignatureFlowUseCase` descarta lo que llegue acá para un SIGNER, así que un
+   * cliente viejo no puede reintroducirlo.
    */
   @ApiPropertyOptional({ example: 'PEAJ800101XXX', nullable: true })
   @ValidateIf(
     (c: CollaboratorPayloadDto) =>
-      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER,
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER &&
+      c.rfc !== undefined &&
+      c.rfc !== null &&
+      c.rfc !== '',
   )
   @IsString()
-  @IsNotEmpty()
   rfc?: string | null;
 
   /**
