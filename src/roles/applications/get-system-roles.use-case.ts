@@ -38,6 +38,7 @@ export class GetSystemRolesUseCase {
         name: role.name,
         isSystemRole: role.isSystemRole,
         permissions: permissionsByRole.get(role.id) ?? [],
+        createdAt: role.createdAt,
       })),
     };
   }

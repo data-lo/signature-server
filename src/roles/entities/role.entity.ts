@@ -1,13 +1,22 @@
 import {
   Column,
+  CreateDateColumn,
   Entity,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  Unique,
 } from 'typeorm';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
 
+/**
+ * Único por `(organizationId, name)` (ver migración `AddCreatedAtAndUniqueNameToRoles`): protege
+ * a los roles custom de una organización de nombres duplicados. No afecta a ADMIN/MEMBER —
+ * comparten `organizationId: null`, y Postgres trata cada NULL como distinto en un UNIQUE
+ * multi-columna.
+ */
 @Entity('roles')
+@Unique(['organizationId', 'name'])
 export class RoleEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -30,4 +39,7 @@ export class RoleEntity {
   @ManyToOne(() => OrganizationEntity, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'organization_id' })
   organization: OrganizationEntity | null;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 }

@@ -1,17 +1,28 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { In } from 'typeorm';
 import { RolesService } from './roles.service';
 import { RoleEntity } from './entities/role.entity';
 import { RolePermissionEntity } from './entities/role-permission.entity';
+import { PermissionEntity } from './entities/permission.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from './enums/action-key.enum';
+import { STATIC_PERMISSION_KEY_ENUM } from './static-permission-catalog';
 
 function createMockRepository() {
   return {
     find: jest.fn(),
     findOne: jest.fn(),
+    create: jest.fn((data: unknown) => data),
+    save: jest.fn(async (data: unknown) => data),
+    insert: jest.fn(),
+    delete: jest.fn(),
   };
 }
 
@@ -19,10 +30,26 @@ describe('RolesService', () => {
   let service: RolesService;
   let roleRepository: ReturnType<typeof createMockRepository>;
   let rolePermissionRepository: ReturnType<typeof createMockRepository>;
+  let permissionRepository: ReturnType<typeof createMockRepository>;
+  let accountRepository: ReturnType<typeof createMockRepository>;
+  let transactionalRolePermissionRepository: ReturnType<
+    typeof createMockRepository
+  >;
+  let dataSource: { transaction: jest.Mock };
 
   beforeEach(async () => {
     roleRepository = createMockRepository();
     rolePermissionRepository = createMockRepository();
+    permissionRepository = createMockRepository();
+    accountRepository = createMockRepository();
+    transactionalRolePermissionRepository = createMockRepository();
+    dataSource = {
+      transaction: jest.fn(async (run: (manager: unknown) => Promise<void>) =>
+        run({
+          getRepository: jest.fn(() => transactionalRolePermissionRepository),
+        }),
+      ),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -32,6 +59,15 @@ describe('RolesService', () => {
           provide: getRepositoryToken(RolePermissionEntity),
           useValue: rolePermissionRepository,
         },
+        {
+          provide: getRepositoryToken(PermissionEntity),
+          useValue: permissionRepository,
+        },
+        {
+          provide: getRepositoryToken(AccountEntity),
+          useValue: accountRepository,
+        },
+        { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
 
@@ -280,6 +316,284 @@ describe('RolesService', () => {
 
       expect(grouped.size).toBe(0);
       expect(rolePermissionRepository.find).not.toHaveBeenCalled();
+    });
+  });
+
+  /** Fila de `permissions` tal como la resolvería `resolveStaticPermissionIds` para esa clave. */
+  function buildStaticPermissionRow(
+    id: string,
+    key: STATIC_PERMISSION_KEY_ENUM,
+  ) {
+    const definitions: Record<
+      STATIC_PERMISSION_KEY_ENUM,
+      { resource: string; action: string; scope: string }
+    > = {
+      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE]: {
+        resource: 'DOCUMENT',
+        action: 'CREATE',
+        scope: 'ANY',
+      },
+      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN]: {
+        resource: 'DOCUMENT',
+        action: 'READ',
+        scope: 'OWN',
+      },
+      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_ORGANIZATION]: {
+        resource: 'DOCUMENT',
+        action: 'READ',
+        scope: 'ORGANIZATION',
+      },
+      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST]: {
+        resource: 'DOCUMENT',
+        action: 'SEND_SIGNATURE_REQUEST',
+        scope: 'ANY',
+      },
+      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF]: {
+        resource: 'DOCUMENT',
+        action: 'SIGN',
+        scope: 'SELF',
+      },
+      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE]: {
+        resource: 'DOCUMENT',
+        action: 'APPROVE',
+        scope: 'ANY',
+      },
+      [STATIC_PERMISSION_KEY_ENUM.MEMBER_INVITE]: {
+        resource: 'MEMBER',
+        action: 'INVITE',
+        scope: 'ANY',
+      },
+    };
+    const { resource, action, scope } = definitions[key];
+
+    return {
+      id,
+      scope,
+      resource: { key: resource },
+      action: { key: action },
+    };
+  }
+
+  describe('assertHasOrganizationPermission', () => {
+    it('no lanza si el llamador es un miembro activo con el permiso', async () => {
+      accountRepository.findOne.mockResolvedValue({
+        roleId: 'admin-role-1',
+      });
+      rolePermissionRepository.findOne.mockResolvedValue({ id: 'rp-1' });
+
+      await expect(
+        service.assertHasOrganizationPermission(
+          'user-1',
+          'org-1',
+          ACTION_KEY_ENUM.READ,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(accountRepository.findOne).toHaveBeenCalledWith({
+        where: { userId: 'user-1', organizationId: 'org-1', isActive: true },
+        relations: { role: true },
+      });
+    });
+
+    it('lanza ForbiddenException si el llamador no tiene membresía activa en la organización', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+      rolePermissionRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.assertHasOrganizationPermission(
+          'user-1',
+          'org-1',
+          ACTION_KEY_ENUM.UPDATE,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('listOrganizationRoles', () => {
+    it('trae los roles de sistema y los propios de la organización en una sola consulta', async () => {
+      roleRepository.find.mockResolvedValue([]);
+
+      await service.listOrganizationRoles('org-1');
+
+      expect(roleRepository.find).toHaveBeenCalledWith({
+        where: [{ isSystemRole: true }, { organizationId: 'org-1' }],
+        order: { name: 'ASC' },
+      });
+    });
+  });
+
+  describe('createOrganizationRole', () => {
+    it('crea el rol y sus permisos cuando el nombre está disponible', async () => {
+      roleRepository.findOne.mockResolvedValue(null);
+      permissionRepository.find.mockResolvedValue([
+        buildStaticPermissionRow(
+          'perm-approve',
+          STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE,
+        ),
+        buildStaticPermissionRow(
+          'perm-read-org',
+          STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_ORGANIZATION,
+        ),
+      ]);
+      roleRepository.save.mockResolvedValue({
+        id: 'role-nuevo',
+        name: 'Aprobador',
+        isSystemRole: false,
+        organizationId: 'org-1',
+      });
+
+      const role = await service.createOrganizationRole('org-1', 'Aprobador', [
+        STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_ORGANIZATION,
+        STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE,
+      ]);
+
+      expect(role.id).toBe('role-nuevo');
+      expect(rolePermissionRepository.insert).toHaveBeenCalledWith([
+        { roleId: 'role-nuevo', permissionId: 'perm-read-org' },
+        { roleId: 'role-nuevo', permissionId: 'perm-approve' },
+      ]);
+    });
+
+    it('crea el rol sin permisos si el arreglo viene vacío', async () => {
+      roleRepository.findOne.mockResolvedValue(null);
+      roleRepository.save.mockResolvedValue({
+        id: 'role-nuevo',
+        name: 'Solo lectura',
+        isSystemRole: false,
+        organizationId: 'org-1',
+      });
+
+      await service.createOrganizationRole('org-1', 'Solo lectura', []);
+
+      expect(rolePermissionRepository.insert).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un nombre que ya usa otro rol de la misma organización', async () => {
+      roleRepository.findOne.mockResolvedValue({
+        id: 'role-existente',
+        name: 'Aprobador',
+        organizationId: 'org-1',
+      });
+
+      await expect(
+        service.createOrganizationRole('org-1', 'Aprobador', []),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it.each(['ADMIN', 'MEMBER'])(
+      'rechaza el nombre de rol de sistema "%s"',
+      async (name) => {
+        await expect(
+          service.createOrganizationRole('org-1', name, []),
+        ).rejects.toThrow(ConflictException);
+
+        expect(roleRepository.findOne).not.toHaveBeenCalled();
+      },
+    );
+
+    it('lanza un error claro si una clave del catálogo estático no está sembrada', async () => {
+      roleRepository.findOne.mockResolvedValue(null);
+      permissionRepository.find.mockResolvedValue([]);
+
+      await expect(
+        service.createOrganizationRole('org-1', 'Aprobador', [
+          STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE,
+        ]),
+      ).rejects.toThrow(/seed:static-permissions/);
+    });
+  });
+
+  describe('updateOrganizationRole', () => {
+    const customRole = {
+      id: 'role-1',
+      name: 'Aprobador',
+      isSystemRole: false,
+      organizationId: 'org-1',
+    };
+
+    it('renombra un rol custom propio de la organización', async () => {
+      roleRepository.findOne
+        .mockResolvedValueOnce({ ...customRole })
+        .mockResolvedValueOnce(null);
+
+      const result = await service.updateOrganizationRole('org-1', 'role-1', {
+        name: 'Aprobador Senior',
+      });
+
+      expect(result.name).toBe('Aprobador Senior');
+      expect(roleRepository.save).toHaveBeenCalled();
+    });
+
+    it('reemplaza el set completo de permisos, no lo agrega', async () => {
+      roleRepository.findOne.mockResolvedValue({ ...customRole });
+      permissionRepository.find.mockResolvedValue([
+        buildStaticPermissionRow(
+          'perm-invite',
+          STATIC_PERMISSION_KEY_ENUM.MEMBER_INVITE,
+        ),
+      ]);
+
+      await service.updateOrganizationRole('org-1', 'role-1', {
+        permissionKeys: [STATIC_PERMISSION_KEY_ENUM.MEMBER_INVITE],
+      });
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(transactionalRolePermissionRepository.delete).toHaveBeenCalledWith(
+        { roleId: 'role-1' },
+      );
+      expect(transactionalRolePermissionRepository.insert).toHaveBeenCalledWith(
+        [{ roleId: 'role-1', permissionId: 'perm-invite' }],
+      );
+    });
+
+    it('rechaza editar un rol de sistema', async () => {
+      roleRepository.findOne.mockResolvedValue({
+        id: 'admin-role-1',
+        name: 'ADMIN',
+        isSystemRole: true,
+        organizationId: null,
+      });
+
+      await expect(
+        service.updateOrganizationRole('org-1', 'admin-role-1', {
+          name: 'Otro nombre',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rechaza editar un rol de otra organización', async () => {
+      roleRepository.findOne.mockResolvedValue({
+        ...customRole,
+        organizationId: 'org-2',
+      });
+
+      await expect(
+        service.updateOrganizationRole('org-1', 'role-1', {
+          name: 'Otro nombre',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rechaza un nuevo nombre que ya usa otro rol de la organización', async () => {
+      roleRepository.findOne
+        .mockResolvedValueOnce({ ...customRole })
+        .mockResolvedValueOnce({ id: 'role-2', name: 'Otro rol' });
+
+      await expect(
+        service.updateOrganizationRole('org-1', 'role-1', {
+          name: 'Otro rol',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('no valida el nombre si no cambia', async () => {
+      roleRepository.findOne.mockResolvedValue({ ...customRole });
+
+      await service.updateOrganizationRole('org-1', 'role-1', {
+        name: 'Aprobador',
+      });
+
+      expect(roleRepository.save).not.toHaveBeenCalled();
     });
   });
 });

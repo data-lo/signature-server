@@ -27,9 +27,20 @@ export class RoleData {
       'Permisos estáticos que otorga el rol, derivados de role_permissions. Es lo que la pantalla de miembros muestra antes de confirmar una asignación',
   })
   permissions: RolePermissionData[];
+
+  @ApiProperty({
+    example: '2026-01-15T10:00:00.000Z',
+    description: 'Fecha de creación del rol',
+  })
+  createdAt: Date;
 }
 
 export class RoleListResponse extends BaseResponse<RoleData[]> {
   @ApiProperty({ type: [RoleData], description: 'Roles del sistema' })
   data: RoleData[];
+}
+
+export class RoleResponse extends BaseResponse<RoleData> {
+  @ApiProperty({ type: RoleData })
+  data: RoleData;
 }
