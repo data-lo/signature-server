@@ -28,7 +28,7 @@ describe('CreateOrganizationUseCase', () => {
   let useCase: CreateOrganizationUseCase;
   let accountService: {
     findUserOrFail: jest.Mock;
-    saveOrganizationWithAdminAccount: jest.Mock;
+    saveOrganizationWithOwnerAccount: jest.Mock;
     appendAccountToCatalog: jest.Mock;
     toCatalogEntry: jest.Mock;
   };
@@ -37,7 +37,7 @@ describe('CreateOrganizationUseCase', () => {
   beforeEach(async () => {
     accountService = {
       findUserOrFail: jest.fn().mockResolvedValue(CURRENT_USER),
-      saveOrganizationWithAdminAccount: jest
+      saveOrganizationWithOwnerAccount: jest
         .fn()
         .mockResolvedValue(CREATED_ACCOUNT),
       appendAccountToCatalog: jest.fn().mockResolvedValue(undefined),
@@ -80,7 +80,7 @@ describe('CreateOrganizationUseCase', () => {
         data: CATALOG_ENTRY,
       });
       expect(
-        accountService.saveOrganizationWithAdminAccount,
+        accountService.saveOrganizationWithOwnerAccount,
       ).toHaveBeenCalledWith(CURRENT_USER, DTO);
     });
 
@@ -111,7 +111,7 @@ describe('CreateOrganizationUseCase', () => {
 
       await expect(create()).rejects.toThrow(ForbiddenException);
       expect(
-        accountService.saveOrganizationWithAdminAccount,
+        accountService.saveOrganizationWithOwnerAccount,
       ).not.toHaveBeenCalled();
       expect(accountService.appendAccountToCatalog).not.toHaveBeenCalled();
     });
@@ -127,7 +127,7 @@ describe('CreateOrganizationUseCase', () => {
       ).rejects.toThrow(MissingActiveAccountException);
       expect(accountMemberService.assertIsActiveMember).not.toHaveBeenCalled();
       expect(
-        accountService.saveOrganizationWithAdminAccount,
+        accountService.saveOrganizationWithOwnerAccount,
       ).not.toHaveBeenCalled();
     });
   });

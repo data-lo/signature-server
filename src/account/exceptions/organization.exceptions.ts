@@ -4,10 +4,10 @@ import {
 } from '@nestjs/common';
 
 /**
- * No se pudo dejar al creador como administrador de la organización que estaba creando.
+ * No se pudo dejar al creador como propietario de la organización que estaba creando.
  *
  * La causa que se ha visto en la práctica es el RBAC sin sembrar: `findSystemRoleByName` no
- * encuentra el rol de sistema ADMIN y responde con instrucciones de operación ("corre
+ * encuentra el rol de sistema OWNER y responde con instrucciones de operación ("corre
  * npm run seed:roles"), un mensaje que no le sirve de nada a quien está llenando el formulario
  * y que además cuenta cómo está montado el sistema por dentro.
  *
@@ -18,13 +18,13 @@ import {
  *
  * @example
  * ```ts
- * throw new OrganizationAdminAssignmentFailedException();
+ * throw new OrganizationOwnerAssignmentFailedException();
  * ```
  */
-export class OrganizationAdminAssignmentFailedException extends InternalServerErrorException {
+export class OrganizationOwnerAssignmentFailedException extends InternalServerErrorException {
   constructor() {
     super(
-      'No se pudo asignar al administrador de la organización, así que no se creó. Vuelve a intentarlo.',
+      'No se pudo asignar al propietario de la organización, así que no se creó. Vuelve a intentarlo.',
     );
   }
 }

@@ -162,6 +162,7 @@ async function main() {
   console.log('Conectado a la base de datos.');
 
   console.log('Creando/verificando roles del sistema...');
+  const ownerRole = await upsertRole(dataSource, SYSTEM_ROLE_NAME_ENUM.OWNER);
   const adminRole = await upsertRole(dataSource, SYSTEM_ROLE_NAME_ENUM.ADMIN);
   const memberRole = await upsertRole(dataSource, SYSTEM_ROLE_NAME_ENUM.MEMBER);
 
@@ -179,7 +180,7 @@ async function main() {
 
   console.log('Creando/verificando permissions y role_permissions...');
 
-  // ADMIN: todas las acciones sobre todos los recursos.
+  // OWNER y ADMIN: todas las acciones sobre todos los recursos.
   for (const resource of resources.values()) {
     for (const action of actions.values()) {
       const permission = await upsertPermission(
@@ -188,6 +189,7 @@ async function main() {
         action,
         PERMISSION_SCOPE_ENUM.ANY,
       );
+      await upsertRolePermission(dataSource, ownerRole, permission);
       await upsertRolePermission(dataSource, adminRole, permission);
     }
   }

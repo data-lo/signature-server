@@ -134,6 +134,10 @@ export const STATIC_PERMISSION_CATALOG: Record<
 /**
  * Qué permisos del catálogo trae cada rol de sistema de fábrica.
  *
+ * OWNER y ADMIN traen el catálogo entero: son el mismo conjunto de capacidades, y lo que los
+ * separa no es qué pueden hacer sino de dónde viene el rol — OWNER se asigna solo al crear la
+ * cuenta y ADMIN lo otorga el propietario a un miembro (ver `SYSTEM_ROLE_NAME_ENUM`).
+ *
  * MEMBER se queda a propósito sin lectura de toda la organización, sin envío de solicitudes, sin
  * aprobación y sin invitación: son las cuatro capacidades que separan a un administrador de un
  * miembro raso. Un ADMIN que quiera dárselas a alguien concreto necesitará un rol custom de
@@ -143,6 +147,7 @@ export const STATIC_ROLE_PERMISSION_MATRIX: Record<
   SYSTEM_ROLE_NAME_ENUM,
   STATIC_PERMISSION_KEY_ENUM[]
 > = {
+  [SYSTEM_ROLE_NAME_ENUM.OWNER]: Object.values(STATIC_PERMISSION_KEY_ENUM),
   [SYSTEM_ROLE_NAME_ENUM.ADMIN]: Object.values(STATIC_PERMISSION_KEY_ENUM),
   [SYSTEM_ROLE_NAME_ENUM.MEMBER]: [
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE,
