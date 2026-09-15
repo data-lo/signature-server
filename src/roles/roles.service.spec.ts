@@ -363,6 +363,11 @@ describe('RolesService', () => {
         action: 'INVITE',
         scope: 'ANY',
       },
+      [STATIC_PERMISSION_KEY_ENUM.MEMBER_DELETE]: {
+        resource: 'MEMBER',
+        action: 'DELETE',
+        scope: 'ANY',
+      },
     };
     const { resource, action, scope } = definitions[key];
 
