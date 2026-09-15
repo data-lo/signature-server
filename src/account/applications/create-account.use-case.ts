@@ -19,6 +19,9 @@ import { AccountData } from '../interfaces/response/account-response';
  * A diferencia de `CreateOrganizationUseCase`, acá la organización y la cuenta no van en una
  * transacción: es el comportamiento que ya tenía este endpoint y cambiarlo queda fuera de esta
  * refactorización.
+ *
+ * Quien crea la cuenta nace con el rol de sistema OWNER, igual que en el registro y en el alta
+ * de organización: es el propietario, no un administrador más de los que él pueda nombrar.
  */
 @Injectable()
 export class CreateAccountUseCase {
@@ -33,8 +36,8 @@ export class CreateAccountUseCase {
   ): Promise<BaseResponse<AccountData>> {
     const currentUser = await this.accountService.findUserOrFail(currentUserId);
 
-    const adminRole = await this.rolesService.findSystemRoleByName(
-      SYSTEM_ROLE_NAME_ENUM.ADMIN,
+    const ownerRole = await this.rolesService.findSystemRoleByName(
+      SYSTEM_ROLE_NAME_ENUM.OWNER,
     );
 
     let organizationId: string | null = null;
@@ -54,7 +57,7 @@ export class CreateAccountUseCase {
       userId: currentUserId,
       accountType: createAccountDto.type,
       organizationId,
-      roleId: adminRole.id,
+      roleId: ownerRole.id,
       user: currentUser,
     });
 

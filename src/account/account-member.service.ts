@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 // DTOs
 import { CreateAccountMemberDto } from './dto/create-account-member.dto';
@@ -40,7 +40,7 @@ import { OrganizationMemberData } from './interfaces/response/account-member-res
  * migración ER-V2, Fase 5) esto ya no es una entidad separada: una "membresía" es una fila más
  * de `accounts`, filtrada por `organizationId`. Este servicio queda enfocado en el flujo de
  * gestión explícita de acceso (otorgar/listar/actualizar/revocar), separado del flujo
- * transaccional de creación (`AccountService.saveOrganizationWithAdminAccount`/
+ * transaccional de creación (`AccountService.saveOrganizationWithOwnerAccount`/
  * `createDefaultPersonalAccount`).
  *
  * Los flujos de cada endpoint viven en `applications/`; acá sólo están las piezas que comparten.
@@ -410,26 +410,39 @@ export class AccountMemberService {
 
   /**
    * Protección del último administrador (ver historia [STORY] Gestión de Miembros, sección
-   * "Reglas de Negocio y Seguridad"): si `target` es hoy el único miembro ADMIN activo de la
-   * organización, ni degradar su rol ni desactivar su acceso está permitido — dejaría la
-   * organización sin nadie que pueda gestionarla. Se aplica sin importar si el llamador es el
-   * propio `target` u otro ADMIN, porque el riesgo es el mismo en ambos casos (el sistema no
-   * tiene un rol OWNER separado de ADMIN, así que "el último dueño" se traduce aquí como "el
-   * último ADMIN"). No-op si `target` no es ADMIN hoy (nada que proteger).
+   * "Reglas de Negocio y Seguridad"): si `target` es hoy el único miembro activo de la
+   * organización con un rol que permita gestionarla, ni degradar su rol ni desactivar su acceso
+   * está permitido — dejaría la organización sin nadie que pueda administrarla. Se aplica sin
+   * importar si el llamador es el propio `target` u otro administrador, porque el riesgo es el
+   * mismo en ambos casos.
+   *
+   * Cuenta OWNER y ADMIN juntos, no sólo ADMIN: desde
+   * `IntroduceOwnerSystemRole1784300000055` el creador de la organización nace OWNER, así que
+   * mirar únicamente ADMIN dejaría al propietario sin protección —podría degradarse a sí mismo
+   * y dejar la organización huérfana— y a la vez trataría como insustituible al único ADMIN de
+   * una organización que todavía tiene a su propietario dentro. No-op si `target` no tiene hoy
+   * ninguno de los dos roles (nada que proteger).
    */
   async assertNotLastAdmin(
     organizationId: string,
     target: AccountEntity,
   ): Promise<void> {
-    const adminRole = await this.rolesService.findSystemRoleByName(
-      SYSTEM_ROLE_NAME_ENUM.ADMIN,
-    );
-    if (target.roleId !== adminRole.id) {
+    const administratorRoles = await Promise.all([
+      this.rolesService.findSystemRoleByName(SYSTEM_ROLE_NAME_ENUM.OWNER),
+      this.rolesService.findSystemRoleByName(SYSTEM_ROLE_NAME_ENUM.ADMIN),
+    ]);
+    const administratorRoleIds = administratorRoles.map((role) => role.id);
+
+    if (!target.roleId || !administratorRoleIds.includes(target.roleId)) {
       return;
     }
 
     const activeAdminCount = await this.accountRepository.count({
-      where: { organizationId, isActive: true, roleId: adminRole.id },
+      where: {
+        organizationId,
+        isActive: true,
+        roleId: In(administratorRoleIds),
+      },
     });
 
     if (activeAdminCount <= 1) {
