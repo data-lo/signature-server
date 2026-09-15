@@ -28,19 +28,18 @@ import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 import { NotificationEventPayload } from '../notification-events.topics';
 
 /**
- * `notification.created`: manda el correo de "tienes un documento por firmar" al colaborador de
- * esa notificación, si es que le toca.
+ * `notification.created`: procesa la notificación creada para un colaborador y decide qué correo
+ * —si acaso alguno— le corresponde.
  *
- * Todas las condiciones de abajo son razones para NO mandar nada, y ninguna es un error: la
- * notificación se persiste para cualquier colaborador, y este caso de uso es el que decide a
- * quién de ellos le corresponde además un correo.
+ * SIGNER: manda "tienes un documento por firmar", condicionado al turno (ver
+ * `sendSignerNotification`). WATCHER: manda "te agregaron como observador" y, si el envío tiene
+ * éxito, lo marca NOTIFIED (historia "Actualizar estatus de watchers a NOTIFIED tras el envío de
+ * correo...") — ver `sendWatcherNotification`. Cualquier otro tipo (p. ej. REVIEWER) no recibe
+ * nada todavía.
  *
- *  - Sólo firmantes pendientes: a un observador no se le pide firmar, y a quien ya respondió
- *    tampoco.
- *  - En un documento no secuencial de firma simple no se manda nada: todos pueden firmar
- *    cuando quieran y el aviso sale por otra vía.
- *  - En un documento secuencial, sólo a quien está en turno: avisarle a los demás los mandaría
- *    a una pantalla donde todavía no pueden hacer nada.
+ * La guarda de `status !== PENDING` es compartida: para SIGNER evita reavisar a quien ya
+ * respondió, y para WATCHER es además la condición de "no reprocesar" — un WATCHER que ya está
+ * NOTIFIED nunca vuelve a pasar por aquí, ni si Kafka reentrega el mismo evento.
  */
 @Injectable()
 export class SendPendingSignatureNotificationUseCase {
@@ -80,14 +79,27 @@ export class SendPendingSignatureNotificationUseCase {
       where: { id: payload.collaboratorId },
       relations: { account: { user: true } },
     });
-    if (
-      !collaborator ||
-      collaborator.colaboratorType !== COLABORATOR_TYPE_ENUM.SIGNER ||
-      collaborator.status !== SIGNEE_STATUS_ENUM.PENDING
-    ) {
+    if (!collaborator || collaborator.status !== SIGNEE_STATUS_ENUM.PENDING) {
       return;
     }
 
+    if (collaborator.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER) {
+      await this.sendSignerNotification(collaborator, payload);
+      return;
+    }
+
+    if (collaborator.colaboratorType === COLABORATOR_TYPE_ENUM.WATCHER) {
+      await this.sendWatcherNotification(collaborator, payload);
+      return;
+    }
+
+    // REVIEWER (y cualquier tipo futuro): sin correo por ahora, sin cambios de comportamiento.
+  }
+
+  private async sendSignerNotification(
+    collaborator: CollaboratorEntity,
+    payload: NotificationEventPayload,
+  ): Promise<void> {
     const document = await this.documentRepository.findOne({
       where: { id: payload.documentId },
     });
@@ -147,6 +159,72 @@ export class SendPendingSignatureNotificationUseCase {
 
     this.logger.log(
       `Correo de notificación pendiente enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
+    );
+  }
+
+  /**
+   * El estatus sólo se mueve a NOTIFIED DESPUÉS de que el correo salga bien: si `sendEmail` lanza,
+   * el `try/catch` de `execute()` lo traga y el colaborador se queda en PENDING, listo para
+   * reprocesarse si Kafka reentrega el evento.
+   *
+   * El update es un claim atómico condicionado a `status: PENDING` —mismo patrón que
+   * `reject-document.use-case.ts` usa para el rechazo— y no una escritura plana: cierra la
+   * ventana de carrera de una entrega duplicada del mismo evento intentando notificar dos veces.
+   */
+  private async sendWatcherNotification(
+    collaborator: CollaboratorEntity,
+    payload: NotificationEventPayload,
+  ): Promise<void> {
+    const document = await this.documentRepository.findOne({
+      where: { id: payload.documentId },
+    });
+    if (!document) {
+      this.logger.warn(
+        `Documento ${payload.documentId} no encontrado al notificar al observador ${collaborator.id}`,
+      );
+      return;
+    }
+
+    const creator = await this.userRepository.findOne({
+      where: { id: document.createdBy },
+    });
+    if (!creator) {
+      this.logger.warn(
+        `Usuario creador ${document.createdBy} no encontrado al notificar al observador ${collaborator.id} del documento ${document.id}`,
+      );
+      return;
+    }
+
+    const recipientEmail = collaboratorEmail(collaborator);
+    if (!recipientEmail) {
+      this.logger.warn(
+        `No se pudo determinar el email para el colaborador ${collaborator.id}`,
+      );
+      return;
+    }
+
+    await this.emailService.sendDocumentWatcherAddedNotification(
+      recipientEmail,
+      collaboratorDisplayName(collaborator),
+      document.fileName,
+      `${creator.firstName ?? ''} ${creator.lastName ?? ''}`.trim() ||
+        creator.email,
+      creator.email,
+      buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
+    );
+
+    const claim = await this.collaboratorRepository.update(
+      { id: collaborator.id, status: SIGNEE_STATUS_ENUM.PENDING },
+      { status: SIGNEE_STATUS_ENUM.NOTIFIED },
+    );
+    if (claim.affected !== 1) {
+      this.logger.warn(
+        `El colaborador ${collaborator.id} ya no estaba PENDING al intentar marcarlo NOTIFIED (posible entrega duplicada del evento)`,
+      );
+    }
+
+    this.logger.log(
+      `Correo de observador enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
     );
   }
 }

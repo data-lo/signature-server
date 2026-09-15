@@ -9,4 +9,5 @@ export enum EmailSubject {
   REGISTRATION_OTP = 'Verifica tu correo',
   ORGANIZATION_INVITATION = 'Te invitaron a una organización',
   DOCUMENT_INVITATION = 'Te invitaron a firmar un documento',
+  DOCUMENT_WATCHER_ADDED = 'Te agregaron como observador de un documento',
 }
