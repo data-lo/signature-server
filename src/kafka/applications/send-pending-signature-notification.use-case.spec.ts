@@ -15,6 +15,7 @@ function createMockRepository() {
   return {
     findOne: jest.fn(),
     find: jest.fn(),
+    update: jest.fn(),
   };
 }
 
@@ -66,13 +67,19 @@ describe('NotificationEventsConsumer', () => {
     userRepository = createMockRepository();
     emailService = {
       sendDocumentPendingNotification: jest.fn().mockResolvedValue(undefined),
+      sendDocumentWatcherAddedNotification: jest
+        .fn()
+        .mockResolvedValue(undefined),
     };
 
     documentRepository.findOne.mockResolvedValue(buildDocument());
     userRepository.findOne.mockResolvedValue({
       id: 'creator-1',
       email: 'creador@correo.com',
+      firstName: 'Creador',
+      lastName: 'Uno',
     });
+    collaboratorRepository.update.mockResolvedValue({ affected: 1 });
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [NotificationEventsConsumer],
@@ -169,14 +176,82 @@ describe('NotificationEventsConsumer', () => {
     expect(emailService.sendDocumentPendingNotification).not.toHaveBeenCalled();
   });
 
-  it('no envía nada para un colaborador WATCHER', async () => {
+  it('no envía nada para un colaborador REVIEWER', async () => {
     collaboratorRepository.findOne.mockResolvedValue(
-      buildCollaborator({ colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER }),
+      buildCollaborator({ colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER }),
     );
 
     await consumer.handleCreated(payload);
 
     expect(emailService.sendDocumentPendingNotification).not.toHaveBeenCalled();
+    expect(
+      emailService.sendDocumentWatcherAddedNotification,
+    ).not.toHaveBeenCalled();
+    expect(collaboratorRepository.update).not.toHaveBeenCalled();
+  });
+
+  describe('colaborador WATCHER', () => {
+    function buildWatcher(overrides: Partial<CollaboratorEntity> = {}) {
+      return buildCollaborator({
+        colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+        email: 'espectador@correo.com',
+        firstName: 'Espectador',
+        lastName: 'Uno',
+        signatureType: null,
+        signingOrder: null,
+        ...overrides,
+      });
+    }
+
+    it('envía el correo de observador y lo marca NOTIFIED', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(buildWatcher());
+
+      await consumer.handleCreated(payload);
+
+      expect(
+        emailService.sendDocumentWatcherAddedNotification,
+      ).toHaveBeenCalledWith(
+        'espectador@correo.com',
+        'Espectador Uno',
+        'contrato.pdf',
+        'Creador Uno',
+        'creador@correo.com',
+        expect.stringContaining(
+          '/access-document?docId=doc-1&collabId=collaborator-1',
+        ),
+      );
+      expect(collaboratorRepository.update).toHaveBeenCalledWith(
+        { id: 'collaborator-1', status: SIGNEE_STATUS_ENUM.PENDING },
+        { status: SIGNEE_STATUS_ENUM.NOTIFIED },
+      );
+      expect(
+        emailService.sendDocumentPendingNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('ya NOTIFIED: no envía nada ni vuelve a actualizar', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildWatcher({ status: SIGNEE_STATUS_ENUM.NOTIFIED }),
+      );
+
+      await consumer.handleCreated(payload);
+
+      expect(
+        emailService.sendDocumentWatcherAddedNotification,
+      ).not.toHaveBeenCalled();
+      expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('si el correo falla, no lo marca NOTIFIED', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(buildWatcher());
+      emailService.sendDocumentWatcherAddedNotification.mockRejectedValue(
+        new Error('SendGrid caído'),
+      );
+
+      await expect(consumer.handleCreated(payload)).resolves.toBeUndefined();
+
+      expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    });
   });
 
   it('no envía nada si el colaborador ya no está PENDING', async () => {
