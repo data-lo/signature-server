@@ -11,7 +11,8 @@ const DOCUMENT_CREATE: RolePermissionData = {
   resource: 'DOCUMENT',
   action: 'CREATE',
   scope: 'ANY',
-  description: 'Crear documentos o borradores dentro de la organización activa.',
+  description:
+    'Crear documentos o borradores dentro de la organización activa.',
   isStaticCatalog: true,
 };
 
@@ -114,9 +115,11 @@ describe('GetSystemRolesUseCase', () => {
 
   /**
    * `organizationId` no viaja al cliente: el catálogo es de roles de sistema y exponer columnas
-   * internas del entity haría que cualquier cambio de esquema se filtrara a la API.
+   * internas del entity haría que cualquier cambio de esquema se filtrara a la API. `createdAt`
+   * sí viaja (historia "Reemplazar 'Permisos' por 'Roles y permisos'") — la pantalla nueva de
+   * roles de organización la usa, y no cuesta nada incluirla también aquí.
    */
-  it('no expone columnas del entity fuera de id/name/isSystemRole/permissions', async () => {
+  it('no expone columnas del entity fuera de id/name/isSystemRole/permissions/createdAt', async () => {
     rolesService.listSystemRoles.mockResolvedValue([
       {
         id: 'role-1',
@@ -130,6 +133,7 @@ describe('GetSystemRolesUseCase', () => {
     const [role] = (await useCase.execute()).data;
 
     expect(Object.keys(role).sort()).toEqual([
+      'createdAt',
       'id',
       'isSystemRole',
       'name',
