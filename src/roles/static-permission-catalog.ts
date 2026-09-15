@@ -33,6 +33,7 @@ export enum STATIC_PERMISSION_KEY_ENUM {
   DOCUMENT_SIGN_SELF = 'DOCUMENT.SIGN_SELF',
   DOCUMENT_APPROVE = 'DOCUMENT.APPROVE',
   MEMBER_INVITE = 'MEMBER.INVITE',
+  MEMBER_DELETE = 'MEMBER.DELETE',
 }
 
 /** Cómo se materializa una clave del catálogo en una fila de `permissions`. */
@@ -58,6 +59,7 @@ export const STATIC_CATALOG_RESOURCES: Record<
 export const STATIC_CATALOG_ACTIONS: Record<
   | ACTION_KEY_ENUM.CREATE
   | ACTION_KEY_ENUM.READ
+  | ACTION_KEY_ENUM.DELETE
   | ACTION_KEY_ENUM.SEND_SIGNATURE_REQUEST
   | ACTION_KEY_ENUM.SIGN
   | ACTION_KEY_ENUM.APPROVE
@@ -66,6 +68,8 @@ export const STATIC_CATALOG_ACTIONS: Record<
 > = {
   [ACTION_KEY_ENUM.CREATE]: 'Crear un recurso nuevo',
   [ACTION_KEY_ENUM.READ]: 'Consultar un recurso existente',
+  // Texto idéntico al que ya sembró `seed:roles`: así la fila existente se reutiliza tal cual.
+  [ACTION_KEY_ENUM.DELETE]: 'Eliminar un recurso existente',
   [ACTION_KEY_ENUM.SEND_SIGNATURE_REQUEST]: 'Enviar una solicitud de firma',
   [ACTION_KEY_ENUM.SIGN]: 'Firmar un documento',
   [ACTION_KEY_ENUM.APPROVE]: 'Aprobar o autorizar un recurso',
@@ -73,7 +77,7 @@ export const STATIC_CATALOG_ACTIONS: Record<
 };
 
 /**
- * Los siete permisos del catálogo.
+ * Los ocho permisos del catálogo.
  *
  * `READ_OWN` y `READ_ORGANIZATION` comparten resource+action y se distinguen SÓLO por el scope
  * (`OWN` vs `ORGANIZATION`), que es justamente para lo que existe esa columna. Ninguno de los dos
@@ -129,10 +133,22 @@ export const STATIC_PERMISSION_CATALOG: Record<
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'Invitar miembros a la organización activa.',
   },
+  [STATIC_PERMISSION_KEY_ENUM.MEMBER_DELETE]: {
+    resource: RESOURCE_KEY_ENUM.MEMBER,
+    action: ACTION_KEY_ENUM.DELETE,
+    scope: PERMISSION_SCOPE_ENUM.ANY,
+    description: 'Eliminar miembros de la organización activa.',
+  },
 };
 
 /**
  * Qué permisos del catálogo trae cada rol de sistema de fábrica.
+ *
+ * OWNER es el único que trae `MEMBER.DELETE`: dar de baja a alguien de la organización es la
+ * capacidad que la historia reserva a quien es dueño de la cuenta. ADMIN trae todo lo demás
+ * —invita, lee toda la organización, envía solicitudes y aprueba—, así que la diferencia entre
+ * los dos roles es exactamente esa fila. Por eso ADMIN se enumera en vez de escribirse como
+ * `Object.values(...)`: un permiso nuevo del catálogo no debe colársele solo.
  *
  * MEMBER se queda a propósito sin lectura de toda la organización, sin envío de solicitudes, sin
  * aprobación y sin invitación: son las cuatro capacidades que separan a un administrador de un
@@ -143,7 +159,16 @@ export const STATIC_ROLE_PERMISSION_MATRIX: Record<
   SYSTEM_ROLE_NAME_ENUM,
   STATIC_PERMISSION_KEY_ENUM[]
 > = {
-  [SYSTEM_ROLE_NAME_ENUM.ADMIN]: Object.values(STATIC_PERMISSION_KEY_ENUM),
+  [SYSTEM_ROLE_NAME_ENUM.OWNER]: Object.values(STATIC_PERMISSION_KEY_ENUM),
+  [SYSTEM_ROLE_NAME_ENUM.ADMIN]: [
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE,
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN,
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_ORGANIZATION,
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST,
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF,
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE,
+    STATIC_PERMISSION_KEY_ENUM.MEMBER_INVITE,
+  ],
   [SYSTEM_ROLE_NAME_ENUM.MEMBER]: [
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE,
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN,
