@@ -11,7 +11,6 @@ import * as request from 'supertest';
 import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
 import { PaymentsController } from './../src/payments/payments.controller';
 import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-public-stripe-plans.use-case';
-import { GetSubscriptionStateUseCase } from './../src/payments/applications/get-subscription-state.use-case';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
 import { GetBillingAccessUseCase } from './../src/billing/entitlements/get-billing-access.use-case';
 import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
@@ -167,10 +166,6 @@ describe('Estado de facturación (e2e)', () => {
         {
           provide: GetPublicStripePlansUseCase,
           useValue: { execute: jest.fn().mockResolvedValue([]) },
-        },
-        {
-          provide: GetSubscriptionStateUseCase,
-          useValue: { execute: jest.fn().mockResolvedValue(null) },
         },
         {
           provide: CreateSubscriptionCheckoutUseCase,

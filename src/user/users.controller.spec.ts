@@ -5,7 +5,6 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availability.use-case';
 import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
 import { UpdateMyPersonalInformationUseCase } from './applications/update-my-personal-information.use-case';
-import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
 import { ChangeMyPasswordUseCase } from './applications/change-my-password.use-case';
 
 describe('UsersController', () => {
@@ -14,7 +13,6 @@ describe('UsersController', () => {
   let getMyProfile: { execute: jest.Mock };
   let updateMyPersonalInformation: { execute: jest.Mock };
   let changeMyPassword: { execute: jest.Mock };
-  let completeMyOnboarding: { execute: jest.Mock };
   let uploadSignatureImage: { execute: jest.Mock };
 
   const user: JwtPayload = {
@@ -30,7 +28,6 @@ describe('UsersController', () => {
     getMyProfile = { execute: jest.fn() };
     updateMyPersonalInformation = { execute: jest.fn() };
     changeMyPassword = { execute: jest.fn() };
-    completeMyOnboarding = { execute: jest.fn() };
     uploadSignatureImage = { execute: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -46,10 +43,6 @@ describe('UsersController', () => {
           useValue: updateMyPersonalInformation,
         },
         { provide: ChangeMyPasswordUseCase, useValue: changeMyPassword },
-        {
-          provide: CompleteMyOnboardingUseCase,
-          useValue: completeMyOnboarding,
-        },
         {
           provide: UploadSignatureImageUseCase,
           useValue: uploadSignatureImage,
@@ -111,13 +104,6 @@ describe('UsersController', () => {
       files,
     );
     expect(result).toBe(uploadResult);
-  });
-
-  it('updateStatus delega en CompleteMyOnboardingUseCase con el userId del JWT', () => {
-    const dto = { isConfigured: true };
-    controller.updateStatus(user, dto);
-
-    expect(completeMyOnboarding.execute).toHaveBeenCalledWith('user-1', dto);
   });
 
   it('checkRfc delega en CheckRfcAvailabilityUseCase con el rfc del query param', () => {

@@ -125,7 +125,6 @@ describe('CreateSubscriptionCheckoutUseCase', () => {
           billingProfileId: 'profile-1',
           planType: 'pro',
           catalogPriceId: 'catalog-price-1',
-          accountId: 'account-1',
         },
       }),
     );

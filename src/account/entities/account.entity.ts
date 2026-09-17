@@ -21,7 +21,7 @@ import { RoleEntity } from 'src/roles/entities/role.entity';
  * Para cuentas PERSONAL no hay ambigüedad (1 usuario = 1 miembro = 1 fila = el tenant). Para
  * ORGANIZATION, cada miembro tiene su propia fila aquí, todas compartiendo el mismo
  * `organizationId` → una fila en `OrganizationEntity` (la identidad real del tenant).
- * `Document.organizationId`/`AccountSubscription.organizationId` son la clave real de
+ * `Document.organizationId`/`BillingProfile.organizationId` son la clave real de
  * aislamiento multi-tenant para contexto de organización; para contexto personal, el `id` de
  * esta fila (única por usuario) sigue sirviendo, ya que un miembro personal siempre es 1:1.
  *
@@ -75,14 +75,6 @@ export class AccountEntity {
   @ManyToOne(() => RoleEntity, { nullable: true })
   @JoinColumn({ name: 'role_id' })
   role: RoleEntity | null;
-
-  /**
-   * Referencia a AccountSubscriptionEntity (ver D2 del plan) — sin FK en base de datos a
-   * propósito: account_subscriptions.account_id ya referencia a accounts.id, y una FK en ambos
-   * sentidos crearía una dependencia circular. Se resuelve en aplicación, no en el schema.
-   */
-  @Column({ name: 'membership_id', nullable: true })
-  membershipId: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
