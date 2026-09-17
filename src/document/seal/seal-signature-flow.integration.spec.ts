@@ -367,7 +367,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
                 certificatePem:
                   '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
               },
-              // Evidencia OCSP de la consulta al SAT (`OscpService.verifyRevokedOCSP`): viaja
+              // Evidencia OCSP de la consulta al SAT (`CertificateValidationApiService.validateCertificate`): viaja
               // dentro del payload de sellado, así que sin ella el flujo ni siquiera llega a
               // Seal Service. Recién firmado, `verifiedAt` es un `Date`.
               ocspEvidence: {

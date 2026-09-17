@@ -293,7 +293,7 @@ describe('casos de uso de documentos', () => {
           certificateNumber: '30001000000400002434',
           certificatePem: '-----BEGIN CERTIFICATE-----...',
         },
-        // Evidencia de la consulta OCSP al SAT (`OscpService`): forma parte del payload de
+        // Evidencia de la consulta OCSP al SAT (`CertificateValidationApiService`): forma parte del payload de
         // sellado, así que sin ella la firma se registra pero el sellado nunca sale.
         ocspEvidence: {
           status: 'good',
@@ -933,7 +933,9 @@ describe('casos de uso de documentos', () => {
         const viewConditions = qb.andWhere.mock.calls
           .map(([condition]: [unknown]) => condition)
           .filter((condition: unknown) => typeof condition === 'string');
-        expect(viewConditions).not.toContain('document.status = :pendingStatus');
+        expect(viewConditions).not.toContain(
+          'document.status = :pendingStatus',
+        );
         expect(viewConditions).not.toContain('document.createdBy = :userId');
         expect(allConditions(qb)).toContain('document.accountId = :accountId');
       });
