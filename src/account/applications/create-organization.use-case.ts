@@ -12,7 +12,7 @@ import { AccountData } from '../interfaces/response/account-response';
  * `POST /api/v1/organizations`: crea una organización y deja a su creador dentro como
  * administrador.
  *
- * El alta va en una transacción (ver `saveOrganizationWithAdminAccount`); el refresco del
+ * El alta va en una transacción (ver `saveOrganizationWithOwnerAccount`); el refresco del
  * catálogo de Redis queda fuera de ella a propósito: es un cache y su fallo no debe deshacer una
  * organización que ya se creó bien.
  *
@@ -72,7 +72,7 @@ export class CreateOrganizationUseCase {
     const currentUser = await this.accountService.findUserOrFail(userId);
 
     const fullAccount =
-      await this.accountService.saveOrganizationWithAdminAccount(
+      await this.accountService.saveOrganizationWithOwnerAccount(
         currentUser,
         dto,
       );

@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ForbiddenException } from '@nestjs/common';
+import { In } from 'typeorm';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { AccountMemberService } from './account-member.service';
 import { AccountEntity } from './entities/account.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
@@ -9,6 +10,7 @@ import { RolesService } from 'src/roles/roles.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { DuplicateOrganizationMembershipException } from './exceptions/organization.exceptions';
 
+const OWNER_ROLE = { id: 'owner-role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER };
 const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
 const MEMBER_ROLE = { id: 'member-role-1', name: SYSTEM_ROLE_NAME_ENUM.MEMBER };
 
@@ -37,11 +39,17 @@ describe('AccountMemberService', () => {
   beforeEach(async () => {
     accountRepository = createMockRepository();
     userRepository = createMockRepository();
-    accountRepository.count.mockResolvedValue(2); // por defecto: hay más de un ADMIN activo, nada que proteger
+    accountRepository.count.mockResolvedValue(2); // por defecto: hay más de un administrador activo, nada que proteger
     accountService = { removeAccountFromCatalog: jest.fn() };
     rolesService = {
       findByIdOrFail: jest.fn().mockResolvedValue(MEMBER_ROLE),
-      findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
+      // Resuelve por nombre: `assertNotLastAdmin` pide OWNER y ADMIN, y devolver siempre el
+      // mismo rol escondería que los cuenta a los dos.
+      findSystemRoleByName: jest
+        .fn()
+        .mockImplementation(async (name: SYSTEM_ROLE_NAME_ENUM) =>
+          name === SYSTEM_ROLE_NAME_ENUM.OWNER ? OWNER_ROLE : ADMIN_ROLE,
+        ),
       // Espeja el seed real: ADMIN tiene los 12 permisos (incluye todo ORGANIZATION),
       // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
       assertHasPermission: jest
@@ -84,6 +92,69 @@ describe('AccountMemberService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  /**
+   * Protección del último administrador. Desde que el creador de la cuenta nace con el rol
+   * OWNER (ver `IntroduceOwnerSystemRole1784300000055`), "el último que puede administrar" ya no
+   * es "el último ADMIN": OWNER y ADMIN se cuentan juntos.
+   */
+  describe('assertNotLastAdmin', () => {
+    const MEMBER = {
+      id: 'account-2',
+      organizationId: 'org-1',
+      roleId: MEMBER_ROLE.id,
+    } as AccountEntity;
+    const OWNER = {
+      id: 'account-1',
+      organizationId: 'org-1',
+      roleId: OWNER_ROLE.id,
+    } as AccountEntity;
+    const ADMIN = {
+      id: 'account-3',
+      organizationId: 'org-1',
+      roleId: ADMIN_ROLE.id,
+    } as AccountEntity;
+
+    it('no comprueba nada si el miembro no administra la organización', async () => {
+      await expect(
+        service.assertNotLastAdmin('org-1', MEMBER),
+      ).resolves.toBeUndefined();
+
+      expect(accountRepository.count).not.toHaveBeenCalled();
+    });
+
+    it('cuenta juntos a los OWNER y a los ADMIN activos de la organización', async () => {
+      await service.assertNotLastAdmin('org-1', OWNER);
+
+      expect(accountRepository.count).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          isActive: true,
+          roleId: In([OWNER_ROLE.id, ADMIN_ROLE.id]),
+        },
+      });
+    });
+
+    it('impide degradar al propietario si es el único administrador activo', async () => {
+      accountRepository.count.mockResolvedValue(1);
+
+      await expect(service.assertNotLastAdmin('org-1', OWNER)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    /**
+     * El ADMIN nombrado por el propietario sí se puede degradar mientras el propietario siga
+     * activo: la organización no se queda sin nadie que la gestione.
+     */
+    it('deja degradar a un ADMIN si el propietario sigue activo', async () => {
+      accountRepository.count.mockResolvedValue(2);
+
+      await expect(
+        service.assertNotLastAdmin('org-1', ADMIN),
+      ).resolves.toBeUndefined();
+    });
   });
 
   describe('assertIsActiveMember', () => {

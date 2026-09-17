@@ -233,6 +233,7 @@ function grantedPermissionsOf(
     .sort();
 }
 
+/** OWNER y ADMIN comparten matriz: el catálogo entero (ver `STATIC_ROLE_PERMISSION_MATRIX`). */
 const ADMIN_MATRIX = [
   'DOCUMENT.APPROVE.ANY',
   'DOCUMENT.CREATE.ANY',
@@ -263,11 +264,11 @@ describe('syncStaticPermissionCatalog', () => {
       silentLogger,
     );
 
-    expect(summary.roles.created).toBe(2);
+    expect(summary.roles.created).toBe(3);
     expect(summary.resources.created).toBe(2);
     expect(summary.actions.created).toBe(6);
     expect(summary.permissions.created).toBe(7);
-    expect(summary.grants.created).toBe(10);
+    expect(summary.grants.created).toBe(17);
 
     expect(
       repositories.resources.rows.map((resource) => resource.key).sort(),
@@ -282,6 +283,7 @@ describe('syncStaticPermissionCatalog', () => {
       'SEND_SIGNATURE_REQUEST',
       'SIGN',
     ]);
+    expect(grantedPermissionsOf(repositories, 'OWNER')).toEqual(ADMIN_MATRIX);
     expect(grantedPermissionsOf(repositories, 'ADMIN')).toEqual(ADMIN_MATRIX);
     expect(grantedPermissionsOf(repositories, 'MEMBER')).toEqual(MEMBER_MATRIX);
   });
@@ -329,9 +331,9 @@ describe('syncStaticPermissionCatalog', () => {
       expect(summary.grants.created).toBe(0);
       expect(summary.resources.updated).toBe(0);
       expect(summary.actions.updated).toBe(0);
-      expect(summary.roles.reused).toBe(2);
+      expect(summary.roles.reused).toBe(3);
       expect(summary.permissions.reused).toBe(7);
-      expect(summary.grants.reused).toBe(10);
+      expect(summary.grants.reused).toBe(17);
     }
 
     expect({
@@ -344,6 +346,10 @@ describe('syncStaticPermissionCatalog', () => {
     expect(grantedPermissionsOf(repositories, 'MEMBER')).toEqual(MEMBER_MATRIX);
   });
 
+  /**
+   * ADMIN y MEMBER conservan su `id`: reasignarlo dejaría huérfana a toda membresía que ya
+   * apunte a ellos. OWNER sí se crea, porque la base que dejó `seed:roles` es anterior a él.
+   */
   it('reutiliza los roles de sistema existentes sin alterar su identidad', async () => {
     const repositories = createRepositories();
     seedLegacyGrid(repositories);
@@ -353,11 +359,11 @@ describe('syncStaticPermissionCatalog', () => {
       silentLogger,
     );
 
-    expect(summary.roles.created).toBe(0);
+    expect(summary.roles.created).toBe(1);
     expect(summary.roles.reused).toBe(2);
     expect(
       repositories.roles.rows.map((role) => `${role.id}:${role.name}`).sort(),
-    ).toEqual(['role-admin:ADMIN', 'role-member:MEMBER']);
+    ).toEqual(['role-1:OWNER', 'role-admin:ADMIN', 'role-member:MEMBER']);
   });
 
   it('preserva permisos, recursos y asignaciones ajenos al catálogo', async () => {
