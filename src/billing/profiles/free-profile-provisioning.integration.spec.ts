@@ -211,7 +211,7 @@ describe('Alta del perfil Free (integración)', () => {
   }
 
   async function altaDeOrganizacion() {
-    return accountService.saveOrganizationWithAdminAccount(USER, {
+    return accountService.saveOrganizationWithOwnerAccount(USER, {
       organizationName: 'Acme',
     } as never);
   }

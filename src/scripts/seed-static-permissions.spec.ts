@@ -233,6 +233,7 @@ function grantedPermissionsOf(
     .sort();
 }
 
+/** Todo el catálogo menos `MEMBER.DELETE` (ver `STATIC_ROLE_PERMISSION_MATRIX`). */
 const ADMIN_MATRIX = [
   'DOCUMENT.APPROVE.ANY',
   'DOCUMENT.CREATE.ANY',
@@ -369,6 +370,10 @@ describe('syncStaticPermissionCatalog', () => {
     expect(grantedPermissionsOf(repositories, 'MEMBER')).toEqual(MEMBER_MATRIX);
   });
 
+  /**
+   * ADMIN y MEMBER conservan su `id`: reasignarlo dejaría huérfana a toda membresía que ya
+   * apunte a ellos. OWNER sí se crea, porque la base que dejó `seed:roles` es anterior a él.
+   */
   it('reutiliza los roles de sistema existentes sin alterar su identidad', async () => {
     const repositories = createRepositories();
     seedLegacyGrid(repositories);

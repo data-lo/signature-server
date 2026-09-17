@@ -23,6 +23,7 @@ import { UpdateAccountUseCase } from './update-account.use-case';
 import { GetAccountUseCase } from './get-account.use-case';
 import { InviteOrganizationMemberUseCase } from './invite-organization-member.use-case';
 
+const OWNER_ROLE = { id: 'owner-role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER };
 const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
 const CURRENT_USER = {
   id: 'user-1',
@@ -89,14 +90,19 @@ describe('casos de uso de cuentas y organizaciones', () => {
     dataSource = { createQueryRunner: jest.fn(() => queryRunner) };
     redisService = { set: jest.fn(), get: jest.fn() };
     rolesService = {
-      findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
+      findSystemRoleByName: jest
+        .fn()
+        .mockImplementation(async (name: SYSTEM_ROLE_NAME_ENUM) =>
+          name === SYSTEM_ROLE_NAME_ENUM.OWNER ? OWNER_ROLE : ADMIN_ROLE,
+        ),
       findByIdOrFail: jest.fn().mockResolvedValue({ id: 'member-role-1' }),
-      // Espeja el seed real: ADMIN tiene los 12 permisos (incluye todo ORGANIZATION),
+      // Espeja el seed real: OWNER y ADMIN tienen los 12 permisos (incluye todo ORGANIZATION),
       // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
       hasPermission: jest
         .fn()
         .mockImplementation(
-          async (roleId: string | null | undefined) => roleId === ADMIN_ROLE.id,
+          async (roleId: string | null | undefined) =>
+            roleId === OWNER_ROLE.id || roleId === ADMIN_ROLE.id,
         ),
     };
     organizationInvitationService = {
@@ -167,14 +173,14 @@ describe('casos de uso de cuentas y organizaciones', () => {
         id: 'generated-id',
         accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
         organizationId: 'generated-id-org',
-        roleId: 'admin-role-1',
+        roleId: 'owner-role-1',
         isActive: true,
         createdAt: new Date('2026-01-01'),
         organization: { name: 'Acme Corp S.A. de C.V.' },
       });
     }
 
-    it('crea Organization + Account(rol ADMIN) dentro de una transaccion y refresca el catalogo en Redis', async () => {
+    it('crea Organization + Account(rol OWNER) dentro de una transaccion y refresca el catalogo en Redis', async () => {
       mockFullAccountLookup();
       redisService.get.mockResolvedValue(null);
 
@@ -191,7 +197,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
 
       const accountSaveCall = queryRunner.manager.save.mock.calls[1][0];
-      expect(accountSaveCall.roleId).toBe('admin-role-1');
+      expect(accountSaveCall.roleId).toBe('owner-role-1');
       expect(accountSaveCall.userId).toBe('user-1');
       expect(accountSaveCall.isActive).toBe(true);
       expect(accountSaveCall.email).toBe('user1@empresa.com');
@@ -199,16 +205,16 @@ describe('casos de uso de cuentas y organizaciones', () => {
 
       const [, cachedValue] = redisService.set.mock.calls[0];
       const cachedCatalog = JSON.parse(cachedValue);
-      expect(cachedCatalog[0].roleId).toBe('admin-role-1');
+      expect(cachedCatalog[0].roleId).toBe('owner-role-1');
       expect(cachedCatalog[0].isActive).toBe(true);
       expect(result.success).toBe(true);
-      expect(result.data.roleId).toBe('admin-role-1');
+      expect(result.data.roleId).toBe('owner-role-1');
       expect(result.data.isActive).toBe(true);
     });
 
     /**
      * La organización nace sin estado comercial: ni `billing_profile`, ni plan Free, ni créditos
-     * de bienvenida. La transacción escribe sólo la organización y la membresía de su ADMIN.
+     * de bienvenida. La transacción escribe sólo la organización y la membresía de su OWNER.
      */
     it('no aprovisiona perfil de facturación ni créditos para la organización nueva', async () => {
       mockFullAccountLookup();

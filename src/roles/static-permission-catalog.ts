@@ -146,8 +146,10 @@ export const STATIC_PERMISSION_CATALOG: Record<
  *
  * OWNER es el único que trae `MEMBER.DELETE`: dar de baja a alguien de la organización es la
  * capacidad que la historia reserva a quien es dueño de la cuenta. ADMIN trae todo lo demás
- * —invita, lee toda la organización, envía solicitudes y aprueba—, así que la diferencia entre
- * los dos roles es exactamente esa fila. Por eso ADMIN se enumera en vez de escribirse como
+ * —invita, lee toda la organización, envía solicitudes y aprueba—, así que la diferencia de
+ * permisos entre los dos roles es exactamente esa fila. Lo otro que los separa es de dónde viene
+ * el rol: OWNER se asigna solo al crear la cuenta y ADMIN lo otorga el propietario a un miembro
+ * (ver `SYSTEM_ROLE_NAME_ENUM`). ADMIN se enumera en vez de escribirse como
  * `Object.values(...)`: un permiso nuevo del catálogo no debe colársele solo.
  *
  * MEMBER se queda a propósito sin lectura de toda la organización, sin envío de solicitudes, sin
