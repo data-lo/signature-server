@@ -5,6 +5,15 @@ import { PermissionEntity } from '../roles/entities/permission.entity';
 import { ResourceEntity } from '../roles/entities/resource.entity';
 import { RolePermissionEntity } from '../roles/entities/role-permission.entity';
 import { RoleEntity } from '../roles/entities/role.entity';
+import { SYSTEM_ROLE_NAME_ENUM } from '../roles/enums/system-role-name.enum';
+import { buildPermissionKey } from '../roles/permission-catalog.util';
+import {
+  STATIC_CATALOG_ACTIONS,
+  STATIC_CATALOG_RESOURCES,
+  STATIC_PERMISSION_CATALOG,
+  STATIC_PERMISSION_KEY_ENUM,
+  STATIC_ROLE_PERMISSION_MATRIX,
+} from '../roles/static-permission-catalog';
 import {
   syncStaticPermissionCatalog,
   type CatalogRepository,
@@ -233,25 +242,33 @@ function grantedPermissionsOf(
     .sort();
 }
 
-/** Todo el catálogo menos `MEMBER.DELETE` (ver `STATIC_ROLE_PERMISSION_MATRIX`). */
-const ADMIN_MATRIX = [
-  'DOCUMENT.APPROVE.ANY',
-  'DOCUMENT.CREATE.ANY',
-  'DOCUMENT.READ.ORGANIZATION',
-  'DOCUMENT.READ.OWN',
-  'DOCUMENT.SEND_SIGNATURE_REQUEST.ANY',
-  'DOCUMENT.SIGN.SELF',
-  'MEMBER.INVITE.ANY',
-];
+/**
+ * La matriz esperada de un rol, derivada del catálogo: `RECURSO.ACCION.ALCANCE` ordenado.
+ *
+ * Se calcula en vez de escribirse a mano para que estas pruebas no haya que reescribirlas cada vez
+ * que el catálogo crece. Lo que sí se fija a mano —y es lo que de verdad se comprueba— es cuántos
+ * permisos tiene cada rol y cuáles NO tiene (ver las pruebas de abajo).
+ */
+function expectedMatrixOf(role: SYSTEM_ROLE_NAME_ENUM): string[] {
+  return STATIC_ROLE_PERMISSION_MATRIX[role]
+    .map((key) => {
+      const { resource, action, scope } = STATIC_PERMISSION_CATALOG[key];
+      return `${resource}.${action}.${scope}`;
+    })
+    .sort();
+}
 
-/** Lo mismo que ADMIN más `MEMBER.DELETE`, la única capacidad reservada al dueño de la cuenta. */
-const OWNER_MATRIX = [...ADMIN_MATRIX, 'MEMBER.DELETE.ANY'].sort();
+const OWNER_MATRIX = expectedMatrixOf(SYSTEM_ROLE_NAME_ENUM.OWNER);
+const ADMIN_MATRIX = expectedMatrixOf(SYSTEM_ROLE_NAME_ENUM.ADMIN);
+const MEMBER_MATRIX = expectedMatrixOf(SYSTEM_ROLE_NAME_ENUM.MEMBER);
 
-const MEMBER_MATRIX = [
-  'DOCUMENT.CREATE.ANY',
-  'DOCUMENT.READ.OWN',
-  'DOCUMENT.SIGN.SELF',
-];
+/** Cuántas filas debería dejar el catálogo sobre una base vacía. */
+const CATALOG_SIZE = {
+  resources: Object.keys(STATIC_CATALOG_RESOURCES).length,
+  actions: Object.keys(STATIC_CATALOG_ACTIONS).length,
+  permissions: Object.keys(STATIC_PERMISSION_CATALOG).length,
+  grants: OWNER_MATRIX.length + ADMIN_MATRIX.length + MEMBER_MATRIX.length,
+};
 
 describe('syncStaticPermissionCatalog', () => {
   beforeEach(() => {
@@ -268,62 +285,125 @@ describe('syncStaticPermissionCatalog', () => {
     );
 
     expect(summary.roles.created).toBe(3);
-    expect(summary.resources.created).toBe(2);
-    expect(summary.actions.created).toBe(7);
-    expect(summary.permissions.created).toBe(8);
-    expect(summary.grants.created).toBe(18);
+    expect(summary.resources.created).toBe(CATALOG_SIZE.resources);
+    expect(summary.actions.created).toBe(CATALOG_SIZE.actions);
+    expect(summary.permissions.created).toBe(CATALOG_SIZE.permissions);
+    expect(summary.grants.created).toBe(CATALOG_SIZE.grants);
 
     expect(
       repositories.resources.rows.map((resource) => resource.key).sort(),
-    ).toEqual(['DOCUMENT', 'MEMBER']);
+    ).toEqual(['BILLING', 'DOCUMENT', 'MEMBER', 'ORGANIZATION', 'ROLE']);
     expect(
       repositories.actions.rows.map((action) => action.key).sort(),
     ).toEqual([
       'APPROVE',
+      'CANCEL',
       'CREATE',
-      'DELETE',
       'INVITE',
+      'MANAGE',
       'READ',
+      'REMOVE',
       'SEND_SIGNATURE_REQUEST',
       'SIGN',
+      'UPDATE',
     ]);
     expect(grantedPermissionsOf(repositories, 'OWNER')).toEqual(OWNER_MATRIX);
     expect(grantedPermissionsOf(repositories, 'ADMIN')).toEqual(ADMIN_MATRIX);
     expect(grantedPermissionsOf(repositories, 'MEMBER')).toEqual(MEMBER_MATRIX);
   });
 
+  /** Las claves de la tabla de la historia, tal como las publica la API. */
+  it('siembra todas las claves del catálogo, con su recurso, acción y alcance', async () => {
+    const repositories = createRepositories();
+
+    await syncStaticPermissionCatalog(repositories, silentLogger);
+
+    const keys = repositories.permissions.rows
+      .map((permission) => {
+        const resource = repositories.resources.rows.find(
+          (candidate) => candidate.id === permission.resourceId,
+        )!;
+        const action = repositories.actions.rows.find(
+          (candidate) => candidate.id === permission.actionId,
+        )!;
+        return buildPermissionKey(resource.key, action.key, permission.scope);
+      })
+      .sort();
+
+    expect(keys).toEqual(Object.values(STATIC_PERMISSION_KEY_ENUM).sort());
+  });
+
+  /** OWNER es el dueño de la cuenta: no hay capacidad del catálogo que no le toque. */
+  it('OWNER recibe todos los permisos del catálogo', async () => {
+    const repositories = createRepositories();
+
+    await syncStaticPermissionCatalog(repositories, silentLogger);
+
+    expect(grantedPermissionsOf(repositories, 'OWNER')).toHaveLength(
+      CATALOG_SIZE.permissions,
+    );
+  });
+
   /**
-   * La única diferencia entre los dos roles que administran. Si `MEMBER.DELETE` se le colara a
+   * La única diferencia entre los dos roles que administran. Si `MEMBER.REMOVE` se le colara a
    * ADMIN, el permiso dejaría de significar lo que la historia pide que signifique.
    */
-  it('sólo OWNER recibe MEMBER.DELETE', async () => {
+  it('sólo OWNER recibe MEMBER.REMOVE', async () => {
     const repositories = createRepositories();
 
     await syncStaticPermissionCatalog(repositories, silentLogger);
 
     expect(grantedPermissionsOf(repositories, 'OWNER')).toContain(
-      'MEMBER.DELETE.ANY',
+      'MEMBER.REMOVE.ANY',
     );
     expect(grantedPermissionsOf(repositories, 'ADMIN')).not.toContain(
-      'MEMBER.DELETE.ANY',
+      'MEMBER.REMOVE.ANY',
     );
     expect(grantedPermissionsOf(repositories, 'MEMBER')).not.toContain(
-      'MEMBER.DELETE.ANY',
+      'MEMBER.REMOVE.ANY',
     );
   });
 
-  it('MEMBER no recibe lectura de organización, envío de solicitudes, aprobación ni invitación', async () => {
+  /** MEMBER conserva exactamente las tres capacidades con las que nació. */
+  it('MEMBER se queda con su matriz inicial y no hereda nada de la ampliación', async () => {
     const repositories = createRepositories();
 
     await syncStaticPermissionCatalog(repositories, silentLogger);
 
     const memberPermissions = grantedPermissionsOf(repositories, 'MEMBER');
-    expect(memberPermissions).not.toContain('DOCUMENT.READ.ORGANIZATION');
-    expect(memberPermissions).not.toContain(
+    expect(memberPermissions).toEqual([
+      'DOCUMENT.CREATE.ANY',
+      'DOCUMENT.READ.OWN',
+      'DOCUMENT.SIGN.SELF',
+    ]);
+    for (const denied of [
+      'DOCUMENT.READ.ORGANIZATION',
       'DOCUMENT.SEND_SIGNATURE_REQUEST.ANY',
-    );
-    expect(memberPermissions).not.toContain('DOCUMENT.APPROVE.ANY');
-    expect(memberPermissions).not.toContain('MEMBER.INVITE.ANY');
+      'DOCUMENT.APPROVE.ANY',
+      'DOCUMENT.CANCEL.ANY',
+      'MEMBER.INVITE.ANY',
+      'MEMBER.READ.ANY',
+      'ORGANIZATION.READ.ANY',
+      'BILLING.READ.ANY',
+      'BILLING.MANAGE.ANY',
+      'ROLE.READ.ANY',
+      'ROLE.MANAGE.ANY',
+    ]) {
+      expect(memberPermissions).not.toContain(denied);
+    }
+  });
+
+  it('persiste en MAYÚSCULAS las descripciones de recursos y acciones', async () => {
+    const repositories = createRepositories();
+
+    await syncStaticPermissionCatalog(repositories, silentLogger);
+
+    for (const row of [
+      ...repositories.resources.rows,
+      ...repositories.actions.rows,
+    ]) {
+      expect(row.description).toBe(row.description.toUpperCase());
+    }
   });
 
   it('correrlo tres veces no duplica ni una fila', async () => {
@@ -356,8 +436,8 @@ describe('syncStaticPermissionCatalog', () => {
       expect(summary.resources.updated).toBe(0);
       expect(summary.actions.updated).toBe(0);
       expect(summary.roles.reused).toBe(3);
-      expect(summary.permissions.reused).toBe(8);
-      expect(summary.grants.reused).toBe(18);
+      expect(summary.permissions.reused).toBe(CATALOG_SIZE.permissions);
+      expect(summary.grants.reused).toBe(CATALOG_SIZE.grants);
     }
 
     expect({
@@ -390,32 +470,28 @@ describe('syncStaticPermissionCatalog', () => {
     ).toEqual(['role-1:OWNER', 'role-admin:ADMIN', 'role-member:MEMBER']);
   });
 
-  it('preserva permisos, recursos y asignaciones ajenos al catálogo', async () => {
+  it('preserva permisos y asignaciones ajenos al catálogo', async () => {
     const repositories = createRepositories();
     seedLegacyGrid(repositories);
     seedCustomOrganizationRole(repositories);
 
     await syncStaticPermissionCatalog(repositories, silentLogger);
 
-    // El recurso ORGANIZATION y su permiso siguen ahí: el catálogo no gobierna ese recurso.
+    // ORGANIZATION+READ+ANY es la fila que el catálogo adopta como `ORGANIZATION.READ`: la
+    // reutiliza, no crea otra al lado.
     expect(
-      repositories.resources.rows.some(
-        (resource) => resource.key === 'ORGANIZATION',
-      ),
-    ).toBe(true);
-    expect(
-      repositories.permissions.rows.some(
+      repositories.permissions.rows.filter(
         (permission) => permission.id === 'permission-organization-read-any',
       ),
-    ).toBe(true);
+    ).toHaveLength(1);
     // La asignación de ADMIN sobre ORGANIZATION es la que usan hoy los checks de `account`.
     expect(
       repositories.rolePermissions.rows.some(
         (grant) => grant.id === 'grant-admin-organization-read-any',
       ),
     ).toBe(true);
-    // DOCUMENT+UPDATE es del recurso del catálogo, pero de una acción que el catálogo no
-    // redefine: se preserva igual.
+    // DOCUMENT+UPDATE es del recurso del catálogo, pero de una acción que el catálogo no redefine
+    // sobre ese recurso: se preserva igual.
     expect(
       repositories.rolePermissions.rows.some(
         (grant) => grant.id === 'grant-admin-document-update-any',
@@ -432,7 +508,7 @@ describe('syncStaticPermissionCatalog', () => {
     ).toBe(true);
   });
 
-  it('reutiliza el recurso y las acciones que ya existían, sin recrearlos', async () => {
+  it('reutiliza los recursos y acciones existentes, actualizando sólo su descripción', async () => {
     const repositories = createRepositories();
     seedLegacyGrid(repositories);
 
@@ -441,10 +517,11 @@ describe('syncStaticPermissionCatalog', () => {
       silentLogger,
     );
 
-    expect(summary.resources.created).toBe(1); // sólo MEMBER
-    expect(summary.resources.reused).toBe(1); // DOCUMENT ya estaba
-    expect(summary.actions.created).toBe(5); // SEND_SIGNATURE_REQUEST, SIGN, APPROVE, INVITE, DELETE
-    expect(summary.actions.reused).toBe(2); // CREATE y READ ya estaban
+    // DOCUMENT y ORGANIZATION ya estaban, con la descripción en minúsculas de `seed:roles`.
+    expect(summary.resources.created).toBe(3); // BILLING, MEMBER, ROLE
+    expect(summary.resources.updated).toBe(2); // DOCUMENT y ORGANIZATION, pasadas a MAYÚSCULAS
+    expect(summary.actions.created).toBe(7);
+    expect(summary.actions.updated).toBe(3); // CREATE, READ y UPDATE ya estaban
     expect(
       repositories.resources.rows.filter(
         (resource) => resource.key === 'DOCUMENT',
@@ -452,7 +529,7 @@ describe('syncStaticPermissionCatalog', () => {
     ).toHaveLength(1);
   });
 
-  it('corrige la descripción de un recurso del catálogo si cambió', async () => {
+  it('corrige la descripción de un recurso del catálogo si cambió, y la deja en MAYÚSCULAS', async () => {
     const repositories = createRepositories();
     repositories.resources.rows.push({
       id: 'resource-document',
@@ -470,7 +547,7 @@ describe('syncStaticPermissionCatalog', () => {
       repositories.resources.rows.find(
         (resource) => resource.key === 'DOCUMENT',
       )?.description,
-    ).toBe('Documentos para firma electrónica');
+    ).toBe('DOCUMENTOS PARA FIRMA ELECTRÓNICA');
   });
 
   it('detecta la lectura global heredada de MEMBER pero no la borra por defecto', async () => {
@@ -482,7 +559,8 @@ describe('syncStaticPermissionCatalog', () => {
       silentLogger,
     );
 
-    // Las dos asignaciones a DOCUMENT+READ+ANY (ADMIN y MEMBER); DOCUMENT+UPDATE+ANY no cuenta.
+    // Las dos asignaciones a DOCUMENT+READ+ANY (ADMIN y MEMBER); DOCUMENT+UPDATE+ANY no cuenta, y
+    // ORGANIZATION+READ+ANY tampoco: ahora ES del catálogo y ADMIN lo tiene en su matriz.
     expect(summary.supersededGrants.detected).toBe(2);
     expect(summary.supersededGrants.revoked).toBe(0);
     expect(
@@ -508,9 +586,9 @@ describe('syncStaticPermissionCatalog', () => {
 
     expect(summary.supersededGrants.revoked).toBe(2);
     expect(grantedPermissionsOf(repositories, 'MEMBER')).toEqual(MEMBER_MATRIX);
-    // ADMIN conserva lo que el catálogo no redefine: DOCUMENT+UPDATE y todo ORGANIZATION.
+    // ADMIN conserva lo que el catálogo no redefine: DOCUMENT+UPDATE.
     expect(grantedPermissionsOf(repositories, 'ADMIN')).toEqual(
-      [...ADMIN_MATRIX, 'DOCUMENT.UPDATE.ANY', 'ORGANIZATION.READ.ANY'].sort(),
+      [...ADMIN_MATRIX, 'DOCUMENT.UPDATE.ANY'].sort(),
     );
     // El rol custom no es de sistema: el barrido ni lo mira, aunque apunte al permiso revocado.
     expect(
@@ -518,5 +596,73 @@ describe('syncStaticPermissionCatalog', () => {
         (grant) => grant.id === 'grant-custom',
       ),
     ).toBe(true);
+  });
+
+  /**
+   * `MEMBER.DELETE` lo sembró la migración `AddMemberDeletePermission` y `MEMBER.REMOVE` lo
+   * sustituye (ver `RETIRED_CATALOG_PERMISSIONS`). Mientras OWNER lo siga teniendo asignado, tiene
+   * dos permisos para lo mismo y uno de ellos ya no existe en el catálogo.
+   */
+  describe('permisos retirados', () => {
+    function seedRetiredMemberDelete(repositories: TestRepositories): void {
+      const owner = { id: 'role-owner', name: 'OWNER', isSystemRole: true };
+      repositories.roles.rows.push(owner as RoleEntity);
+      repositories.resources.rows.push({
+        id: 'resource-member',
+        key: 'MEMBER',
+        description: 'MIEMBROS DE UNA ORGANIZACIÓN',
+      } as ResourceEntity);
+      repositories.actions.rows.push({
+        id: 'action-delete',
+        key: 'DELETE',
+        description: 'ELIMINAR UN RECURSO EXISTENTE',
+      } as ActionEntity);
+      repositories.permissions.rows.push({
+        id: 'permission-member-delete-any',
+        resourceId: 'resource-member',
+        actionId: 'action-delete',
+        scope: 'ANY',
+      } as PermissionEntity);
+      repositories.rolePermissions.rows.push({
+        id: 'grant-owner-member-delete-any',
+        roleId: owner.id,
+        permissionId: 'permission-member-delete-any',
+      } as RolePermissionEntity);
+    }
+
+    it('reporta la asignación retirada sin borrarla por defecto', async () => {
+      const repositories = createRepositories();
+      seedRetiredMemberDelete(repositories);
+
+      const summary = await syncStaticPermissionCatalog(
+        repositories,
+        silentLogger,
+      );
+
+      expect(summary.supersededGrants.detected).toBe(1);
+      expect(summary.supersededGrants.revoked).toBe(0);
+      expect(grantedPermissionsOf(repositories, 'OWNER')).toContain(
+        'MEMBER.DELETE.ANY',
+      );
+    });
+
+    it('con --prune-superseded la revoca y deja MEMBER.REMOVE en su lugar', async () => {
+      const repositories = createRepositories();
+      seedRetiredMemberDelete(repositories);
+
+      await syncStaticPermissionCatalog(repositories, silentLogger, {
+        pruneSuperseded: true,
+      });
+
+      const ownerPermissions = grantedPermissionsOf(repositories, 'OWNER');
+      expect(ownerPermissions).not.toContain('MEMBER.DELETE.ANY');
+      expect(ownerPermissions).toContain('MEMBER.REMOVE.ANY');
+      // La fila de `permissions` no se borra: puede seguir referenciada por un rol custom.
+      expect(
+        repositories.permissions.rows.some(
+          (permission) => permission.id === 'permission-member-delete-any',
+        ),
+      ).toBe(true);
+    });
   });
 });

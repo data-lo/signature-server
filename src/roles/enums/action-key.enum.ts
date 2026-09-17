@@ -12,4 +12,15 @@ export enum ACTION_KEY_ENUM {
   SIGN = 'SIGN',
   APPROVE = 'APPROVE',
   INVITE = 'INVITE',
+  /**
+   * Verbos que estrena la ampliación del catálogo.
+   *
+   * `MANAGE` es "administrar por completo" (contratar, cambiar o cancelar el plan; crear o editar
+   * roles) y no se descompone en CREATE/UPDATE/DELETE porque el catálogo lo concede entero.
+   * `REMOVE` es dar de baja una membresía: sustituye a `DELETE` sobre MEMBER, que era el verbo
+   * genérico del CRUD. `CANCEL` es cancelar un documento, que no es borrarlo.
+   */
+  MANAGE = 'MANAGE',
+  REMOVE = 'REMOVE',
+  CANCEL = 'CANCEL',
 }

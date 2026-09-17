@@ -480,24 +480,41 @@ Módulo completo sin ninguna documentación previa. `GET /` (lista), `POST /` (c
 
 Es el catálogo de lo que una **membresía de organización** (`accounts` con `organizationId` y `roleId`) podrá hacer. Hoy sólo carga datos: **no protege ningún endpoint ni cambia la UI**. Las cuentas personales no participan — el catálogo se usará sólo al autorizar membresías con `organizationId`.
 
+Las descripciones —de recursos, acciones y permisos— se escriben, se persisten y se publican en **MAYÚSCULAS**: `normalizeCatalogDescription` las normaliza al sembrarlas y al publicarlas, así que una fila vieja en minúsculas se corrige sola en la siguiente corrida del seed.
+
 | Permiso | `resource` + `action` + `scope` | Qué habilita |
 |---|---|---|
-| `DOCUMENT.CREATE` | `DOCUMENT` + `CREATE` + `ANY` | Crear documentos o borradores dentro de la organización activa. |
-| `DOCUMENT.READ_OWN` | `DOCUMENT` + `READ` + `OWN` | Consultar documentos propios o donde el miembro sea firmante. |
-| `DOCUMENT.READ_ORGANIZATION` | `DOCUMENT` + `READ` + `ORGANIZATION` | Consultar documentos de toda la organización. |
-| `DOCUMENT.SEND_SIGNATURE_REQUEST` | `DOCUMENT` + `SEND_SIGNATURE_REQUEST` + `ANY` | Enviar solicitudes de firma de documentos autorizados. |
-| `DOCUMENT.SIGN_SELF` | `DOCUMENT` + `SIGN` + `SELF` | Firmar en nombre propio e incluirse como firmante. |
-| `DOCUMENT.APPROVE` | `DOCUMENT` + `APPROVE` + `ANY` | Aprobar o autorizar documentos cuando el flujo existente lo soporte. |
-| `MEMBER.INVITE` | `MEMBER` + `INVITE` + `ANY` | Invitar miembros a la organización activa. |
+| `ORGANIZATION.READ` | `ORGANIZATION` + `READ` + `ANY` | VER DATOS Y CONFIGURACIÓN DE LA ORGANIZACIÓN ACTIVA |
+| `ORGANIZATION.UPDATE` | `ORGANIZATION` + `UPDATE` + `ANY` | EDITAR DATOS Y CONFIGURACIÓN DE LA ORGANIZACIÓN |
+| `BILLING.READ` | `BILLING` + `READ` + `ANY` | VER PLAN, PAGOS, FACTURAS Y ESTADO DE SUSCRIPCIÓN |
+| `BILLING.MANAGE` | `BILLING` + `MANAGE` + `ANY` | INICIAR PAGO, CAMBIAR, CANCELAR O ADMINISTRAR EL PLAN |
+| `MEMBER.READ` | `MEMBER` + `READ` + `ANY` | VER MIEMBROS |
+| `MEMBER.INVITE` | `MEMBER` + `INVITE` + `ANY` | INVITAR O AGREGAR MIEMBROS |
+| `MEMBER.UPDATE` | `MEMBER` + `UPDATE` + `ANY` | CAMBIAR ROL O DATOS DE UN MIEMBRO |
+| `MEMBER.REMOVE` | `MEMBER` + `REMOVE` + `ANY` | REVOCAR O ELIMINAR MEMBRESÍAS |
+| `ROLE.READ` | `ROLE` + `READ` + `ANY` | VER ROLES Y SUS PERMISOS |
+| `ROLE.MANAGE` | `ROLE` + `MANAGE` + `ANY` | CREAR O EDITAR ROLES PERSONALIZADOS |
+| `DOCUMENT.CREATE` | `DOCUMENT` + `CREATE` + `ANY` | CREAR DOCUMENTOS |
+| `DOCUMENT.READ_OWN` | `DOCUMENT` + `READ` + `OWN` | VER DOCUMENTOS PROPIOS O DONDE PARTICIPA |
+| `DOCUMENT.READ_ORGANIZATION` | `DOCUMENT` + `READ` + `ORGANIZATION` | VER DOCUMENTOS DE TODA LA ORGANIZACIÓN |
+| `DOCUMENT.SEND_SIGNATURE_REQUEST` | `DOCUMENT` + `SEND_SIGNATURE_REQUEST` + `ANY` | ENVIAR SOLICITUDES DE FIRMA |
+| `DOCUMENT.SIGN_SELF` | `DOCUMENT` + `SIGN` + `SELF` | FIRMAR COMO PARTICIPANTE |
+| `DOCUMENT.APPROVE` | `DOCUMENT` + `APPROVE` + `ANY` | APROBAR DOCUMENTOS, SI EL FLUJO LO REQUIERE |
+| `DOCUMENT.CANCEL` | `DOCUMENT` + `CANCEL` + `ANY` | SOLICITAR O CONFIRMAR CANCELACIONES, SEGÚN EL FLUJO |
+
+`ORGANIZATION.READ` y `ORGANIZATION.UPDATE` son exactamente las filas que ya había sembrado `seed:roles` (`ORGANIZATION` + `READ`/`UPDATE` + `ANY`), las que consultan hoy `AccountService` y `OrganizationPermissionsService`: el catálogo las adopta y les pone nombre, no crea otras.
+
+**`MEMBER.DELETE` quedó retirado** y lo sustituye `MEMBER.REMOVE` (ver `RETIRED_CATALOG_PERMISSIONS`). Su fila de `permissions` no se borra —un rol custom podría estar apuntándola—, pero el seed reporta la asignación heredada de OWNER y la revoca con `--prune-superseded`.
 
 | Rol | Permisos |
 |---|---|
-| `ADMIN` | Los siete. |
+| `OWNER` | Los diecisiete. |
+| `ADMIN` | Los diecisiete menos `MEMBER.REMOVE`. |
 | `MEMBER` | `DOCUMENT.CREATE`, `DOCUMENT.READ_OWN` y `DOCUMENT.SIGN_SELF`. |
 
-`MEMBER` se queda a propósito sin lectura de toda la organización, sin envío de solicitudes, sin aprobación y sin invitación.
+`MEMBER` conserva a propósito sólo sus tres capacidades iniciales: la ampliación del catálogo no le agrega ninguna.
 
-**Sin migración.** Sólo inserta y relaciona filas en tablas que ya existen. Lo único nuevo son valores de enum de TypeScript —`RESOURCE_KEY_ENUM.MEMBER`; `SEND_SIGNATURE_REQUEST`/`SIGN`/`APPROVE`/`INVITE` en `ACTION_KEY_ENUM`; `OWN`/`ORGANIZATION`/`SELF` en `PERMISSION_SCOPE_ENUM`— y ninguno de los tres se persiste como enum de Postgres (`resources.key`, `actions.key` y `permissions.scope` son varchar). La descripción de cada permiso vive en código: `permissions` no tiene columna `description` y agregarla habría sido cambiar el esquema para un texto que sólo se lee en la consola y en esta tabla.
+**Sin migración.** Sólo inserta y relaciona filas en tablas que ya existen, así que un despliegue que quiera el catálogo nuevo tiene que correr `npm run seed:static-permissions:prod`. Lo único nuevo son valores de enum de TypeScript —`MEMBER`/`BILLING`/`ROLE` en `RESOURCE_KEY_ENUM`; `SEND_SIGNATURE_REQUEST`/`SIGN`/`APPROVE`/`INVITE`/`MANAGE`/`REMOVE`/`CANCEL` en `ACTION_KEY_ENUM`; `OWN`/`ORGANIZATION`/`SELF` en `PERMISSION_SCOPE_ENUM`— y ninguno de los tres se persiste como enum de Postgres (`resources.key`, `actions.key` y `permissions.scope` son varchar). La descripción de cada permiso vive en código: `permissions` no tiene columna `description` y agregarla habría sido cambiar el esquema para un texto que sólo se lee en la consola y en esta tabla.
 
 **Qué toca y qué no.** Idempotente y aditivo: busca cada fila por su clave natural antes de insertarla (`key`, `name`+`isSystemRole`, `resource_id`+`action_id`+`scope`, `role_id`+`permission_id`), reutiliza los roles `ADMIN`/`MEMBER` existentes sin tocar su `id` —es una FK real desde `accounts.role_id`— y sólo actualiza la `description` de un recurso o acción del catálogo si cambió. No borra nada: la rejilla de `seed:roles`, los permisos sobre `ORGANIZATION`/`USER` y cualquier rol custom de organización quedan intactos. `organization_permissions` es un sistema paralelo de nombres libres y no se toca (ver arriba).
 

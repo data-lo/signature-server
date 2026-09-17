@@ -13,7 +13,10 @@ import { PermissionEntity } from './entities/permission.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from './enums/action-key.enum';
-import { STATIC_PERMISSION_KEY_ENUM } from './static-permission-catalog';
+import {
+  STATIC_PERMISSION_CATALOG,
+  STATIC_PERMISSION_KEY_ENUM,
+} from './static-permission-catalog';
 
 function createMockRepository() {
   return {
@@ -319,57 +322,18 @@ describe('RolesService', () => {
     });
   });
 
-  /** Fila de `permissions` tal como la resolvería `resolveStaticPermissionIds` para esa clave. */
+  /**
+   * Fila de `permissions` tal como la resolvería `resolveStaticPermissionIds` para esa clave.
+   *
+   * Se arma DESDE el catálogo en vez de repetir aquí sus definiciones: cuando el catálogo crece,
+   * esta prueba no tiene que crecer con él (y no puede quedarse describiendo permisos que ya
+   * cambiaron de recurso, acción o alcance).
+   */
   function buildStaticPermissionRow(
     id: string,
     key: STATIC_PERMISSION_KEY_ENUM,
   ) {
-    const definitions: Record<
-      STATIC_PERMISSION_KEY_ENUM,
-      { resource: string; action: string; scope: string }
-    > = {
-      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE]: {
-        resource: 'DOCUMENT',
-        action: 'CREATE',
-        scope: 'ANY',
-      },
-      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN]: {
-        resource: 'DOCUMENT',
-        action: 'READ',
-        scope: 'OWN',
-      },
-      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_ORGANIZATION]: {
-        resource: 'DOCUMENT',
-        action: 'READ',
-        scope: 'ORGANIZATION',
-      },
-      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST]: {
-        resource: 'DOCUMENT',
-        action: 'SEND_SIGNATURE_REQUEST',
-        scope: 'ANY',
-      },
-      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF]: {
-        resource: 'DOCUMENT',
-        action: 'SIGN',
-        scope: 'SELF',
-      },
-      [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE]: {
-        resource: 'DOCUMENT',
-        action: 'APPROVE',
-        scope: 'ANY',
-      },
-      [STATIC_PERMISSION_KEY_ENUM.MEMBER_INVITE]: {
-        resource: 'MEMBER',
-        action: 'INVITE',
-        scope: 'ANY',
-      },
-      [STATIC_PERMISSION_KEY_ENUM.MEMBER_DELETE]: {
-        resource: 'MEMBER',
-        action: 'DELETE',
-        scope: 'ANY',
-      },
-    };
-    const { resource, action, scope } = definitions[key];
+    const { resource, action, scope } = STATIC_PERMISSION_CATALOG[key];
 
     return {
       id,
