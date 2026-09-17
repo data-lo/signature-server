@@ -31,6 +31,7 @@ const STATIC_PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'DOCUMENT.APPROVE':
     'Aprobar o autorizar documentos cuando el flujo existente lo soporte.',
   'MEMBER.INVITE': 'Invitar miembros a la organización activa.',
+  'MEMBER.DELETE': 'Eliminar miembros de la organización activa.',
 };
 
 /**
@@ -126,7 +127,7 @@ export function comparePermissionKeys(
  * del seed anterior, que sigue existiendo en la base y no debe presentarse igual.
  *
  * @param key - Clave derivada del permiso.
- * @returns `true` si es uno de los siete permisos del catálogo.
+ * @returns `true` si es uno de los ocho permisos del catálogo.
  *
  * @example
  * ```ts

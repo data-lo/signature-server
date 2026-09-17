@@ -233,7 +233,7 @@ function grantedPermissionsOf(
     .sort();
 }
 
-/** OWNER y ADMIN comparten matriz: el catálogo entero (ver `STATIC_ROLE_PERMISSION_MATRIX`). */
+/** Todo el catálogo menos `MEMBER.DELETE` (ver `STATIC_ROLE_PERMISSION_MATRIX`). */
 const ADMIN_MATRIX = [
   'DOCUMENT.APPROVE.ANY',
   'DOCUMENT.CREATE.ANY',
@@ -243,6 +243,9 @@ const ADMIN_MATRIX = [
   'DOCUMENT.SIGN.SELF',
   'MEMBER.INVITE.ANY',
 ];
+
+/** Lo mismo que ADMIN más `MEMBER.DELETE`, la única capacidad reservada al dueño de la cuenta. */
+const OWNER_MATRIX = [...ADMIN_MATRIX, 'MEMBER.DELETE.ANY'].sort();
 
 const MEMBER_MATRIX = [
   'DOCUMENT.CREATE.ANY',
@@ -266,9 +269,9 @@ describe('syncStaticPermissionCatalog', () => {
 
     expect(summary.roles.created).toBe(3);
     expect(summary.resources.created).toBe(2);
-    expect(summary.actions.created).toBe(6);
-    expect(summary.permissions.created).toBe(7);
-    expect(summary.grants.created).toBe(17);
+    expect(summary.actions.created).toBe(7);
+    expect(summary.permissions.created).toBe(8);
+    expect(summary.grants.created).toBe(18);
 
     expect(
       repositories.resources.rows.map((resource) => resource.key).sort(),
@@ -278,14 +281,35 @@ describe('syncStaticPermissionCatalog', () => {
     ).toEqual([
       'APPROVE',
       'CREATE',
+      'DELETE',
       'INVITE',
       'READ',
       'SEND_SIGNATURE_REQUEST',
       'SIGN',
     ]);
-    expect(grantedPermissionsOf(repositories, 'OWNER')).toEqual(ADMIN_MATRIX);
+    expect(grantedPermissionsOf(repositories, 'OWNER')).toEqual(OWNER_MATRIX);
     expect(grantedPermissionsOf(repositories, 'ADMIN')).toEqual(ADMIN_MATRIX);
     expect(grantedPermissionsOf(repositories, 'MEMBER')).toEqual(MEMBER_MATRIX);
+  });
+
+  /**
+   * La única diferencia entre los dos roles que administran. Si `MEMBER.DELETE` se le colara a
+   * ADMIN, el permiso dejaría de significar lo que la historia pide que signifique.
+   */
+  it('sólo OWNER recibe MEMBER.DELETE', async () => {
+    const repositories = createRepositories();
+
+    await syncStaticPermissionCatalog(repositories, silentLogger);
+
+    expect(grantedPermissionsOf(repositories, 'OWNER')).toContain(
+      'MEMBER.DELETE.ANY',
+    );
+    expect(grantedPermissionsOf(repositories, 'ADMIN')).not.toContain(
+      'MEMBER.DELETE.ANY',
+    );
+    expect(grantedPermissionsOf(repositories, 'MEMBER')).not.toContain(
+      'MEMBER.DELETE.ANY',
+    );
   });
 
   it('MEMBER no recibe lectura de organización, envío de solicitudes, aprobación ni invitación', async () => {
@@ -332,8 +356,8 @@ describe('syncStaticPermissionCatalog', () => {
       expect(summary.resources.updated).toBe(0);
       expect(summary.actions.updated).toBe(0);
       expect(summary.roles.reused).toBe(3);
-      expect(summary.permissions.reused).toBe(7);
-      expect(summary.grants.reused).toBe(17);
+      expect(summary.permissions.reused).toBe(8);
+      expect(summary.grants.reused).toBe(18);
     }
 
     expect({
@@ -359,7 +383,7 @@ describe('syncStaticPermissionCatalog', () => {
       silentLogger,
     );
 
-    expect(summary.roles.created).toBe(1);
+    expect(summary.roles.created).toBe(1); // sólo OWNER, que no existía en la rejilla anterior
     expect(summary.roles.reused).toBe(2);
     expect(
       repositories.roles.rows.map((role) => `${role.id}:${role.name}`).sort(),
@@ -419,7 +443,7 @@ describe('syncStaticPermissionCatalog', () => {
 
     expect(summary.resources.created).toBe(1); // sólo MEMBER
     expect(summary.resources.reused).toBe(1); // DOCUMENT ya estaba
-    expect(summary.actions.created).toBe(4); // SEND_SIGNATURE_REQUEST, SIGN, APPROVE, INVITE
+    expect(summary.actions.created).toBe(5); // SEND_SIGNATURE_REQUEST, SIGN, APPROVE, INVITE, DELETE
     expect(summary.actions.reused).toBe(2); // CREATE y READ ya estaban
     expect(
       repositories.resources.rows.filter(
