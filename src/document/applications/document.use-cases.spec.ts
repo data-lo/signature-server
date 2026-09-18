@@ -835,6 +835,103 @@ describe('casos de uso de documentos', () => {
       expect(visibility).not.toContain('document.createdBy = :userId');
     });
 
+    /**
+     * El grupo de acceso con los parámetros de cada condición. `bracketConditions` sólo registra
+     * el SQL, y aquí importa también CONTRA QUÉ se compara: la participación tiene que atarse a la
+     * cuenta activa, no al usuario.
+     */
+    function visibilityWithParameters(qb: any): Array<[string, any]> {
+      const recorded: Array<[string, any]> = [];
+      const nested: any = {};
+      ['where', 'orWhere', 'andWhere'].forEach((method) => {
+        nested[method] = jest.fn((sql: string, parameters?: unknown) => {
+          recorded.push([sql, parameters]);
+          return nested;
+        });
+      });
+
+      const group = qb.andWhere.mock.calls
+        .map(([condition]: [unknown]) => condition)
+        .find(
+          (condition: any) =>
+            typeof condition !== 'string' &&
+            bracketConditions(condition).some(
+              (sql) =>
+                sql.includes('document.accountId') ||
+                sql.includes('document.organizationId'),
+            ),
+        );
+      group.whereFactory(nested);
+      return recorded;
+    }
+
+    /**
+     * Bug corregido: "Corregir documentos persistentes al cambiar de cuenta activa".
+     *
+     * La participación se reconocía por USUARIO (`u.id = :userId`): cualquier colaborador enlazado
+     * a cualquiera de sus cuentas contaba. Como los colaboradores se anclan a la cuenta PERSONAL,
+     * quien se incluía como firmante en sus documentos personales los seguía viendo dentro de cada
+     * organización a la que pertenece, y la lista no cambiaba al cambiar de cuenta.
+     */
+    it('reconoce la participación sólo desde la cuenta activa, no desde cualquier cuenta del usuario', async () => {
+      personalAccount();
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb);
+
+      const [, [participation, parameters]] = visibilityWithParameters(qb);
+      expect(participation).toContain('c.account_id = :accountId');
+      expect(participation).not.toContain(':userId');
+      expect(parameters).toMatchObject({ accountId: 'account-1' });
+    });
+
+    it('desde una organización no muestra los documentos personales en los que el usuario firma', async () => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await getDocuments.execute({
+        userId: 'user-1',
+        accountId: 'account-org-member-1',
+        filters: { page: 1, limit: 25 } as any,
+      });
+
+      const [[ownership], [participation, parameters]] =
+        visibilityWithParameters(qb);
+      expect(ownership).toBe('document.organizationId = :organizationId');
+      // Se compara contra la membresía de la organización, que nunca es la cuenta a la que se
+      // anclan los colaboradores: el documento personal donde firma no entra por aquí.
+      expect(parameters).toMatchObject({ accountId: 'account-org-member-1' });
+      expect(participation).not.toContain(':userId');
+    });
+
+    /**
+     * La invitación por correo sin vincular va a anclarse a la cuenta personal en cuanto se
+     * vincule; mientras tanto se ve SÓLO ahí. Sin este camino el invitado no vería el documento
+     * que tiene que firmar, porque la vinculación ocurre al firmar —nunca antes de ver la lista—.
+     */
+    it('la invitación por correo todavía sin vincular sólo cuenta desde la cuenta personal', async () => {
+      personalAccount();
+      const personalQb = createMockQueryBuilder();
+      await list({}, personalQb);
+      const [, [personalParticipation]] = visibilityWithParameters(personalQb);
+      expect(personalParticipation).toContain(
+        'c.account_id IS NULL AND LOWER(c.email) = :callerEmail',
+      );
+
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+      const orgQb = createMockQueryBuilder();
+      await list({}, orgQb);
+      const [, [orgParticipation]] = visibilityWithParameters(orgQb);
+      expect(orgParticipation).not.toContain(':callerEmail');
+    });
+
     it('usa la organización en lugar de la cuenta cuando la cuenta activa pertenece a una', async () => {
       accountMemberService.assertIsActiveMember.mockResolvedValue({
         id: 'account-org-member-1',
@@ -933,7 +1030,9 @@ describe('casos de uso de documentos', () => {
         const viewConditions = qb.andWhere.mock.calls
           .map(([condition]: [unknown]) => condition)
           .filter((condition: unknown) => typeof condition === 'string');
-        expect(viewConditions).not.toContain('document.status = :pendingStatus');
+        expect(viewConditions).not.toContain(
+          'document.status = :pendingStatus',
+        );
         expect(viewConditions).not.toContain('document.createdBy = :userId');
         expect(allConditions(qb)).toContain('document.accountId = :accountId');
       });
