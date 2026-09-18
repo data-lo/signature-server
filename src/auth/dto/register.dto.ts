@@ -2,7 +2,6 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   IsEmail,
   IsNotEmpty,
-  IsOptional,
   IsString,
   Length,
   MinLength,
@@ -70,14 +69,4 @@ export class RegisterDto {
   @IsString()
   @IsNotEmpty({ message: 'Completa el CAPTCHA para continuar' })
   turnstileToken: string;
-
-  @ApiProperty({
-    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    description:
-      'Token de invitación a organización (ver /join) — si viene presente, el registro une automáticamente al usuario recién creado a esa organización',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  invitationToken?: string;
 }

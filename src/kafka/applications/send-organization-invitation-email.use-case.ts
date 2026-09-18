@@ -28,7 +28,12 @@ export class SendOrganizationInvitationEmailUseCase {
     try {
       // Normalizada: leída cruda, una `FRONTEND_URL` con diagonal final generaba
       // `https://app.ejemplo.com//join?token=...` en el correo de invitación.
-      const joinUrl = `${frontendBaseUrl()}/join?token=${payload.invitationToken}&orgId=${payload.organizationId}`;
+      //
+      // Sólo el token: la organización la resuelve `/join` a partir de él, al consultar la
+      // invitación. Llevarla también en la URL daba dos fuentes de la misma verdad, y un enlace
+      // con `orgId` editado a mano apuntaba a una organización distinta de la invitada. Se
+      // codifica por si algún día el token deja de ser un UUID.
+      const joinUrl = `${frontendBaseUrl()}/join?token=${encodeURIComponent(payload.invitationToken)}`;
 
       await this.emailService.sendOrganizationInvitationNotification(
         payload.email,
