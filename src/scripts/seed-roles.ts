@@ -14,6 +14,7 @@ import { SYSTEM_ROLE_NAME_ENUM } from '../roles/enums/system-role-name.enum';
 import { RESOURCE_KEY_ENUM } from '../roles/enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from '../roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from '../roles/enums/permission-scope.enum';
+import { normalizeCatalogDescription } from '../roles/static-permission-catalog';
 
 /**
  * Puebla las tablas estáticas del RBAC básico (roles, resources, actions,
@@ -29,6 +30,11 @@ import { PERMISSION_SCOPE_ENUM } from '../roles/enums/permission-scope.enum';
  */
 
 /**
+ * Las descripciones van en MAYÚSCULAS, igual que las del catálogo estático
+ * (`src/roles/static-permission-catalog.ts`): las dos siembras comparten filas —DOCUMENT,
+ * ORGANIZATION, CREATE, READ...— y si cada una escribiera con su propio criterio, correrlas
+ * alternadas dejaría la descripción cambiando de forma en cada corrida.
+ *
  * Recursos y acciones que siembra ESTE seed, enumerados a mano en vez de recorrer los enums.
  * Los enums crecieron con el catálogo estático (MEMBER, SIGN, APPROVE, INVITE...) y recorrerlos
  * haría que este script sembrara permisos que nunca sembró y que no le corresponden.
@@ -50,17 +56,17 @@ const RESOURCE_DESCRIPTIONS: Record<
   (typeof LEGACY_RESOURCE_KEYS)[number],
   string
 > = {
-  [RESOURCE_KEY_ENUM.DOCUMENT]: 'Documentos para firma electrónica',
-  [RESOURCE_KEY_ENUM.ORGANIZATION]: 'Cuentas de tipo organización',
-  [RESOURCE_KEY_ENUM.USER]: 'Usuarios de la plataforma',
+  [RESOURCE_KEY_ENUM.DOCUMENT]: 'DOCUMENTOS PARA FIRMA ELECTRÓNICA',
+  [RESOURCE_KEY_ENUM.ORGANIZATION]: 'CUENTAS DE TIPO ORGANIZACIÓN',
+  [RESOURCE_KEY_ENUM.USER]: 'USUARIOS DE LA PLATAFORMA',
 };
 
 const ACTION_DESCRIPTIONS: Record<(typeof LEGACY_ACTION_KEYS)[number], string> =
   {
-    [ACTION_KEY_ENUM.CREATE]: 'Crear un recurso nuevo',
-    [ACTION_KEY_ENUM.READ]: 'Consultar un recurso existente',
-    [ACTION_KEY_ENUM.UPDATE]: 'Actualizar un recurso existente',
-    [ACTION_KEY_ENUM.DELETE]: 'Eliminar un recurso existente',
+    [ACTION_KEY_ENUM.CREATE]: 'CREAR UN RECURSO NUEVO',
+    [ACTION_KEY_ENUM.READ]: 'CONSULTAR UN RECURSO EXISTENTE',
+    [ACTION_KEY_ENUM.UPDATE]: 'ACTUALIZAR UN RECURSO EXISTENTE',
+    [ACTION_KEY_ENUM.DELETE]: 'ELIMINAR UN RECURSO EXISTENTE',
   };
 
 async function upsertRole(
@@ -78,30 +84,70 @@ async function upsertRole(
   );
 }
 
+/**
+ * Crea el recurso si falta y, si ya existe, corrige su descripción cuando no coincide.
+ *
+ * Corregirla —y no sólo reutilizar la fila— es lo que mantiene la regla de MAYÚSCULAS: las filas
+ * que sembró una migración en minúsculas (`DELETE`, por ejemplo) se quedaban así para siempre,
+ * porque ningún seed las volvía a tocar.
+ *
+ * @param dataSource - Conexión del seed.
+ * @param key - Clave del recurso.
+ * @returns El recurso persistido.
+ *
+ * @example
+ * ```ts
+ * const document = await upsertResource(dataSource, RESOURCE_KEY_ENUM.DOCUMENT);
+ * ```
+ */
 async function upsertResource(
   dataSource: DataSource,
   key: (typeof LEGACY_RESOURCE_KEYS)[number],
 ): Promise<ResourceEntity> {
   const resourceRepository = dataSource.getRepository(ResourceEntity);
+  const description = normalizeCatalogDescription(RESOURCE_DESCRIPTIONS[key]);
   const existing = await resourceRepository.findOne({ where: { key } });
-  if (existing) return existing;
+
+  if (existing) {
+    if (existing.description === description) return existing;
+
+    return resourceRepository.save({ ...existing, description });
+  }
 
   return resourceRepository.save(
-    resourceRepository.create({ key, description: RESOURCE_DESCRIPTIONS[key] }),
+    resourceRepository.create({ key, description }),
   );
 }
 
+/**
+ * Crea la acción si falta y, si ya existe, corrige su descripción cuando no coincide.
+ *
+ * Misma razón que `upsertResource`.
+ *
+ * @param dataSource - Conexión del seed.
+ * @param key - Clave de la acción.
+ * @returns La acción persistida.
+ *
+ * @example
+ * ```ts
+ * const read = await upsertAction(dataSource, ACTION_KEY_ENUM.READ);
+ * ```
+ */
 async function upsertAction(
   dataSource: DataSource,
   key: (typeof LEGACY_ACTION_KEYS)[number],
 ): Promise<ActionEntity> {
   const actionRepository = dataSource.getRepository(ActionEntity);
+  const description = normalizeCatalogDescription(ACTION_DESCRIPTIONS[key]);
   const existing = await actionRepository.findOne({ where: { key } });
-  if (existing) return existing;
 
-  return actionRepository.save(
-    actionRepository.create({ key, description: ACTION_DESCRIPTIONS[key] }),
-  );
+  if (existing) {
+    if (existing.description === description) return existing;
+
+    return actionRepository.save({ ...existing, description });
+  }
+
+  return actionRepository.save(actionRepository.create({ key, description }));
 }
 
 async function upsertPermission(

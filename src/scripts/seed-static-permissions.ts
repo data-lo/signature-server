@@ -21,6 +21,8 @@ import { ACTION_KEY_ENUM } from '../roles/enums/action-key.enum';
 import { RESOURCE_KEY_ENUM } from '../roles/enums/resource-key.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from '../roles/enums/system-role-name.enum';
 import {
+  normalizeCatalogDescription,
+  RETIRED_CATALOG_PERMISSIONS,
   STATIC_CATALOG_ACTIONS,
   STATIC_CATALOG_RESOURCES,
   STATIC_PERMISSION_CATALOG,
@@ -165,6 +167,9 @@ async function upsertSystemRole(
 /**
  * Crea el recurso si falta, y si ya existe corrige su descripción sólo cuando cambió.
  *
+ * La descripción se normaliza a MAYÚSCULAS antes de comparar y de escribir, así que una fila
+ * sembrada por `seed:roles` —que las escribía en minúsculas— se corrige en la primera corrida.
+ *
  * @param repositories - Repositorios de las tablas del RBAC.
  * @param key - Clave del recurso (`DOCUMENT`, `MEMBER`).
  * @param description - Descripción que el catálogo declara para esa clave.
@@ -188,10 +193,11 @@ async function upsertSystemRole(
 async function upsertResource(
   repositories: StaticPermissionCatalogRepositories,
   key: RESOURCE_KEY_ENUM,
-  description: string,
+  rawDescription: string,
   summary: StaticPermissionCatalogSummary,
   logger: CatalogLogger,
 ): Promise<ResourceEntity> {
+  const description = normalizeCatalogDescription(rawDescription);
   const existing = await repositories.resources.findOne({ where: { key } });
 
   if (!existing) {
@@ -219,6 +225,8 @@ async function upsertResource(
 /**
  * Crea la acción si falta, y si ya existe corrige su descripción sólo cuando cambió.
  *
+ * Misma normalización a MAYÚSCULAS que `upsertResource`.
+ *
  * @param repositories - Repositorios de las tablas del RBAC.
  * @param key - Clave de la acción (`CREATE`, `SIGN`, `INVITE`...).
  * @param description - Descripción que el catálogo declara para esa clave.
@@ -242,10 +250,11 @@ async function upsertResource(
 async function upsertAction(
   repositories: StaticPermissionCatalogRepositories,
   key: ACTION_KEY_ENUM,
-  description: string,
+  rawDescription: string,
   summary: StaticPermissionCatalogSummary,
   logger: CatalogLogger,
 ): Promise<ActionEntity> {
+  const description = normalizeCatalogDescription(rawDescription);
   const existing = await repositories.actions.findOne({ where: { key } });
 
   if (!existing) {
@@ -381,13 +390,15 @@ async function upsertGrant(
  * Detecta —y opcionalmente revoca— las asignaciones de un rol de sistema que el catálogo dejó
  * obsoletas.
  *
- * El caso real es `MEMBER → DOCUMENT+READ+ANY`, la fila que sembró `seed:roles`: al no distinguir
- * alcance equivale a lectura global, justo lo que la matriz le niega a MEMBER. Mientras siga ahí,
- * la matriz efectiva no es la documentada.
+ * Son dos casos reales. Uno, `MEMBER → DOCUMENT+READ+ANY`, la fila que sembró `seed:roles`: al no
+ * distinguir alcance equivale a lectura global, justo lo que la matriz le niega a MEMBER. Otro,
+ * `OWNER → MEMBER+DELETE+ANY`, que sembró `AddMemberDeletePermission` y que `MEMBER.REMOVE`
+ * sustituyó (ver `RETIRED_CATALOG_PERMISSIONS`). Mientras sigan ahí, la matriz efectiva no es la
+ * documentada.
  *
  * "Obsoleta" es exigente a propósito: sólo cuenta una asignación sobre un par recurso+acción que
- * el catálogo REDEFINE con alcances explícitos (hoy `DOCUMENT`+`READ`, partido en `OWN` y
- * `ORGANIZATION`) y que la matriz de ese rol no contempla. `DOCUMENT`+`UPDATE`/`DELETE`, que el
+ * el catálogo REDEFINE con alcances explícitos (`DOCUMENT`+`READ`, partido en `OWN` y
+ * `ORGANIZATION`) o que RETIRÓ (`MEMBER`+`DELETE`), y que la matriz de ese rol no contempla. `DOCUMENT`+`UPDATE`/`DELETE`, que el
  * catálogo no cubre, se preservan aunque sean del mismo recurso — igual que ORGANIZATION y USER,
  * que los consultan hoy `AccountService` y `OrganizationPermissionsService`. Los roles custom de
  * organización quedan fuera por completo: el barrido sólo mira los roles de sistema.
@@ -395,7 +406,7 @@ async function upsertGrant(
  * @param repositories - Repositorios de las tablas del RBAC.
  * @param role - Rol de sistema a revisar.
  * @param expectedPermissionIds - Ids de los permisos que la matriz sí le da a ese rol.
- * @param catalogResourceActionPairs - Pares `resourceId:actionId` que el catálogo redefine.
+ * @param catalogResourceActionPairs - Pares `resourceId:actionId` que el catálogo redefine o retiró.
  * @param prune - `true` para revocarlas; `false` para sólo reportarlas.
  * @param summary - Contadores de la corrida, que esta función incrementa.
  * @param logger - Dónde reportar cada asignación obsoleta.
@@ -559,14 +570,37 @@ export async function syncStaticPermissionCatalog(
   }
 
   logger.log('Matriz rol → permisos...');
-  // Pares recurso+acción que el catálogo redefine: el único terreno donde puede haber una
-  // asignación obsoleta (ver `revokeSupersededGrants`).
+  /**
+   * Pares recurso+acción donde puede haber una asignación obsoleta (ver `revokeSupersededGrants`):
+   * los que el catálogo redefine con alcances explícitos y los que retiró.
+   *
+   * Un par retirado sólo entra si sus filas existen: `MEMBER`+`DELETE` puede no estar sembrado en
+   * una base nueva, y buscarlo entonces no tiene sentido.
+   */
   const catalogResourceActionPairs = new Set(
     Object.values(STATIC_PERMISSION_CATALOG).map(
       (definition) =>
         `${resources.get(definition.resource)!.id}:${actions.get(definition.action)!.id}`,
     ),
   );
+
+  for (const retired of RETIRED_CATALOG_PERMISSIONS) {
+    const resource =
+      resources.get(retired.resource) ??
+      (await repositories.resources.findOne({
+        where: { key: retired.resource },
+      }));
+    const action = await repositories.actions.findOne({
+      where: { key: retired.action },
+    });
+
+    if (!resource || !action) continue;
+
+    catalogResourceActionPairs.add(`${resource.id}:${action.id}`);
+    logger.log(
+      `Permiso retirado ${retired.resource}.${retired.action}: lo sustituye ${retired.supersededBy}.`,
+    );
+  }
 
   for (const [name, role] of roles) {
     const expectedPermissionIds = new Set<string>();

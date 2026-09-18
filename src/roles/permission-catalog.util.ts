@@ -3,36 +3,20 @@ import { PermissionEntity } from './entities/permission.entity';
 import { ResourceEntity } from './entities/resource.entity';
 import { PERMISSION_SCOPE_ENUM } from './enums/permission-scope.enum';
 import { RolePermissionData } from './interfaces/response/permission-response';
+import {
+  normalizeCatalogDescription,
+  STATIC_PERMISSION_CATALOG,
+  STATIC_PERMISSION_KEY_ENUM,
+} from './static-permission-catalog';
 
-/**
- * Traduce una fila de `permissions` a la forma en que el frontend la muestra: una clave estable
- * y una descripción en lenguaje de negocio.
- *
- * La clave se DERIVA de la fila (`resource.key`, `action.key`, `scope`) en vez de guardarse en
- * la base: `permissions` no tiene columna de clave ni de descripción, y agregarlas sería un
- * cambio de esquema para algo que sólo se lee en la UI de administración de miembros.
- *
- * El diccionario de abajo cubre el catálogo de permisos estáticos de organización; cualquier
- * otra fila —la rejilla CRUD que sembró `npm run seed:roles`, o un permiso que una organización
- * agregue en el futuro— se describe con el texto genérico de su recurso y su acción, para que la
- * pantalla nunca muestre un hueco.
- */
-
-/** Descripciones de negocio del catálogo estático, por clave derivada. */
-const STATIC_PERMISSION_DESCRIPTIONS: Record<string, string> = {
-  'DOCUMENT.CREATE':
-    'Crear documentos o borradores dentro de la organización activa.',
-  'DOCUMENT.READ_OWN':
-    'Consultar documentos propios o donde el miembro sea firmante.',
-  'DOCUMENT.READ_ORGANIZATION': 'Consultar documentos de toda la organización.',
-  'DOCUMENT.SEND_SIGNATURE_REQUEST':
-    'Enviar solicitudes de firma de documentos autorizados.',
-  'DOCUMENT.SIGN_SELF': 'Firmar en nombre propio e incluirse como firmante.',
-  'DOCUMENT.APPROVE':
-    'Aprobar o autorizar documentos cuando el flujo existente lo soporte.',
-  'MEMBER.INVITE': 'Invitar miembros a la organización activa.',
-  'MEMBER.DELETE': 'Eliminar miembros de la organización activa.',
-};
+/** Descripciones del catálogo estático, indexadas por la clave que publica la API. */
+const STATIC_PERMISSION_DESCRIPTIONS: Record<string, string> =
+  Object.fromEntries(
+    Object.entries(STATIC_PERMISSION_CATALOG).map(([key, definition]) => [
+      key as STATIC_PERMISSION_KEY_ENUM,
+      normalizeCatalogDescription(definition.description),
+    ]),
+  );
 
 /**
  * Orden en que la UI lista el catálogo estático. Los permisos que no son del catálogo van
@@ -69,8 +53,10 @@ export function buildPermissionKey(
 }
 
 /**
- * Descripción legible de un permiso: la del catálogo estático si la clave pertenece a él, y si
- * no, una armada con los textos genéricos del recurso y la acción.
+ * Descripción legible de un permiso, siempre en MAYÚSCULAS: la del catálogo estático si la clave
+ * pertenece a él, y si no, una armada con los textos de su recurso y su acción. Esos dos salen de
+ * la base, así que se normalizan acá por si la fila se sembró antes de que el catálogo exigiera
+ * mayúsculas.
  *
  * @param key - Clave derivada del permiso (ver `buildPermissionKey`).
  * @param resource - Recurso al que apunta el permiso.
@@ -80,7 +66,7 @@ export function buildPermissionKey(
  * @example
  * ```ts
  * describePermission('DOCUMENT.SIGN_SELF', documentResource, signAction);
- * // 'Firmar en nombre propio e incluirse como firmante.'
+ * // 'FIRMAR COMO PARTICIPANTE'
  * ```
  */
 export function describePermission(
@@ -90,7 +76,9 @@ export function describePermission(
 ): string {
   return (
     STATIC_PERMISSION_DESCRIPTIONS[key] ??
-    `${action.description} — ${resource.description}`
+    normalizeCatalogDescription(
+      `${action.description} — ${resource.description}`,
+    )
   );
 }
 
@@ -127,7 +115,7 @@ export function comparePermissionKeys(
  * del seed anterior, que sigue existiendo en la base y no debe presentarse igual.
  *
  * @param key - Clave derivada del permiso.
- * @returns `true` si es uno de los ocho permisos del catálogo.
+ * @returns `true` si la clave es una de las del catálogo.
  *
  * @example
  * ```ts
