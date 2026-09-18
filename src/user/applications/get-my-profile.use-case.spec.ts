@@ -32,7 +32,7 @@ describe('GetMyProfileUseCase', () => {
   });
 
   it('sirve el snapshot cacheado sin consultar PostgreSQL', async () => {
-    const cached = { id: 'user-1', isConfigured: true };
+    const cached = { id: 'user-1', signatureId: 'sig-1' };
     userService.readCachedProfile.mockResolvedValue(cached);
 
     const result = await useCase.execute('CURP1');

@@ -661,7 +661,6 @@ describe('UserService', () => {
       userRepository.findOne.mockResolvedValue({
         id: 'user-1',
         nationalId: 'CURP1',
-        isConfigured: false,
         signatureId: 'sig-1',
         personalInformation: {
           rfc: 'RFC1',
@@ -694,13 +693,13 @@ describe('UserService', () => {
   describe('readCachedProfile', () => {
     it('devuelve el snapshot parseado si la key existe en Redis', async () => {
       redisService.get.mockResolvedValue(
-        JSON.stringify({ id: 'user-1', isConfigured: true }),
+        JSON.stringify({ id: 'user-1', signatureId: 'sig-1' }),
       );
 
       const result = await service.readCachedProfile('CURP1');
 
       expect(redisService.get).toHaveBeenCalledWith('CURP1');
-      expect(result).toEqual({ id: 'user-1', isConfigured: true });
+      expect(result).toEqual({ id: 'user-1', signatureId: 'sig-1' });
     });
 
     /** Devolver null y no reconstruir es lo que deja al caso de uso decidir qué hacer. */
@@ -708,16 +707,6 @@ describe('UserService', () => {
       redisService.get.mockResolvedValue(null);
 
       expect(await service.readCachedProfile('CURP1')).toBeNull();
-    });
-  });
-
-  describe('markConfigured', () => {
-    it('fija isConfigured=true sin comprobar nada más', async () => {
-      await service.markConfigured('user-1');
-
-      expect(userRepository.update).toHaveBeenCalledWith('user-1', {
-        isConfigured: true,
-      });
     });
   });
 

@@ -7,7 +7,6 @@ import { SignatureCaptureSessionsController } from './signature-capture-sessions
 import { SignatureEntity } from './entities/signature.entity';
 import { SignatureCaptureSessionEntity } from './entities/signature-capture-session.entity';
 import { SimpleSignatureEntity } from './entities/simple-signature.entity';
-import { FielSignatureEntity } from './entities/fiel-signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { MinioService } from 'src/common/minio/minio.service';
 import { SharedModule } from 'src/common/shared.module';
@@ -39,7 +38,6 @@ import { DeleteOfficialFileUseCase } from './applications/delete-official-file.u
       SignatureEntity,
       SignatureCaptureSessionEntity,
       SimpleSignatureEntity,
-      FielSignatureEntity,
       UserEntity,
     ]),
     SharedModule,

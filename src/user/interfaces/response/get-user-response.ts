@@ -87,19 +87,6 @@ export class UserGetData {
   })
   signatureId: string | null;
 
-  /**
-   * @deprecated Ya no controla el acceso a nada. Quedó como bandera de onboarding general
-   * (datos personales) y ninguna pantalla la consulta para decidir si se puede crear un
-   * documento o firmar: eso lo decide `signingCredentialStatus`.
-   */
-  @ApiProperty({
-    example: false,
-    deprecated: true,
-    description:
-      'Obsoleta: marca el fin del onboarding general y ya no habilita ninguna acción. Usa signingCredentialStatus.',
-  })
-  isConfigured: boolean;
-
   @ApiProperty({
     enum: SIGNING_CREDENTIAL_STATUS_ENUM,
     example: SIGNING_CREDENTIAL_STATUS_ENUM.IDENTITY_VERIFICATION_REQUIRED,

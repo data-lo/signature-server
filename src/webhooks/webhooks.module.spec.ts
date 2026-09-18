@@ -4,7 +4,6 @@ import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
-import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { PersonalInformationEntity } from 'src/user/entities/personal-information.entity';
@@ -63,8 +62,6 @@ describe('WebhooksModule', () => {
       ],
     })
       .overrideProvider(getRepositoryToken(WebhookEventEntity))
-      .useValue(repositoryStub)
-      .overrideProvider(getRepositoryToken(AccountSubscriptionEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(AccountEntity))
       .useValue(repositoryStub)

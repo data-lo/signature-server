@@ -9,7 +9,6 @@ import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availabili
 import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
 import { UpdateMyPersonalInformationUseCase } from './applications/update-my-personal-information.use-case';
 import { ChangeMyPasswordUseCase } from './applications/change-my-password.use-case';
-import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
 import { UserController } from './user.controller';
 import { UsersController } from './users.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -35,7 +34,6 @@ import { AccountModule } from 'src/account/account.module';
     GetMyProfileUseCase,
     UpdateMyPersonalInformationUseCase,
     ChangeMyPasswordUseCase,
-    CompleteMyOnboardingUseCase,
   ],
   controllers: [UserController, UsersController],
   imports: [

@@ -118,12 +118,10 @@ export class CreateSubscriptionCheckoutUseCase {
         customerId,
         successUrl: `${frontendUrl}${SUCCESS_PATH}`,
         cancelUrl: `${frontendUrl}${CANCEL_PATH}`,
-        // `accountId` lo sigue necesitando el flujo heredado de `account_subscriptions`.
         metadata: {
           billingProfileId: profile.id,
           planType: plan.planType,
           catalogPriceId: catalogPrice.id,
-          accountId: input.accountId,
         },
       });
 

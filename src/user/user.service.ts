@@ -697,14 +697,6 @@ export class UserService {
     return updatedUser;
   }
 
-  /**
-   * Consolida el onboarding marcando `isConfigured=true`. Quién puede hacerlo y con qué
-   * condiciones lo decide `CompleteMyOnboardingUseCase`: acá sólo se escribe la columna.
-   */
-  async markConfigured(userId: string): Promise<void> {
-    await this.userRepository.update(userId, { isConfigured: true });
-  }
-
   /** Usuario con su información personal cargada, o `null` si no existe. */
   async findOneWithPersonalInformation(
     userId: string,
@@ -739,7 +731,6 @@ export class UserService {
       email: user.email,
       roles: user.roles,
       nationalId: user.nationalId,
-      isConfigured: user.isConfigured,
       signatureId: user.signatureId,
       // La pantalla "Identidad y firma" decide qué mostrar con estos campos, y se hidrata desde
       // este snapshot. `UpdateSigningCredentialStatusUseCase` borra la key de Redis al cambiar

@@ -38,17 +38,6 @@ export class UserEntity {
   @Column({ default: false, name: 'is_deleted' })
   isDeleted: boolean;
 
-  /**
-   * Fin del onboarding general (datos personales de contacto).
-   *
-   * @deprecated Para decidir qué puede hacer el usuario. Ya no controla el acceso a ninguna
-   * pantalla ni acción: crear documentos no depende de ella y firmar depende de
-   * `signingCredentialStatus`. Se conserva la columna porque describe un hecho real del
-   * onboarding, pero nada la consulta para autorizar.
-   */
-  @Column({ default: false, name: 'is_configured' })
-  isConfigured: boolean;
-
   @Column({ default: false, name: 'is_email_verified' })
   isEmailVerified: boolean;
 
@@ -71,9 +60,9 @@ export class UserEntity {
    * servicio, controller ni el frontend la tocan directamente. Los disparadores son eventos de
    * Didit (webhook), acciones del usuario sobre su firma y la regla de máximo de intentos.
    *
-   * Es la única variable que decide si el usuario puede firmar con firma Simple. `isConfigured`
-   * no participa: marca el fin del onboarding general (datos personales) y no sabe nada de
-   * identidad validada.
+   * Es la única variable que decide si el usuario puede firmar con firma Simple. Sustituyó a la
+   * antigua bandera `is_configured` (fin del onboarding general), que se eliminó en la depuración
+   * de modelos deprecados.
    */
   @Column({
     type: 'enum',

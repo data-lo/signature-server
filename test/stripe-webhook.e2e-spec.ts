@@ -14,7 +14,6 @@ import { WebhookEventEntity } from './../src/webhooks/entities/webhook-event.ent
 import { WEBHOOK_PROCESSING_STATUS_ENUM } from './../src/webhooks/enums/webhook-processing-status.enum';
 import { StripeWebhookService } from './../src/payments/stripe/stripe-webhook.service';
 import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
-import { AccountSubscriptionEntity } from './../src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './../src/billing/subscriptions/subscription-billing.service';
 import { RegisterSubscriptionBillingUseCase } from './../src/billing/subscriptions/register-subscription-billing.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './../src/billing/subscriptions/finalize-subscription-from-stripe.use-case';
@@ -281,10 +280,6 @@ describe('Webhook de Stripe (e2e)', () => {
         {
           provide: getRepositoryToken(WebhookEventEntity),
           useValue: webhookEvents,
-        },
-        {
-          provide: getRepositoryToken(AccountSubscriptionEntity),
-          useValue: createInMemoryRepository(),
         },
         {
           provide: getRepositoryToken(BillingProfileEntity),
