@@ -32,10 +32,6 @@ export class RoleEntity {
   @Column({ name: 'organization_id', nullable: true })
   organizationId: string | null;
 
-  /** Significado de negocio por definir (ver migración AddVisibilityToRoles) — aterrizada sin enforcement todavía. */
-  @Column({ default: 0 })
-  visibility: number;
-
   @ManyToOne(() => OrganizationEntity, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'organization_id' })
   organization: OrganizationEntity | null;

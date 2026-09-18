@@ -1,11 +1,8 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingModule } from 'src/billing/billing.module';
-import { AccountSubscriptionEntity } from './entities/account-subscription.entity';
 import { StripePaymentService } from './stripe/stripe-payment.service';
 import { StripeWebhookService } from './stripe/stripe-webhook.service';
 import { GetPublicStripePlansUseCase } from './applications/get-public-stripe-plans.use-case';
-import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { PaymentsController } from './payments.controller';
 import { SharedModule } from 'src/common/shared.module';
 
@@ -28,13 +25,10 @@ import { SharedModule } from 'src/common/shared.module';
 @Module({
   imports: [
     /**
-     * `AccountEntity` ya no se registra acá: entró cuando `GetSubscriptionStateUseCase`
-     * resolvía la cuenta por su cuenta, y desde que esa resolución la hace `BillingOwnerService`
-     * ningún proveedor de este módulo inyecta ese repositorio. `AccountSubscriptionEntity` sí
-     * sigue: `StripeWebhookService` mantiene esa tabla por compatibilidad, aunque ya no sea la
-     * fuente de verdad del estado de suscripción.
+     * Sin `TypeOrmModule.forFeature`: ningún proveedor de este módulo inyecta repositorios. El
+     * último era `AccountSubscriptionEntity` (modelo de suscripción anterior a
+     * `billing_profiles`), eliminado junto con su tabla.
      */
-    TypeOrmModule.forFeature([AccountSubscriptionEntity]),
     // `forwardRef`: billing necesita el adaptador de Stripe de este módulo para abrir el
     // checkout, y este módulo necesita los handlers de billing en su router de webhooks.
     forwardRef(() => BillingModule),
@@ -46,7 +40,6 @@ import { SharedModule } from 'src/common/shared.module';
     StripePaymentService,
     StripeWebhookService,
     GetPublicStripePlansUseCase,
-    GetSubscriptionStateUseCase,
   ],
   exports: [StripePaymentService, StripeWebhookService],
 })

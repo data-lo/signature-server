@@ -9,7 +9,6 @@ import { WebhookEventEntity } from 'src/webhooks/entities/webhook-event.entity';
 import { WEBHOOK_PROCESSING_STATUS_ENUM } from 'src/webhooks/enums/webhook-processing-status.enum';
 import { StripeWebhookService } from 'src/payments/stripe/stripe-webhook.service';
 import { StripePaymentService } from 'src/payments/stripe/stripe-payment.service';
-import { AccountSubscriptionEntity } from 'src/payments/entities/account-subscription.entity';
 import { SubscriptionBillingService } from './subscription-billing.service';
 import { RegisterSubscriptionBillingUseCase } from './register-subscription-billing.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './finalize-subscription-from-stripe.use-case';
@@ -186,10 +185,6 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
         {
           provide: getRepositoryToken(WebhookEventEntity),
           useValue: webhookEventRepository,
-        },
-        {
-          provide: getRepositoryToken(AccountSubscriptionEntity),
-          useValue: createMockRepository(),
         },
         {
           provide: getRepositoryToken(BillingProfileEntity),

@@ -71,7 +71,10 @@ async function upsertUser(
   const existing = await userRepository.findOne({
     where: { email: spec.email },
   });
-  if (existing) return existing;
+  if (existing) {
+    await ensurePersonalAccount(dataSource, existing);
+    return existing;
+  }
 
   const personalInformationRepository = dataSource.getRepository(
     PersonalInformationEntity,
@@ -86,7 +89,7 @@ async function upsertUser(
 
   const password = await bcrypt.hash('Password123!', 10);
 
-  return userRepository.save(
+  const user = await userRepository.save(
     userRepository.create({
       firstName: spec.firstName,
       lastName: spec.lastName,
@@ -95,6 +98,47 @@ async function upsertUser(
       nationalId: spec.nationalId,
       password,
       personalInformationId: personalInformation.id,
+    }),
+  );
+  await ensurePersonalAccount(dataSource, user);
+  return user;
+}
+
+/**
+ * Garantiza que el usuario sembrado tenga su cuenta PERSONAL.
+ *
+ * Los documentos de prueba se cuelgan de `accounts` (`documents.account_id`,
+ * `collaborators.account_id`), así que un usuario sin cuenta PERSONAL tumbaba el seed en
+ * `findPersonalAccountId`. Antes sólo se creaba el usuario, y el seed únicamente funcionaba en
+ * bases donde esos usuarios ya tenían cuenta por haberse registrado a mano. Es idempotente: si la
+ * cuenta existe, no hace nada.
+ *
+ * @param dataSource - Conexión del seed.
+ * @param user - Usuario sembrado o ya existente.
+ * @returns Nada.
+ *
+ * @example
+ * ```ts
+ * await ensurePersonalAccount(dataSource, user);
+ * ```
+ */
+async function ensurePersonalAccount(
+  dataSource: DataSource,
+  user: UserEntity,
+): Promise<void> {
+  const accountRepository = dataSource.getRepository(AccountEntity);
+  const exists = await accountRepository.exists({
+    where: { userId: user.id, accountType: ACCOUNT_TYPE_ENUM.PERSONAL },
+  });
+  if (exists) return;
+
+  await accountRepository.save(
+    accountRepository.create({
+      userId: user.id,
+      accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+      organizationId: null,
+      email: user.email,
+      password: user.password,
     }),
   );
 }
