@@ -32,18 +32,6 @@ export class UserMeData {
   @ApiProperty({ example: 'PELJ850101HDFRNN08' })
   nationalId: string;
 
-  /**
-   * @deprecated Ya no habilita ninguna acción; la credencial de firma se decide con
-   * `signingCredentialStatus`.
-   */
-  @ApiProperty({
-    example: false,
-    deprecated: true,
-    description:
-      'Obsoleta: marca el fin del onboarding general y ya no habilita ninguna acción. Usa signingCredentialStatus.',
-  })
-  isConfigured: boolean;
-
   @ApiProperty({ format: 'uuid', nullable: true })
   signatureId: string | null;
 

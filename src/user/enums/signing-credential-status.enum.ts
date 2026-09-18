@@ -12,8 +12,8 @@
  *
  *     signingCredentialConfigured = signingCredentialStatus === CONFIGURED
  *
- * No se confunde con `users.is_configured`, que marca el fin del onboarding general (datos
- * personales) y no sabe nada de identidad validada.
+ * Sustituyó a la antigua columna `users.is_configured` (fin del onboarding general), eliminada
+ * en la depuración de modelos deprecados.
  */
 export enum SIGNING_CREDENTIAL_STATUS_ENUM {
   /** Estado inicial de todo usuario: nunca inició una verificación de identidad. */

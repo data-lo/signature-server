@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Get,
-  Patch,
   Put,
   Query,
   UploadedFiles,
@@ -26,12 +25,10 @@ import { CheckRfcAvailabilityUseCase } from './applications/check-rfc-availabili
 import { GetMyProfileUseCase } from './applications/get-my-profile.use-case';
 import { UpdateMyPersonalInformationUseCase } from './applications/update-my-personal-information.use-case';
 import { ChangeMyPasswordUseCase } from './applications/change-my-password.use-case';
-import { CompleteMyOnboardingUseCase } from './applications/complete-my-onboarding.use-case';
 
 // DTOs
 import { UpdatePersonalInformationDto } from './dto/update-personal-information.dto';
 import { ChangeMyPasswordDto } from './dto/change-my-password.dto';
-import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { CreateSignatureDto } from 'src/signature/dto/create-signature.dto';
 
 // Docs
@@ -40,7 +37,6 @@ import { ApiGetMyProfile } from './docs/api-get-my-profile.docs';
 import { ApiUpdateMyPersonalInformation } from './docs/api-update-my-personal-information.docs';
 import { ApiChangeMyPassword } from './docs/api-change-my-password.docs';
 import { ApiRegisterMySignature } from './docs/api-register-my-signature.docs';
-import { ApiCompleteMyOnboarding } from './docs/api-complete-my-onboarding.docs';
 
 @ApiTags('Users')
 @ApiBearerAuth('access-token')
@@ -52,7 +48,6 @@ export class UsersController {
     private readonly updateMyPersonalInformation: UpdateMyPersonalInformationUseCase,
     private readonly changeMyPassword: ChangeMyPasswordUseCase,
     private readonly uploadSignatureImage: UploadSignatureImageUseCase,
-    private readonly completeMyOnboarding: CompleteMyOnboardingUseCase,
   ) {}
 
   @Get('check-rfc')
@@ -112,14 +107,5 @@ export class UsersController {
     },
   ) {
     return this.uploadSignatureImage.execute(user.sub, dto, files);
-  }
-
-  @Patch('me/status')
-  @ApiCompleteMyOnboarding()
-  updateStatus(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: UpdateUserStatusDto,
-  ) {
-    return this.completeMyOnboarding.execute(user.sub, dto);
   }
 }

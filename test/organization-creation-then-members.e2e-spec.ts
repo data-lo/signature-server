@@ -62,7 +62,6 @@ describe('Crear organización y consultar su detalle de inmediato (e2e)', () => 
         roles: ['USER'],
         isActive: true,
         isDeleted: false,
-        isConfigured: true,
         isEmailVerified: true,
         nationalId: `NID${label}${Date.now()}`.slice(0, 18).toUpperCase(),
         password: 'hash-no-usado-en-esta-prueba',

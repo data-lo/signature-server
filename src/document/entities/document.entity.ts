@@ -116,9 +116,6 @@ export class DocumentEntity {
   @Column({ default: true, name: 'is_sequential' })
   isSequential: boolean;
 
-  @Column({ nullable: true, name: 'expiration_date' })
-  expirationDate: Date | null;
-
   /**
    * Clave real de aislamiento multi-tenant para documentos en contexto de organización (ver
    * plan de migración ER-V2, Fase 5, decisión D5). NULL para documentos en contexto personal,
@@ -135,9 +132,6 @@ export class DocumentEntity {
 
   @Column({ default: 0, name: 'visibility_level' })
   visibilityLevel: number;
-
-  @Column({ name: 'seal_key', nullable: true })
-  sealKey?: string;
 
   /**
    * Desde cuándo este documento firmado espera su constancia de conservación NOM-151.
@@ -158,10 +152,6 @@ export class DocumentEntity {
 
   @Column({ default: 0, name: 'completed_signers_count' })
   completedSignersCount: number;
-
-  /** No-op hasta el flujo de revisión (ver Fase 6 del plan, rol REVIEWER). */
-  @Column({ nullable: true, name: 'reviewed_by' })
-  reviewedBy: string | null;
 
   @Column({ default: false, name: 'requires_verification' })
   requiresVerification: boolean;

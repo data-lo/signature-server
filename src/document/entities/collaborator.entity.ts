@@ -10,18 +10,20 @@ import {
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { DocumentEntity } from './document.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
-import { FielSignatureEntity } from 'src/signature/entities/fiel-signature.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
-import { REMINDER_PERIODICITY_ENUM } from '../enum/reminder-periodicity.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 
 /**
  * Reemplaza a DocumentParticipantEntity (ver plan de migración ER-V2, Fase 3). Generaliza
  * "participante" a "colaborador": agrega el rol REVIEWER, permite invitar solo por email
- * (accountId nullable) sin que exista una cuenta de plataforma todavía, y suma comments/geoLoc/
- * cancellationReason/reminderPeriodicity/signatureType que no existían antes.
+ * (accountId nullable) sin que exista una cuenta de plataforma todavía, y suma geoLoc/
+ * cancellationReason/signatureType que no existían antes.
+ *
+ * `comments`, `reminderPeriodicity` y la relación con `fiel_signatures` se eliminaron en la
+ * depuración de modelos deprecados (migración `DropDeprecatedSchema`): ningún flujo las escribía
+ * ni las leía. La firma avanzada vive en `advancedSignature`.
  *
  * `accountId` reemplazó a `userId` (ver diagrama ER-V2 más reciente / migración
  * `RenameCollaboratorUserIdToAccountId`): apunta a la cuenta PERSONAL del colaborador, no
@@ -88,9 +90,6 @@ export class CollaboratorEntity {
   })
   status: SIGNEE_STATUS_ENUM;
 
-  @Column({ type: 'text', nullable: true })
-  comments: string | null;
-
   @Column({ name: 'ip_address' })
   ipAddress: string;
 
@@ -105,14 +104,6 @@ export class CollaboratorEntity {
   @Column({ name: 'cancellation_reason', type: 'text', nullable: true })
   cancellationReason: string | null;
 
-  @Column({
-    name: 'reminder_periodicity',
-    type: 'enum',
-    enum: REMINDER_PERIODICITY_ENUM,
-    nullable: true,
-  })
-  reminderPeriodicity: REMINDER_PERIODICITY_ENUM | null;
-
   /** Coordenadas de firma explícitas de este colaborador (ver Fase 4 del plan). NULL = usa el apilado automático. */
   @Column({ name: 'simple_signature_id', nullable: true })
   simpleSignatureId: string | null;
@@ -120,11 +111,6 @@ export class CollaboratorEntity {
   @ManyToOne(() => SimpleSignatureEntity, { nullable: true })
   @JoinColumn({ name: 'simple_signature_id' })
   simpleSignature: SimpleSignatureEntity | null;
-
-  /** Modelo de datos histórico (ver Fase 8 del plan) — la validación/firma FIEL real se resuelve
-   * en el momento de firmar vía `EfirmaService` (ver `advancedSignature`), no a través de esta FK. */
-  @Column({ name: 'fiel_signature_id', nullable: true })
-  fielSignatureId: string | null;
 
   /**
    * Copia inmutable de la imagen de firma tomada en el momento en que este colaborador firmó
@@ -145,10 +131,6 @@ export class CollaboratorEntity {
    */
   @Column({ name: 'advanced_signature', type: 'jsonb', nullable: true })
   advancedSignature: SignatureResult | null;
-
-  @ManyToOne(() => FielSignatureEntity, { nullable: true })
-  @JoinColumn({ name: 'fiel_signature_id' })
-  fielSignature: FielSignatureEntity | null;
 
   @Column({
     name: 'signature_type',

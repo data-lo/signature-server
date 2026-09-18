@@ -15,14 +15,11 @@ import type { SubscriptionScheduleResponse } from 'src/billing/subscriptions/sub
 import { GetBillingAccessUseCase } from 'src/billing/entitlements/get-billing-access.use-case';
 import type { BillingAccessResponse } from 'src/billing/entitlements/plan-entitlements.types';
 import { GetPublicStripePlansUseCase } from './applications/get-public-stripe-plans.use-case';
-import { GetSubscriptionStateUseCase } from './applications/get-subscription-state.use-case';
 import { CreateCheckoutSessionDto } from './dto/create-checkout-session.dto';
 import { CheckoutSessionResponse } from './interfaces/checkout-session-response.interface';
 import { PaymentServiceResponse } from './interfaces/payment-service-response.interface';
-import { UserSubscriptionState } from './interfaces/user-subscription-state.interface';
 import { ApiGetPaymentServices } from './docs/api-get-payment-services.docs';
 import { ApiCreateCheckoutSession } from './docs/api-create-checkout-session.docs';
-import { ApiGetSubscriptionState } from './docs/api-get-subscription-state.docs';
 import { ApiGetBillingState } from './docs/api-get-billing-state.docs';
 import { ApiCancelSubscription } from './docs/api-cancel-subscription.docs';
 import { ApiResumeSubscription } from './docs/api-resume-subscription.docs';
@@ -43,7 +40,6 @@ export class PaymentsController {
   constructor(
     private readonly getPublicStripePlans: GetPublicStripePlansUseCase,
     private readonly createSubscriptionCheckout: CreateSubscriptionCheckoutUseCase,
-    private readonly getSubscriptionState: GetSubscriptionStateUseCase,
     private readonly getBillingAccess: GetBillingAccessUseCase,
     private readonly getDocumentCreditOffers: GetAvailableDocumentCreditOffersUseCase,
     private readonly createDocumentCreditCheckout: CreateDocumentCreditCheckoutUseCase,
@@ -154,14 +150,14 @@ export class PaymentsController {
    *
    * **Es la fuente única del frontend**, y responde las cuatro cosas juntas porque juntas se
    * usan: una pantalla que supiera el plan pero no el saldo dibujaría un botón de "crear
-   * documento" que el backend va a rechazar. Antes hacían falta dos consultas al MISMO
-   * `billing_profile` —ésta y `GET /subscription`—, con dos cachés que podían mostrar dos
-   * verdades distintas del mismo perfil.
+   * documento" que el backend va a rechazar. Sustituyó a `GET /subscription`, que ya se retiró:
+   * con las dos había que hacer dos consultas al MISMO `billing_profile`, con dos cachés que
+   * podían mostrar dos verdades distintas del mismo perfil.
    *
    * Lleva `X-Account-Id` por el mismo motivo que el checkout, y no por simetría: un usuario con
    * cuenta personal y organización tiene DOS estados de facturación distintos a la vez, y cuál
    * de los dos se responde depende de en cuál esté trabajando. Sin el header no habría forma de
-   * saberlo — que es exactamente el defecto de `GET /subscription`, debajo.
+   * saberlo.
    *
    * **`actions` y `limits` NO autorizan.** Son para dibujar: habilitar, ocultar, ofrecer la
    * mejora. Cada acción protegida se vuelve a validar en su propio endpoint contra el mismo mapa
@@ -224,32 +220,6 @@ export class PaymentsController {
       success: true,
       message: 'Tu suscripción volverá a renovarse automáticamente',
       data: await this.resumeSubscription.execute({
-        userId: user.sub,
-        accountId,
-      }),
-    };
-  }
-
-  /**
-   * @deprecated Sustituido por `GET /payments/billing-state`, que responde todo esto y además el
-   * saldo, los beneficios y los límites de la cuenta activa. **Ya no lo consume el frontend**; se
-   * conserva sólo por si quedara algún cliente sin actualizar, y se retira en cuanto se confirme
-   * que no queda ninguno.
-   *
-   * Su contrato es además incompleto para lo que hoy se necesita: devuelve `planType` sin
-   * `billingProfileId`, sin saldo y sin beneficios, así que quien lo use sigue obligado a decidir
-   * qué habilitar a partir del NOMBRE del plan — que es exactamente lo que `actions` elimina.
-   */
-  @Get('subscription')
-  @ApiGetSubscriptionState()
-  async subscription(
-    @CurrentUser() user: JwtPayload,
-    @ActiveAccountId() accountId: string,
-  ): Promise<BaseResponse<UserSubscriptionState>> {
-    return {
-      success: true,
-      message: 'Estado de suscripción obtenido correctamente',
-      data: await this.getSubscriptionState.execute({
         userId: user.sub,
         accountId,
       }),
