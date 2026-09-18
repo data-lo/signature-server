@@ -9,21 +9,6 @@ import {
   STATIC_PERMISSION_KEY_ENUM,
 } from './static-permission-catalog';
 
-/**
- * Traduce una fila de `permissions` a la forma en que el frontend la muestra: una clave estable
- * y una descripción en lenguaje de negocio, en MAYÚSCULAS.
- *
- * La clave se DERIVA de la fila (`resource.key`, `action.key`, `scope`) en vez de guardarse en
- * la base: `permissions` no tiene columna de clave ni de descripción, y agregarlas sería un
- * cambio de esquema para algo que sólo se lee en la UI de administración de miembros.
- *
- * Las descripciones salen de `STATIC_PERMISSION_CATALOG`, la única fuente de verdad del catálogo:
- * antes vivían duplicadas acá, y un permiso nuevo aparecía en pantalla con el texto genérico hasta
- * que alguien se acordaba de copiar el suyo. Cualquier fila que no sea del catálogo —la rejilla
- * CRUD que sembró `npm run seed:roles`, o un permiso que una organización agregue en el futuro— se
- * describe con el texto de su recurso y su acción, para que la pantalla nunca muestre un hueco.
- */
-
 /** Descripciones del catálogo estático, indexadas por la clave que publica la API. */
 const STATIC_PERMISSION_DESCRIPTIONS: Record<string, string> =
   Object.fromEntries(
