@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { ACTION_KEY_ENUM } from '../enums/action-key.enum';
 import { RoleData } from '../interfaces/response/role-response';
 import { RolesService } from '../roles.service';
 
@@ -18,12 +17,12 @@ export class ListOrganizationRolesUseCase {
     callerId: string,
     organizationId: string,
   ): Promise<BaseResponse<RoleData[]>> {
-    await this.rolesService.assertHasOrganizationPermission(
-      callerId,
-      organizationId,
-      ACTION_KEY_ENUM.READ,
-    );
-
+    /**
+     * Sin comprobación de permisos aquí: la hace `PermissionsGuard` a partir del
+     * `@RequirePermission(ROLE, READ)` del controller, que además exige el permiso propio
+     * del recurso (`ROLE.READ`) en vez del genérico `ORGANIZATION.READ` que se usaba
+     * antes. El caso de uso ya sólo coordina la operación.
+     */
     const roles = await this.rolesService.listOrganizationRoles(organizationId);
     const permissionsByRole = await this.rolesService.listPermissionsByRoleIds(
       roles.map((role) => role.id),

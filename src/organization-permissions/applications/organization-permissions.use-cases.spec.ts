@@ -158,15 +158,6 @@ describe('casos de uso de permisos de organización', () => {
 
       expect(result.data).toHaveLength(1);
     });
-
-    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
-      accountRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        getOrganizationPermissions.execute('intruder', 'org-1'),
-      ).rejects.toThrow(ForbiddenException);
-      expect(organizationPermissionRepository.find).not.toHaveBeenCalled();
-    });
   });
 
   describe('CreateOrganizationPermissionUseCase', () => {
@@ -186,17 +177,6 @@ describe('casos de uso de permisos de organización', () => {
         }),
       );
       expect(result.success).toBe(true);
-    });
-
-    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
-      accountRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        createOrganizationPermission.execute('intruder', 'org-1', {
-          name: 'Aprobar',
-        }),
-      ).rejects.toThrow(ForbiddenException);
-      expect(organizationPermissionRepository.save).not.toHaveBeenCalled();
     });
 
     it('lanza ConflictException si ya existe un permiso con ese nombre en la organización', async () => {

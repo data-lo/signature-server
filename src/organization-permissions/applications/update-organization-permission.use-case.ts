@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 import { UpdateOrganizationPermissionDto } from '../dto/update-organization-permission.dto';
 import { OrganizationPermissionData } from '../interfaces/response/organization-permission-response';
@@ -27,12 +26,13 @@ export class UpdateOrganizationPermissionUseCase {
     permissionId: string,
     dto: UpdateOrganizationPermissionDto,
   ): Promise<BaseResponse<OrganizationPermissionData>> {
-    await this.organizationPermissionsService.assertHasOrganizationPermission(
-      callerId,
-      organizationId,
-      ACTION_KEY_ENUM.UPDATE,
-    );
-
+    /**
+     * Sin comprobación de permisos aquí: la hace `PermissionsGuard` con el
+     * `@RequirePermission(ORGANIZATION, UPDATE)` del controller. El catálogo estático no
+     * distingue CREATE ni DELETE sobre la organización —sus dos permisos son `ORGANIZATION.READ`
+     * y `ORGANIZATION.UPDATE`—, y el catálogo de permisos de organización es precisamente
+     * configuración suya, así que crear, editar y borrar entradas caen todas bajo `UPDATE`.
+     */
     const permission =
       await this.organizationPermissionsService.findPermissionOrFail(
         organizationId,

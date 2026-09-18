@@ -18,6 +18,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { RequirePermission } from 'src/authorization/decorators/require-permission.decorator';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
 // Use cases
 import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
@@ -73,6 +76,7 @@ export class OrganizationsController {
 
   @Post('invite')
   @ApiInviteOrganizationMember()
+  @RequirePermission(RESOURCE_KEY_ENUM.MEMBER, ACTION_KEY_ENUM.INVITE)
   invite(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -88,6 +92,7 @@ export class OrganizationsController {
    */
   @Post('members')
   @ApiAddOrganizationMember()
+  @RequirePermission(RESOURCE_KEY_ENUM.MEMBER, ACTION_KEY_ENUM.INVITE)
   addMember(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -98,6 +103,7 @@ export class OrganizationsController {
 
   @Get(':organizationId/members')
   @ApiGetOrganizationMemberList()
+  @RequirePermission(RESOURCE_KEY_ENUM.MEMBER, ACTION_KEY_ENUM.READ)
   findMembers(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,

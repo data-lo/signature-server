@@ -14,6 +14,7 @@ import { PermissionEntity } from './entities/permission.entity';
 import { SYSTEM_ROLE_NAME_ENUM } from './enums/system-role-name.enum';
 import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from './enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from './enums/permission-scope.enum';
 import { RolePermissionData } from './interfaces/response/permission-response';
 import {
   buildPermissionKey,
@@ -174,9 +175,9 @@ export class RolesService {
    * **Ignora el `scope`**: pregunta por resource+action y acepta cualquier alcance. Con la
    * rejilla de `seed:roles` (todo `ANY`) daba igual, pero el catálogo de permisos estáticos
    * (`npm run seed:static-permissions`, ver `src/roles/static-permission-catalog.ts`) ya
-   * distingue `OWN` de `ORGANIZATION`, así que quien necesite esa diferencia tendrá que
-   * consultar también el alcance — es parte del ticket de RBAC efectivo, no de la carga del
-   * catálogo, y hoy ninguna ruta pregunta por permisos de DOCUMENT.
+   * distingue `OWN` de `ORGANIZATION`. Quien necesite esa diferencia usa
+   * `getPermissionScopes`, que devuelve los alcances concedidos en vez de un sí/no: es lo que
+   * consulta `AuthorizationService` para armar el contexto que después lee cada Policy.
    */
   async hasPermission(
     roleId: string | null | undefined,
@@ -197,6 +198,69 @@ export class RolesService {
     });
 
     return !!match;
+  }
+
+  /**
+   * Alcances que un rol tiene concedidos para una combinación de recurso y acción.
+   *
+   * Es la consulta que sostiene la autorización centralizada: recorre
+   * `role_permissions → permissions → resources → actions` y NO mira en ningún momento el nombre
+   * del rol, así que un rol custom de organización con una combinación parcial del catálogo
+   * funciona igual que ADMIN o que MEMBER.
+   *
+   * Devuelve una lista porque un mismo `resource + action` puede estar concedido con más de un
+   * alcance a la vez: `DOCUMENT.READ_OWN` y `DOCUMENT.READ_ORGANIZATION` comparten
+   * `DOCUMENT + READ` y se distinguen sólo por el scope. Un rol que tenga los dos recibe
+   * `['OWN', 'ORGANIZATION']`, y es la Policy del recurso la que decide con cuál entra.
+   *
+   * Un arreglo vacío significa exactamente "este rol no puede ejercer esa acción sobre ese
+   * recurso": no se lanza nada aquí, porque quien traduce eso a un 403 es `AuthorizationService`.
+   *
+   * @param roleId - Rol de la membresía activa; `null`/`undefined` (membresía sin rol) devuelve
+   *   la lista vacía en vez de consultar.
+   * @param resource - Recurso declarado por el endpoint.
+   * @param action - Acción declarada por el endpoint.
+   * @returns Los alcances concedidos, sin repetidos y en el orden en que los devolvió la base.
+   *
+   * @throws {QueryFailedError} Si la consulta contra Postgres falla.
+   *
+   * @example
+   * ```ts
+   * const scopes = await rolesService.getPermissionScopes(
+   *   membership.roleId,
+   *   RESOURCE_KEY_ENUM.DOCUMENT,
+   *   ACTION_KEY_ENUM.READ,
+   * );
+   * // ['OWN', 'ORGANIZATION'] para ADMIN; ['OWN'] para MEMBER; [] para un rol sin el permiso.
+   * ```
+   */
+  async getPermissionScopes(
+    roleId: string | null | undefined,
+    resource: RESOURCE_KEY_ENUM,
+    action: ACTION_KEY_ENUM,
+  ): Promise<PERMISSION_SCOPE_ENUM[]> {
+    if (!roleId) return [];
+
+    const grants = await this.rolePermissionRepository.find({
+      where: {
+        roleId,
+        permission: {
+          resource: { key: resource },
+          action: { key: action },
+        },
+      },
+      relations: { permission: { resource: true, action: true } },
+    });
+
+    // `Set` por defensa: `permissions` es única por (resource, action, scope) y
+    // `role_permissions` por (role_id, permission_id), así que hoy no deberían repetirse — pero
+    // el contexto de autorización se publica hacia las Policies y un alcance duplicado ahí sólo
+    // sería ruido.
+    return [
+      ...new Set(
+        grants.map((grant) => grant.permission.scope as PERMISSION_SCOPE_ENUM),
+      ),
+    ];
   }
 
   async assertHasPermission(
