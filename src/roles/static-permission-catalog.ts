@@ -56,26 +56,8 @@ export interface StaticPermissionDefinition {
   resource: RESOURCE_KEY_ENUM;
   action: ACTION_KEY_ENUM;
   scope: PERMISSION_SCOPE_ENUM;
-  /** Qué habilita, en lenguaje de negocio y en MAYÚSCULAS. No se persiste (ver docblock). */
   description: string;
 }
-
-/**
- * Pasa una descripción a la forma en que el catálogo la publica y la persiste: MAYÚSCULAS y sin
- * espacios de sobra.
- *
- * Se aplica al escribir en `resources`/`actions` y al publicar cualquier descripción hacia la API,
- * así que una fila sembrada antes de esta regla —o por `seed:roles`— se corrige en la siguiente
- * corrida del seed en vez de quedarse en minúsculas para siempre.
- *
- * @param description - Texto tal como lo declara el catálogo o como vino de la base.
- * @returns El mismo texto en mayúsculas, recortado.
- *
- * @example
- * ```ts
- * normalizeCatalogDescription('Ver miembros'); // 'VER MIEMBROS'
- * ```
- */
 export function normalizeCatalogDescription(description: string): string {
   return description.trim().toUpperCase();
 }
