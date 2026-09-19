@@ -3,6 +3,10 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { RequirePermission } from 'src/authorization/decorators/require-permission.decorator';
+
+import { ACTION_KEY_ENUM } from './enums/action-key.enum';
+import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 
 import { CreateOrganizationRoleDto } from './dto/create-organization-role.dto';
 import { UpdateOrganizationRoleDto } from './dto/update-organization-role.dto';
@@ -33,6 +37,7 @@ export class OrganizationRolesController {
 
   @Get()
   @ApiListOrganizationRoles()
+  @RequirePermission(RESOURCE_KEY_ENUM.ROLE, ACTION_KEY_ENUM.READ)
   findAll(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -42,6 +47,7 @@ export class OrganizationRolesController {
 
   @Post()
   @ApiCreateOrganizationRole()
+  @RequirePermission(RESOURCE_KEY_ENUM.ROLE, ACTION_KEY_ENUM.MANAGE)
   create(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -52,6 +58,7 @@ export class OrganizationRolesController {
 
   @Patch(':roleId')
   @ApiUpdateOrganizationRole()
+  @RequirePermission(RESOURCE_KEY_ENUM.ROLE, ACTION_KEY_ENUM.MANAGE)
   update(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,

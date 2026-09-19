@@ -103,6 +103,7 @@ describe('casos de uso de miembros de organización', () => {
     removeAccountFromCatalog: jest.Mock;
     appendAccountToCatalog: jest.Mock;
     assertHasOrganizationPermission: jest.Mock;
+    resolveOwnActiveAccountOrFail: jest.Mock;
   };
   let rolesService: {
     findByIdOrFail: jest.Mock;
@@ -121,6 +122,13 @@ describe('casos de uso de miembros de organización', () => {
       appendAccountToCatalog: jest.fn(),
       // Espeja al real: devuelve la cuenta ACTIVA del llamador, de la que sale el organizationId.
       assertHasOrganizationPermission: jest
+        .fn()
+        .mockResolvedValue(adminAccount()),
+      /**
+       * La misma cuenta, resuelta sin volver a preguntar por permisos: es lo que usan los casos
+       * de uso ya migrados a `@RequirePermission`, donde `PermissionsGuard` autorizó antes.
+       */
+      resolveOwnActiveAccountOrFail: jest
         .fn()
         .mockResolvedValue(adminAccount()),
     };
@@ -393,15 +401,6 @@ describe('casos de uso de miembros de organización', () => {
         order: { joinedAt: 'ASC' },
       });
     });
-
-    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
-      accountRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        getOrganizationMemberList.execute('not-owner', 'org-1'),
-      ).rejects.toThrow(ForbiddenException);
-      expect(accountRepository.find).not.toHaveBeenCalled();
-    });
   });
 
   describe('GetAccountMemberUseCase y UpdateAccountMemberUseCase', () => {
@@ -618,7 +617,7 @@ describe('casos de uso de miembros de organización', () => {
      * alta aterriza en la suya.
      */
     it('da el alta en la organización de la cuenta activa, no en otra', async () => {
-      accountService.assertHasOrganizationPermission.mockResolvedValue(
+      accountService.resolveOwnActiveAccountOrFail.mockResolvedValue(
         adminAccount({ id: 'admin-account-2', organizationId: 'org-2' }),
       );
       userRepository.findOne.mockResolvedValue(NEW_USER);
@@ -640,9 +639,14 @@ describe('casos de uso de miembros de organización', () => {
       );
     });
 
-    it('lanza ForbiddenException si el llamador no puede administrar esa cuenta', async () => {
-      accountService.assertHasOrganizationPermission.mockRejectedValue(
-        new ForbiddenException('No tienes permisos de administrador'),
+    /**
+     * El permiso lo exige ahora `PermissionsGuard` (`@RequirePermission(MEMBER, INVITE)`), pero
+     * el caso de uso sigue rechazando una cuenta activa que no sea del llamador: eso no es
+     * autorización, es que `X-Account-Id` apunte de verdad a una membresía suya.
+     */
+    it('lanza ForbiddenException si la cuenta activa no es del llamador', async () => {
+      accountService.resolveOwnActiveAccountOrFail.mockRejectedValue(
+        new ForbiddenException('No tienes acceso a esta cuenta'),
       );
 
       await expect(
@@ -662,13 +666,13 @@ describe('casos de uso de miembros de organización', () => {
         }),
       ).rejects.toThrow(BadRequestException);
       expect(
-        accountService.assertHasOrganizationPermission,
+        accountService.resolveOwnActiveAccountOrFail,
       ).not.toHaveBeenCalled();
     });
 
     /** Una cuenta personal no tiene miembros que administrar; esta pantalla no aplica. */
     it('lanza BadRequestException si la cuenta activa es PERSONAL', async () => {
-      accountService.assertHasOrganizationPermission.mockResolvedValue(
+      accountService.resolveOwnActiveAccountOrFail.mockResolvedValue(
         adminAccount({
           accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
           organizationId: null,

@@ -11,6 +11,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { RequirePermission } from 'src/authorization/decorators/require-permission.decorator';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
 import { CreateOrganizationPermissionDto } from './dto/create-organization-permission.dto';
 import { UpdateOrganizationPermissionDto } from './dto/update-organization-permission.dto';
@@ -40,6 +43,7 @@ export class OrganizationPermissionsController {
 
   @Get()
   @ApiGetOrganizationPermissions()
+  @RequirePermission(RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.READ)
   findAll(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -49,6 +53,7 @@ export class OrganizationPermissionsController {
 
   @Post()
   @ApiCreateOrganizationPermission()
+  @RequirePermission(RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.UPDATE)
   create(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -63,6 +68,7 @@ export class OrganizationPermissionsController {
 
   @Patch(':permissionId')
   @ApiUpdateOrganizationPermission()
+  @RequirePermission(RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.UPDATE)
   update(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,
@@ -79,6 +85,7 @@ export class OrganizationPermissionsController {
 
   @Delete(':permissionId')
   @ApiDeleteOrganizationPermission()
+  @RequirePermission(RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.UPDATE)
   remove(
     @CurrentUser() user: JwtPayload,
     @Param('organizationId') organizationId: string,

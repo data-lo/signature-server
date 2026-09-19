@@ -192,4 +192,36 @@ export class DocumentEntity {
     },
   )
   collaborators: CollaboratorEntity[];
+
+  /**
+   * Si el usuario tiene una relación propia con este documento: lo creó, o figura como
+   * colaborador con su cuenta ya enlazada.
+   *
+   * Es la regla que traduce el alcance `OWN` del catálogo ("VER DOCUMENTOS PROPIOS O DONDE
+   * PARTICIPA") y vive en la entidad porque es del documento, no de quien pregunta:
+   * `DocumentAuthorizationPolicy` la usa para leer y para firmar, y ninguna de las dos tendría
+   * por qué reimplementarla.
+   *
+   * **Necesita `collaborators` cargado con su `account`.** Sin esa relación no hay forma de
+   * saber quién participa, así que un documento traído sin ella responde que sólo su creador
+   * tiene acceso. Los colaboradores invitados por correo y todavía sin cuenta (`accountId` nulo)
+   * no cuentan aquí: hasta que se enlazan no hay usuario con el que comparar — de eso se ocupa
+   * `DocumentService.resolveMyCollaborator`, y por eso la Policy acepta recibir la
+   * participación ya resuelta.
+   *
+   * @param userId - Usuario autenticado que pide acceso.
+   * @returns `true` si es el creador o un colaborador enlazado a ese usuario.
+   *
+   * @example
+   * ```ts
+   * document.isAccessibleBy('user-1'); // true si lo creó o si firma en él
+   * ```
+   */
+  isAccessibleBy(userId: string): boolean {
+    if (this.createdBy === userId) return true;
+
+    return (this.collaborators ?? []).some(
+      (collaborator) => collaborator.account?.userId === userId,
+    );
+  }
 }

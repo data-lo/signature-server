@@ -1,10 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
-import {
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import { RolesService } from '../roles.service';
 import { RoleEntity } from '../entities/role.entity';
@@ -18,7 +14,6 @@ import { CreateOrganizationRoleUseCase } from './create-organization-role.use-ca
 import { UpdateOrganizationRoleUseCase } from './update-organization-role.use-case';
 
 const ADMIN_ROLE_ID = 'admin-role-1';
-const MEMBER_ROLE_ID = 'member-role-1';
 
 function createMockRepository() {
   return {
@@ -40,18 +35,16 @@ function adminMembership() {
   };
 }
 
-function memberMembership() {
-  return {
-    userId: 'member-user-1',
-    organizationId: 'org-1',
-    isActive: true,
-    roleId: MEMBER_ROLE_ID,
-  };
-}
-
 /**
  * Casos de uso montados sobre el `RolesService` de verdad —con los repositorios simulados— para
- * cuidar la composición real: que la comprobación de ADMIN ocurra antes de tocar cualquier rol.
+ * cuidar la composición real de la operación: nombres repetidos, roles de otra organización,
+ * reemplazo del set de permisos.
+ *
+ * **Ya no se comprueba aquí quién puede llamarlos.** Desde la autorización centralizada eso lo
+ * decide `PermissionsGuard` con el `@RequirePermission(ROLE, …)` del controller, y se cubre en
+ * `authorization-permissions.e2e-spec.ts`, que ejercita la ruta entera con un rol sin el
+ * permiso y espera un 403. Repetirlo aquí sólo fijaría una comprobación que estos casos de uso
+ * ya no hacen.
  */
 describe('casos de uso de roles de organización', () => {
   let roleRepository: ReturnType<typeof createMockRepository>;
@@ -131,16 +124,6 @@ describe('casos de uso de roles de organización', () => {
       expect(response.success).toBe(true);
       expect(response.data).toHaveLength(1);
     });
-
-    it('rechaza a un caller MEMBER', async () => {
-      accountRepository.findOne.mockResolvedValue(memberMembership());
-
-      await expect(
-        listOrganizationRoles.execute('member-user-1', 'org-1'),
-      ).rejects.toThrow(ForbiddenException);
-
-      expect(roleRepository.find).not.toHaveBeenCalled();
-    });
   });
 
   describe('CreateOrganizationRoleUseCase', () => {
@@ -189,20 +172,6 @@ describe('casos de uso de roles de organización', () => {
         { roleId: 'role-aprobador', permissionId: 'perm-approve' },
       ]);
     });
-
-    it('rechaza a un caller MEMBER sin llegar a crear nada', async () => {
-      accountRepository.findOne.mockResolvedValue(memberMembership());
-
-      await expect(
-        createOrganizationRole.execute('member-user-1', 'org-1', {
-          name: 'Aprobador',
-          permissionKeys: [],
-        }),
-      ).rejects.toThrow(ForbiddenException);
-
-      expect(roleRepository.findOne).not.toHaveBeenCalled();
-      expect(roleRepository.save).not.toHaveBeenCalled();
-    });
   });
 
   describe('UpdateOrganizationRoleUseCase', () => {
@@ -250,21 +219,6 @@ describe('casos de uso de roles de organización', () => {
           name: 'Otro nombre',
         }),
       ).rejects.toThrow(NotFoundException);
-    });
-
-    it('rechaza a un caller MEMBER, incluso llamando al endpoint directo', async () => {
-      accountRepository.findOne.mockResolvedValue(memberMembership());
-
-      await expect(
-        updateOrganizationRole.execute(
-          'member-user-1',
-          'org-1',
-          'role-aprobador',
-          { name: 'Otro nombre' },
-        ),
-      ).rejects.toThrow(ForbiddenException);
-
-      expect(roleRepository.findOne).not.toHaveBeenCalled();
     });
 
     it('rechaza un nombre repetido dentro de la misma organización', async () => {

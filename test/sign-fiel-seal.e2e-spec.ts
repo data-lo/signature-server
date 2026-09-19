@@ -16,6 +16,7 @@ import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.const
 import { DocumentController } from './../src/document/document.controller';
 import { DocumentService } from './../src/document/document.service';
 import { SignDocumentUseCase } from './../src/document/applications/sign-document.use-case';
+import { DocumentAuthorizationPolicy } from './../src/document/policies/document-authorization.policy';
 import { SendCompletedSimpleSignatureToSealUseCase } from './../src/document/seal/use-cases/send-completed-simple-signature-to-seal.use-case';
 import { AdvancedSummaryDocumentService } from './../src/document/summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './../src/document/services/signature-qr.service';
@@ -221,6 +222,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         // sustituyen por dobles inertes, porque Nest exige resolver todo el constructor aunque
         // esta prueba sólo ejercite `PATCH /document/:id/sign`.
         SignDocumentUseCase,
+        DocumentAuthorizationPolicy,
         ...DOCUMENT_CONTROLLER_USE_CASE_STUBS,
         DocumentService,
         SealDocumentUseCase,

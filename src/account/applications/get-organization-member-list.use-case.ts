@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 import { AccountMemberService } from '../account-member.service';
 import { OrganizationMemberData } from '../interfaces/response/account-member-response';
@@ -32,8 +31,8 @@ export class GetOrganizationMemberListUseCase {
    * estado real; por defecto sólo se devuelven las activas.
    * @returns Los miembros con rol, estado y permisos derivados del rol.
    *
-   * @throws {ForbiddenException} Si el llamador no es miembro activo de esa organización o su rol
-   * no tiene el permiso ORGANIZATION:READ.
+   * @throws {ForbiddenException} Si el rol del llamador no tiene el permiso `MEMBER.READ` en la
+   * organización activa — lo lanza `PermissionsGuard`, antes de llegar aquí.
    *
    * @example
    * ```ts
@@ -45,12 +44,11 @@ export class GetOrganizationMemberListUseCase {
     organizationId: string,
     includeInactive = false,
   ): Promise<BaseResponse<OrganizationMemberData[]>> {
-    await this.accountMemberService.assertHasOrganizationPermission(
-      callerId,
-      organizationId,
-      ACTION_KEY_ENUM.READ,
-    );
-
+    /**
+     * Sin comprobación de permisos aquí: la hace `PermissionsGuard` con el
+     * `@RequirePermission(MEMBER, READ)` del controller, que además exige el permiso propio del
+     * recurso (`MEMBER.READ`) en vez del genérico `ORGANIZATION.READ`.
+     */
     return {
       success: true,
       message: 'Miembros obtenidos correctamente',

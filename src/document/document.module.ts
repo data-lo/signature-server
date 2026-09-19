@@ -20,6 +20,7 @@ import { SealModule } from './seal/seal.module';
 import { SummaryDocumentModule } from './summary-document/summary-document.module';
 import { BillingModule } from 'src/billing/billing.module';
 import { SignatureQrService } from './services/signature-qr.service';
+import { DocumentAuthorizationPolicy } from './policies/document-authorization.policy';
 
 // Use cases
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
@@ -49,6 +50,12 @@ import { ArchiveCompletedDocumentUseCase } from './applications/archive-document
     DocumentService,
     VerificationCodeService,
     SignatureQrService,
+    /**
+     * Reglas de acceso a UN documento, aplicadas por los casos de uso sobre el contexto que deja
+     * `PermissionsGuard`. No se exporta: quien tenga que decidir sobre un documento pasa por un
+     * caso de uso de este módulo, no por la Policy directamente.
+     */
+    DocumentAuthorizationPolicy,
     GetDocumentFileUrlUseCase,
     GetPublicDocumentUseCase,
     GetPublicSealArtifactUseCase,
