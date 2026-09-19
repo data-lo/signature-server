@@ -336,7 +336,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
   });
 
-  it('guarda fiel en el documento cuando la firma es avanzada', async () => {
+  it('guarda FIEL en el documento cuando la firma es avanzada', async () => {
     await useCase.execute(
       'creator-1',
       'account-1',
@@ -362,7 +362,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   });
 
   /**
-   * `fiel` en el dominio de documentos y `ADVANCED` en el comercial son el mismo tipo de firma:
+   * `FIEL` en el dominio de documentos y `ADVANCED` en el comercial son el mismo tipo de firma:
    * la traducción es el único punto donde se cruza esa frontera y aquí se verifica que no se
    * escape el vocabulario de documentos al recibo.
    */

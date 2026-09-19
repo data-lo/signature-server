@@ -63,7 +63,7 @@ export interface AuditXmlSigner {
   curp: string | null;
   /** ISO 8601. */
   signedAt: string | null;
-  /** `simple` | `fiel`, o `null` en filas anteriores a que existiera la columna. */
+  /** `SIMPLE` | `FIEL`, o `null` en filas anteriores a que existiera la columna. */
   signatureType: string | null;
   status: string;
   ipAddress: string | null;

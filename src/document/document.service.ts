@@ -198,7 +198,7 @@ export class DocumentService {
   }
 
   /**
-   * Tipo de firma del documento (`simple` / `fiel`) para el listado, o `null` si no se puede
+   * Tipo de firma del documento (`SIMPLE` / `FIEL`) para el listado, o `null` si no se puede
    * determinar — lo consume la columna "Tipo de firma" de las tablas del frontend.
    *
    * El tipo no vive en `DocumentEntity` sino en cada SIGNER: es una decisión del documento que
