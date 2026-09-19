@@ -20,7 +20,7 @@ import { join } from 'node:path';
  * en cuanto se integre. Ver la sección de pendientes del README.
  *
  * Deliberadamente NO cubre dónde el dato sí debe seguir vivo: la columna
- * `CollaboratorEntity.geoLoc`, el `GeolocationDto` que lo exige al firmar, la escritura en
+ * `CollaboratorEntity.geolocation`, el `GeolocationDto` que lo exige al firmar, la escritura en
  * `DocumentService.sign` y la cadena de auditoría.
  */
 
@@ -50,7 +50,7 @@ function presentationSources(): string[] {
 
 /**
  * Quita comentarios antes de buscar: los docblocks de estos mismos archivos explican por qué la
- * geolocalización dejó de publicarse y mencionan `CollaboratorEntity.geoLoc`, que es exactamente
+ * geolocalización dejó de publicarse y mencionan `CollaboratorEntity.geolocation`, que es exactamente
  * lo que se quiere poder seguir escribiendo. Lo que no debe aparecer es en el código ejecutable.
  *
  * El `[^:]` del segundo reemplazo evita comerse la parte de `https://` de una URL en una cadena.

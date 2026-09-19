@@ -69,7 +69,7 @@ export class SignDocumentDto {
 
   /**
    * OBLIGATORIA: sin ubicación no se puede firmar. Antes era opcional (rechazar el permiso del
-   * navegador dejaba `geoLoc` en null y la firma seguía adelante); el requisito cambió y ahora
+   * navegador dejaba `geolocation` en null y la firma seguía adelante); el requisito cambió y ahora
    * la ubicación es parte no negociable de la evidencia de firma, así que su ausencia corta el
    * proceso con un 400 en vez de registrar una firma sin ella.
    *

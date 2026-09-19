@@ -218,7 +218,7 @@ describe('AdvancedSummaryDocumentService', () => {
   /**
    * Historia "Ocultar geolocalización en hojas de firma y vistas públicas": la hoja se anexa al
    * PDF firmado y se conserva por años, así que la ausencia del renglón se afirma en vez de
-   * darse por hecha. El dato sigue guardado en `CollaboratorEntity.geoLoc`.
+   * darse por hecha. El dato sigue guardado en `CollaboratorEntity.geolocation`.
    */
   it('no imprime ningún renglón de geolocalización', () => {
     const [, , ...signerTables] = tablesOf(buildDefinition());

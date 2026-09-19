@@ -467,7 +467,7 @@ export class DocumentService {
    * La geolocalización del firmante ya no viaja en esta respuesta (historia "Ocultar
    * geolocalización en hojas de firma y vistas públicas", ver `PublicSignerData`): la hoja dejó de
    * imprimirla y esta ruta —que abre cualquiera con el id, sin sesión— era el último lugar donde
-   * seguía publicándose. Se sigue guardando en `collaborator.geoLoc` como evidencia.
+   * seguía publicándose. Se sigue guardando en `collaborator.geolocation` como evidencia.
    */
   async toCompletedPublicSigner(
     documentId: string,
