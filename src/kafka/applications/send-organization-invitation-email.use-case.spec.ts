@@ -49,7 +49,7 @@ describe('OrganizationInvitationEventsConsumer', () => {
   const joinUrlSentTo = (): string =>
     emailService.sendOrganizationInvitationNotification.mock.calls[0][2];
 
-  it('construye el enlace de /join con token+orgId y despacha el correo vía SendGrid', async () => {
+  it('construye el enlace de /join sólo con el token y despacha el correo vía SendGrid', async () => {
     process.env.FRONTEND_URL = 'https://app.ejemplo.com';
 
     await consumer.handleInvited(payload);
@@ -59,7 +59,7 @@ describe('OrganizationInvitationEventsConsumer', () => {
     ).toHaveBeenCalledWith(
       'nuevo@empresa.com',
       'Acme Corp',
-      'https://app.ejemplo.com/join?token=token-1&orgId=org-1',
+      'https://app.ejemplo.com/join?token=token-1',
     );
   });
 
@@ -70,9 +70,7 @@ describe('OrganizationInvitationEventsConsumer', () => {
 
     await consumer.handleInvited(payload);
 
-    expect(joinUrlSentTo()).toBe(
-      'https://app.ejemplo.com/join?token=token-1&orgId=org-1',
-    );
+    expect(joinUrlSentTo()).toBe('https://app.ejemplo.com/join?token=token-1');
     expect(joinUrlSentTo()).not.toContain('//join');
   });
 
@@ -86,7 +84,7 @@ describe('OrganizationInvitationEventsConsumer', () => {
     ).toHaveBeenCalledWith(
       'nuevo@empresa.com',
       'Acme Corp',
-      'http://localhost:3001/join?token=token-1&orgId=org-1',
+      'http://localhost:3001/join?token=token-1',
     );
   });
 
