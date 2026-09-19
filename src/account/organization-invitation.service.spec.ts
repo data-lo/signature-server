@@ -1,4 +1,8 @@
-import { NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  GoneException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { OrganizationInvitationService } from './organization-invitation.service';
@@ -128,33 +132,112 @@ describe('OrganizationInvitationService', () => {
     });
   });
 
-  describe('acceptForUser', () => {
-    it('lanza NotFoundException si el usuario no existe', async () => {
+  describe('acceptByRfc', () => {
+    /** Usuario con cuenta registrada con un correo DISTINTO al de la invitación. */
+    const PERSONAL_EMAIL_USER = {
+      id: 'user-2',
+      email: 'ana.personal@gmail.com',
+      password: 'hashed-pw-2',
+    };
+
+    /**
+     * El corazón de la historia: la invitación se mandó a `nuevo@empresa.com`, pero la persona
+     * tiene su cuenta con el correo personal. Se une igual, porque la identidad la da el RFC y
+     * el correo de la invitación es sólo el canal de entrega.
+     */
+    it('crea la membresía sin comparar el correo de la invitación con el de la cuenta', async () => {
+      invitationRepository.findOne.mockResolvedValue(pendingInvitation());
+      userRepository.findOne.mockResolvedValue(PERSONAL_EMAIL_USER);
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await service.acceptByRfc('token-1', 'XAXX010101000');
+
+      expect(accountRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-2',
+          organizationId: 'org-1',
+          roleId: 'role-1',
+          isActive: true,
+        }),
+      );
+    });
+
+    it('busca al usuario por RFC en mayúsculas', async () => {
+      invitationRepository.findOne.mockResolvedValue(pendingInvitation());
+      userRepository.findOne.mockResolvedValue(PERSONAL_EMAIL_USER);
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await service.acceptByRfc('token-1', 'xaxx010101000');
+
+      expect(userRepository.findOne).toHaveBeenCalledWith({
+        where: { personalInformation: { rfc: 'XAXX010101000' } },
+        relations: { personalInformation: true },
+      });
+    });
+
+    it('marca la invitación como ACCEPTED', async () => {
+      const invitation = pendingInvitation();
+      invitationRepository.findOne.mockResolvedValue(invitation);
+      userRepository.findOne.mockResolvedValue(PERSONAL_EMAIL_USER);
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await service.acceptByRfc('token-1', 'XAXX010101000');
+
+      expect(invitationRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: INVITATION_STATUS_ENUM.ACCEPTED }),
+      );
+    });
+
+    it('lanza NotFoundException si no hay cuenta con ese RFC, sin crear nada', async () => {
       invitationRepository.findOne.mockResolvedValue(pendingInvitation());
       userRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.acceptForUser('token-1', 'missing-user'),
+        service.acceptByRfc('token-1', 'XAXX010101000'),
+      ).rejects.toThrow(NotFoundException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('lanza NotFoundException si el token no existe', async () => {
+      invitationRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.acceptByRfc('token-inexistente', 'XAXX010101000'),
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('crea la membresía para el usuario recién registrado', async () => {
-      invitationRepository.findOne.mockResolvedValue(pendingInvitation());
-      userRepository.findOne.mockResolvedValue({
-        id: 'user-2',
-        email: 'nuevo-registro@empresa.com',
-        password: 'hashed-pw-2',
-      });
-      accountRepository.findOne.mockResolvedValue(null);
-
-      await service.acceptForUser('token-1', 'user-2');
-
-      expect(userRepository.findOne).toHaveBeenCalledWith({
-        where: { id: 'user-2' },
-      });
-      expect(accountRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'user-2', organizationId: 'org-1' }),
+    it('lanza ConflictException si la invitación ya se usó', async () => {
+      invitationRepository.findOne.mockResolvedValue(
+        pendingInvitation({ status: INVITATION_STATUS_ENUM.ACCEPTED }),
       );
+
+      await expect(
+        service.acceptByRfc('token-1', 'XAXX010101000'),
+      ).rejects.toThrow(ConflictException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    /** La expiración se aplica al leerla: una invitación vencida pero aún PENDING se rechaza. */
+    it('lanza GoneException si la invitación ya expiró', async () => {
+      invitationRepository.findOne.mockResolvedValue(
+        pendingInvitation({ expiresAt: new Date(Date.now() - 1000) }),
+      );
+
+      await expect(
+        service.acceptByRfc('token-1', 'XAXX010101000'),
+      ).rejects.toThrow(GoneException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('lanza ConflictException si la persona ya es miembro activo de la organización', async () => {
+      invitationRepository.findOne.mockResolvedValue(pendingInvitation());
+      userRepository.findOne.mockResolvedValue(PERSONAL_EMAIL_USER);
+      accountRepository.findOne.mockResolvedValue({ id: 'existing-account' });
+
+      await expect(
+        service.acceptByRfc('token-1', 'XAXX010101000'),
+      ).rejects.toThrow(ConflictException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
     });
   });
 });

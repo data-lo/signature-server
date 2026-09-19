@@ -5,8 +5,8 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { OrganizationInvitationService } from '../organization-invitation.service';
 
 /**
- * `POST /api/v1/organizations/invitations/:token/accept`: camino A de la historia — el invitado
- * ya tiene cuenta y se une con su RFC.
+ * `POST /api/v1/organizations/invitations/:token/accept`: el único camino para unirse a una
+ * organización por invitación, tenga la persona cuenta desde antes o la acabe de crear.
  *
  * Sin JWT a propósito: el invitado puede no tener sesión iniciada (Escenario 5 de la historia) y
  * el token del correo es la credencial. La identidad se resuelve por RFC y no comparando
@@ -23,19 +23,28 @@ export class AcceptOrganizationInvitationUseCase {
     private readonly organizationInvitationService: OrganizationInvitationService,
   ) {}
 
+  /**
+   * Une a la persona dueña del RFC a la organización de la invitación.
+   *
+   * Lo llaman los dos caminos de `/join`: quien ya tenía cuenta y confirma, y el formulario de
+   * registro justo después de crear una cuenta nueva. Toda la lógica vive en
+   * `OrganizationInvitationService.acceptByRfc`.
+   *
+   * @param token - Token de la invitación.
+   * @param rfc - RFC de quien se une.
+   * @returns Confirmación, sin datos.
+   *
+   * @throws {NotFoundException} (404) Token inexistente o RFC sin cuenta.
+   * @throws {ConflictException} (409) Invitación ya usada, o la persona ya es miembro activo.
+   * @throws {GoneException} (410) Invitación expirada.
+   *
+   * @example
+   * ```ts
+   * await acceptInvitation.execute(token, 'XAXX010101000');
+   * ```
+   */
   async execute(token: string, rfc: string): Promise<BaseResponse<null>> {
-    const invitation =
-      await this.organizationInvitationService.resolveInvitation(token);
-
-    this.organizationInvitationService.assertPending(invitation);
-
-    const user =
-      await this.organizationInvitationService.findUserByRfcOrFail(rfc);
-
-    await this.organizationInvitationService.finalizeAcceptance(
-      invitation,
-      user,
-    );
+    await this.organizationInvitationService.acceptByRfc(token, rfc);
 
     return {
       success: true,

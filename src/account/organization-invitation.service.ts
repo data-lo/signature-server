@@ -110,18 +110,38 @@ export class OrganizationInvitationService {
   }
 
   /**
-   * Camino B de la historia (RFC nuevo) — llamado internamente por AuthService.register()
-   * justo después de crear la cuenta, cuando el registro vino de un enlace de invitación
-   * (ver RegisterDto.invitationToken). El usuario ya se conoce por id, no hace falta el RFC.
+   * Consuma una invitación para la persona dueña de ese RFC: el ÚNICO camino por el que alguien
+   * se une a una organización desde una invitación.
+   *
+   * Sirve a los dos casos del flujo de `/join` con el mismo código: quien ya tenía cuenta, y
+   * quien la acaba de crear — el frontend lo llama justo después de que el registro respondió
+   * bien. El registro ya no acepta la invitación por su cuenta: mantenerlo independiente es lo
+   * que permite que un fallo aquí no toque la cuenta recién creada, y que la persona pueda unirse
+   * después con una invitación nueva.
+   *
+   * **La identidad se resuelve por RFC y NO se compara el correo de la invitación con el del
+   * usuario.** El correo al que se mandó el enlace es sólo el canal de entrega: la persona puede
+   * tener su cuenta registrada con otro correo (el personal, por ejemplo).
+   *
+   * @param token - Token de la invitación, tal como viaja en el enlace del correo.
+   * @param rfc - RFC con el que la persona se identifica; se compara en mayúsculas.
+   * @returns Nada: la membresía queda creada y la invitación en `ACCEPTED`.
+   *
+   * @throws {NotFoundException} (404) Si el token no existe, o si no hay usuario con ese RFC.
+   * @throws {ConflictException} (409) Si la invitación ya se usó, o la persona ya es miembro
+   *   activo de esa organización.
+   * @throws {GoneException} (410) Si la invitación expiró.
+   *
+   * @example
+   * ```ts
+   * await organizationInvitationService.acceptByRfc(token, 'XAXX010101000');
+   * ```
    */
-  async acceptForUser(token: string, userId: string): Promise<void> {
+  async acceptByRfc(token: string, rfc: string): Promise<void> {
     const invitation = await this.resolveInvitation(token);
     this.assertPending(invitation);
 
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
-    }
+    const user = await this.findUserByRfcOrFail(rfc);
 
     await this.finalizeAcceptance(invitation, user);
   }
@@ -218,12 +238,30 @@ export class OrganizationInvitationService {
     return invitation;
   }
 
+  /**
+   * Exige que la invitación siga `PENDING`, con un error distinto para cada motivo.
+   *
+   * Cualquier estado que no sea `PENDING` se rechaza, no sólo los dos que hoy existen además de
+   * él: un estado nuevo (una invitación revocada, por ejemplo) no debe poder aceptarse por no
+   * haberse agregado aquí.
+   *
+   * @param invitation - Invitación ya resuelta por `resolveInvitation`, con la expiración aplicada.
+   * @returns Nada: autorizar es no lanzar.
+   *
+   * @throws {ConflictException} (409) Si ya se usó, o si está en cualquier otro estado no pendiente.
+   * @throws {GoneException} (410) Si expiró.
+   *
+   * @example
+   * ```ts
+   * this.assertPending(invitation);
+   * ```
+   */
   assertPending(invitation: OrganizationInvitationEntity): void {
-    if (invitation.status === INVITATION_STATUS_ENUM.ACCEPTED) {
-      throw new ConflictException('Esta invitación ya fue utilizada');
-    }
+    if (invitation.status === INVITATION_STATUS_ENUM.PENDING) return;
+
     if (invitation.status === INVITATION_STATUS_ENUM.EXPIRED) {
       throw new GoneException('Esta invitación ya expiró');
     }
+    throw new ConflictException('Esta invitación ya fue utilizada');
   }
 }

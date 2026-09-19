@@ -1,7 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 
-import { OrganizationInvitationService } from 'src/account/organization-invitation.service';
 import { PasswordService } from 'src/common/password/password.service';
 import { TurnstileService } from 'src/common/turnstile/turnstile.service';
 import { UserService } from 'src/user/user.service';
@@ -11,7 +10,6 @@ import { RegisterUseCase } from './register.use-case';
 describe('RegisterUseCase', () => {
   let useCase: RegisterUseCase;
   let userService: { createFromSignup: jest.Mock };
-  let organizationInvitationService: { acceptForUser: jest.Mock };
   let passwordService: { hash: jest.Mock };
   let turnstileService: { verifyToken: jest.Mock };
 
@@ -38,9 +36,6 @@ describe('RegisterUseCase', () => {
         .fn()
         .mockResolvedValue({ success: true, data: pendingVerificationData }),
     };
-    organizationInvitationService = {
-      acceptForUser: jest.fn().mockResolvedValue(undefined),
-    };
     passwordService = { hash: jest.fn().mockResolvedValue('hashed-pw') };
     turnstileService = { verifyToken: jest.fn().mockResolvedValue(undefined) };
 
@@ -48,10 +43,6 @@ describe('RegisterUseCase', () => {
       providers: [
         RegisterUseCase,
         { provide: UserService, useValue: userService },
-        {
-          provide: OrganizationInvitationService,
-          useValue: organizationInvitationService,
-        },
         { provide: PasswordService, useValue: passwordService },
         { provide: TurnstileService, useValue: turnstileService },
       ],
@@ -65,7 +56,6 @@ describe('RegisterUseCase', () => {
 
     expect(passwordService.hash).toHaveBeenCalledWith('Password123!');
     expect(userService.createFromSignup).toHaveBeenCalledWith(dto, 'hashed-pw');
-    expect(organizationInvitationService.acceptForUser).not.toHaveBeenCalled();
   });
 
   it('verifica el CAPTCHA de Turnstile antes de crear el pre-registro', async () => {
@@ -91,28 +81,21 @@ describe('RegisterUseCase', () => {
     expect(passwordService.hash).not.toHaveBeenCalled();
   });
 
-  it('si el dto trae invitationToken, une al usuario recien creado a esa organizacion', async () => {
-    await useCase.execute({
+  /**
+   * Historia "Unificar invitaciones de miembros y vincular cuentas nuevas por token": el registro
+   * ya no acepta invitaciones. Un token que llegue en el cuerpo —de un cliente anterior— se
+   * ignora y la cuenta se crea igual; unirse a la organización es una llamada aparte que el
+   * frontend hace después, a `POST /organizations/invitations/:token/accept`. El módulo de
+   * prueba ni siquiera provee `OrganizationInvitationService`: si el caso de uso volviera a
+   * depender de él, esta suite dejaría de compilar.
+   */
+  it('crea la cuenta sin aceptar ninguna invitación, aunque llegue un token', async () => {
+    const result = await useCase.execute({
       ...dto,
       invitationToken: 'invite-token-1',
     } as never);
 
-    expect(organizationInvitationService.acceptForUser).toHaveBeenCalledWith(
-      'invite-token-1',
-      'user-1',
-    );
-  });
-
-  it('no falla el registro si acceptForUser rechaza (best-effort)', async () => {
-    organizationInvitationService.acceptForUser.mockRejectedValue(
-      new Error('Invitación no encontrada'),
-    );
-
-    const result = await useCase.execute({
-      ...dto,
-      invitationToken: 'bad-token',
-    } as never);
-
     expect(result.success).toBe(true);
+    expect(userService.createFromSignup).toHaveBeenCalledTimes(1);
   });
 });
