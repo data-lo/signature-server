@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 import { OrganizationPermissionData } from '../interfaces/response/organization-permission-response';
 import { OrganizationPermissionsService } from '../organization-permissions.service';
@@ -24,12 +23,12 @@ export class GetOrganizationPermissionsUseCase {
     callerId: string,
     organizationId: string,
   ): Promise<BaseResponse<OrganizationPermissionData[]>> {
-    await this.organizationPermissionsService.assertHasOrganizationPermission(
-      callerId,
-      organizationId,
-      ACTION_KEY_ENUM.READ,
-    );
-
+    /**
+     * Sin comprobación de permisos aquí: la hace `PermissionsGuard` con el
+     * `@RequirePermission(ORGANIZATION, READ)` del controller. Sigue siendo el mismo permiso que
+     * se exigía antes, sólo que resuelto una vez, en la puerta, en vez de dentro de cada caso de
+     * uso.
+     */
     return {
       success: true,
       message: 'Permisos obtenidos correctamente',

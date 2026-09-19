@@ -32,6 +32,7 @@ import { EventModule } from './event/event.module';
 import { SealModule } from './document/seal/seal.module';
 import { IdentityVerificationModule } from './identity-verification/identity-verification.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { AuthorizationModule } from './authorization/authorization.module';
 
 @Module({
   imports: [
@@ -105,6 +106,14 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     SealModule,
     IdentityVerificationModule,
     WebhooksModule,
+    /**
+     * Va al FINAL de la lista, y no junto a `AuthModule`, porque el orden importa: Nest ejecuta
+     * los guards globales en el orden en que los registra, y `PermissionsGuard` necesita que
+     * `JwtAuthGuard` (registrado en `AuthModule`) ya haya dejado el usuario en la petición.
+     * Moverlo arriba invertiría ese orden y el guard de permisos se encontraría sin
+     * `request.user`.
+     */
+    AuthorizationModule,
   ],
   controllers: [AppController],
   providers: [
