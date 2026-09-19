@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
-import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { RolesService } from 'src/roles/roles.service';
 
