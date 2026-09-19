@@ -59,6 +59,13 @@ import { ClientIp } from 'src/common/interceptors/request-ip.decorator';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
+import { RequirePermission } from 'src/authorization/decorators/require-permission.decorator';
+import { CurrentAuthorization } from 'src/authorization/decorators/current-authorization.decorator';
+
+// Authorization
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 // Interfaces
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
@@ -112,7 +119,7 @@ export class DocumentController {
     private readonly updateDocument: UpdateDocumentUseCase,
     private readonly deleteDocument: DeleteDocumentUseCase,
     private readonly archiveCompletedDocument: ArchiveCompletedDocumentUseCase,
-  ) { }
+  ) {}
 
   @Get('file/:id')
   @ApiGetDocumentFileUrl()
@@ -194,8 +201,11 @@ export class DocumentController {
 
   @Post()
   @ApiCreateDocument()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.CREATE)
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES }, }),
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES },
+    }),
     RequestIpInterceptor,
   )
   async create(
@@ -221,6 +231,7 @@ export class DocumentController {
    */
   @Get()
   @ApiGetDocuments()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
   findAll(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -233,10 +244,19 @@ export class DocumentController {
     });
   }
 
+  /**
+   * El guard sólo comprueba que el rol pueda leer documentos; cuáles de ellos lo decide
+   * `DocumentAuthorizationPolicy` dentro del caso de uso, con el documento ya cargado y contra
+   * los alcances que viajan en el contexto (`OWN`, `ORGANIZATION`).
+   */
   @Get(':id')
   @ApiGetDocument()
-  findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.getDocument.execute(id, user.sub);
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
+  findOne(
+    @Param('id') id: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
+  ) {
+    return this.getDocument.execute({ documentId: id, authorization });
   }
 
   @Patch(':id/submit-for-authorization')
@@ -250,6 +270,7 @@ export class DocumentController {
 
   @Patch(':id/sign')
   @ApiSignDocument()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.SIGN)
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -265,6 +286,7 @@ export class DocumentController {
     @Body() dto: SignDocumentDto,
     @UploadedFiles()
     files: { key?: Express.Multer.File[]; cer?: Express.Multer.File[] },
+    @CurrentAuthorization() authorization: AuthorizationContext,
   ) {
     return this.signDocument.execute(
       id,
@@ -275,6 +297,7 @@ export class DocumentController {
         cerFile: files?.cer?.[0],
       },
       dto?.geolocation,
+      authorization,
     );
   }
 

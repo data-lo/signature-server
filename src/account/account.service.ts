@@ -230,6 +230,49 @@ export class AccountService {
   }
 
   /**
+   * La cuenta activa del llamador, resuelta SIN volver a preguntar por permisos.
+   *
+   * Es la mitad que sigue haciendo falta de `assertHasOrganizationPermission` en los endpoints ya
+   * migrados a `@RequirePermission`: allí `PermissionsGuard` resolvió la misma fila y ya autorizó,
+   * así que repetir la consulta de permisos sólo volvería a exigir el permiso genérico de
+   * organización además del específico del recurso —y dejaría fuera a un rol custom que sí tiene
+   * el específico—. Lo que el caso de uso todavía necesita es la ENTIDAD: su tipo de cuenta y su
+   * `organizationId`.
+   *
+   * El filtro por `userId` se conserva a propósito. No es la autorización —esa ya ocurrió— sino
+   * la garantía de que `X-Account-Id` sigue apuntando a una membresía del usuario autenticado,
+   * que es lo que impide que el identificador de otra cuenta se cuele por el header.
+   *
+   * @param callerId - Usuario autenticado.
+   * @param accountId - Cuenta activa que llegó en `X-Account-Id`.
+   * @returns La membresía, con su rol y su organización cargados.
+   *
+   * @throws {ForbiddenException} (403) Si esa cuenta no existe, no es del llamador o está dada
+   *   de baja.
+   *
+   * @example
+   * ```ts
+   * const account = await accountService.resolveOwnActiveAccountOrFail(callerId, accountId);
+   * account.organizationId; // la organización sobre la que se va a operar
+   * ```
+   */
+  async resolveOwnActiveAccountOrFail(
+    callerId: string,
+    accountId: string,
+  ): Promise<AccountEntity> {
+    const account = await this.accountRepository.findOne({
+      where: { id: accountId, userId: callerId, isActive: true },
+      relations: { role: true, organization: true },
+    });
+
+    if (!account) {
+      throw new ForbiddenException('No tienes acceso a esta cuenta');
+    }
+
+    return account;
+  }
+
+  /**
    * Crea la cuenta PERSONAL por defecto de un usuario recién registrado. Recibe el
    * EntityManager del llamador para poder enlistarse en la transacción de registro (no abre su
    * propia transacción). `email`/`password` sincronizan la credencial única del usuario

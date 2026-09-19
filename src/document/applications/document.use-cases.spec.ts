@@ -68,6 +68,43 @@ import { UpdateDocumentUseCase } from './update-document.use-case';
 import { DeleteDocumentUseCase } from './delete-document.use-case';
 import { SubmitDocumentForAuthorizationUseCase } from './submit-document-for-authorization.use-case';
 import { GetDocumentFileUrlUseCase } from './get-document-file-url.use-case';
+import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+
+/**
+ * El contexto que `PermissionsGuard` dejaría en la petición para un miembro raso: puede leer
+ * documentos, pero sólo los propios o aquellos en los que participa (`DOCUMENT.READ_OWN`).
+ *
+ * Es el alcance con el que estas pruebas ejercitan `GET /document/:id`, porque es el que hace
+ * trabajo: con `ORGANIZATION` la Policy dejaría pasar cualquier documento del tenant y estos
+ * escenarios —creador, firmante, invitado por correo, ajeno— dejarían de distinguirse.
+ */
+/**
+ * Instancia REAL de `DocumentEntity`, no un objeto plano.
+ *
+ * `DocumentAuthorizationPolicy` cae en `document.isAccessibleBy()` cuando el caso de uso no
+ * resolvió ninguna participación —el escenario del usuario ajeno—, y un literal con forma de
+ * documento no trae ese método: la prueba fallaría con un `TypeError` en vez de con el 403 que
+ * está comprobando.
+ */
+function asDocumentEntity(fields: Partial<DocumentEntity>): DocumentEntity {
+  return Object.assign(new DocumentEntity(), fields);
+}
+
+function readOwnAuthorization(userId: string): AuthorizationContext {
+  return {
+    userId,
+    organizationId: null,
+    accountId: `account-${userId}`,
+    roleId: 'member-role-1',
+    resource: RESOURCE_KEY_ENUM.DOCUMENT,
+    action: ACTION_KEY_ENUM.READ,
+    scopes: [PERMISSION_SCOPE_ENUM.OWN],
+  };
+}
 
 function createMockRepository() {
   return {
@@ -332,6 +369,7 @@ describe('casos de uso de documentos', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DocumentService,
+        DocumentAuthorizationPolicy,
         CreateDocumentUseCase,
         GetDocumentsUseCase,
         GetDocumentUseCase,
@@ -4460,7 +4498,10 @@ describe('casos de uso de documentos', () => {
           collaborators: [buildSigner({ userId: 'user-1' })],
         } as unknown as DocumentEntity);
 
-        await getDocument.execute('doc-1', 'user-1');
+        await getDocument.execute({
+          documentId: 'doc-1',
+          authorization: readOwnAuthorization('user-1'),
+        });
 
         expect(minioService.getFile).toHaveBeenCalledWith(
           'object-key-1',
@@ -4569,10 +4610,16 @@ describe('casos de uso de documentos', () => {
     it('findDetailForUser marca canSign solo para el firmante B (A ya firmó, C debe esperar)', async () => {
       documentRepository.findOne.mockResolvedValue(mockDetailDocument());
 
-      const resultB = await getDocument.execute('doc-1', 'user-b');
+      const resultB = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
       expect(resultB.data.canSign).toBe(true);
 
-      const resultC = await getDocument.execute('doc-1', 'user-c');
+      const resultC = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-c'),
+      });
       expect(resultC.data.canSign).toBe(false);
     });
 
@@ -4601,7 +4648,10 @@ describe('casos de uso de documentos', () => {
         isSequential: false,
       });
 
-      const resultC = await getDocument.execute('doc-1', 'user-c');
+      const resultC = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-c'),
+      });
       expect(resultC.data.canSign).toBe(true);
     });
 
@@ -4623,7 +4673,10 @@ describe('casos de uso de documentos', () => {
         email: 'firmante.b@correo.com',
       });
 
-      const result = await getDocument.execute('doc-1', 'user-b');
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
 
       expect(result.data.canSign).toBe(true);
       expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
@@ -4647,7 +4700,10 @@ describe('casos de uso de documentos', () => {
         email: 'firmante.b@correo.com',
       });
 
-      await getDocument.execute('doc-1', 'user-b');
+      await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
 
       expect(collaboratorRepository.update).not.toHaveBeenCalled();
     });
@@ -4661,18 +4717,23 @@ describe('casos de uso de documentos', () => {
         account: null,
         email: 'firmante.b@correo.com',
       });
-      documentRepository.findOne.mockResolvedValue({
-        ...mockDetailDocument(),
-        collaborators: [signerA, invitedByEmail, signerC],
-      } as unknown as DocumentEntity);
+      documentRepository.findOne.mockResolvedValue(
+        asDocumentEntity({
+          ...mockDetailDocument(),
+          collaborators: [signerA, invitedByEmail, signerC],
+        }),
+      );
       userService.findOne.mockResolvedValue({
         id: 'user-x',
         email: 'intruso@correo.com',
       });
 
-      await expect(getDocument.execute('doc-1', 'user-x')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: readOwnAuthorization('user-x'),
+        }),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('tras una vinculación explícita previa (linkPendingCollaboratorAccount), findDetailForUser sí encuentra al colaborador por accountId y calcula canSign/myStatus normalmente', async () => {
@@ -4690,7 +4751,10 @@ describe('casos de uso de documentos', () => {
         linkedDetailDocument as unknown as DocumentEntity,
       );
 
-      const result = await getDocument.execute('doc-1', 'user-b');
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
 
       expect(result.data.canSign).toBe(true);
       expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
