@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { AuditService } from 'src/audit/audit.service';
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { AuditAction } from 'src/audit/schema/audit-document';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
@@ -24,6 +25,7 @@ import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { isSignerTurn } from '../utils/next-signer.util';
 import { VerificationCodeService } from '../verification-code.service';
 import { AdvancedSignatureInput, DocumentService } from '../document.service';
+import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
 
 /**
  * Lo que el firmante necesita saber en cuanto su firma queda registrada.
@@ -86,6 +88,7 @@ export class SignDocumentUseCase {
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentService: DocumentService,
+    private readonly authorizationPolicy: DocumentAuthorizationPolicy,
   ) {}
 
   /**
@@ -97,18 +100,25 @@ export class SignDocumentUseCase {
    *   sólo hace falta— cuando el firmante tiene `signatureType` FIEL.
    * @param geolocation Ubicación declarada por el dispositivo del firmante, obligatoria como
    *   evidencia de la firma.
+   * @param authorization Contexto que dejó `PermissionsGuard` cuando la firma entra por
+   *   `PATCH /document/:id/sign`. Es OPCIONAL, y no por comodidad: este caso de uso también se
+   *   invoca desde flujos que no vienen de esa ruta y que por lo tanto no tienen contexto de
+   *   autorización. Cuando llega, `DocumentAuthorizationPolicy` comprueba además el alcance
+   *   `SELF` del catálogo; cuando no, siguen rigiendo las validaciones de firmante y de turno
+   *   que este método ya hacía, que son las que de verdad protegen la firma.
    * @returns El documento firmado y si esta firma lo dejó completo.
    * @throws {BadRequestException} Cuando falta la geolocalización, el documento no está en
    *   `PENDING`, el firmante ya respondió, el documento exige un código de verificación que no se
    *   validó, o otra petición reclamó el turno primero.
-   * @throws {ForbiddenException} Cuando el usuario no es firmante del documento o todavía no es
-   *   su turno.
+   * @throws {ForbiddenException} Cuando el usuario no es firmante del documento, todavía no es
+   *   su turno, o su rol no tiene concedido `DOCUMENT.SIGN_SELF`.
    */
   async execute(
     documentId: string,
     currentUserId: string,
     advancedSignatureInput?: AdvancedSignatureInput,
     geolocation?: GeolocationDto,
+    authorization?: AuthorizationContext,
   ): Promise<BaseResponse<SignedDocumentData>> {
     // Se revalida aunque el DTO ya la exija: este método también se invoca desde otros puntos.
     if (!geolocation) {
@@ -137,6 +147,19 @@ export class SignDocumentUseCase {
 
     if (!myParticipant) {
       throw new ForbiddenException('No eres firmante de este documento');
+    }
+
+    /**
+     * Va aquí y no antes porque `SIGN + SELF` se valida CONTRA el participante: el guard ya
+     * comprobó que el rol puede firmar, y lo que falta es que quien firma sea el firmante, algo
+     * que sólo se sabe una vez resuelto (o enlazado) el colaborador.
+     */
+    if (authorization) {
+      this.authorizationPolicy.assertCanSign({
+        document,
+        authorization,
+        participant: myParticipant,
+      });
     }
 
     if (myParticipant.status !== SIGNEE_STATUS_ENUM.PENDING) {
