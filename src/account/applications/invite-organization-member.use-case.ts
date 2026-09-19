@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { RolesService } from 'src/roles/roles.service';
 
 import { AccountService } from '../account.service';
@@ -55,15 +56,35 @@ export class InviteOrganizationMemberUseCase {
       );
     }
 
+    const organizationId = account.organizationId as string;
+
     /**
-     * El rol se valida antes de persistir nada: una invitación con un `roleId` inexistente se
+     * El rol se valida antes de persistir nada: una invitación con un `roleId` inválido se
      * aceptaría acá y reventaría al canjearse, cuando ya no hay quien corrija el error —el
      * invitado no eligió ese rol y quien invitó cree que la invitación salió bien.
+     *
+     * Tiene que ser un rol asignable EN ESTA organización: uno de sistema o uno propio. Antes se
+     * aceptaba cualquier rol que existiera, incluido el rol personalizado de otra organización.
      */
-    await this.rolesService.findByIdOrFail(dto.roleId);
+    const role = await this.rolesService.findAssignableRoleOrFail(
+      dto.roleId,
+      organizationId,
+    );
+
+    /**
+     * OWNER no se reparte por invitación: lo recibe automáticamente quien crea la cuenta, y es
+     * lo que distingue al dueño de un administrador nombrado por él. El modal ya no lo ofrece,
+     * pero eso es sólo presentación: sin esta comprobación bastaría mandar su `roleId` a la API
+     * para convertir en propietario a cualquiera. Para delegar la administración está ADMIN.
+     */
+    if (role.isSystemRole && role.name === SYSTEM_ROLE_NAME_ENUM.OWNER) {
+      throw new BadRequestException(
+        'El rol de propietario no se puede asignar por invitación',
+      );
+    }
 
     await this.organizationInvitationService.create({
-      organizationId: account.organizationId as string,
+      organizationId,
       roleId: dto.roleId,
       invitedBy: callerId,
       email: dto.email,

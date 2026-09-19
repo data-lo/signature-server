@@ -71,6 +71,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
   let rolesService: {
     findSystemRoleByName: jest.Mock;
     findByIdOrFail: jest.Mock;
+    findAssignableRoleOrFail: jest.Mock;
     hasPermission: jest.Mock;
   };
   let organizationInvitationService: { create: jest.Mock };
@@ -96,6 +97,11 @@ describe('casos de uso de cuentas y organizaciones', () => {
           name === SYSTEM_ROLE_NAME_ENUM.OWNER ? OWNER_ROLE : ADMIN_ROLE,
         ),
       findByIdOrFail: jest.fn().mockResolvedValue({ id: 'member-role-1' }),
+      findAssignableRoleOrFail: jest.fn().mockResolvedValue({
+        id: 'member-role-1',
+        name: SYSTEM_ROLE_NAME_ENUM.MEMBER,
+        isSystemRole: true,
+      }),
       // Espeja el seed real: OWNER y ADMIN tienen los 12 permisos (incluye todo ORGANIZATION),
       // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
       hasPermission: jest
@@ -444,7 +450,10 @@ describe('casos de uso de cuentas y organizaciones', () => {
         dto,
       );
 
-      expect(rolesService.findByIdOrFail).toHaveBeenCalledWith('member-role-1');
+      expect(rolesService.findAssignableRoleOrFail).toHaveBeenCalledWith(
+        'member-role-1',
+        'org-1',
+      );
       expect(organizationInvitationService.create).toHaveBeenCalledWith({
         organizationId: 'org-1',
         roleId: 'member-role-1',
@@ -481,16 +490,16 @@ describe('casos de uso de cuentas y organizaciones', () => {
       await expect(
         inviteOrganizationMember.execute('admin-1', 'personal-account-1', dto),
       ).rejects.toThrow(BadRequestException);
-      expect(rolesService.findByIdOrFail).not.toHaveBeenCalled();
+      expect(rolesService.findAssignableRoleOrFail).not.toHaveBeenCalled();
     });
 
     /**
      * Si el rol no existe, la invitación reventaría al canjearse: en ese momento ya no hay
      * quien corrija el error, porque el invitado no eligió ese rol.
      */
-    it('no persiste nada si el roleId no corresponde a un rol existente', async () => {
+    it('no persiste nada si el roleId no es un rol asignable en esta organización', async () => {
       accountRepository.findOne.mockResolvedValue(adminOrgAccount);
-      rolesService.findByIdOrFail.mockRejectedValue(
+      rolesService.findAssignableRoleOrFail.mockRejectedValue(
         new NotFoundException('Rol con ID bad-role no encontrado'),
       );
 
@@ -500,6 +509,27 @@ describe('casos de uso de cuentas y organizaciones', () => {
           roleId: 'bad-role',
         }),
       ).rejects.toThrow(NotFoundException);
+      expect(organizationInvitationService.create).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Historia "Cargar roles de la organización en el modal Invitar miembro": el modal ya no
+     * ofrece OWNER, pero eso es sólo presentación. El backend rechaza la invitación aunque el
+     * `roleId` de OWNER llegue directo a la API.
+     */
+    it('rechaza invitar con el rol OWNER, sin persistir nada', async () => {
+      accountRepository.findOne.mockResolvedValue(adminOrgAccount);
+      rolesService.findAssignableRoleOrFail.mockResolvedValue({
+        ...OWNER_ROLE,
+        isSystemRole: true,
+      });
+
+      await expect(
+        inviteOrganizationMember.execute('admin-1', 'org-account-1', {
+          ...dto,
+          roleId: OWNER_ROLE.id,
+        }),
+      ).rejects.toThrow(BadRequestException);
       expect(organizationInvitationService.create).not.toHaveBeenCalled();
     });
   });
