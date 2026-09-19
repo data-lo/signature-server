@@ -172,7 +172,7 @@ export class GetDocumentsUseCase {
       .skip((page - 1) * limit)
       .take(limit);
 
-    this.applyVisibility(qb, { userId, callerEmail, activeAccount, accountId });
+    this.applyVisibility(qb, { callerEmail, activeAccount, accountId });
     this.applyView(qb, view, userId);
     this.excludeArchived(qb, userId);
 
@@ -310,32 +310,39 @@ export class GetDocumentsUseCase {
    *
    * El `view` `created_by_me` no se ve afectado: filtra por `createdBy` DENTRO de lo ya visible
    * (ver `applyView`), así que sigue listando lo que el usuario mandó a firmar en esta cuenta.
+   *
+   * **La participación también se acota a la cuenta activa**, por la misma razón que se quitó
+   * `createdBy`. Antes se reconocía por USUARIO —cualquier colaborador enlazado a cualquiera de
+   * sus cuentas, o su correo—, así que quien se incluía como firmante en sus documentos personales
+   * los seguía viendo desde la organización: el listado no cambiaba al cambiar de cuenta (bug
+   * "Corregir documentos persistentes al cambiar de cuenta activa"). Ver
+   * `callerParticipatesFromAccountSubquery`.
    */
   private applyVisibility(
     qb: SelectQueryBuilder<DocumentEntity>,
     context: {
-      userId: string;
       callerEmail: string | null;
       activeAccount: { organizationId?: string | null };
       accountId: string;
     },
   ): void {
-    const { userId, callerEmail, activeAccount, accountId } = context;
+    const { callerEmail, activeAccount, accountId } = context;
+    const isPersonalAccount = !activeAccount.organizationId;
 
     qb.andWhere(
       new Brackets((where) => {
-        if (activeAccount.organizationId) {
+        if (isPersonalAccount) {
+          where.where('document.accountId = :accountId', { accountId });
+        } else {
           where.where('document.organizationId = :organizationId', {
             organizationId: activeAccount.organizationId,
           });
-        } else {
-          where.where('document.accountId = :accountId', { accountId });
         }
 
-        where.orWhere(this.callerIsParticipantSubquery(), {
-          userId,
-          callerEmail,
-        });
+        where.orWhere(
+          this.callerParticipatesFromAccountSubquery(isPersonalAccount),
+          { accountId, callerEmail },
+        );
       }),
     );
   }
@@ -412,19 +419,46 @@ export class GetDocumentsUseCase {
   }
 
   /**
-   * "Soy participante de este documento", por cuenta vinculada o por el correo de la invitación.
+   * "Participo en este documento DESDE la cuenta activa".
    *
-   * Los dos caminos son necesarios: un firmante invitado por correo no tiene `account_id` hasta
-   * que algo lo vincula —y eso ocurre al firmar, rechazar o pedir el código, es decir, nunca
-   * antes de ver esta lista— así que emparejar sólo por cuenta lo dejaría sin ver el documento
-   * que tiene que firmar.
+   * La participación pertenece a una cuenta, no a la persona: `CreateDocumentUseCase` ancla cada
+   * colaborador a la cuenta PERSONAL del invitado, y `linkPendingCollaboratorAccount` hace lo
+   * mismo al vincular una invitación por correo. Por eso se empareja por `c.account_id` contra la
+   * cuenta activa y no por el usuario dueño de esa cuenta: emparejar por usuario reconocía la
+   * participación desde CUALQUIERA de sus cuentas, y los documentos personales en los que firma
+   * aparecían también dentro de cada organización a la que pertenece.
+   *
+   * La consecuencia, deliberada: en una organización este camino no aporta nada hoy —ningún
+   * colaborador se ancla a una membresía de organización—, así que ahí se ve exactamente lo de la
+   * organización. Lo que le toca firmar a la persona por invitación de terceros aparece en su
+   * cuenta personal, que es donde se ancló. Si algún día los colaboradores se anclaran a una
+   * membresía de organización, esta misma condición los mostraría en esa organización sin tocar
+   * nada.
+   *
+   * La invitación por correo todavía sin vincular (`account_id` nulo) cuenta SÓLO en la cuenta
+   * personal: es donde va a anclarse en cuanto se vincule, y es necesaria porque la vinculación
+   * ocurre al firmar, rechazar o pedir el código —nunca antes de ver esta lista—, así que sin este
+   * camino el invitado no vería el documento que tiene que firmar.
+   *
+   * @param isPersonalAccount - Si la cuenta activa es la PERSONAL del usuario.
+   * @returns La condición SQL; espera los parámetros `:accountId` y `:callerEmail`.
+   *
+   * @example
+   * ```ts
+   * where.orWhere(this.callerParticipatesFromAccountSubquery(true), { accountId, callerEmail });
+   * ```
    */
-  private callerIsParticipantSubquery(): string {
+  private callerParticipatesFromAccountSubquery(
+    isPersonalAccount: boolean,
+  ): string {
+    const pendingEmailInvitation = isPersonalAccount
+      ? 'OR (c.account_id IS NULL AND LOWER(c.email) = :callerEmail)'
+      : '';
+
     return `document.id IN (
       SELECT c.document_id FROM collaborators c
-      LEFT JOIN accounts a ON a.id = c.account_id
-      LEFT JOIN users u ON u.id = a.user_id
-      WHERE u.id = :userId OR LOWER(c.email) = :callerEmail
+      WHERE c.account_id = :accountId
+      ${pendingEmailInvitation}
     )`;
   }
 
