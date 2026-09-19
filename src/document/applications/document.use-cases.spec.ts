@@ -3211,7 +3211,7 @@ describe('casos de uso de documentos', () => {
       await signDocument.execute('doc-1', 'user-1', undefined, geolocation);
 
       expect(collaboratorRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ geoLoc: geolocation }),
+        expect.objectContaining({ geolocation }),
       );
       expect(auditService.create).toHaveBeenCalledWith(
         expect.objectContaining({ geolocation }),
@@ -3220,7 +3220,7 @@ describe('casos de uso de documentos', () => {
 
     /**
      * La geolocalización pasó de opcional a obligatoria: antes, firmar sin ella guardaba
-     * `geoLoc: null` y la firma seguía adelante. Ahora se rechaza — la ubicación es parte no
+     * `geolocation: null` y la firma seguía adelante. Ahora se rechaza — la ubicación es parte no
      * negociable de la evidencia de firma.
      */
     it('rechaza firmar sin geolocalización y no registra ninguna firma', async () => {
@@ -4104,7 +4104,7 @@ describe('casos de uso de documentos', () => {
               signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
               signedAt: new Date('2026-08-14T18:24:11.000Z'),
               ipAddress: '187.190.12.4',
-              geoLoc: { latitude: 19.4326, longitude: -99.1332 },
+              geolocation: { latitude: 19.4326, longitude: -99.1332 },
             }),
           ]);
           verificationCodeService.findConsumedCode.mockResolvedValue('482915');
@@ -4141,7 +4141,7 @@ describe('casos de uso de documentos', () => {
               signatureType: SIGNATURE_TYPE_ENUM.FIEL,
               signedAt: new Date('2026-08-14T18:00:00.000Z'),
               ipAddress: '187.190.12.4',
-              geoLoc: { latitude: 19.4326, longitude: -99.1332 },
+              geolocation: { latitude: 19.4326, longitude: -99.1332 },
               advancedSignature: {
                 signatureBase64: 'firma-base64',
                 algorithm: 'sha256',
@@ -4211,7 +4211,7 @@ describe('casos de uso de documentos', () => {
               id: 'collab-1',
               status: SIGNEE_STATUS_ENUM.SIGNED,
               signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-              geoLoc: { latitude: 19.4326, longitude: -99.1332 },
+              geolocation: { latitude: 19.4326, longitude: -99.1332 },
             }),
           ]);
 

@@ -14,8 +14,8 @@ import { ConservationRecordInfo } from '../conservation-record.util';
  *    sigue viviendo en `AuditChainEntity.chipher`, que es su fuente de verdad; la hoja solo la
  *    mostraba. Se dejó de calcular en `attachSignaturesSheet` para no gastar un cifrado que nadie
  *    lee.
- *  - **RFC del firmante**: la plantilla identifica al firmante por nombre; el RFC sigue en
- *    `CollaboratorEntity.rfc` y en la hoja avanzada aparece dentro del certificado del SAT.
+ *  - **RFC del firmante**: la plantilla identifica al firmante por nombre; el dato sigue en
+ *    `CollaboratorEntity.taxId` y en la hoja avanzada aparece dentro del certificado del SAT.
  *
  * Si la omisión resulta ser un olvido de las plantillas, volver a imprimirlos es agregar el
  * renglón correspondiente: los datos siguen disponibles en su origen.
@@ -47,7 +47,7 @@ export interface SummaryDocumentInfo {
 /**
  * La geolocalización se dejó de imprimir (historia "Ocultar geolocalización en hojas de firma
  * y vistas públicas"). El dato SIGUE registrándose y consultándose: vive en
- * `CollaboratorEntity.geoLoc` y en la cadena de auditoría, intacto. Lo que desapareció es su
+ * `CollaboratorEntity.geolocation` y en la cadena de auditoría, intacto. Lo que desapareció es su
  * camino hacia la presentación — por eso el campo se quitó de este contrato en vez de dejarlo
  * entrando sin usarse, que es como vuelve a colarse a una plantilla sin que nadie lo note.
  */

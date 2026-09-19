@@ -103,7 +103,7 @@ export class PublicSignerData {
    * que en la hoja: esta URL la abre cualquiera que tenga el id, sin sesión y sin cuenta, así que
    * el dato quedaba a un `curl` de distancia aunque la pantalla no lo pintara.
    *
-   * El dato se sigue capturando y guardando en `CollaboratorEntity.geoLoc` y en la cadena de
+   * El dato se sigue capturando y guardando en `CollaboratorEntity.geolocation` y en la cadena de
    * auditoría, que es donde tiene valor probatorio. Lo que desapareció es su publicación.
    */
 
