@@ -60,7 +60,7 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
 };
 
 /**
- * Vocabulario de documentos -> vocabulario comercial. `fiel` y `ADVANCED` son el mismo tipo de
+ * Vocabulario de documentos -> vocabulario comercial. `FIEL` y `ADVANCED` son el mismo tipo de
  * firma con el nombre que le da cada módulo: el dominio de documentos habla de la FIEL del SAT y
  * facturación habla de firma avanzada.
  */
