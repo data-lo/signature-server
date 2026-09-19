@@ -23,6 +23,10 @@ import { ConfirmDocumentCancellationUseCase } from './applications/confirm-docum
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
 type Mocked = { execute: jest.Mock };
 
@@ -61,6 +65,21 @@ describe('DocumentController', () => {
     nationalId: 'PELJ850101HDFRNN08',
     jti: 'jti-1',
   };
+
+  /**
+   * Lo que `PermissionsGuard` habría dejado en la petición para este usuario. Se construye por
+   * acción porque el contexto la lleva dentro: el de leer y el de firmar no son el mismo objeto,
+   * y afirmar que el controller pasó "un contexto" cualquiera no comprobaría nada.
+   */
+  const authorization = (action: ACTION_KEY_ENUM): AuthorizationContext => ({
+    userId: 'user-1',
+    organizationId: 'org-1',
+    accountId: 'account-1',
+    roleId: 'role-1',
+    resource: RESOURCE_KEY_ENUM.DOCUMENT,
+    action,
+    scopes: [PERMISSION_SCOPE_ENUM.OWN, PERMISSION_SCOPE_ENUM.SELF],
+  });
 
   beforeEach(async () => {
     module = await Test.createTestingModule({
@@ -251,13 +270,18 @@ describe('DocumentController', () => {
     });
   });
 
-  it('findOne delega en GetDocumentUseCase con el userId autenticado', () => {
-    controller.findOne(user, 'doc-1');
+  /**
+   * El controller ya no le pasa el `userId` suelto: le pasa el contexto entero que dejó
+   * `PermissionsGuard`, que además del usuario trae los alcances con los que la Policy decidirá
+   * si ESTE documento es visible.
+   */
+  it('findOne delega en GetDocumentUseCase el documento y el contexto autorizado', () => {
+    controller.findOne('doc-1', authorization(ACTION_KEY_ENUM.READ));
 
-    expect(useCase(GetDocumentUseCase).execute).toHaveBeenCalledWith(
-      'doc-1',
-      'user-1',
-    );
+    expect(useCase(GetDocumentUseCase).execute).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      authorization: authorization(ACTION_KEY_ENUM.READ),
+    });
   });
 
   /**
@@ -277,6 +301,7 @@ describe('DocumentController', () => {
         key: [keyFile],
         cer: [cerFile],
       },
+      authorization(ACTION_KEY_ENUM.SIGN),
     );
 
     expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
@@ -284,17 +309,25 @@ describe('DocumentController', () => {
       'user-1',
       { password: 'secreto', keyFile, cerFile },
       geolocation,
+      authorization(ACTION_KEY_ENUM.SIGN),
     );
   });
 
   it('sign tolera una firma simple, sin archivos ni contrasena', () => {
-    controller.sign(user, 'doc-1', {} as any, {});
+    controller.sign(
+      user,
+      'doc-1',
+      {} as any,
+      {},
+      authorization(ACTION_KEY_ENUM.SIGN),
+    );
 
     expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
       'doc-1',
       'user-1',
       { password: undefined, keyFile: undefined, cerFile: undefined },
       undefined,
+      authorization(ACTION_KEY_ENUM.SIGN),
     );
   });
 

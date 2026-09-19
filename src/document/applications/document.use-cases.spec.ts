@@ -68,6 +68,43 @@ import { UpdateDocumentUseCase } from './update-document.use-case';
 import { DeleteDocumentUseCase } from './delete-document.use-case';
 import { SubmitDocumentForAuthorizationUseCase } from './submit-document-for-authorization.use-case';
 import { GetDocumentFileUrlUseCase } from './get-document-file-url.use-case';
+import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+
+/**
+ * El contexto que `PermissionsGuard` dejaría en la petición para un miembro raso: puede leer
+ * documentos, pero sólo los propios o aquellos en los que participa (`DOCUMENT.READ_OWN`).
+ *
+ * Es el alcance con el que estas pruebas ejercitan `GET /document/:id`, porque es el que hace
+ * trabajo: con `ORGANIZATION` la Policy dejaría pasar cualquier documento del tenant y estos
+ * escenarios —creador, firmante, invitado por correo, ajeno— dejarían de distinguirse.
+ */
+/**
+ * Instancia REAL de `DocumentEntity`, no un objeto plano.
+ *
+ * `DocumentAuthorizationPolicy` cae en `document.isAccessibleBy()` cuando el caso de uso no
+ * resolvió ninguna participación —el escenario del usuario ajeno—, y un literal con forma de
+ * documento no trae ese método: la prueba fallaría con un `TypeError` en vez de con el 403 que
+ * está comprobando.
+ */
+function asDocumentEntity(fields: Partial<DocumentEntity>): DocumentEntity {
+  return Object.assign(new DocumentEntity(), fields);
+}
+
+function readOwnAuthorization(userId: string): AuthorizationContext {
+  return {
+    userId,
+    organizationId: null,
+    accountId: `account-${userId}`,
+    roleId: 'member-role-1',
+    resource: RESOURCE_KEY_ENUM.DOCUMENT,
+    action: ACTION_KEY_ENUM.READ,
+    scopes: [PERMISSION_SCOPE_ENUM.OWN],
+  };
+}
 
 function createMockRepository() {
   return {
@@ -332,6 +369,7 @@ describe('casos de uso de documentos', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DocumentService,
+        DocumentAuthorizationPolicy,
         CreateDocumentUseCase,
         GetDocumentsUseCase,
         GetDocumentUseCase,
@@ -835,6 +873,103 @@ describe('casos de uso de documentos', () => {
       expect(visibility).not.toContain('document.createdBy = :userId');
     });
 
+    /**
+     * El grupo de acceso con los parámetros de cada condición. `bracketConditions` sólo registra
+     * el SQL, y aquí importa también CONTRA QUÉ se compara: la participación tiene que atarse a la
+     * cuenta activa, no al usuario.
+     */
+    function visibilityWithParameters(qb: any): Array<[string, any]> {
+      const recorded: Array<[string, any]> = [];
+      const nested: any = {};
+      ['where', 'orWhere', 'andWhere'].forEach((method) => {
+        nested[method] = jest.fn((sql: string, parameters?: unknown) => {
+          recorded.push([sql, parameters]);
+          return nested;
+        });
+      });
+
+      const group = qb.andWhere.mock.calls
+        .map(([condition]: [unknown]) => condition)
+        .find(
+          (condition: any) =>
+            typeof condition !== 'string' &&
+            bracketConditions(condition).some(
+              (sql) =>
+                sql.includes('document.accountId') ||
+                sql.includes('document.organizationId'),
+            ),
+        );
+      group.whereFactory(nested);
+      return recorded;
+    }
+
+    /**
+     * Bug corregido: "Corregir documentos persistentes al cambiar de cuenta activa".
+     *
+     * La participación se reconocía por USUARIO (`u.id = :userId`): cualquier colaborador enlazado
+     * a cualquiera de sus cuentas contaba. Como los colaboradores se anclan a la cuenta PERSONAL,
+     * quien se incluía como firmante en sus documentos personales los seguía viendo dentro de cada
+     * organización a la que pertenece, y la lista no cambiaba al cambiar de cuenta.
+     */
+    it('reconoce la participación sólo desde la cuenta activa, no desde cualquier cuenta del usuario', async () => {
+      personalAccount();
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb);
+
+      const [, [participation, parameters]] = visibilityWithParameters(qb);
+      expect(participation).toContain('c.account_id = :accountId');
+      expect(participation).not.toContain(':userId');
+      expect(parameters).toMatchObject({ accountId: 'account-1' });
+    });
+
+    it('desde una organización no muestra los documentos personales en los que el usuario firma', async () => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+      const qb = createMockQueryBuilder();
+      documentRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await getDocuments.execute({
+        userId: 'user-1',
+        accountId: 'account-org-member-1',
+        filters: { page: 1, limit: 25 } as any,
+      });
+
+      const [[ownership], [participation, parameters]] =
+        visibilityWithParameters(qb);
+      expect(ownership).toBe('document.organizationId = :organizationId');
+      // Se compara contra la membresía de la organización, que nunca es la cuenta a la que se
+      // anclan los colaboradores: el documento personal donde firma no entra por aquí.
+      expect(parameters).toMatchObject({ accountId: 'account-org-member-1' });
+      expect(participation).not.toContain(':userId');
+    });
+
+    /**
+     * La invitación por correo sin vincular va a anclarse a la cuenta personal en cuanto se
+     * vincule; mientras tanto se ve SÓLO ahí. Sin este camino el invitado no vería el documento
+     * que tiene que firmar, porque la vinculación ocurre al firmar —nunca antes de ver la lista—.
+     */
+    it('la invitación por correo todavía sin vincular sólo cuenta desde la cuenta personal', async () => {
+      personalAccount();
+      const personalQb = createMockQueryBuilder();
+      await list({}, personalQb);
+      const [, [personalParticipation]] = visibilityWithParameters(personalQb);
+      expect(personalParticipation).toContain(
+        'c.account_id IS NULL AND LOWER(c.email) = :callerEmail',
+      );
+
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+      const orgQb = createMockQueryBuilder();
+      await list({}, orgQb);
+      const [, [orgParticipation]] = visibilityWithParameters(orgQb);
+      expect(orgParticipation).not.toContain(':callerEmail');
+    });
+
     it('usa la organización en lugar de la cuenta cuando la cuenta activa pertenece a una', async () => {
       accountMemberService.assertIsActiveMember.mockResolvedValue({
         id: 'account-org-member-1',
@@ -933,7 +1068,9 @@ describe('casos de uso de documentos', () => {
         const viewConditions = qb.andWhere.mock.calls
           .map(([condition]: [unknown]) => condition)
           .filter((condition: unknown) => typeof condition === 'string');
-        expect(viewConditions).not.toContain('document.status = :pendingStatus');
+        expect(viewConditions).not.toContain(
+          'document.status = :pendingStatus',
+        );
         expect(viewConditions).not.toContain('document.createdBy = :userId');
         expect(allConditions(qb)).toContain('document.accountId = :accountId');
       });
@@ -4361,7 +4498,10 @@ describe('casos de uso de documentos', () => {
           collaborators: [buildSigner({ userId: 'user-1' })],
         } as unknown as DocumentEntity);
 
-        await getDocument.execute('doc-1', 'user-1');
+        await getDocument.execute({
+          documentId: 'doc-1',
+          authorization: readOwnAuthorization('user-1'),
+        });
 
         expect(minioService.getFile).toHaveBeenCalledWith(
           'object-key-1',
@@ -4470,10 +4610,16 @@ describe('casos de uso de documentos', () => {
     it('findDetailForUser marca canSign solo para el firmante B (A ya firmó, C debe esperar)', async () => {
       documentRepository.findOne.mockResolvedValue(mockDetailDocument());
 
-      const resultB = await getDocument.execute('doc-1', 'user-b');
+      const resultB = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
       expect(resultB.data.canSign).toBe(true);
 
-      const resultC = await getDocument.execute('doc-1', 'user-c');
+      const resultC = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-c'),
+      });
       expect(resultC.data.canSign).toBe(false);
     });
 
@@ -4502,7 +4648,10 @@ describe('casos de uso de documentos', () => {
         isSequential: false,
       });
 
-      const resultC = await getDocument.execute('doc-1', 'user-c');
+      const resultC = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-c'),
+      });
       expect(resultC.data.canSign).toBe(true);
     });
 
@@ -4524,7 +4673,10 @@ describe('casos de uso de documentos', () => {
         email: 'firmante.b@correo.com',
       });
 
-      const result = await getDocument.execute('doc-1', 'user-b');
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
 
       expect(result.data.canSign).toBe(true);
       expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
@@ -4548,7 +4700,10 @@ describe('casos de uso de documentos', () => {
         email: 'firmante.b@correo.com',
       });
 
-      await getDocument.execute('doc-1', 'user-b');
+      await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
 
       expect(collaboratorRepository.update).not.toHaveBeenCalled();
     });
@@ -4562,18 +4717,23 @@ describe('casos de uso de documentos', () => {
         account: null,
         email: 'firmante.b@correo.com',
       });
-      documentRepository.findOne.mockResolvedValue({
-        ...mockDetailDocument(),
-        collaborators: [signerA, invitedByEmail, signerC],
-      } as unknown as DocumentEntity);
+      documentRepository.findOne.mockResolvedValue(
+        asDocumentEntity({
+          ...mockDetailDocument(),
+          collaborators: [signerA, invitedByEmail, signerC],
+        }),
+      );
       userService.findOne.mockResolvedValue({
         id: 'user-x',
         email: 'intruso@correo.com',
       });
 
-      await expect(getDocument.execute('doc-1', 'user-x')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: readOwnAuthorization('user-x'),
+        }),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('tras una vinculación explícita previa (linkPendingCollaboratorAccount), findDetailForUser sí encuentra al colaborador por accountId y calcula canSign/myStatus normalmente', async () => {
@@ -4591,7 +4751,10 @@ describe('casos de uso de documentos', () => {
         linkedDetailDocument as unknown as DocumentEntity,
       );
 
-      const result = await getDocument.execute('doc-1', 'user-b');
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('user-b'),
+      });
 
       expect(result.data.canSign).toBe(true);
       expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);

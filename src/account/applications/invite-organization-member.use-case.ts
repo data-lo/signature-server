@@ -44,10 +44,16 @@ export class InviteOrganizationMemberUseCase {
       );
     }
 
-    const account = await this.accountService.assertHasOrganizationPermission(
+    /**
+     * Sólo se resuelve la cuenta, no se vuelve a autorizar: de eso se encargó
+     * `PermissionsGuard` con el `@RequirePermission(MEMBER, INVITE)` del controller, sobre el
+     * mismo `X-Account-Id` que llega aquí. Antes se exigía `ORGANIZATION.CREATE`, un permiso
+     * genérico que el catálogo estático ya no define para la organización; el permiso propio
+     * del recurso (`MEMBER.INVITE`) es el que describe lo que de verdad se está haciendo.
+     */
+    const account = await this.accountService.resolveOwnActiveAccountOrFail(
       callerId,
       accountId,
-      ACTION_KEY_ENUM.CREATE,
     );
 
     if (account.accountType !== ACCOUNT_TYPE_ENUM.ORGANIZATION) {

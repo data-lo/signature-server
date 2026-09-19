@@ -6,6 +6,7 @@ import axios from 'axios';
 
 import { DocumentService } from '../document.service';
 import { SignDocumentUseCase } from '../applications/sign-document.use-case';
+import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
 import { DocumentEntity } from '../entities/document.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { VerificationCodeEntity } from '../entities/verification-code.entity';
@@ -233,6 +234,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       providers: [
         // Cadena real bajo prueba.
         SignDocumentUseCase,
+        DocumentAuthorizationPolicy,
         DocumentService,
         SealDocumentUseCase,
         SealApiService,

@@ -13,6 +13,7 @@ import { PermissionEntity } from './entities/permission.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from './enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from './enums/permission-scope.enum';
 import {
   STATIC_PERMISSION_CATALOG,
   STATIC_PERMISSION_KEY_ENUM,
@@ -149,6 +150,96 @@ describe('RolesService', () => {
 
       expect(result).toBe(false);
       expect(rolePermissionRepository.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getPermissionScopes', () => {
+    /**
+     * `DOCUMENT.READ_OWN` y `DOCUMENT.READ_ORGANIZATION` comparten recurso y acción: lo único
+     * que los separa es el alcance. Devolver los dos es lo que después permite a
+     * `DocumentAuthorizationPolicy` decidir por cuál entra cada documento.
+     */
+    it('devuelve todos los alcances concedidos para ese recurso y esa acción', async () => {
+      rolePermissionRepository.find.mockResolvedValue([
+        { permission: { scope: PERMISSION_SCOPE_ENUM.OWN } },
+        { permission: { scope: PERMISSION_SCOPE_ENUM.ORGANIZATION } },
+      ]);
+
+      const scopes = await service.getPermissionScopes(
+        'admin-role-1',
+        RESOURCE_KEY_ENUM.DOCUMENT,
+        ACTION_KEY_ENUM.READ,
+      );
+
+      expect(scopes).toEqual([
+        PERMISSION_SCOPE_ENUM.OWN,
+        PERMISSION_SCOPE_ENUM.ORGANIZATION,
+      ]);
+    });
+
+    /**
+     * La consulta recorre `role_permissions → permissions → resources → actions` y en ningún
+     * punto menciona el nombre del rol: es lo que hace que un rol custom con una combinación
+     * parcial del catálogo funcione igual que ADMIN.
+     */
+    it('consulta el catálogo por claves de recurso y acción, nunca por el nombre del rol', async () => {
+      rolePermissionRepository.find.mockResolvedValue([]);
+
+      await service.getPermissionScopes(
+        'custom-role-1',
+        RESOURCE_KEY_ENUM.BILLING,
+        ACTION_KEY_ENUM.MANAGE,
+      );
+
+      expect(rolePermissionRepository.find).toHaveBeenCalledWith({
+        where: {
+          roleId: 'custom-role-1',
+          permission: {
+            resource: { key: RESOURCE_KEY_ENUM.BILLING },
+            action: { key: ACTION_KEY_ENUM.MANAGE },
+          },
+        },
+        relations: { permission: { resource: true, action: true } },
+      });
+    });
+
+    it('devuelve una lista vacía cuando el rol no tiene ese permiso', async () => {
+      rolePermissionRepository.find.mockResolvedValue([]);
+
+      await expect(
+        service.getPermissionScopes(
+          'member-role-1',
+          RESOURCE_KEY_ENUM.BILLING,
+          ACTION_KEY_ENUM.READ,
+        ),
+      ).resolves.toEqual([]);
+    });
+
+    it('no repite un alcance que llegue duplicado', async () => {
+      rolePermissionRepository.find.mockResolvedValue([
+        { permission: { scope: PERMISSION_SCOPE_ENUM.OWN } },
+        { permission: { scope: PERMISSION_SCOPE_ENUM.OWN } },
+      ]);
+
+      await expect(
+        service.getPermissionScopes(
+          'admin-role-1',
+          RESOURCE_KEY_ENUM.DOCUMENT,
+          ACTION_KEY_ENUM.READ,
+        ),
+      ).resolves.toEqual([PERMISSION_SCOPE_ENUM.OWN]);
+    });
+
+    it('devuelve una lista vacía sin consultar la base si la membresía no tiene rol', async () => {
+      await expect(
+        service.getPermissionScopes(
+          null,
+          RESOURCE_KEY_ENUM.DOCUMENT,
+          ACTION_KEY_ENUM.READ,
+        ),
+      ).resolves.toEqual([]);
+
+      expect(rolePermissionRepository.find).not.toHaveBeenCalled();
     });
   });
 

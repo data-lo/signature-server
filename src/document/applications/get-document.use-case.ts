@@ -1,12 +1,11 @@
-import {
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsRelations, Repository } from 'typeorm';
 
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { MinioService } from 'src/common/minio/minio.service';
+
+import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
 
 import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
@@ -28,6 +27,11 @@ import { DocumentService } from '../document.service';
  * Además del documento, resuelve qué es el usuario dentro de él —creador, firmante en turno,
  * firmante que ya respondió, observador—, porque de eso depende todo lo que la pantalla le
  * ofrece.
+ *
+ * El acceso se decide en dos tiempos, que es el reparto que sostiene toda la autorización de la
+ * plataforma: `PermissionsGuard` ya comprobó que el rol de la membresía activa puede leer
+ * documentos y dejó los alcances concedidos en el contexto; aquí, con el documento ya cargado,
+ * `DocumentAuthorizationPolicy` confronta esos alcances con ESTE documento.
  */
 @Injectable()
 export class GetDocumentUseCase {
@@ -38,9 +42,32 @@ export class GetDocumentUseCase {
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentService: DocumentService,
+    private readonly authorizationPolicy: DocumentAuthorizationPolicy,
   ) {}
 
-  async execute(documentId: string, currentUserId: string) {
+  /**
+   * Arma el detalle del documento para el usuario autorizado.
+   *
+   * @param params.documentId - Documento pedido en la ruta.
+   * @param params.authorization - Contexto que dejó `PermissionsGuard` (usuario, organización
+   *   activa y alcances concedidos para `DOCUMENT + READ`).
+   * @returns El detalle del documento con lo que este usuario puede hacer en él.
+   *
+   * @throws {NotFoundException} (404) Si el documento no existe.
+   * @throws {ForbiddenException} (403) Si ningún alcance concedido cubre a este documento.
+   *
+   * @example
+   * ```ts
+   * await getDocumentUseCase.execute({ documentId: 'doc-1', authorization });
+   * ```
+   */
+  async execute(params: {
+    documentId: string;
+    authorization: AuthorizationContext;
+  }) {
+    const { documentId, authorization } = params;
+    const currentUserId = authorization.userId;
+
     const documentDetailRelations: FindOptionsRelations<DocumentEntity> = {
       requestedBy: true,
       collaborators: { account: { user: true } },
@@ -58,14 +85,21 @@ export class GetDocumentUseCase {
     }
 
     const isCreator = document.createdBy === currentUserId;
+    /**
+     * Se resuelve ANTES de autorizar y se le pasa a la Policy: enlazar a un colaborador invitado
+     * sólo por correo necesita ir a la base, y esa consulta es del caso de uso, no de la Policy
+     * —que sigue siendo una función pura sobre el documento y el contexto.
+     */
     const myParticipant = await this.documentService.resolveMyCollaborator(
       document.collaborators,
       currentUserId,
     );
 
-    if (!isCreator && !myParticipant) {
-      throw new ForbiddenException('No tienes acceso a este documento');
-    }
+    this.authorizationPolicy.assertCanRead({
+      document,
+      authorization,
+      participant: myParticipant ?? null,
+    });
 
     const isMyTurn = Boolean(
       myParticipant &&

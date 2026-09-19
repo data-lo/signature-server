@@ -3,6 +3,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { RequirePermission } from 'src/authorization/decorators/require-permission.decorator';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { CreateSubscriptionCheckoutUseCase } from 'src/billing/checkout/create-subscription-checkout.use-case';
 import { CreateDocumentCreditCheckoutUseCase } from 'src/billing/checkout/create-document-credit-checkout.use-case';
@@ -52,6 +55,11 @@ export class PaymentsController {
    * cambió es qué devuelve —sólo productos marcados como plan visible en Stripe— y que la
    * respuesta se sirve desde Redis mientras el TTL siga vigente.
    */
+  /**
+   * Sin `@RequirePermission`: es el catálogo de lo que se puede comprar, igual para cualquiera y
+   * sin cuenta activa de por medio. Exigir `BILLING.READ` aquí impediría ver los planes justo a
+   * quien todavía no tiene ninguno.
+   */
   @Get('services')
   @ApiGetPaymentServices()
   async services(): Promise<BaseResponse<PaymentServiceResponse[]>> {
@@ -72,6 +80,7 @@ export class PaymentsController {
    */
   @Post('checkout-sessions')
   @ApiCreateCheckoutSession()
+  @RequirePermission(RESOURCE_KEY_ENUM.BILLING, ACTION_KEY_ENUM.MANAGE)
   async checkoutSessions(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -102,6 +111,7 @@ export class PaymentsController {
    */
   @Get('document-credit-offers')
   @ApiGetDocumentCreditOffers()
+  @RequirePermission(RESOURCE_KEY_ENUM.BILLING, ACTION_KEY_ENUM.READ)
   async documentCreditOffers(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -127,6 +137,7 @@ export class PaymentsController {
    */
   @Post('document-credits/checkout')
   @ApiCreateDocumentCreditCheckout()
+  @RequirePermission(RESOURCE_KEY_ENUM.BILLING, ACTION_KEY_ENUM.MANAGE)
   async documentCreditsCheckout(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -165,6 +176,7 @@ export class PaymentsController {
    */
   @Get('billing-state')
   @ApiGetBillingState()
+  @RequirePermission(RESOURCE_KEY_ENUM.BILLING, ACTION_KEY_ENUM.READ)
   async billingState(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -191,6 +203,7 @@ export class PaymentsController {
    */
   @Post('subscription/cancel')
   @ApiCancelSubscription()
+  @RequirePermission(RESOURCE_KEY_ENUM.BILLING, ACTION_KEY_ENUM.MANAGE)
   async cancelSubscriptionAtPeriodEnd(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
@@ -212,6 +225,7 @@ export class PaymentsController {
    */
   @Post('subscription/resume')
   @ApiResumeSubscription()
+  @RequirePermission(RESOURCE_KEY_ENUM.BILLING, ACTION_KEY_ENUM.MANAGE)
   async resumeSubscriptionRenewal(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
