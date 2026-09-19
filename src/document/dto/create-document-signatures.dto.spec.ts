@@ -20,43 +20,69 @@ async function validateDto(payload: unknown) {
   return validate(dto);
 }
 
+function errorsFor(
+  errors: Awaited<ReturnType<typeof validateDto>>,
+  property: string,
+) {
+  return errors.filter((error) => error.property === property);
+}
+
 /**
- * Historia "Eliminar campo RFC de la sección de Espectadores": antes `rfc` era obligatorio SOLO
- * para VIEWER; ahora es opcional también para VIEWER, pero si llega con valor se sigue validando
- * como string.
+ * El campo se llamaba `rfc` hasta la historia "Estandarizar campos de colaboradores"; la regla de
+ * validación es la misma y sólo cambió el nombre.
+ *
+ * Historia "Eliminar campo RFC de la sección de Espectadores": antes era obligatorio SOLO para
+ * VIEWER; ahora es opcional también para VIEWER, pero si llega con valor se sigue validando como
+ * string.
  */
-describe('CollaboratorPayloadDto.rfc', () => {
+describe('CollaboratorPayloadDto.taxId', () => {
   it.each([
     ['sin el campo', baseViewer()],
-    ['en null', baseViewer({ rfc: null })],
-    ['vacío', baseViewer({ rfc: '' })],
-  ])('acepta un VIEWER %s de rfc', async (_name, payload) => {
+    ['en null', baseViewer({ taxId: null })],
+    ['vacío', baseViewer({ taxId: '' })],
+  ])('acepta un VIEWER %s de taxId', async (_name, payload) => {
     const errors = await validateDto(payload);
-    const rfcErrors = errors.filter((error) => error.property === 'rfc');
-    expect(rfcErrors).toHaveLength(0);
+
+    expect(errorsFor(errors, 'taxId')).toHaveLength(0);
   });
 
-  it('acepta un VIEWER con rfc válido', async () => {
-    const errors = await validateDto(baseViewer({ rfc: 'AURU800101ABC' }));
-    const rfcErrors = errors.filter((error) => error.property === 'rfc');
-    expect(rfcErrors).toHaveLength(0);
+  it('acepta un VIEWER con taxId válido', async () => {
+    const errors = await validateDto(baseViewer({ taxId: 'AURU800101ABC' }));
+
+    expect(errorsFor(errors, 'taxId')).toHaveLength(0);
   });
 
-  it('rechaza un VIEWER cuyo rfc no es un string', async () => {
-    const errors = await validateDto(baseViewer({ rfc: 12345 }));
-    const rfcErrors = errors.filter((error) => error.property === 'rfc');
-    expect(rfcErrors.length).toBeGreaterThan(0);
+  it('rechaza un VIEWER cuyo taxId no es un string', async () => {
+    const errors = await validateDto(baseViewer({ taxId: 12345 }));
+
+    expect(errorsFor(errors, 'taxId').length).toBeGreaterThan(0);
   });
 
-  it('nunca valida el rfc de un SIGNER, aunque venga mal tipado', async () => {
+  it('nunca valida el taxId de un SIGNER, aunque venga mal tipado', async () => {
     const errors = await validateDto({
       collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
       firstName: 'Juan',
       lastName: 'Pérez',
       email: 'juan@correo.com',
-      rfc: 12345,
+      taxId: 12345,
     });
-    const rfcErrors = errors.filter((error) => error.property === 'rfc');
-    expect(rfcErrors).toHaveLength(0);
+
+    expect(errorsFor(errors, 'taxId')).toHaveLength(0);
+  });
+
+  /**
+   * El nombre viejo deja de existir como campo del contrato: `whitelist: true` del
+   * `ValidationPipe` global lo descarta antes de llegar al caso de uso, así que un cliente que
+   * siga mandando `rfc` no reintroduce el dato por la puerta de atrás — simplemente no lo manda.
+   */
+  it('ignora por completo un `rfc` heredado en el payload', async () => {
+    const errors = await validateDto(baseViewer({ rfc: 'AURU800101ABC' }));
+    const dto = plainToInstance(
+      CollaboratorPayloadDto,
+      baseViewer({ rfc: 'AURU800101ABC' }),
+    );
+
+    expect(errorsFor(errors, 'rfc')).toHaveLength(0);
+    expect(dto.taxId).toBeUndefined();
   });
 });

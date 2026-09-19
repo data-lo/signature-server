@@ -18,7 +18,7 @@ import type { SignatureResult } from 'src/efirma/interfaces/signature-result.int
 /**
  * Reemplaza a DocumentParticipantEntity (ver plan de migración ER-V2, Fase 3). Generaliza
  * "participante" a "colaborador": agrega el rol REVIEWER, permite invitar solo por email
- * (accountId nullable) sin que exista una cuenta de plataforma todavía, y suma geoLoc/
+ * (accountId nullable) sin que exista una cuenta de plataforma todavía, y suma geolocation/
  * cancellationReason/signatureType que no existían antes.
  *
  * `comments`, `reminderPeriodicity` y la relación con `fiel_signatures` se eliminaron en la
@@ -28,6 +28,13 @@ import type { SignatureResult } from 'src/efirma/interfaces/signature-result.int
  * `accountId` reemplazó a `userId` (ver diagrama ER-V2 más reciente / migración
  * `RenameCollaboratorUserIdToAccountId`): apunta a la cuenta PERSONAL del colaborador, no
  * directamente a `UserEntity`, consistente con el resto del modelo multi-tenant.
+ *
+ * `geoLoc` y `rfc` pasaron a `geolocation` y `taxId`, y `visibilityLevel` se eliminó, en la
+ * migración `StandardizeCollaboratorFields`: la primera alinea el nombre con el que ya usaba
+ * todo el flujo de firma y de auditoría, la segunda deja de dar por hecho que el colaborador
+ * tributa en México, y la tercera era un campo sin significado definido que nadie escribía ni
+ * leía. El RFC de `personal_information`, el de `organizations` y el del certificado del SAT no
+ * se tocan: ésos sí son, por definición, un RFC.
  */
 @Entity('collaborators')
 export class CollaboratorEntity {
@@ -73,9 +80,13 @@ export class CollaboratorEntity {
   @Column({ name: 'last_name', nullable: true })
   lastName: string | null;
 
-  /** Solo para colaboradores VIEWER, o SIGNER con signatureType ADVANCED (ver historia de frontend). */
-  @Column({ nullable: true })
-  rfc: string | null;
+  /**
+   * Identificador fiscal del colaborador (en México, su RFC). Solo lo guarda el VIEWER: al
+   * firmante no se le pide en ningún flujo, y en firma avanzada el dato real sale del
+   * certificado de e.firma al momento de firmar.
+   */
+  @Column({ name: 'tax_id', nullable: true })
+  taxId: string | null;
 
   @Column({ name: 'signing_order', nullable: true })
   signingOrder: number | null;
@@ -94,11 +105,12 @@ export class CollaboratorEntity {
   ipAddress: string;
 
   /** Evidencia de ubicación declarada por el dispositivo del firmante al momento de firmar (ver `GeolocationDto`). */
-  @Column({ name: 'geo_loc', type: 'jsonb', nullable: true })
-  geoLoc: { latitude: number; longitude: number; accuracy?: number } | null;
-
-  @Column({ name: 'visibility_level', nullable: true })
-  visibilityLevel: number | null;
+  @Column({ type: 'jsonb', nullable: true })
+  geolocation: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+  } | null;
 
   /** Mapea desde el antiguo rejectionReason — aproximación (ver migración de la Fase 3: "rechazo" y "cancelación" no son lo mismo conceptualmente). */
   @Column({ name: 'cancellation_reason', type: 'text', nullable: true })

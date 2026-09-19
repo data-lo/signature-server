@@ -68,7 +68,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
 
   /**
    * Documento de firma SIMPLE (el tipo lo define `documentData`, no cada colaborador — ver
-   * historia "Selección de tipo de firma al crear documentos"). Juan trae un `rfc` que el backend
+   * historia "Selección de tipo de firma al crear documentos"). Juan trae un `taxId` que el backend
    * debe descartar por ser SIGNER, y María trae requiresTwoFactorAuth:false que el backend debe
    * forzar a true por ser un documento SIMPLE.
    */
@@ -83,7 +83,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Juan',
         lastName: 'Pérez',
         email: 'juan.perez@mail.com',
-        rfc: 'PEAJ800101XXX',
+        taxId: 'PEAJ800101XXX',
         signatures: [
           {
             signatureId: 'sig-1',
@@ -101,7 +101,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'María',
         lastName: 'Gómez',
         email: 'maria.gomez@mail.com',
-        rfc: null,
+        taxId: null,
         signatures: [],
         requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
       },
@@ -110,7 +110,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Carlos',
         lastName: 'Solares',
         email: 'auditor@mail.com',
-        rfc: 'AUDI990101YYY',
+        taxId: 'AUDI990101YYY',
       },
     ],
   };
@@ -413,7 +413,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
   });
 
-  it('historia "Selección de tipo de firma": descarta el rfc que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
+  it('historia "Selección de tipo de firma": descarta el taxId que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
     await useCase.execute(
       'creator-1',
       'account-1',
@@ -425,8 +425,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     const juanCall = collaboratorRepo.create.mock.calls.find(
       (call) => call[0].email === 'juan.perez@mail.com',
     );
-    // El payload trae rfc: 'PEAJ800101XXX' — un cliente viejo no puede reintroducir el campo.
-    expect(juanCall[0].rfc).toBeNull();
+    // El payload trae taxId: 'PEAJ800101XXX' — un cliente viejo no puede reintroducir el campo.
+    expect(juanCall[0].taxId).toBeNull();
   });
 
   it('rechaza el payload si requiresDifferentSignatures contradice el tipo de firma del documento', async () => {
@@ -617,7 +617,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
     expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WATCHER);
     expect(viewerCall[0].signatureType).toBeNull();
-    expect(viewerCall[0].rfc).toBe('AUDI990101YYY');
+    expect(viewerCall[0].taxId).toBe('AUDI990101YYY');
     // Solo 2 verification_codes en total (los 2 signers), ninguno para el viewer.
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
   });
