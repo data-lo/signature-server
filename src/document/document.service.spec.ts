@@ -293,7 +293,10 @@ describe('DocumentService', () => {
       [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
       [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
       [DOCUMENT_STATUS_ENUM.CREATED, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
-      [DOCUMENT_STATUS_ENUM.PENDING, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+      [
+        DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+      ],
       [DOCUMENT_STATUS_ENUM.EXPIRED, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
     ])('status=%s resuelve el bucket %s', async (status, expectedBucket) => {
       documentRepository.findOne.mockResolvedValue({
@@ -343,7 +346,7 @@ describe('DocumentService', () => {
         documentRepository.findOne.mockResolvedValue({
           id: 'doc-1',
           fileName: 'contrato.pdf',
-          status: DOCUMENT_STATUS_ENUM.PENDING,
+          status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
           objectKey: 'object-key-1',
           completedSignersCount,
         });

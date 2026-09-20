@@ -8,7 +8,7 @@ import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 
 // Services
@@ -26,6 +26,7 @@ import {
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 
 import { NotificationEventPayload } from '../notification-events.topics';
+import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
 
 /**
  * `notification.created`: procesa la notificación creada para un colaborador y decide qué correo
@@ -79,7 +80,30 @@ export class SendPendingSignatureNotificationUseCase {
       where: { id: payload.collaboratorId },
       relations: { account: { user: true } },
     });
-    if (!collaborator || collaborator.status !== SIGNEE_STATUS_ENUM.PENDING) {
+    if (
+      !collaborator ||
+      collaborator.status !== COLLABORATOR_STATUS_ENUM.PENDING
+    ) {
+      return;
+    }
+
+    /**
+     * Mientras el documento espera aprobación no sale ningún correo de firma (historia
+     * "Implementar flujo de aprobación previo al proceso de firma"). La guarda se pone aquí, en
+     * el consumidor, y no en quien publica el evento: así la regla depende del estado REAL del
+     * documento en el momento de enviar —incluido el caso en que la aprobación llegue entre la
+     * publicación del evento y su consumo— y no de que cada productor se acuerde de filtrar.
+     *
+     * A los firmantes se les avisa cuando el reviewer aprueba, y de eso se encargan
+     * `notifyNextSigner` y `sendSimpleSignatureInvitations`.
+     */
+    const document = await this.documentRepository.findOne({
+      where: { id: payload.documentId },
+    });
+    if (
+      document?.status === DOCUMENT_STATUS_ENUM.PENDING_APPROVAL &&
+      collaborator.colaboratorType !== COLABORATOR_TYPE_ENUM.REVIEWER
+    ) {
       return;
     }
 
@@ -214,8 +238,8 @@ export class SendPendingSignatureNotificationUseCase {
     );
 
     const claim = await this.collaboratorRepository.update(
-      { id: collaborator.id, status: SIGNEE_STATUS_ENUM.PENDING },
-      { status: SIGNEE_STATUS_ENUM.NOTIFIED },
+      { id: collaborator.id, status: COLLABORATOR_STATUS_ENUM.PENDING },
+      { status: COLLABORATOR_STATUS_ENUM.NOTIFIED },
     );
     if (claim.affected !== 1) {
       this.logger.warn(

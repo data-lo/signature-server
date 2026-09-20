@@ -8,7 +8,7 @@ import { CollaboratorEntity } from '../../entities/collaborator.entity';
 import { VerificationCodeEntity } from '../../entities/verification-code.entity';
 import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../../enum/collaborator-status.enum';
 import { VERIFICATION_EVENT_ENUM } from '../../enum/verification-event.enum';
 import { detectImageContentType } from 'src/common/utils/image-content-type.util';
 import {
@@ -206,7 +206,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
     );
 
     const allSigned = signers.every(
-      (signer) => signer.status === SIGNEE_STATUS_ENUM.SIGNED,
+      (signer) => signer.status === COLLABORATOR_STATUS_ENUM.SIGNED,
     );
 
     return (
@@ -252,7 +252,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
     this.assertPresent(name, 'el nombre', signer.id);
     this.assertPresent(lastName, 'el apellido', signer.id);
 
-    if (!signer.signedAt) {
+    if (!signer.resolvedAt) {
       throw new IncompleteSimpleSignatureDataException(
         'la fecha de firma',
         signer.id,
@@ -269,7 +269,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
        * campo llega como `Date` cuando la fila se acaba de escribir en esta petición y como
        * string cuando se releyó de la base. Mismo criterio que el sellado de firma avanzada.
        */
-      signedAt: new Date(signer.signedAt).toISOString(),
+      signedAt: new Date(signer.resolvedAt).toISOString(),
       verificationData: await this.resolveVerificationData(documentId, signer),
       signatureMedia: {
         signatureImage: await this.resolveSignatureImage(signer),

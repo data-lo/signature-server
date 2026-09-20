@@ -59,7 +59,7 @@ export class SubmitDocumentForAuthorizationUseCase {
       );
     }
 
-    document.status = DOCUMENT_STATUS_ENUM.PENDING;
+    document.status = DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE;
     await this.documentRepository.save(document);
 
     void this.auditService.create({

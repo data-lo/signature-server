@@ -20,7 +20,7 @@ import { assertNoOverlappingSignaturePositions } from '../utils/signature-collis
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { ACTOR_TYPE_ENUM } from '../enum/actor-type.enum';
 import { NOTIFICATION_CHANNEL_ENUM } from '../enum/notification-channel.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
@@ -42,6 +42,8 @@ import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
 import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
+import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
+import { DocumentReviewerService } from '../services/document-reviewer.service';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -155,6 +157,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
+    private readonly documentReviewerService: DocumentReviewerService,
   ) {}
 
   async execute(
@@ -230,6 +233,33 @@ export class CreateDocumentSignatureFlowUseCase {
       );
     }
 
+    const requiresApproval = dto.documentData.requiresApproval === true;
+
+    /**
+     * Mandar aprobador y a la vez decir que no hace falta aprobación es una contradicción, y se
+     * rechaza en vez de resolverla en silencio: ignorar el campo crearía un documento que sale
+     * directo a firma cuando quien lo mandó creía haber pedido una revisión, y honrarlo crearía
+     * lo contrario. Mismo criterio con el que este flujo ya trata `requiresDifferentSignatures`
+     * cuando contradice al tipo de firma.
+     */
+    if (!requiresApproval && dto.documentData.reviewerUserId) {
+      throw new BadRequestException(
+        'reviewerUserId solo puede enviarse cuando requiresApproval es true',
+      );
+    }
+
+    /**
+     * Se valida ANTES de subir el archivo y de abrir la transacción: si el aprobador elegido ya
+     * no puede aprobar, lo barato es enterarse aquí y no después de haber escrito el PDF en
+     * Minio y cobrado un crédito.
+     */
+    const reviewerAccountId = requiresApproval
+      ? await this.documentReviewerService.resolveReviewerAccountId(
+          dto.documentData.reviewerUserId!,
+          activeAccount.organizationId,
+        )
+      : null;
+
     const totalPages = await this.documentSigningService.getPdfPages(file);
     const originalHash = await this.hashService.generateFileHash(file);
 
@@ -263,6 +293,12 @@ export class CreateDocumentSignatureFlowUseCase {
     }
     assertNoOverlappingSignaturePositions(positionsByPage);
 
+    /**
+     * Se declara fuera de la transacción porque hace falta después de ella, para publicar el
+     * evento de aprobación solicitada con el colaborador concreto al que hay que esperar.
+     */
+    let reviewerCollaboratorId: string | null = null;
+
     const {
       document,
       notificationEvents,
@@ -282,11 +318,19 @@ export class CreateDocumentSignatureFlowUseCase {
           totalPages,
           ipAddress: ip,
           originalHash,
-          status: DOCUMENT_STATUS_ENUM.PENDING,
+          /**
+           * Con aprobación el documento nace esperando al reviewer, no a los firmantes: es la
+           * distinción que hace posible bloquear la firma (ver `SignDocumentUseCase`, que sólo
+           * admite `PENDING_SIGNATURE`) sin depender de que nadie se acuerde de comprobar
+           * `requiresApproval` en cada camino.
+           */
+          status: requiresApproval
+            ? DOCUMENT_STATUS_ENUM.PENDING_APPROVAL
+            : DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
           createdBy,
           accountId,
           organizationId: activeAccount.organizationId,
-          requiresApproval: dto.documentData.requiresApproval === true,
+          requiresApproval,
           totalSigners,
           isSequential,
           isIndexable,
@@ -416,7 +460,7 @@ export class CreateDocumentSignatureFlowUseCase {
             signatureType: isSigner ? documentSignatureType : null,
             simpleSignatureId,
             signingOrder: isSigner ? signerIndex : null,
-            status: SIGNEE_STATUS_ENUM.PENDING,
+            status: COLLABORATOR_STATUS_ENUM.PENDING,
             ipAddress: ip,
           }),
         );
@@ -441,8 +485,15 @@ export class CreateDocumentSignatureFlowUseCase {
           collaboratorId: collaborator.id,
         });
 
+        /**
+         * Con aprobación pendiente no se invita a nadie a firmar: el documento todavía puede no
+         * salir nunca a firma. Estas invitaciones las manda el caso de uso de aprobación cuando
+         * el reviewer autoriza (ver `DocumentService.sendSimpleSignatureInvitations`, que
+         * reconstruye exactamente esta misma lista desde la base).
+         */
         if (
           isSigner &&
+          !requiresApproval &&
           documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE &&
           !isSequential
         ) {
@@ -485,6 +536,44 @@ export class CreateDocumentSignatureFlowUseCase {
         });
       }
 
+      /**
+       * El reviewer es un colaborador más —misma tabla, misma transacción— y no una columna del
+       * documento: así la decisión que tome queda registrada con su fecha y su nota en la misma
+       * fila que todo lo demás, y el día que se admita más de un aprobador no hay que cambiar el
+       * modelo. Va al final del arreglo a propósito: no tiene `signingOrder`, así que no compite
+       * por el turno de firma.
+       */
+      if (reviewerAccountId) {
+        const reviewer = await collaboratorRepo.save(
+          collaboratorRepo.create({
+            documentId: document.id,
+            accountId: reviewerAccountId,
+            colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+            status: COLLABORATOR_STATUS_ENUM.PENDING,
+            // Sin `signatureType` ni `signingOrder`: el reviewer no firma, autoriza.
+            ipAddress: ip,
+          }),
+        );
+        reviewerCollaboratorId = reviewer.id;
+
+        const reviewerNotification = await notificationRepo.save(
+          notificationRepo.create({
+            collaboratorId: reviewer.id,
+            documentId: document.id,
+            isNotified: false,
+            // ACCOUNT y no WATCHER como el resto: al aprobador se le eligió de la lista de
+            // miembros de la organización, así que tiene cuenta en la plataforma por definición.
+            actorType: ACTOR_TYPE_ENUM.ACCOUNT,
+            notificationChannelSource: NOTIFICATION_CHANNEL_ENUM.EMAIL,
+            delivered: false,
+          }),
+        );
+        notificationEvents.push({
+          notification: reviewerNotification,
+          collaboratorId: reviewer.id,
+        });
+      }
+
       return {
         document,
         notificationEvents,
@@ -507,6 +596,24 @@ export class CreateDocumentSignatureFlowUseCase {
       fileName: document.fileName,
       actorUserId: createdBy,
     });
+
+    /**
+     * Un documento con aprobación anuncia que está esperando una decisión; uno sin ella ya está
+     * en firma y lo anuncia como siempre. Son dos hechos distintos y por eso son dos eventos
+     * distintos: un consumidor no debería tener que leer el estado del documento para saber cuál
+     * de los dos ocurrió.
+     */
+    if (reviewerCollaboratorId) {
+      this.documentEventsProducer.emitApprovalEvent(
+        DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
+        {
+          documentId: document.id,
+          fileName: document.fileName,
+          actorUserId: createdBy,
+          collaboratorId: reviewerCollaboratorId,
+        },
+      );
+    }
 
     if (document.isIndexable) {
       /**

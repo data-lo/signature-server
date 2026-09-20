@@ -13,7 +13,7 @@ import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
 import { GetPublicDocumentAuditXmlUseCase } from './get-public-document-audit-xml.use-case';
 
@@ -40,7 +40,7 @@ function simpleSigner(overrides: Partial<CollaboratorEntity> = {}) {
     documentId: DOCUMENT_ID,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-    status: SIGNEE_STATUS_ENUM.SIGNED,
+    status: COLLABORATOR_STATUS_ENUM.SIGNED,
     signedAt: new Date('2026-01-14T08:30:00.000Z'),
     ipAddress: '10.0.0.2',
     geoLoc: { latitude: 19.43, longitude: -99.13 },
@@ -140,7 +140,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
 
   it('rechaza el documento que todavía no está firmado', async () => {
     documentService.findOne.mockResolvedValue(
-      signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+      signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
     );
 
     await expect(useCase.execute(DOCUMENT_ID)).rejects.toThrow(

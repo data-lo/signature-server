@@ -8,7 +8,7 @@ export class CreateDocumentSignaturesData {
 
   @ApiProperty({
     enum: DOCUMENT_STATUS_ENUM,
-    example: DOCUMENT_STATUS_ENUM.PENDING,
+    example: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
   })
   status: DOCUMENT_STATUS_ENUM;
 

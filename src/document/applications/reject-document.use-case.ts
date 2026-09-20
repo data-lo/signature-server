@@ -20,7 +20,7 @@ import { UserService } from 'src/user/user.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { isSignerTurn } from '../utils/next-signer.util';
 import { DocumentService } from '../document.service';
@@ -60,9 +60,9 @@ export class RejectDocumentUseCase {
   ): Promise<BaseResponse<{ id: string }>> {
     const document = await this.documentService.findOne(documentId);
 
-    if (document.status !== DOCUMENT_STATUS_ENUM.PENDING) {
+    if (document.status !== DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE) {
       throw new BadRequestException(
-        `El documento no puede rechazarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.PENDING}', el estatus actual es '${document.status}'`,
+        `El documento no puede rechazarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE}', el estatus actual es '${document.status}'`,
       );
     }
 
@@ -79,7 +79,7 @@ export class RejectDocumentUseCase {
       throw new ForbiddenException('No eres firmante de este documento');
     }
 
-    if (myParticipant.status !== SIGNEE_STATUS_ENUM.PENDING) {
+    if (myParticipant.status !== COLLABORATOR_STATUS_ENUM.PENDING) {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
 
@@ -103,13 +103,13 @@ export class RejectDocumentUseCase {
     // Claim atómico (mismo criterio que sign(), ver su comentario): cierra la ventana de
     // carrera de un doble clic/doble pestaña rechazando antes de tocar MinIO/estampado.
     const claim = await this.collaboratorRepository.update(
-      { id: myParticipant.id, status: SIGNEE_STATUS_ENUM.PENDING },
-      { status: SIGNEE_STATUS_ENUM.REJECTED, cancellationReason: reason },
+      { id: myParticipant.id, status: COLLABORATOR_STATUS_ENUM.PENDING },
+      { status: COLLABORATOR_STATUS_ENUM.REJECTED, cancellationReason: reason },
     );
     if (claim.affected !== 1) {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
-    myParticipant.status = SIGNEE_STATUS_ENUM.REJECTED;
+    myParticipant.status = COLLABORATOR_STATUS_ENUM.REJECTED;
     myParticipant.cancellationReason = reason;
 
     // Estampo y muevo el documento a rechazados ANTES de marcar al colaborador como

@@ -4,6 +4,7 @@ import {
   DOCUMENT_KAFKA_TOPICS,
   DocumentEventPayload,
   DocumentCollaboratorSignedPayload,
+  DocumentApprovalEventPayload,
 } from './document-events.topics';
 import { EventService } from 'src/event/event.service';
 import { EVENT_TYPE_ENUM } from 'src/event/enums/event-type.enum';
@@ -19,12 +20,23 @@ interface EmitCollaboratorSignedParams extends EmitDocumentEventParams {
   signedAt: string;
 }
 
+interface EmitApprovalEventParams extends EmitDocumentEventParams {
+  /** Colaborador REVIEWER del documento. */
+  collaboratorId: string;
+  resolutionNote?: string | null;
+}
+
 /**
  * Mapeo explícito tópico Kafka -> tipo de evento persistido (ver EventModule) — evitar acoplar
  * ambos enums por coincidencia de string, aunque hoy compartan los mismos valores.
  */
 const TOPIC_TO_EVENT_TYPE: Record<DOCUMENT_KAFKA_TOPICS, EVENT_TYPE_ENUM> = {
   [DOCUMENT_KAFKA_TOPICS.CREATED]: EVENT_TYPE_ENUM.DOCUMENT_CREATED,
+  [DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED]:
+    EVENT_TYPE_ENUM.DOCUMENT_APPROVAL_REQUESTED,
+  [DOCUMENT_KAFKA_TOPICS.APPROVED]: EVENT_TYPE_ENUM.DOCUMENT_APPROVED,
+  [DOCUMENT_KAFKA_TOPICS.APPROVAL_REJECTED]:
+    EVENT_TYPE_ENUM.DOCUMENT_APPROVAL_REJECTED,
   [DOCUMENT_KAFKA_TOPICS.SENT_TO_SIGN]: EVENT_TYPE_ENUM.DOCUMENT_SENT_TO_SIGN,
   [DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED]:
     EVENT_TYPE_ENUM.DOCUMENT_COLLABORATOR_SIGNED,
@@ -80,6 +92,59 @@ export class DocumentEventsProducer {
 
   emitSentToSign(params: EmitDocumentEventParams) {
     this.emitEvent(DOCUMENT_KAFKA_TOPICS.SENT_TO_SIGN, params);
+  }
+
+  /**
+   * Publica uno de los tres eventos del flujo de aprobación.
+   *
+   * Los tres comparten forma —documento + reviewer + quién actuó— y por eso comparten método: lo
+   * único que cambia entre ellos es el tópico y, en el rechazo, el comentario del reviewer.
+   *
+   * @param topic - Cuál de los tres eventos de aprobación se publica.
+   * @param params - Documento, reviewer, actor y, si aplica, la nota de resolución.
+   * @returns Nada: publicar es best-effort, igual que el resto de los eventos de este productor.
+   *
+   * @example
+   * ```ts
+   * producer.emitApprovalEvent(DOCUMENT_KAFKA_TOPICS.APPROVED, {
+   *   documentId, fileName, actorUserId, collaboratorId,
+   * });
+   * ```
+   */
+  emitApprovalEvent(
+    topic:
+      | DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED
+      | DOCUMENT_KAFKA_TOPICS.APPROVED
+      | DOCUMENT_KAFKA_TOPICS.APPROVAL_REJECTED,
+    {
+      documentId,
+      fileName,
+      actorUserId,
+      collaboratorId,
+      resolutionNote,
+    }: EmitApprovalEventParams,
+  ) {
+    const payload: DocumentApprovalEventPayload = {
+      documentId,
+      fileName,
+      actorUserId,
+      collaboratorId,
+      resolutionNote: resolutionNote ?? null,
+      timestamp: new Date().toISOString(),
+    };
+    this.kafkaProducer.emit(topic, payload);
+
+    this.eventService
+      .create({
+        eventType: TOPIC_TO_EVENT_TYPE[topic],
+        metadata: { documentId, fileName, collaboratorId },
+        from: actorUserId,
+      })
+      .catch((error) =>
+        this.logger.error(
+          `Error persistiendo el evento '${topic}' del documento ${documentId}: ${error}`,
+        ),
+      );
   }
 
   /**

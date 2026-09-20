@@ -23,6 +23,8 @@ import { ConfirmDocumentCancellationUseCase } from './applications/confirm-docum
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
+import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
@@ -40,6 +42,8 @@ const USE_CASES = [
   GetDocumentsUseCase,
   GetDocumentUseCase,
   SubmitDocumentForAuthorizationUseCase,
+  ApproveDocumentUseCase,
+  RejectDocumentApprovalUseCase,
   SignDocumentUseCase,
   LinkDocumentCollaboratorUseCase,
   RequestDocumentVerificationCodeUseCase,

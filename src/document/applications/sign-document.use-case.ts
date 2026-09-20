@@ -20,7 +20,7 @@ import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { isSignerTurn } from '../utils/next-signer.util';
 import { VerificationCodeService } from '../verification-code.service';
@@ -129,9 +129,9 @@ export class SignDocumentUseCase {
 
     const document = await this.documentService.findOne(documentId);
 
-    if (document.status !== DOCUMENT_STATUS_ENUM.PENDING) {
+    if (document.status !== DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE) {
       throw new BadRequestException(
-        `El documento no puede firmarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.PENDING}', el estatus actual es '${document.status}'`,
+        `El documento no puede firmarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE}', el estatus actual es '${document.status}'`,
       );
     }
 
@@ -162,7 +162,7 @@ export class SignDocumentUseCase {
       });
     }
 
-    if (myParticipant.status !== SIGNEE_STATUS_ENUM.PENDING) {
+    if (myParticipant.status !== COLLABORATOR_STATUS_ENUM.PENDING) {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
 
@@ -203,14 +203,14 @@ export class SignDocumentUseCase {
 
     // `affected !== 1` significa que otra petición ya reclamó el turno.
     const claim = await this.collaboratorRepository.update(
-      { id: myParticipant.id, status: SIGNEE_STATUS_ENUM.PENDING },
-      { status: SIGNEE_STATUS_ENUM.SIGNED, signedAt: new Date() },
+      { id: myParticipant.id, status: COLLABORATOR_STATUS_ENUM.PENDING },
+      { status: COLLABORATOR_STATUS_ENUM.SIGNED, resolvedAt: new Date() },
     );
     if (claim.affected !== 1) {
       throw new BadRequestException('Ya respondiste a esta solicitud de firma');
     }
-    myParticipant.status = SIGNEE_STATUS_ENUM.SIGNED;
-    myParticipant.signedAt = new Date();
+    myParticipant.status = COLLABORATOR_STATUS_ENUM.SIGNED;
+    myParticipant.resolvedAt = new Date();
     // Evidencia declarada por el dispositivo, no verificada por el servidor.
     myParticipant.geoLoc = geolocation;
 
@@ -247,7 +247,8 @@ export class SignDocumentUseCase {
 
     const remainingSigners = signerCollaborators.filter(
       (c) =>
-        c.id !== myParticipant.id && c.status === SIGNEE_STATUS_ENUM.PENDING,
+        c.id !== myParticipant.id &&
+        c.status === COLLABORATOR_STATUS_ENUM.PENDING,
     );
 
     document.completedSignersCount = (document.completedSignersCount ?? 0) + 1;
@@ -297,7 +298,7 @@ export class SignDocumentUseCase {
       fileName: document.fileName,
       actorUserId: currentUserId,
       collaboratorId: myParticipant.id,
-      signedAt: myParticipant.signedAt.toISOString(),
+      signedAt: myParticipant.resolvedAt.toISOString(),
     });
 
     void this.auditService.create({
@@ -305,7 +306,7 @@ export class SignDocumentUseCase {
       operation: AuditAction.DOCUMENT_SIGNED,
       ipAddress: document.ipAddress ?? '0.0.0.0',
       users: [{ userId: currentUserId, action: AuditAction.DOCUMENT_SIGNED }],
-      signedAt: myParticipant.signedAt,
+      signedAt: myParticipant.resolvedAt,
       geolocation,
     });
 

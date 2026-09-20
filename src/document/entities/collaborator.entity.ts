@@ -11,7 +11,7 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { DocumentEntity } from './document.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 
@@ -80,15 +80,33 @@ export class CollaboratorEntity {
   @Column({ name: 'signing_order', nullable: true })
   signingOrder: number | null;
 
-  @Column({ name: 'signed_at', nullable: true })
-  signedAt: Date | null;
+  /**
+   * Cuándo terminó su participación este colaborador: cuando firma o rechaza si es SIGNER, y
+   * cuando aprueba o rechaza si es REVIEWER. `null` mientras siga en PENDING.
+   *
+   * Se llamaba `signedAt` hasta la historia del flujo de aprobación (ver migración
+   * `AddCollaboratorApprovalFields`). El nombre viejo ya mentía a medias —un firmante que
+   * rechazaba también la escribía— y con el reviewer habría mentido del todo.
+   */
+  @Column({ name: 'resolved_at', nullable: true })
+  resolvedAt: Date | null;
+
+  /**
+   * Comentario con el que el colaborador acompañó su decisión: hoy lo escribe el reviewer al
+   * negar la aprobación (`resolutionNote` del endpoint de rechazo), y es opcional.
+   *
+   * Distinto de `cancellationReason`, que es el motivo de una cancelación del documento entero
+   * y no de la resolución de un colaborador.
+   */
+  @Column({ name: 'resolution_note', type: 'text', nullable: true })
+  resolutionNote: string | null;
 
   @Column({
     type: 'enum',
-    enum: SIGNEE_STATUS_ENUM,
-    default: SIGNEE_STATUS_ENUM.PENDING,
+    enum: COLLABORATOR_STATUS_ENUM,
+    default: COLLABORATOR_STATUS_ENUM.PENDING,
   })
-  status: SIGNEE_STATUS_ENUM;
+  status: COLLABORATOR_STATUS_ENUM;
 
   @Column({ name: 'ip_address' })
   ipAddress: string;

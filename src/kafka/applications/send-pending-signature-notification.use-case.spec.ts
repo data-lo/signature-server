@@ -6,7 +6,7 @@ import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 import { EmailService } from 'src/common/email/email.service';
 import type { NotificationEventPayload } from '../notification-events.topics';
@@ -28,7 +28,7 @@ function buildCollaborator(overrides: Partial<CollaboratorEntity> = {}) {
     firstName: 'Firmante',
     lastName: 'Uno',
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
-    status: SIGNEE_STATUS_ENUM.PENDING,
+    status: COLLABORATOR_STATUS_ENUM.PENDING,
     signatureType: SIGNATURE_TYPE_ENUM.FIEL,
     signingOrder: 0,
     ...overrides,
@@ -221,8 +221,8 @@ describe('NotificationEventsConsumer', () => {
         ),
       );
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
-        { id: 'collaborator-1', status: SIGNEE_STATUS_ENUM.PENDING },
-        { status: SIGNEE_STATUS_ENUM.NOTIFIED },
+        { id: 'collaborator-1', status: COLLABORATOR_STATUS_ENUM.PENDING },
+        { status: COLLABORATOR_STATUS_ENUM.NOTIFIED },
       );
       expect(
         emailService.sendDocumentPendingNotification,
@@ -231,7 +231,7 @@ describe('NotificationEventsConsumer', () => {
 
     it('ya NOTIFIED: no envía nada ni vuelve a actualizar', async () => {
       collaboratorRepository.findOne.mockResolvedValue(
-        buildWatcher({ status: SIGNEE_STATUS_ENUM.NOTIFIED }),
+        buildWatcher({ status: COLLABORATOR_STATUS_ENUM.NOTIFIED }),
       );
 
       await consumer.handleCreated(payload);
@@ -256,7 +256,7 @@ describe('NotificationEventsConsumer', () => {
 
   it('no envía nada si el colaborador ya no está PENDING', async () => {
     collaboratorRepository.findOne.mockResolvedValue(
-      buildCollaborator({ status: SIGNEE_STATUS_ENUM.SIGNED }),
+      buildCollaborator({ status: COLLABORATOR_STATUS_ENUM.SIGNED }),
     );
 
     await consumer.handleCreated(payload);

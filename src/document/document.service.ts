@@ -22,7 +22,7 @@ import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credentia
 // Enums
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from './enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from './enum/collaborator-status.enum';
 import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 
@@ -145,7 +145,12 @@ export class DocumentService {
     [DOCUMENT_STATUS_ENUM.SIGNED]: BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING]:
       BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
-    [DOCUMENT_STATUS_ENUM.PENDING]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    [DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE]:
+      BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+    // En espera de aprobación el archivo sigue siendo el original recién cargado: todavía no ha
+    // entrado a firma, así que vive en el mismo bucket que un documento creado.
+    [DOCUMENT_STATUS_ENUM.PENDING_APPROVAL]:
+      BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.CREATED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     [DOCUMENT_STATUS_ENUM.EXPIRED]: BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
   };
@@ -380,7 +385,7 @@ export class DocumentService {
     completedSignersCount?: number | null;
   }): BUCKET_TYPES_ENUM {
     if (
-      document.status === DOCUMENT_STATUS_ENUM.PENDING &&
+      document.status === DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE &&
       (document.completedSignersCount ?? 0) > 0
     ) {
       return BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS;
@@ -490,7 +495,7 @@ export class DocumentService {
         // `advancedSignature.signedAt` es el momento real del firmado criptográfico; el del
         // colaborador es cuándo se registró en la base y solo sirve de respaldo.
         signedAt: toIsoStringOrNull(
-          advancedSignature?.signedAt ?? collaborator.signedAt,
+          advancedSignature?.signedAt ?? collaborator.resolvedAt,
         ),
         otpCode: null,
         certificateSerialNumber:
@@ -508,7 +513,7 @@ export class DocumentService {
       signatureTypeLabel: SIMPLE_SIGNATURE_TYPE_LABEL,
       legalBacking: SIMPLE_SIGNATURE_BACKING_LABEL,
       ipAddress: collaborator.ipAddress,
-      signedAt: toIsoStringOrNull(collaborator.signedAt),
+      signedAt: toIsoStringOrNull(collaborator.resolvedAt),
       // Evidencia de con qué código se acreditó su identidad. No siempre existe: la verificación
       // por OTP depende de `document.requiresVerification`, así que un documento que no la exigió
       // se completa sin código y el renglón simplemente no se muestra.
@@ -577,6 +582,115 @@ export class DocumentService {
   }
 
   /** Envía el correo de solicitud de firma al siguiente firmante pendiente en el orden establecido. */
+  /**
+   * Manda las invitaciones de firma simple que quedaron en pausa mientras el documento esperaba
+   * aprobación (historia "Implementar flujo de aprobación previo al proceso de firma").
+   *
+   * Reconstruye desde la base exactamente la misma lista que arma `CreateDocumentSignatureFlowUseCase`
+   * al crear un documento sin aprobación: firmantes de firma SIMPLE de un documento sin orden, a
+   * los que se invita de inmediato porque no hay turno que esperar. Los demás flujos no entran —
+   * en un documento secuencial avisa `notifyNextSigner`, y la firma avanzada no usa este correo.
+   *
+   * Es best-effort por destinatario, igual que en la creación: un correo que falla no debe
+   * impedir que salgan los demás ni deshacer la aprobación que ya quedó registrada.
+   *
+   * @param documentId - Documento recién aprobado.
+   * @returns Nada.
+   *
+   * @throws Nada: los fallos de correo se registran en el log y no se propagan.
+   *
+   * @example
+   * ```ts
+   * await documentService.sendSimpleSignatureInvitations('doc-1');
+   * ```
+   */
+  async sendSimpleSignatureInvitations(documentId: string): Promise<void> {
+    const document = await this.findOne(documentId);
+
+    if (document.isSequential) return;
+
+    const signers = await this.collaboratorRepository.find({
+      where: {
+        documentId,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        status: COLLABORATOR_STATUS_ENUM.PENDING,
+        signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+      },
+    });
+
+    for (const signer of signers) {
+      if (!signer.email) continue;
+
+      const accessUrl = buildDocumentAccessUrl(
+        documentId,
+        signer.id,
+        signer.email,
+      );
+      try {
+        await this.emailService.sendDocumentInvitationNotification(
+          signer.email,
+          collaboratorDisplayName(signer),
+          document.fileName,
+          accessUrl,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Error enviando invitación de firma simple a ${signer.email} (documento ${documentId}): ${error}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Avisa al creador de que su documento no fue autorizado.
+   *
+   * Reutiliza el correo de rechazo que ya existe —es el mismo hecho desde el punto de vista de
+   * quien lo recibe: alguien se negó y aquí está el motivo— en vez de introducir una plantilla
+   * nueva para distinguir quién se negó. Lo que sí distingue el sistema es el evento
+   * (`document.approval_rejected` frente a `document.rejected`), que es donde esa diferencia
+   * tiene consecuencias.
+   *
+   * **Sólo al creador.** A los firmantes no se les avisa porque nunca supieron que el documento
+   * existía: con la aprobación pendiente no se les notificó nada.
+   *
+   * @param documentId - Documento cuya aprobación se negó.
+   * @param resolutionNote - Comentario del reviewer, o `null` si no dejó ninguno.
+   * @returns Nada.
+   *
+   * @throws {NotFoundException} (404) Si el documento o su creador no existen.
+   *
+   * @example
+   * ```ts
+   * await documentService.notifyCreatorOfApprovalRejection('doc-1', 'Falta el anexo B');
+   * ```
+   */
+  async notifyCreatorOfApprovalRejection(
+    documentId: string,
+    resolutionNote: string | null,
+  ): Promise<void> {
+    const document = await this.findOne(documentId);
+    const creator = await this.userService.findOne(document.createdBy);
+
+    const reviewer = await this.collaboratorRepository.findOne({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER },
+      relations: { account: { user: true } },
+    });
+
+    try {
+      await this.emailService.sendDocumentRejectedNotification(
+        creator.email,
+        `${creator.firstName} ${creator.lastName}`,
+        reviewer ? collaboratorDisplayName(reviewer) : 'El usuario aprobador',
+        document.fileName,
+        resolutionNote ?? 'No se indicó un motivo',
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error notificando al creador el rechazo de aprobación del documento ${documentId}: ${error}`,
+      );
+    }
+  }
+
   async notifyNextSigner(documentId: string): Promise<void> {
     const signerCollaborators = await this.collaboratorRepository.find({
       where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
@@ -1004,7 +1118,7 @@ export class DocumentService {
     collaborator: CollaboratorEntity,
   ): Promise<Buffer | null> {
     if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
-      if (collaborator.status !== SIGNEE_STATUS_ENUM.SIGNED) {
+      if (collaborator.status !== COLLABORATOR_STATUS_ENUM.SIGNED) {
         return null;
       }
 
@@ -1285,7 +1399,7 @@ export class DocumentService {
     signerCollaborators: CollaboratorEntity[],
   ): Promise<void> {
     const signed = signerCollaborators.filter(
-      (collaborator) => collaborator.status === SIGNEE_STATUS_ENUM.SIGNED,
+      (collaborator) => collaborator.status === COLLABORATOR_STATUS_ENUM.SIGNED,
     );
     if (signed.length === 0) {
       return;
@@ -1405,7 +1519,7 @@ export class DocumentService {
     return {
       name: collaboratorDisplayName(collaborator),
       ipAddress: collaborator.ipAddress,
-      signedAt: collaborator.signedAt,
+      signedAt: collaborator.resolvedAt,
       otpCode: await this.verificationCodeService.findConsumedCode(
         documentId,
         collaborator.id,
@@ -1443,7 +1557,7 @@ export class DocumentService {
         : null,
       // `advancedSignature.signedAt` es el momento real del firmado criptográfico; `signedAt` del
       // colaborador es cuando se registró en la base y solo se usa como respaldo.
-      signedAt: advancedSignature?.signedAt ?? collaborator.signedAt,
+      signedAt: advancedSignature?.signedAt ?? collaborator.resolvedAt,
     };
   }
 

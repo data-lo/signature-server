@@ -25,7 +25,7 @@ import { DocumentEntity } from './../src/document/entities/document.entity';
 import { CollaboratorEntity } from './../src/document/entities/collaborator.entity';
 import { DOCUMENT_STATUS_ENUM } from './../src/document/enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from './../src/document/enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from './../src/document/enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from './../src/document/enum/collaborator-status.enum';
 import { SIGNATURE_TYPE_ENUM } from './../src/document/enum/signature-type.enum';
 import { MinioService } from './../src/common/minio/minio.service';
 import { HashService } from './../src/common/hash/hash.service';
@@ -121,7 +121,7 @@ function mockDocument(): DocumentEntity {
     fileName: 'contrato.pdf',
     objectKey: 'object-key-1',
     originalHash: 'hash-original-del-documento',
-    status: DOCUMENT_STATUS_ENUM.PENDING,
+    status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
     isSequential: true,
     totalSigners: 1,
     completedSignersCount: 0,
@@ -139,7 +139,7 @@ function buildFielSigner(): CollaboratorEntity {
     email: null,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     signatureType: SIGNATURE_TYPE_ENUM.FIEL,
-    status: SIGNEE_STATUS_ENUM.PENDING,
+    status: COLLABORATOR_STATUS_ENUM.PENDING,
     signingOrder: 0,
     ipAddress: '127.0.0.1',
     account: {
@@ -390,7 +390,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
       // 2. El resultado no sensible quedó en el colaborador.
       expect(collaboratorRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          status: SIGNEE_STATUS_ENUM.SIGNED,
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
           advancedSignature: expect.objectContaining({
             signatureBase64: 'firma-criptografica-en-base64',
           }),
@@ -506,7 +506,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
       await withEfirmaFiles(signRequest()).expect(422);
 
       expect(collaboratorRepository.update).not.toHaveBeenCalled();
-      expect(document.status).toBe(DOCUMENT_STATUS_ENUM.PENDING);
+      expect(document.status).toBe(DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE);
       expect(mockedAxios.post).not.toHaveBeenCalled();
     });
 

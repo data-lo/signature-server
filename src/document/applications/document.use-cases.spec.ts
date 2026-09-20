@@ -12,7 +12,7 @@ import { DocumentEntity } from '../entities/document.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { FILE_STATUS_ENUM } from 'src/common/minio/enums/file-status-enum';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { MinioService } from 'src/common/minio/minio.service';
@@ -144,7 +144,7 @@ function buildSigner(
     accountId: `account-of-${userId}`,
     email: null,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
-    status: SIGNEE_STATUS_ENUM.PENDING,
+    status: COLLABORATOR_STATUS_ENUM.PENDING,
     signingOrder: overrides.signingOrder ?? 0,
     ipAddress: '127.0.0.1',
     account: {
@@ -1013,7 +1013,7 @@ describe('casos de uso de documentos', () => {
 
         expect(qb.andWhere).toHaveBeenCalledWith(
           'document.status = :pendingStatus',
-          { pendingStatus: DOCUMENT_STATUS_ENUM.PENDING },
+          { pendingStatus: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE },
         );
         const [, params] = qb.andWhere.mock.calls.find(
           ([sql]: [unknown]) =>
@@ -1024,7 +1024,9 @@ describe('casos de uso de documentos', () => {
           COLABORATOR_TYPE_ENUM.SIGNER,
           COLABORATOR_TYPE_ENUM.REVIEWER,
         ]);
-        expect(params.pendingSigneeStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
+        expect(params.pendingSigneeStatus).toBe(
+          COLLABORATOR_STATUS_ENUM.PENDING,
+        );
       });
 
       it('`created_by_me` lista lo que el usuario mandó a firmar', async () => {
@@ -1097,7 +1099,7 @@ describe('casos de uso de documentos', () => {
         await list(
           {
             statuses: [
-              DOCUMENT_STATUS_ENUM.PENDING,
+              DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
               DOCUMENT_STATUS_ENUM.SIGNED,
             ],
           },
@@ -1108,7 +1110,7 @@ describe('casos de uso de documentos', () => {
           'document.status IN (:...statuses)',
           {
             statuses: [
-              DOCUMENT_STATUS_ENUM.PENDING,
+              DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
               DOCUMENT_STATUS_ENUM.SIGNED,
             ],
           },
@@ -1272,7 +1274,7 @@ describe('casos de uso de documentos', () => {
           fileName: 'contrato.pdf',
           fileType: 'application/pdf',
           totalPages: 1,
-          status: DOCUMENT_STATUS_ENUM.PENDING,
+          status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
           createdAt: new Date('2026-03-15T23:55:00.000Z'),
           createdBy: 'otro-usuario',
           collaborators: [],
@@ -1284,7 +1286,7 @@ describe('casos de uso de documentos', () => {
       function myPendingSignature() {
         return {
           colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
-          status: SIGNEE_STATUS_ENUM.PENDING,
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
           signatureType: null,
           signingOrder: 0,
           account: { userId: 'user-1' },
@@ -1310,7 +1312,10 @@ describe('casos de uso de documentos', () => {
           [
             documentWith({
               collaborators: [
-                { ...myPendingSignature(), status: SIGNEE_STATUS_ENUM.SIGNED },
+                {
+                  ...myPendingSignature(),
+                  status: COLLABORATOR_STATUS_ENUM.SIGNED,
+                },
               ],
             }),
           ],
@@ -1367,7 +1372,7 @@ describe('casos de uso de documentos', () => {
               collaborators: [
                 {
                   colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
-                  status: SIGNEE_STATUS_ENUM.PENDING,
+                  status: COLLABORATOR_STATUS_ENUM.PENDING,
                   signatureType: null,
                   signingOrder: 0,
                   account: null,
@@ -1430,7 +1435,7 @@ describe('casos de uso de documentos', () => {
             fileName: 'contrato.pdf',
             fileType: 'application/pdf',
             totalPages: 3,
-            status: DOCUMENT_STATUS_ENUM.PENDING,
+            status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
             createdAt: new Date('2026-03-15T23:55:00.000Z'),
             collaborators: [],
             requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
@@ -1459,7 +1464,7 @@ describe('casos de uso de documentos', () => {
               fileName: 'contrato.pdf',
               fileType: 'application/pdf',
               totalPages: 1,
-              status: DOCUMENT_STATUS_ENUM.PENDING,
+              status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
               createdAt: new Date('2026-03-15T23:55:00.000Z'),
               collaborators,
               requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
@@ -1542,7 +1547,7 @@ describe('casos de uso de documentos', () => {
               fileName: 'contrato.pdf',
               fileType: 'application/pdf',
               totalPages: 1,
-              status: DOCUMENT_STATUS_ENUM.PENDING,
+              status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
               createdAt: new Date('2026-03-15T23:55:00.000Z'),
               collaborators: [],
               requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
@@ -1591,7 +1596,7 @@ describe('casos de uso de documentos', () => {
         id: 'doc-1',
         objectKey: 'object-key-1',
         fileName: 'contrato.pdf',
-        status: DOCUMENT_STATUS_ENUM.PENDING,
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         ipAddress: '127.0.0.1',
         signatureCoordinates: null,
         ...overrides,
@@ -1620,7 +1625,7 @@ describe('casos de uso de documentos', () => {
       expect(result.success).toBe(true);
       expect(collaboratorRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          status: SIGNEE_STATUS_ENUM.SIGNED,
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
         }),
       );
       expect(documentEventsProducer.emitSigned).not.toHaveBeenCalled();
@@ -1938,7 +1943,7 @@ describe('casos de uso de documentos', () => {
 
         expect(result.success).toBe(true);
         expect(collaboratorRepository.save).toHaveBeenCalledWith(
-          expect.objectContaining({ status: SIGNEE_STATUS_ENUM.SIGNED }),
+          expect.objectContaining({ status: COLLABORATOR_STATUS_ENUM.SIGNED }),
         );
       });
 
@@ -2318,7 +2323,7 @@ describe('casos de uso de documentos', () => {
           signDocument.execute('doc-1', 'user-1', undefined, TEST_GEOLOCATION),
         ).rejects.toThrow(/estampando el documento/i);
 
-        expect(document.status).toBe(DOCUMENT_STATUS_ENUM.PENDING);
+        expect(document.status).toBe(DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE);
         expect(uploadTo(BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS)).toBeUndefined();
       });
 
@@ -2413,7 +2418,7 @@ describe('casos de uso de documentos', () => {
       const signerA = buildSigner({
         userId: 'user-a',
         signingOrder: 0,
-        status: SIGNEE_STATUS_ENUM.SIGNED,
+        status: COLLABORATOR_STATUS_ENUM.SIGNED,
         signatureSnapshotObjectKey: 'signerA-snapshot-key',
       } as any);
       const signerB = buildSigner({ userId: 'user-b', signingOrder: 1 });
@@ -2468,7 +2473,7 @@ describe('casos de uso de documentos', () => {
       const signerA = buildSigner({
         userId: 'user-a',
         signingOrder: 0,
-        status: SIGNEE_STATUS_ENUM.SIGNED,
+        status: COLLABORATOR_STATUS_ENUM.SIGNED,
         // Shape legacy (pre-migración ArraySignatureCoordinates, ver historia "Ubicación de
         // firmas por usuario") — sin xRatio, así que finalizeSignedDocument lo trata tal cual,
         // en píxeles absolutos, sin conversión de ratios.
@@ -2628,7 +2633,7 @@ describe('casos de uso de documentos', () => {
       collaboratorRepository.find.mockResolvedValue([
         buildSigner({
           userId: 'user-1',
-          status: SIGNEE_STATUS_ENUM.SIGNED,
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
         }),
       ]);
 
@@ -2961,7 +2966,7 @@ describe('casos de uso de documentos', () => {
             id: 'p-a',
             userId: 'user-a',
             signingOrder: 0,
-            status: SIGNEE_STATUS_ENUM.SIGNED,
+            status: COLLABORATOR_STATUS_ENUM.SIGNED,
             advancedSignature: {
               originalHash: 'hash-doc-1',
               signatureBase64: 'firma-de-a',
@@ -3241,6 +3246,32 @@ describe('casos de uso de documentos', () => {
       expect(collaboratorRepository.save).not.toHaveBeenCalled();
       expect(auditService.create).not.toHaveBeenCalled();
     });
+
+    /**
+     * Criterio de aceptación de la historia del flujo de aprobación: ningún firmante puede firmar
+     * mientras el documento espera aprobación, y la guarda vive en el backend — no depende de que
+     * el frontend oculte el botón.
+     *
+     * No hace falta comprobar `requiresApproval` aquí: partir `pending` en `PENDING_APPROVAL` y
+     * `PENDING_SIGNATURE` convirtió la regla en una comparación de estado que este caso de uso ya
+     * hacía, y por eso no hay un segundo camino que alguien pueda olvidarse de proteger.
+     */
+    it('rechaza firmar un documento que todavía espera aprobación', async () => {
+      const document = mockDocument({
+        status: DOCUMENT_STATUS_ENUM.PENDING_APPROVAL,
+      });
+      documentRepository.findOne.mockResolvedValue(document);
+
+      await expect(
+        signDocument.execute('doc-1', 'user-1', undefined, {
+          latitude: 19.4326,
+          longitude: -99.1332,
+        }),
+      ).rejects.toThrow(/no puede firmarse/i);
+
+      expect(collaboratorRepository.save).not.toHaveBeenCalled();
+      expect(auditService.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('reject', () => {
@@ -3249,7 +3280,7 @@ describe('casos de uso de documentos', () => {
         id: 'doc-1',
         objectKey: 'object-key-1',
         fileName: 'contrato.pdf',
-        status: DOCUMENT_STATUS_ENUM.PENDING,
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         ipAddress: '127.0.0.1',
         createdBy: 'creator-1',
         ...overrides,
@@ -3374,7 +3405,7 @@ describe('casos de uso de documentos', () => {
       return {
         id: 'doc-1',
         fileName: 'contrato.pdf',
-        status: DOCUMENT_STATUS_ENUM.PENDING,
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         ...overrides,
       } as DocumentEntity;
     }
@@ -3608,7 +3639,7 @@ describe('casos de uso de documentos', () => {
 
     it('rechaza con BadRequestException si el documento no está SIGNED', async () => {
       documentRepository.findOne.mockResolvedValue(
-        mockDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+        mockDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
       );
 
       await expect(
@@ -3750,7 +3781,7 @@ describe('casos de uso de documentos', () => {
     describe('documento pendiente de firmas', () => {
       it.each([
         DOCUMENT_STATUS_ENUM.CREATED,
-        DOCUMENT_STATUS_ENUM.PENDING,
+        DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
         DOCUMENT_STATUS_ENUM.REJECTED,
         DOCUMENT_STATUS_ENUM.EXPIRED,
@@ -3778,7 +3809,7 @@ describe('casos de uso de documentos', () => {
        */
       it('solo expone el nombre del documento y los nombres de los firmantes', async () => {
         documentRepository.findOne.mockResolvedValue(
-          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
         );
         collaboratorRepository.find.mockResolvedValue([
           buildSigner({ id: 'collab-1', signingOrder: 0 }),
@@ -3786,9 +3817,9 @@ describe('casos de uso de documentos', () => {
             id: 'collab-2',
             userId: 'user-2',
             signingOrder: 1,
-            status: SIGNEE_STATUS_ENUM.SIGNED,
+            status: COLLABORATOR_STATUS_ENUM.SIGNED,
             signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-            signedAt: new Date('2026-08-14T18:24:11.000Z'),
+            resolvedAt: new Date('2026-08-14T18:24:11.000Z'),
             ipAddress: '187.190.12.4',
           }),
         ]);
@@ -3798,7 +3829,7 @@ describe('casos de uso de documentos', () => {
         expect(result.data).toEqual({
           id: 'doc-1',
           fileName: 'contrato.pdf',
-          status: DOCUMENT_STATUS_ENUM.PENDING,
+          status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
           isCompleted: false,
           // Un documento sin completar no espera constancia: no hay nada que sellar todavía.
           sealingPending: false,
@@ -3845,7 +3876,7 @@ describe('casos de uso de documentos', () => {
 
       it('no consulta el sello ni al creador de un documento que sigue pendiente', async () => {
         documentRepository.findOne.mockResolvedValue(
-          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
         );
 
         await getPublicDocument.execute('doc-1');
@@ -3856,7 +3887,7 @@ describe('casos de uso de documentos', () => {
 
       it('solo considera a los SIGNER: watchers y reviewers no salen en la vista pública', async () => {
         documentRepository.findOne.mockResolvedValue(
-          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+          signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
         );
 
         await getPublicDocument.execute('doc-1');
@@ -4100,9 +4131,9 @@ describe('casos de uso de documentos', () => {
           collaboratorRepository.find.mockResolvedValue([
             buildSigner({
               id: 'collab-1',
-              status: SIGNEE_STATUS_ENUM.SIGNED,
+              status: COLLABORATOR_STATUS_ENUM.SIGNED,
               signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-              signedAt: new Date('2026-08-14T18:24:11.000Z'),
+              resolvedAt: new Date('2026-08-14T18:24:11.000Z'),
               ipAddress: '187.190.12.4',
               geoLoc: { latitude: 19.4326, longitude: -99.1332 },
             }),
@@ -4137,7 +4168,7 @@ describe('casos de uso de documentos', () => {
           collaboratorRepository.find.mockResolvedValue([
             buildSigner({
               id: 'collab-1',
-              status: SIGNEE_STATUS_ENUM.SIGNED,
+              status: COLLABORATOR_STATUS_ENUM.SIGNED,
               signatureType: SIGNATURE_TYPE_ENUM.FIEL,
               signedAt: new Date('2026-08-14T18:00:00.000Z'),
               ipAddress: '187.190.12.4',
@@ -4185,7 +4216,7 @@ describe('casos de uso de documentos', () => {
             buildSigner({
               id: 'collab-1',
               signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-              signedAt: new Date('2026-08-14T18:24:11.000Z'),
+              resolvedAt: new Date('2026-08-14T18:24:11.000Z'),
             }),
           ]);
           verificationCodeService.findConsumedCode.mockResolvedValue(null);
@@ -4209,7 +4240,7 @@ describe('casos de uso de documentos', () => {
           collaboratorRepository.find.mockResolvedValue([
             buildSigner({
               id: 'collab-1',
-              status: SIGNEE_STATUS_ENUM.SIGNED,
+              status: COLLABORATOR_STATUS_ENUM.SIGNED,
               signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
               geoLoc: { latitude: 19.4326, longitude: -99.1332 },
             }),
@@ -4312,7 +4343,7 @@ describe('casos de uso de documentos', () => {
     it('404 si el documento todavía no se ha completado de firmar', async () => {
       documentRepository.findOne.mockResolvedValue({
         id: 'doc-1',
-        status: DOCUMENT_STATUS_ENUM.PENDING,
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
       });
 
       await expect(
@@ -4362,8 +4393,8 @@ describe('casos de uso de documentos', () => {
         documentId: 'doc-1',
         colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
         signatureType: SIGNATURE_TYPE_ENUM.FIEL,
-        status: SIGNEE_STATUS_ENUM.SIGNED,
-        signedAt: SIGNED_AT,
+        status: COLLABORATOR_STATUS_ENUM.SIGNED,
+        resolvedAt: SIGNED_AT,
         firstName: 'MANUEL',
         lastName: 'BALDERRAMA',
         advancedSignature: {
@@ -4428,8 +4459,8 @@ describe('casos de uso de documentos', () => {
     it('responde 404 si la firma avanzada todavía está pendiente', async () => {
       collaboratorRepository.findOne = jest.fn().mockResolvedValue(
         advancedCollaborator({
-          status: SIGNEE_STATUS_ENUM.PENDING,
-          signedAt: null,
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+          resolvedAt: null,
         }),
       );
 
@@ -4480,7 +4511,10 @@ describe('casos de uso de documentos', () => {
         ],
         [DOCUMENT_STATUS_ENUM.REJECTED, BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS],
         [DOCUMENT_STATUS_ENUM.CANCELLED, BUCKET_TYPES_ENUM.CANCELLED_DOCUMENTS],
-        [DOCUMENT_STATUS_ENUM.PENDING, BUCKET_TYPES_ENUM.CREATED_DOCUMENTS],
+        [
+          DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+          BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        ],
       ];
 
     it.each(detailBucketCases)(
@@ -4538,7 +4572,7 @@ describe('casos de uso de documentos', () => {
             id: 'doc-pendiente',
             fileName: 'pendiente.pdf',
             objectKey: 'object-key-pendiente',
-            status: DOCUMENT_STATUS_ENUM.PENDING,
+            status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
             requestedBy: { firstName: 'Creador', lastName: 'Uno' },
             collaborators: [],
           },
@@ -4579,7 +4613,7 @@ describe('casos de uso de documentos', () => {
       id: 'p-a',
       userId: 'user-a',
       signingOrder: 0,
-      status: SIGNEE_STATUS_ENUM.SIGNED,
+      status: COLLABORATOR_STATUS_ENUM.SIGNED,
     });
     const signerB = buildSigner({
       id: 'p-b',
@@ -4600,7 +4634,7 @@ describe('casos de uso de documentos', () => {
         fileType: 'application/pdf',
         totalPages: 1,
         objectKey: 'object-key-1',
-        status: DOCUMENT_STATUS_ENUM.PENDING,
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         createdBy: 'creator-1',
         requestedBy: { firstName: 'Creador', lastName: 'Uno' },
         collaborators: participants,
@@ -4679,7 +4713,7 @@ describe('casos de uso de documentos', () => {
       });
 
       expect(result.data.canSign).toBe(true);
-      expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
+      expect(result.data.myStatus).toBe(COLLABORATOR_STATUS_ENUM.PENDING);
     });
 
     it('leer NO vincula la cuenta (ver historia "Vinculación del documento debe postergarse hasta el inicio de sesión y validación de RFC"): la vinculación sigue siendo una acción explícita', async () => {
@@ -4757,7 +4791,7 @@ describe('casos de uso de documentos', () => {
       });
 
       expect(result.data.canSign).toBe(true);
-      expect(result.data.myStatus).toBe(SIGNEE_STATUS_ENUM.PENDING);
+      expect(result.data.myStatus).toBe(COLLABORATOR_STATUS_ENUM.PENDING);
     });
   });
 
@@ -4861,7 +4895,7 @@ describe('casos de uso de documentos', () => {
       it('rechaza un documento que ya salio a firmar', async () => {
         documentRepository.findOne.mockResolvedValue({
           ...draft,
-          status: DOCUMENT_STATUS_ENUM.PENDING,
+          status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         });
 
         await expect(
@@ -4922,7 +4956,9 @@ describe('casos de uso de documentos', () => {
         );
 
         expect(documentRepository.save).toHaveBeenCalledWith(
-          expect.objectContaining({ status: DOCUMENT_STATUS_ENUM.PENDING }),
+          expect.objectContaining({
+            status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+          }),
         );
         expect(documentEventsProducer.emitSentToSign).toHaveBeenCalledWith({
           documentId: 'doc-1',
@@ -4965,7 +5001,7 @@ describe('casos de uso de documentos', () => {
       it('rechaza un documento que ya habia salido a firmar', async () => {
         documentRepository.findOne.mockResolvedValue({
           ...draft,
-          status: DOCUMENT_STATUS_ENUM.PENDING,
+          status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         });
 
         await expect(

@@ -28,6 +28,9 @@ import {
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   REQUIRES_DIFFERENT_SIGNATURES_ENUM,
 } from '../dto/create-document-signatures.dto';
+import { DocumentReviewerService } from '../services/document-reviewer.service';
+import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 
 function createMockRepository() {
   let seq = 0;
@@ -58,6 +61,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let emailService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let consumeDocumentCredit: Record<string, jest.Mock>;
+  let documentReviewerService: Record<string, jest.Mock>;
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -165,7 +169,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       issue: jest.fn().mockResolvedValue({ id: 'vc-1' }),
     };
     notificationEventsProducer = { emitCreated: jest.fn() };
-    documentEventsProducer = { emitCreated: jest.fn() };
+    documentEventsProducer = {
+      emitCreated: jest.fn(),
+      emitApprovalEvent: jest.fn(),
+    };
     emailService = {
       sendDocumentInvitationNotification: jest
         .fn()
@@ -174,6 +181,14 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     documentTransactionService = { createInitial: jest.fn() };
     consumeDocumentCredit = {
       execute: jest.fn().mockResolvedValue({ id: 'consumo-1' }),
+    };
+    /**
+     * Devuelve la cuenta PERSONAL del aprobador ya validado: qué hace que un aprobador sea válido
+     * —miembro activo con `DOCUMENT.APPROVE`— tiene su propia suite en
+     * `document-reviewer.service.spec.ts`.
+     */
+    documentReviewerService = {
+      resolveReviewerAccountId: jest.fn().mockResolvedValue('account-reviewer'),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -202,6 +217,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           provide: ConsumeDocumentCreditUseCase,
           useValue: consumeDocumentCredit,
         },
+        {
+          provide: DocumentReviewerService,
+          useValue: documentReviewerService,
+        },
       ],
     }).compile();
 
@@ -220,7 +239,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(result.data.status).toBe(DOCUMENT_STATUS_ENUM.PENDING);
+    expect(result.data.status).toBe(DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE);
     expect(minioService.uploadObject).toHaveBeenCalled();
     // 2 signers + 1 viewer = 3 colaboradores/notificaciones
     expect(collaboratorRepo.save).toHaveBeenCalledTimes(3);
@@ -743,6 +762,152 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
   });
 
+  /**
+   * Historia "Implementar flujo de aprobación previo al proceso de firma": con aprobación, el
+   * documento nace esperando al reviewer y nadie más se entera todavía.
+   */
+  describe('flujo de aprobación', () => {
+    /** El mismo payload de siempre, más la aprobación y su aprobador. */
+    function dtoConAprobacion(): CreateDocumentSignaturesDto {
+      return {
+        ...baseDto,
+        documentData: {
+          ...baseDto.documentData,
+          requiresApproval: true,
+          reviewerUserId: 'user-aprobador',
+        },
+      };
+    }
+
+    beforeEach(() => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: 'org-1',
+      });
+    });
+
+    it('el documento nace en PENDING_APPROVAL y no en PENDING_SIGNATURE', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion(),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: DOCUMENT_STATUS_ENUM.PENDING_APPROVAL,
+          requiresApproval: true,
+        }),
+      );
+    });
+
+    it('valida al aprobador antes de escribir nada y crea su colaborador REVIEWER en PENDING', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion(),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        documentReviewerService.resolveReviewerAccountId,
+      ).toHaveBeenCalledWith('user-aprobador', 'org-1');
+      expect(collaboratorRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+          accountId: 'account-reviewer',
+        }),
+      );
+    });
+
+    it('publica document.approval_requested con el reviewer al que hay que esperar', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion(),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentEventsProducer.emitApprovalEvent).toHaveBeenCalledWith(
+        DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
+        expect.objectContaining({ documentId: expect.any(String) }),
+      );
+    });
+
+    /**
+     * Criterio de aceptación: los firmantes no reciben nada antes de la aprobación. Este flujo
+     * (firma simple sin orden) es el único que manda correo de invitación al crear.
+     */
+    it('no manda invitaciones de firma mientras el documento espera aprobación', async () => {
+      const dtoSinOrden: CreateDocumentSignaturesDto = {
+        ...dtoConAprobacion(),
+        documentData: {
+          ...dtoConAprobacion().documentData,
+          isSequential: false,
+        },
+      };
+
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoSinOrden,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        emailService.sendDocumentInvitationNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un aprobador enviado junto a requiresApproval=false', async () => {
+      const contradictorio: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: {
+          ...baseDto.documentData,
+          requiresApproval: false,
+          reviewerUserId: 'user-aprobador',
+        },
+      };
+
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          contradictorio,
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(/reviewerUserId/);
+    });
+
+    it('sin aprobación, no se crea ningún REVIEWER ni se consulta al validador', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        documentReviewerService.resolveReviewerAccountId,
+      ).not.toHaveBeenCalled();
+      expect(collaboratorRepo.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+        }),
+      );
+      expect(documentEventsProducer.emitApprovalEvent).not.toHaveBeenCalled();
+    });
+  });
+
   it('bug corregido: rechaza requiresApproval=true cuando la cuenta activa es PERSONAL', async () => {
     // El mock por defecto de assertIsActiveMember ya es PERSONAL (ver beforeEach).
     const dtoConAprobacion: CreateDocumentSignaturesDto = {
@@ -861,8 +1026,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         file,
         '127.0.0.1',
       );
-      const eventosIndexable = documentEventsProducer.emitCreated.mock.calls
-        .length;
+      const eventosIndexable =
+        documentEventsProducer.emitCreated.mock.calls.length;
 
       jest.clearAllMocks();
       minioService.uploadObject.mockResolvedValue({

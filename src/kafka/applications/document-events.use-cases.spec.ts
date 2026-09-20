@@ -15,7 +15,7 @@ import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
 import { AuditChainService } from 'src/audit-chain/audit-chain.service';
@@ -42,7 +42,7 @@ function buildCollaborator(overrides: Partial<CollaboratorEntity> = {}) {
     email: null,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-    status: SIGNEE_STATUS_ENUM.PENDING,
+    status: COLLABORATOR_STATUS_ENUM.PENDING,
     signingOrder: 0,
     ...overrides,
   } as CollaboratorEntity;
@@ -144,7 +144,7 @@ describe('consumidor de eventos de documento', () => {
     const signerA = buildCollaborator({
       id: 'p-a',
       signingOrder: 0,
-      status: SIGNEE_STATUS_ENUM.SIGNED,
+      status: COLLABORATOR_STATUS_ENUM.SIGNED,
     });
     const signerB = buildCollaborator({ id: 'p-b', signingOrder: 1 });
     collaboratorRepository.find.mockResolvedValue([signerA, signerB]);
@@ -236,8 +236,8 @@ describe('consumidor de eventos de documento', () => {
   });
 
   describe('encadenamiento de Document Transaction según el tipo de firma', () => {
-    const signed = SIGNEE_STATUS_ENUM.SIGNED;
-    const pending = SIGNEE_STATUS_ENUM.PENDING;
+    const signed = COLLABORATOR_STATUS_ENUM.SIGNED;
+    const pending = COLLABORATOR_STATUS_ENUM.PENDING;
 
     it('firma simple: cada firma encadena su propio registro', async () => {
       collaboratorRepository.find.mockResolvedValue([
