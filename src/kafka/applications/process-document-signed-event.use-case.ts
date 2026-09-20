@@ -23,7 +23,7 @@ export class ProcessDocumentSignedEventUseCase {
 
   async execute(payload: DocumentEventPayload): Promise<void> {
     this.logger.log(
-      `Documento firmado: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.timestamp}`,
+      `Documento firmado: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
     try {

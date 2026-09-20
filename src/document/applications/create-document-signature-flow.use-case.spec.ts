@@ -171,7 +171,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     notificationEventsProducer = { emitCreated: jest.fn() };
     documentEventsProducer = {
       emitCreated: jest.fn(),
-      emitApprovalEvent: jest.fn(),
+      enqueueApprovalEvent: jest.fn().mockResolvedValue({ id: 'event-1' }),
+      flushOutbox: jest.fn().mockResolvedValue(undefined),
     };
     emailService = {
       sendDocumentInvitationNotification: jest
@@ -825,7 +826,11 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       );
     });
 
-    it('publica document.approval_requested con el reviewer al que hay que esperar', async () => {
+    /**
+     * El evento se registra DENTRO de la transacción (outbox) y sólo se publica al confirmarla:
+     * un documento que no llegue a guardarse no puede haber pedido aprobación a nadie.
+     */
+    it('registra document.approval_requested en la outbox y lo publica tras el commit', async () => {
       await useCase.execute(
         'creator-1',
         'account-1',
@@ -834,10 +839,12 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         '127.0.0.1',
       );
 
-      expect(documentEventsProducer.emitApprovalEvent).toHaveBeenCalledWith(
+      expect(documentEventsProducer.enqueueApprovalEvent).toHaveBeenCalledWith(
+        expect.anything(),
         DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
         expect.objectContaining({ documentId: expect.any(String) }),
       );
+      expect(documentEventsProducer.flushOutbox).toHaveBeenCalled();
     });
 
     /**
@@ -904,7 +911,9 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
         }),
       );
-      expect(documentEventsProducer.emitApprovalEvent).not.toHaveBeenCalled();
+      expect(
+        documentEventsProducer.enqueueApprovalEvent,
+      ).not.toHaveBeenCalled();
     });
   });
 

@@ -19,7 +19,7 @@ export class ProcessDocumentCreatedEventUseCase {
 
   async execute(payload: DocumentEventPayload): Promise<void> {
     this.logger.log(
-      `Documento creado: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.timestamp}`,
+      `Documento creado: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
     await this.audit.record(payload, AUDIT_TYPE_ENUM.CREATED);

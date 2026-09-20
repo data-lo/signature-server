@@ -4,10 +4,12 @@ import {
   DOCUMENT_KAFKA_TOPICS,
   DocumentEventPayload,
   DocumentCollaboratorSignedPayload,
-  DocumentApprovalEventPayload,
 } from './document-events.topics';
 import { EventService } from 'src/event/event.service';
 import { EVENT_TYPE_ENUM } from 'src/event/enums/event-type.enum';
+import { EntityManager } from 'typeorm';
+import { OutboxService } from 'src/event/outbox.service';
+import { EventEntity } from 'src/event/entities/event.entity';
 
 interface EmitDocumentEventParams {
   documentId: string;
@@ -55,6 +57,7 @@ export class DocumentEventsProducer {
   constructor(
     private readonly kafkaProducer: KafkaProducerService,
     private readonly eventService: EventService,
+    private readonly outboxService: OutboxService,
   ) {}
 
   private emitEvent(
@@ -65,7 +68,7 @@ export class DocumentEventsProducer {
       documentId,
       fileName,
       actorUserId,
-      timestamp: new Date().toISOString(),
+      occurredAt: new Date().toISOString(),
     };
     this.kafkaProducer.emit(topic, payload);
 
@@ -95,23 +98,33 @@ export class DocumentEventsProducer {
   }
 
   /**
-   * Publica uno de los tres eventos del flujo de aprobación.
+   * Registra un evento de aprobación en la outbox, dentro de la transacción del llamador.
    *
-   * Los tres comparten forma —documento + reviewer + quién actuó— y por eso comparten método: lo
-   * único que cambia entre ellos es el tópico y, en el rechazo, el comentario del reviewer.
+   * Los tres eventos del flujo de aprobación pasan por aquí y no por `emitEvent` porque acompañan
+   * un cambio de estado del documento: anunciarlos antes de que la transacción confirme sería
+   * anunciar algo que todavía puede deshacerse. El resto de los eventos sigue publicándose por el
+   * camino directo; migrarlos es un cambio de comportamiento que esta historia no pide.
    *
-   * @param topic - Cuál de los tres eventos de aprobación se publica.
-   * @param params - Documento, reviewer, actor y, si aplica, la nota de resolución.
-   * @returns Nada: publicar es best-effort, igual que el resto de los eventos de este productor.
+   * Los tres comparten método porque comparten forma —documento + reviewer + actor—: lo único que
+   * cambia entre ellos es el tópico y, en el rechazo, el comentario del reviewer.
+   *
+   * @param manager - `EntityManager` de la transacción que cambia el estado.
+   * @param topic - Cuál de los tres eventos de aprobación.
+   * @param params - Documento, reviewer, actor y la nota de resolución si aplica.
+   * @returns El evento registrado; su `id` es el `eventId` que viajará en el sobre.
+   *
+   * @throws {QueryFailedError} Si la inserción falla — propaga y revierte la transacción, que es
+   *   lo correcto: sin evento registrado el cambio de estado no debe confirmarse.
    *
    * @example
    * ```ts
-   * producer.emitApprovalEvent(DOCUMENT_KAFKA_TOPICS.APPROVED, {
+   * await producer.enqueueApprovalEvent(manager, DOCUMENT_KAFKA_TOPICS.APPROVED, {
    *   documentId, fileName, actorUserId, collaboratorId,
    * });
    * ```
    */
-  emitApprovalEvent(
+  async enqueueApprovalEvent(
+    manager: EntityManager,
     topic:
       | DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED
       | DOCUMENT_KAFKA_TOPICS.APPROVED
@@ -123,28 +136,33 @@ export class DocumentEventsProducer {
       collaboratorId,
       resolutionNote,
     }: EmitApprovalEventParams,
-  ) {
-    const payload: DocumentApprovalEventPayload = {
-      documentId,
-      fileName,
-      actorUserId,
-      collaboratorId,
-      resolutionNote: resolutionNote ?? null,
-      timestamp: new Date().toISOString(),
-    };
-    this.kafkaProducer.emit(topic, payload);
+  ): Promise<EventEntity> {
+    return this.outboxService.enqueue(manager, {
+      eventType: TOPIC_TO_EVENT_TYPE[topic],
+      topic,
+      body: {
+        documentId,
+        fileName,
+        collaboratorId,
+        resolutionNote: resolutionNote ?? null,
+      },
+      from: actorUserId,
+    });
+  }
 
-    this.eventService
-      .create({
-        eventType: TOPIC_TO_EVENT_TYPE[topic],
-        metadata: { documentId, fileName, collaboratorId },
-        from: actorUserId,
-      })
-      .catch((error) =>
-        this.logger.error(
-          `Error persistiendo el evento '${topic}' del documento ${documentId}: ${error}`,
-        ),
-      );
+  /**
+   * Publica lo que la outbox tenga pendiente. Se llama DESPUÉS de confirmar la transacción.
+   *
+   * @returns Nada: es best-effort; lo que falle se queda pendiente y lo reintenta el siguiente
+   *   `flushOutbox` (ver `OutboxService`).
+   *
+   * @example
+   * ```ts
+   * await producer.flushOutbox();
+   * ```
+   */
+  async flushOutbox(): Promise<void> {
+    await this.outboxService.flush();
   }
 
   /**
@@ -165,7 +183,7 @@ export class DocumentEventsProducer {
       actorUserId,
       collaboratorId,
       signedAt,
-      timestamp: new Date().toISOString(),
+      occurredAt: new Date().toISOString(),
     };
     this.kafkaProducer.emit(DOCUMENT_KAFKA_TOPICS.COLLABORATOR_SIGNED, payload);
 

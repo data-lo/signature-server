@@ -99,6 +99,22 @@ export class ApproveDocumentUseCase {
           { id: documentId, status: DOCUMENT_STATUS_ENUM.PENDING_APPROVAL },
           { status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE },
         );
+
+      /**
+       * El evento se registra AQUÍ, con el manager de esta transacción, y se publica después del
+       * commit (ver `OutboxService`): si algo de lo de arriba revierte, el evento desaparece con
+       * ello y nunca se anuncia una aprobación que no ocurrió.
+       */
+      await this.documentEventsProducer.enqueueApprovalEvent(
+        manager,
+        DOCUMENT_KAFKA_TOPICS.APPROVED,
+        {
+          documentId,
+          fileName: document.fileName,
+          actorUserId: currentUserId,
+          collaboratorId: reviewer.id,
+        },
+      );
     });
 
     void this.auditService.create({
@@ -108,15 +124,12 @@ export class ApproveDocumentUseCase {
       users: [{ userId: currentUserId, action: AuditAction.DOCUMENT_APPROVED }],
     });
 
-    this.documentEventsProducer.emitApprovalEvent(
-      DOCUMENT_KAFKA_TOPICS.APPROVED,
-      {
-        documentId,
-        fileName: document.fileName,
-        actorUserId: currentUserId,
-        collaboratorId: reviewer.id,
-      },
-    );
+    /**
+     * Ya confirmada la transacción: se publica lo pendiente, incluido lo que haya quedado atrasado
+     * de intentos anteriores. Un fallo aquí no devuelve error — la aprobación ya está registrada y
+     * el evento se reintenta en el siguiente `flushOutbox`.
+     */
+    await this.documentEventsProducer.flushOutbox();
 
     /**
      * `document.sent_to_sign` se publica aquí y no sólo al crear: es el evento que significa "el

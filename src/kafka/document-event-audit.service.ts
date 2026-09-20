@@ -34,7 +34,7 @@ export class DocumentEventAuditService {
           actorUserId: payload.actorUserId,
           ...extraMetadata,
         },
-        timestamp: new Date(payload.timestamp),
+        timestamp: new Date(payload.occurredAt),
       });
     } catch (error) {
       this.logger.error(

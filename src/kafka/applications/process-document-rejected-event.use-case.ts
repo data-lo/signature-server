@@ -26,7 +26,7 @@ export class ProcessDocumentRejectedEventUseCase {
 
   async execute(payload: DocumentEventPayload): Promise<void> {
     this.logger.log(
-      `Documento rechazado: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.timestamp}`,
+      `Documento rechazado: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
     try {

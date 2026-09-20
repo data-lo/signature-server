@@ -17,6 +17,7 @@ import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
 import { ACTOR_TYPE_ENUM } from 'src/document/enum/actor-type.enum';
+import { IdempotencyService } from 'src/event/idempotency.service';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
 import { AuditChainService } from 'src/audit-chain/audit-chain.service';
 import { AUDIT_TYPE_ENUM } from 'src/audit-chain/enums/audit-type.enum';
@@ -59,13 +60,14 @@ describe('consumidor de eventos de documento', () => {
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let documentRepository: ReturnType<typeof createMockRepository>;
   let documentTransactionService: Record<string, jest.Mock>;
+  let idempotencyService: Record<string, jest.Mock>;
   let auditChainService: Record<string, jest.Mock>;
 
   const payload: DocumentEventPayload = {
     documentId: 'doc-1',
     fileName: 'contrato.pdf',
     actorUserId: 'user-1',
-    timestamp: '2026-01-01T00:00:00.000Z',
+    occurredAt: '2026-01-01T00:00:00.000Z',
   };
 
   const collaboratorSignedPayload: DocumentCollaboratorSignedPayload = {
@@ -82,6 +84,7 @@ describe('consumidor de eventos de documento', () => {
       id: 'doc-1',
       signedHash: 'hash-del-pdf-final',
     });
+    idempotencyService = { claim: jest.fn().mockResolvedValue(true) };
     documentTransactionService = {
       registerSignature: jest.fn(),
       registerCompletion: jest.fn(),
@@ -115,6 +118,14 @@ describe('consumidor de eventos de documento', () => {
         {
           provide: DocumentTransactionService,
           useValue: documentTransactionService,
+        },
+        /**
+         * Por defecto reclama siempre: la deduplicación tiene su propia suite, y aquí lo que se
+         * prueba es qué hace cada handler cuando el evento sí le toca.
+         */
+        {
+          provide: IdempotencyService,
+          useValue: idempotencyService,
         },
         { provide: AuditChainService, useValue: auditChainService },
       ],

@@ -44,7 +44,7 @@ export class ProcessDocumentCollaboratorSignedEventUseCase {
 
   async execute(payload: DocumentCollaboratorSignedPayload): Promise<void> {
     this.logger.log(
-      `Documento firmado por el colaborador ${payload.collaboratorId}: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.timestamp}`,
+      `Documento firmado por el colaborador ${payload.collaboratorId}: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
     try {

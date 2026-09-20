@@ -91,6 +91,19 @@ export class RejectDocumentApprovalUseCase {
           rejectedAt: resolvedAt,
         },
       );
+
+      // Dentro de la transacción, por lo mismo que al aprobar (ver `OutboxService`).
+      await this.documentEventsProducer.enqueueApprovalEvent(
+        manager,
+        DOCUMENT_KAFKA_TOPICS.APPROVAL_REJECTED,
+        {
+          documentId,
+          fileName: document.fileName,
+          actorUserId: currentUserId,
+          collaboratorId: reviewer.id,
+          resolutionNote: resolutionNote ?? null,
+        },
+      );
     });
 
     void this.auditService.create({
@@ -105,16 +118,7 @@ export class RejectDocumentApprovalUseCase {
       ],
     });
 
-    this.documentEventsProducer.emitApprovalEvent(
-      DOCUMENT_KAFKA_TOPICS.APPROVAL_REJECTED,
-      {
-        documentId,
-        fileName: document.fileName,
-        actorUserId: currentUserId,
-        collaboratorId: reviewer.id,
-        resolutionNote: resolutionNote ?? null,
-      },
-    );
+    await this.documentEventsProducer.flushOutbox();
 
     /**
      * Sólo se avisa al creador. A los firmantes no se les dice nada porque nunca supieron que

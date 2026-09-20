@@ -76,7 +76,8 @@ describe('flujo de aprobación', () => {
     };
     auditService = { create: jest.fn().mockResolvedValue(undefined) };
     documentEventsProducer = {
-      emitApprovalEvent: jest.fn(),
+      enqueueApprovalEvent: jest.fn().mockResolvedValue({ id: 'event-1' }),
+      flushOutbox: jest.fn().mockResolvedValue(undefined),
       emitSentToSign: jest.fn(),
     };
     managedDocumentRepository = {
@@ -227,10 +228,16 @@ describe('flujo de aprobación', () => {
       );
     });
 
-    it('publica document.approved y document.sent_to_sign', async () => {
+    /**
+     * `document.approved` se registra en la outbox dentro de la transacción y se publica al
+     * confirmarla; `document.sent_to_sign` sale por el camino directo, que es el que ya usaban
+     * el envío a autorización y el resto del ciclo de vida.
+     */
+    it('registra document.approved en la outbox, la vacía y publica document.sent_to_sign', async () => {
       await approveDocument.execute('doc-1', REVIEWER_USER_ID);
 
-      expect(documentEventsProducer.emitApprovalEvent).toHaveBeenCalledWith(
+      expect(documentEventsProducer.enqueueApprovalEvent).toHaveBeenCalledWith(
+        expect.anything(),
         DOCUMENT_KAFKA_TOPICS.APPROVED,
         expect.objectContaining({
           documentId: 'doc-1',
@@ -238,6 +245,7 @@ describe('flujo de aprobación', () => {
           actorUserId: REVIEWER_USER_ID,
         }),
       );
+      expect(documentEventsProducer.flushOutbox).toHaveBeenCalled();
       expect(documentEventsProducer.emitSentToSign).toHaveBeenCalledWith(
         expect.objectContaining({ documentId: 'doc-1' }),
       );
@@ -331,10 +339,12 @@ describe('flujo de aprobación', () => {
       expect(
         documentService.notifyCreatorOfApprovalRejection,
       ).toHaveBeenCalledWith('doc-1', 'Falta el anexo B');
-      expect(documentEventsProducer.emitApprovalEvent).toHaveBeenCalledWith(
+      expect(documentEventsProducer.enqueueApprovalEvent).toHaveBeenCalledWith(
+        expect.anything(),
         DOCUMENT_KAFKA_TOPICS.APPROVAL_REJECTED,
         expect.objectContaining({ resolutionNote: 'Falta el anexo B' }),
       );
+      expect(documentEventsProducer.flushOutbox).toHaveBeenCalled();
       expect(auditService.create).toHaveBeenCalledWith(
         expect.objectContaining({
           operation: AuditAction.DOCUMENT_APPROVAL_REJECTED,

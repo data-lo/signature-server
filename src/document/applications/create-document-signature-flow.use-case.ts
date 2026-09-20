@@ -572,6 +572,22 @@ export class CreateDocumentSignatureFlowUseCase {
           notification: reviewerNotification,
           collaboratorId: reviewer.id,
         });
+
+        /**
+         * El anuncio de que hay una aprobación esperando se registra dentro de esta transacción y
+         * se publica después del commit (ver `OutboxService`): un documento que no llegue a
+         * guardarse no puede haber pedido aprobación a nadie.
+         */
+        await this.documentEventsProducer.enqueueApprovalEvent(
+          manager,
+          DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
+          {
+            documentId: document.id,
+            fileName: document.fileName,
+            actorUserId: createdBy,
+            collaboratorId: reviewer.id,
+          },
+        );
       }
 
       return {
@@ -604,15 +620,7 @@ export class CreateDocumentSignatureFlowUseCase {
      * de los dos ocurrió.
      */
     if (reviewerCollaboratorId) {
-      this.documentEventsProducer.emitApprovalEvent(
-        DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
-        {
-          documentId: document.id,
-          fileName: document.fileName,
-          actorUserId: createdBy,
-          collaboratorId: reviewerCollaboratorId,
-        },
-      );
+      await this.documentEventsProducer.flushOutbox();
     }
 
     if (document.isIndexable) {

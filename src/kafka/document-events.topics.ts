@@ -18,11 +18,23 @@ export enum DOCUMENT_KAFKA_TOPICS {
   CANCELLED = 'document.cancelled',
 }
 
+/**
+ * Sobre común de todos los eventos de documento.
+ *
+ * `eventId`, `occurredAt` y `version` los pone la outbox al publicar (ver `OutboxService`), que es
+ * lo que permite a un consumidor descartar una reentrega y saber contra qué versión del contrato
+ * está leyendo. Son opcionales porque los eventos que todavía se publican por el camino directo
+ * —sin outbox— no los llevan: un consumidor que reciba uno de ésos simplemente no puede
+ * deduplicarlo, y eso es mejor que rechazarlo.
+ */
 export interface DocumentEventPayload {
+  eventId?: string;
   documentId: string;
   fileName: string;
   actorUserId: string;
-  timestamp: string;
+  /** ISO 8601 del momento en que ocurrió el hecho, no de su publicación. */
+  occurredAt: string;
+  version?: number;
 }
 
 /**
