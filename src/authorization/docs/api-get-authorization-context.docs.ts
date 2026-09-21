@@ -9,7 +9,8 @@ export function ApiGetAuthorizationContext() {
     ApiOperation({
       summary: 'Obtener el contexto de autorización de la cuenta activa',
       description:
-        'Devuelve la cuenta activa, su organización, su rol y las claves del catálogo estático ' +
+        'Devuelve la cuenta activa, su organización, su rol (identificador y nombre) y las ' +
+        'claves del catálogo estático ' +
         'que ese rol otorga. Sirve para que el cliente pinte el menú y las acciones; NO autoriza ' +
         'ninguna operación: cada endpoint vuelve a validar su propio permiso.',
     }),

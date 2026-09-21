@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { STATIC_PERMISSION_KEY_ENUM } from 'src/roles/static-permission-catalog';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 
 /**
  * Lo que la cuenta activa puede hacer, resuelto para el usuario autenticado.
@@ -42,6 +43,24 @@ export class AuthorizationContextData {
       'Rol de la membresía; `null` mientras no se le haya asignado uno (invitación a medio completar)',
   })
   roleId: string | null;
+
+  /**
+   * El NOMBRE del rol, junto al identificador que ya se publicaba.
+   *
+   * Sin esto el cliente recibe un UUID que no puede interpretar: para decidir algo que dependa
+   * del rol —comprobar que quien acaba de crear una organización quedó como su propietario, por
+   * ejemplo— tendría que pedir aparte el catálogo de roles y cruzarlo a mano.
+   *
+   * Que sea un nombre y no un enum es deliberado: además de OWNER/ADMIN/MEMBER, una organización
+   * puede definir roles propios, y el contrato tiene que poder nombrarlos igual.
+   */
+  @ApiProperty({
+    example: SYSTEM_ROLE_NAME_ENUM.OWNER,
+    nullable: true,
+    description:
+      'Nombre del rol de la membresía; `null` mientras no se le haya asignado uno',
+  })
+  roleName: string | null;
 
   @ApiProperty({
     example: [
