@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { OrganizationInvitationService } from '../organization-invitation.service';
 import { OrganizationInvitationEntity } from '../entities/organization-invitation.entity';
 import { AccountEntity } from '../entities/account.entity';
@@ -12,6 +12,7 @@ import { OrganizationEntity } from '../entities/organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { AccountService } from '../account.service';
 import { OrganizationInvitationEventsProducer } from 'src/kafka/organization-invitation.producer';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 import { INVITATION_STATUS_ENUM } from '../enums/invitation-status.enum';
 
 import { GetOrganizationInvitationPreviewUseCase } from './get-organization-invitation-preview.use-case';
@@ -22,6 +23,28 @@ function createMockRepository() {
     findOne: jest.fn(),
     create: jest.fn((data) => data),
     save: jest.fn(async (data) => ({ id: 'saved-id', ...data })),
+  };
+}
+
+/**
+ * `DataSource.transaction` simulado: corre el callback con un manager que devuelve los mismos
+ * repositorios simulados. No prueba el commit ni el rollback —eso es de Postgres—, sí que la
+ * secuencia escriba por el manager de la transacción y no por su repositorio propio.
+ */
+function createMockDataSource(repositoriesByEntity: Map<unknown, unknown>) {
+  const manager = {
+    getRepository: jest.fn((entity: unknown) =>
+      repositoriesByEntity.get(entity),
+    ),
+  };
+
+  return {
+    manager,
+    dataSource: {
+      transaction: jest.fn(async (work: (manager: unknown) => unknown) =>
+        work(manager),
+      ),
+    },
   };
 }
 
@@ -58,6 +81,10 @@ describe('casos de uso de invitaciones a organización', () => {
   let userRepository: ReturnType<typeof createMockRepository>;
   let accountService: { appendAccountToCatalog: jest.Mock };
   let invitationEventsProducer: { emitInvited: jest.Mock };
+  let memberEventsProducer: {
+    enqueueJoined: jest.Mock;
+    flushOutbox: jest.Mock;
+  };
 
   beforeEach(async () => {
     invitationRepository = createMockRepository();
@@ -66,6 +93,16 @@ describe('casos de uso de invitaciones a organización', () => {
     userRepository = createMockRepository();
     accountService = { appendAccountToCatalog: jest.fn() };
     invitationEventsProducer = { emitInvited: jest.fn() };
+    memberEventsProducer = {
+      enqueueJoined: jest.fn(),
+      flushOutbox: jest.fn(),
+    };
+    const { dataSource } = createMockDataSource(
+      new Map<unknown, unknown>([
+        [AccountEntity, accountRepository],
+        [OrganizationInvitationEntity, invitationRepository],
+      ]),
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -90,6 +127,11 @@ describe('casos de uso de invitaciones a organización', () => {
           provide: OrganizationInvitationEventsProducer,
           useValue: invitationEventsProducer,
         },
+        {
+          provide: OrganizationMemberEventsProducer,
+          useValue: memberEventsProducer,
+        },
+        { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
 
@@ -179,6 +221,48 @@ describe('casos de uso de invitaciones a organización', () => {
         acceptInvitation.execute('token-1', 'RFC123456789'),
       ).rejects.toThrow(ConflictException);
       expect(accountRepository.save).not.toHaveBeenCalled();
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
+    });
+
+    /**
+     * El aviso a propietarios y administradores se registra en la MISMA transacción que la
+     * membresía y la invitación: una incorporación que no llega a confirmarse no debe anunciarse.
+     * El actor es el propio invitado, que es quien aceptó; quien lo invitó ya quedó registrado en
+     * la invitación.
+     */
+    it('registra el aviso de incorporación dentro de la transacción y lo publica al confirmar', async () => {
+      invitationRepository.findOne.mockResolvedValue(pendingInvitation());
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'user@empresa.com',
+        password: 'hashed-pw',
+      });
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await acceptInvitation.execute('token-1', 'RFC123456789');
+
+      expect(memberEventsProducer.enqueueJoined).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          membership: expect.objectContaining({
+            userId: 'user-1',
+            organizationId: 'org-1',
+          }),
+          actorUserId: 'user-1',
+        },
+      );
+      expect(memberEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    it('no anuncia ninguna incorporación si la invitación ya había expirado', async () => {
+      invitationRepository.findOne.mockResolvedValue(
+        pendingInvitation({ expiresAt: new Date(Date.now() - 1000) }),
+      );
+
+      await expect(
+        acceptInvitation.execute('token-1', 'RFC123456789'),
+      ).rejects.toThrow(GoneException);
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
     });
 
     it('crea la membresía, marca la invitación ACCEPTED y refresca el catálogo de Redis', async () => {

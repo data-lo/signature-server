@@ -8,6 +8,8 @@ import { DocumentEventsProducer } from './document-events.producer';
 import { DocumentEventsConsumer } from './document-events.controller';
 import { OrganizationInvitationEventsProducer } from './organization-invitation.producer';
 import { OrganizationInvitationEventsConsumer } from './organization-invitation-events.controller';
+import { OrganizationMemberEventsProducer } from './organization-member.producer';
+import { OrganizationMemberEventsConsumer } from './organization-member-events.controller';
 import { NotificationEventsProducer } from './notification-events.producer';
 import { NotificationEventsConsumer } from './notification-events.controller';
 import { KAFKA_SERVICE } from './kafka.constants';
@@ -15,6 +17,8 @@ import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { RoleEntity } from 'src/roles/entities/role.entity';
 import { SharedModule } from 'src/common/shared.module';
 import { EventModule } from 'src/event/event.module';
 import { DocumentTransactionModule } from 'src/document/document-transaction.module';
@@ -34,6 +38,7 @@ import { ProcessDocumentCancellationRequestedEventUseCase } from './applications
 import { ProcessDocumentCancelledEventUseCase } from './applications/process-document-cancelled-event.use-case';
 import { SendPendingSignatureNotificationUseCase } from './applications/send-pending-signature-notification.use-case';
 import { SendOrganizationInvitationEmailUseCase } from './applications/send-organization-invitation-email.use-case';
+import { NotifyOrganizationAdminsOfNewMemberUseCase } from './applications/notify-organization-admins-of-new-member.use-case';
 
 @Module({
   imports: [
@@ -42,6 +47,8 @@ import { SendOrganizationInvitationEmailUseCase } from './applications/send-orga
       CollaboratorEntity,
       DocumentEntity,
       UserEntity,
+      AccountEntity,
+      RoleEntity,
     ]),
     SharedModule,
     forwardRef(() => EventModule),
@@ -71,6 +78,7 @@ import { SendOrganizationInvitationEmailUseCase } from './applications/send-orga
     KafkaTestController,
     DocumentEventsConsumer,
     OrganizationInvitationEventsConsumer,
+    OrganizationMemberEventsConsumer,
     NotificationEventsConsumer,
   ],
   providers: [
@@ -86,8 +94,10 @@ import { SendOrganizationInvitationEmailUseCase } from './applications/send-orga
     ProcessDocumentCancelledEventUseCase,
     SendPendingSignatureNotificationUseCase,
     SendOrganizationInvitationEmailUseCase,
+    NotifyOrganizationAdminsOfNewMemberUseCase,
     DocumentEventsProducer,
     OrganizationInvitationEventsProducer,
+    OrganizationMemberEventsProducer,
     NotificationEventsProducer,
   ],
   exports: [
@@ -95,6 +105,7 @@ import { SendOrganizationInvitationEmailUseCase } from './applications/send-orga
     KafkaProducerService,
     DocumentEventsProducer,
     OrganizationInvitationEventsProducer,
+    OrganizationMemberEventsProducer,
     NotificationEventsProducer,
   ],
 })
