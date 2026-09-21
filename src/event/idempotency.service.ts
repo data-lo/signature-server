@@ -84,4 +84,49 @@ export class IdempotencyService {
       return true;
     }
   }
+
+  /**
+   * Suelta una marca tomada por `claim` para que una reentrega del mismo evento vuelva a
+   * trabajarlo.
+   *
+   * Existe porque `claim` reclama ANTES de hacer el trabajo: esa decisión evita que dos entregas
+   * simultáneas trabajen a la vez, pero deja un trabajo fallido marcado como hecho. Soltar la
+   * marca al fallar convierte ese "no se reintenta nunca" en "se reintenta a la siguiente
+   * entrega", sin renunciar a la protección contra duplicados — lo que ya salió bien conserva su
+   * marca y no se repite.
+   *
+   * Sólo tiene sentido con marcas de grano fino (una por destinatario, por ejemplo): soltar una
+   * marca que cubre varios trabajos reintentaría también los que ya terminaron.
+   *
+   * @param eventId - `eventId` del sobre. Si viene vacío no hay marca que soltar y no hace nada.
+   * @param consumer - El MISMO nombre con el que se reclamó.
+   * @returns Nada.
+   *
+   * @throws Nada: un fallo de base se registra y se traga. Dejar la marca puesta sólo cuesta el
+   *   reintento; propagar el error tumbaría además los destinatarios que sí se procesaron.
+   *
+   * @example
+   * ```ts
+   * if (!(await idempotency.claim(eventId, key))) return;
+   * try {
+   *   await sendEmail();
+   * } catch (error) {
+   *   await idempotency.release(eventId, key);
+   * }
+   * ```
+   */
+  async release(
+    eventId: string | undefined | null,
+    consumer: string,
+  ): Promise<void> {
+    if (!eventId) return;
+
+    try {
+      await this.processedEventRepository.delete({ eventId, consumer });
+    } catch (error) {
+      this.logger.error(
+        `Error soltando la marca del evento ${eventId} para '${consumer}'; no se reintentará: ${error}`,
+      );
+    }
+  }
 }

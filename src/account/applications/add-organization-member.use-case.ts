@@ -3,9 +3,12 @@ import {
   ConflictException,
   Injectable,
 } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { RolesService } from 'src/roles/roles.service';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 
 import { AccountMemberService } from '../account-member.service';
 import { AccountService } from '../account.service';
@@ -32,6 +35,10 @@ export class AddOrganizationMemberUseCase {
     private readonly accountService: AccountService,
     private readonly accountMemberService: AccountMemberService,
     private readonly rolesService: RolesService,
+    private readonly organizationMemberEventsProducer: OrganizationMemberEventsProducer,
+
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -45,6 +52,10 @@ export class AddOrganizationMemberUseCase {
    * Al terminar refresca el catálogo de cuentas cacheado del nuevo miembro, para que la
    * organización le aparezca en el selector sin tener que volver a iniciar sesión — lo mismo que
    * hace el flujo de invitación al aceptarla.
+   *
+   * El alta y el evento que avisa a propietarios y administradores se escriben en UNA
+   * transacción (ver `OrganizationMemberEventsProducer`): si la membresía no llega a guardarse,
+   * el aviso desaparece con ella y nadie se entera de una incorporación que no ocurrió.
    *
    * @param callerId - Usuario autenticado que da el alta.
    * @param accountId - Header `X-Account-Id`: la membresía del llamador en la organización activa.
@@ -129,15 +140,32 @@ export class AddOrganizationMemberUseCase {
       );
     }
 
-    const membership = await this.accountMemberService.saveMembership(
-      {
-        organizationId,
-        userId: invitedUser.id,
-        roleId: dto.roleId,
-        position: dto.position,
-      },
-      invitedUser,
-    );
+    const membership = await this.dataSource.transaction(async (manager) => {
+      const created = await this.accountMemberService.saveMembership(
+        {
+          organizationId,
+          userId: invitedUser.id,
+          roleId: dto.roleId,
+          position: dto.position,
+        },
+        invitedUser,
+        manager,
+      );
+
+      await this.organizationMemberEventsProducer.enqueueJoined(manager, {
+        membership: created,
+        actorUserId: callerId,
+      });
+
+      return created;
+    });
+
+    /**
+     * Ya confirmada la transacción: se publica lo pendiente. Es best-effort — un Kafka caído no
+     * debe devolver un error a quien acaba de dar de alta a un compañero, y el evento se reintenta
+     * en el siguiente `flushOutbox` (ver `OutboxService`).
+     */
+    await this.organizationMemberEventsProducer.flushOutbox();
 
     await this.accountService.appendAccountToCatalog(
       invitedUser.id,

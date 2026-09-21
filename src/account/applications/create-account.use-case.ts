@@ -44,6 +44,13 @@ export class CreateAccountUseCase {
     if (createAccountDto.type === ACCOUNT_TYPE_ENUM.ORGANIZATION) {
       const organization = await this.accountService.saveOrganization({
         name: createAccountDto.organizationName ?? createAccountDto.name,
+        /**
+         * `name` del DTO es el nombre de visualización — el corto, el que se lee en el selector
+         * de cuentas—, y aquí es obligatorio. La razón social de arriba sí cae en él cuando el
+         * alta genérica no la manda, porque `organizationName` es opcional en este DTO y una
+         * organización sin nombre legal es preferible a una sin ninguno.
+         */
+        displayName: createAccountDto.name,
         address: createAccountDto.address,
         rfc: createAccountDto.rfc,
         domainAllowed: createAccountDto.domainAllowed,

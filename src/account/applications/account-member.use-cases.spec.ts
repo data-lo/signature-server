@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import {
   BadRequestException,
   ConflictException,
@@ -15,6 +15,7 @@ import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from '../enums/account-status.enum';
 import { RolePermissionData } from 'src/roles/interfaces/response/permission-response';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 
 import { AddOrganizationMemberUseCase } from './add-organization-member.use-case';
 import { GrantAccountAccessUseCase } from './grant-account-access.use-case';
@@ -63,11 +64,34 @@ const MEMBER_PERMISSIONS: RolePermissionData[] = [
 function createMockRepository() {
   return {
     findOne: jest.fn(),
+    findOneOrFail: jest.fn(),
     find: jest.fn(),
     count: jest.fn(),
     create: jest.fn((data) => data),
     save: jest.fn(async (data) => ({ id: 'new-member-1', ...data })),
     update: jest.fn(),
+  };
+}
+
+/**
+ * `DataSource.transaction` simulado: corre el callback con un manager que devuelve los mismos
+ * repositorios simulados. No prueba el commit ni el rollback —eso es de Postgres—, sí que la
+ * secuencia escriba por el manager de la transacción y no por su repositorio propio.
+ */
+function createMockDataSource(repositoriesByEntity: Map<unknown, unknown>) {
+  const manager = {
+    getRepository: jest.fn((entity: unknown) =>
+      repositoriesByEntity.get(entity),
+    ),
+  };
+
+  return {
+    manager,
+    dataSource: {
+      transaction: jest.fn(async (work: (manager: unknown) => unknown) =>
+        work(manager),
+      ),
+    },
   };
 }
 
@@ -112,10 +136,18 @@ describe('casos de uso de miembros de organización', () => {
     assertHasPermission: jest.Mock;
     findSystemRoleByName: jest.Mock;
   };
+  let memberEventsProducer: {
+    enqueueJoined: jest.Mock;
+    flushOutbox: jest.Mock;
+  };
 
   beforeEach(async () => {
     accountRepository = createMockRepository();
     userRepository = createMockRepository();
+    memberEventsProducer = {
+      enqueueJoined: jest.fn(),
+      flushOutbox: jest.fn(),
+    };
     accountRepository.count.mockResolvedValue(2); // por defecto: hay más de un ADMIN activo, nada que proteger
     accountService = {
       removeAccountFromCatalog: jest.fn(),
@@ -180,6 +212,16 @@ describe('casos de uso de miembros de organización', () => {
         },
         { provide: AccountService, useValue: accountService },
         { provide: RolesService, useValue: rolesService },
+        {
+          provide: OrganizationMemberEventsProducer,
+          useValue: memberEventsProducer,
+        },
+        {
+          provide: getDataSourceToken(),
+          useValue: createMockDataSource(
+            new Map<unknown, unknown>([[AccountEntity, accountRepository]]),
+          ).dataSource,
+        },
       ],
     }).compile();
 
@@ -248,6 +290,47 @@ describe('casos de uso de miembros de organización', () => {
           userId: 'user-1',
         }),
       );
+    });
+
+    it('registra el aviso a propietarios y administradores y lo publica tras confirmar', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(null);
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'invitado@empresa.com',
+        password: 'hashed-pw',
+      });
+
+      await grantAccountAccess.execute('owner-1', dto);
+
+      expect(memberEventsProducer.enqueueJoined).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          membership: expect.objectContaining({ id: 'new-member-1' }),
+          actorUserId: 'owner-1',
+        },
+      );
+      expect(memberEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    /**
+     * El alta puede pedirse inactiva. Nadie ha quedado dentro todavía, así que no hay
+     * incorporación que anunciar: el aviso saldrá cuando se le reactive.
+     */
+    it('no anuncia nada si la membresía se da de alta inactiva', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(null);
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'invitado@empresa.com',
+        password: 'hashed-pw',
+      });
+
+      await grantAccountAccess.execute('owner-1', { ...dto, isActive: false });
+
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
     });
   });
 
@@ -550,6 +633,72 @@ describe('casos de uso de miembros de organización', () => {
       expect(accountRepository.count).not.toHaveBeenCalled();
       expect(accountRepository.update).toHaveBeenCalled();
     });
+
+    /**
+     * Reactivar es una incorporación: quien fue dado de baja y vuelve hoy está dentro y ayer no,
+     * y eso es justo lo que los administradores tienen que saber.
+     */
+    it('update anuncia la incorporación al reactivar a alguien dado de baja', async () => {
+      const removedMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: false,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(removedMember)
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.findOneOrFail.mockResolvedValue({
+        ...removedMember,
+        isActive: true,
+      });
+
+      await updateAccountMember.execute('owner-1', 'member-2', {
+        isActive: true,
+      });
+
+      expect(memberEventsProducer.enqueueJoined).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          membership: expect.objectContaining({
+            id: 'member-2',
+            isActive: true,
+          }),
+          actorUserId: 'owner-1',
+        },
+      );
+      expect(memberEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    /**
+     * `isActive: true` sobre quien ya estaba activo no reactiva a nadie. Sin mirar el estado
+     * anterior, cada edición de rol o de puesto mandaría un aviso de "nuevo miembro".
+     */
+    it('update no anuncia nada al cambiar el rol de alguien que ya estaba activo', async () => {
+      const activeMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(activeMember)
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.findOneOrFail.mockResolvedValue({
+        ...activeMember,
+        roleId: ADMIN_ROLE.id,
+      });
+
+      await updateAccountMember.execute('owner-1', 'member-2', {
+        roleId: ADMIN_ROLE.id,
+        isActive: true,
+      });
+
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
+      expect(memberEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    });
   });
 
   /**
@@ -768,6 +917,49 @@ describe('casos de uso de miembros de organización', () => {
         NEW_USER.id,
         expect.objectContaining({ id: 'new-member-1' }),
       );
+    });
+
+    it('registra el aviso a propietarios y administradores y lo publica tras confirmar', async () => {
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(savedMembershipRow());
+
+      await addOrganizationMember.execute('owner-1', 'admin-account-1', {
+        email: NEW_USER.email,
+        roleId: MEMBER_ROLE.id,
+      });
+
+      expect(memberEventsProducer.enqueueJoined).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          membership: expect.objectContaining({ id: 'new-member-1' }),
+          actorUserId: 'owner-1',
+        },
+      );
+      expect(memberEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    /**
+     * El alta y el evento comparten transacción, así que un alta que no llega a escribirse no
+     * deja aviso: aquí se comprueba por el camino que la corta antes de abrirla.
+     */
+    it('no anuncia nada si el alta falla porque esa persona ya es miembro', async () => {
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne.mockResolvedValueOnce({
+        id: 'existing',
+        isActive: true,
+      });
+
+      await expect(
+        addOrganizationMember.execute('owner-1', 'admin-account-1', {
+          email: NEW_USER.email,
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
+      expect(memberEventsProducer.flushOutbox).not.toHaveBeenCalled();
     });
   });
 

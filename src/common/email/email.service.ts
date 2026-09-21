@@ -20,6 +20,7 @@ import {
   documentSignedTemplate,
   documentWatcherAddedTemplate,
   organizationInvitationTemplate,
+  organizationMemberJoinedTemplate,
   passwordResetOtpTemplate,
   registrationOtpTemplate,
   verificationCodeTemplate,
@@ -310,6 +311,60 @@ export class EmailService {
       to,
       EmailSubject.ORGANIZATION_INVITATION,
       organizationInvitationTemplate(organizationName, joinUrl),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /**
+   * Avisa a un propietario o administrador de que alguien se incorporó a su organización.
+   *
+   * Sin `replyTo`: el destinatario no tiene que responderle a nadie —es un aviso, no una
+   * solicitud—, y poner el correo del nuevo miembro invitaría a contestarle al buzón equivocado.
+   *
+   * @param to - Correo del propietario o administrador que recibe el aviso.
+   * @param recipientName - Nombre de quien recibe el aviso, para encabezar el mensaje.
+   * @param memberFullName - Nombre completo de quien se acaba de unir.
+   * @param memberEmail - Correo de quien se acaba de unir.
+   * @param organizationName - Nombre de visualización de la organización.
+   * @param roleName - Rol con el que quedó la nueva membresía.
+   * @param membersUrl - Enlace a la sección de miembros de la organización.
+   * @returns Nada.
+   *
+   * @throws {InternalServerErrorException} Si SendGrid rechaza el envío.
+   *
+   * @example
+   * ```ts
+   * await emailService.sendOrganizationMemberJoinedNotification(
+   *   'owner@empresa.com',
+   *   'Ana',
+   *   'Luis Pérez',
+   *   'luis@empresa.com',
+   *   'Empresa S.A.',
+   *   'MEMBER',
+   *   buildOrganizationMembersUrl('org-1'),
+   * );
+   * ```
+   */
+  async sendOrganizationMemberJoinedNotification(
+    to: string,
+    recipientName: string,
+    memberFullName: string,
+    memberEmail: string,
+    organizationName: string,
+    roleName: string,
+    membersUrl: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.ORGANIZATION_MEMBER_JOINED,
+      organizationMemberJoinedTemplate(
+        recipientName,
+        memberFullName,
+        memberEmail,
+        organizationName,
+        roleName,
+        membersUrl,
+      ),
       EmailType.NOTIFICATION,
     );
   }

@@ -4,8 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { OrganizationInvitationEntity } from './entities/organization-invitation.entity';
 import { AccountEntity } from './entities/account.entity';
@@ -16,6 +16,7 @@ import { INVITATION_STATUS_ENUM } from './enums/invitation-status.enum';
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
 import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
 import { OrganizationInvitationEventsProducer } from 'src/kafka/organization-invitation.producer';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 import { isDuplicateMembershipError } from './exceptions/organization.exceptions';
 
 const INVITATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 días — sin precedente en el repo, valor razonable para un enlace de invitación por correo.
@@ -55,6 +56,10 @@ export class OrganizationInvitationService {
 
     private readonly accountService: AccountService,
     private readonly invitationEventsProducer: OrganizationInvitationEventsProducer,
+    private readonly organizationMemberEventsProducer: OrganizationMemberEventsProducer,
+
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(params: CreateInvitationParams): Promise<void> {
@@ -146,6 +151,30 @@ export class OrganizationInvitationService {
     await this.finalizeAcceptance(invitation, user);
   }
 
+  /**
+   * Crea la membresía, marca la invitación como aceptada y anuncia la incorporación.
+   *
+   * Los tres pasos van en UNA transacción, y no por ahorrar viajes: una membresía creada con la
+   * invitación todavía PENDING dejaría el enlace utilizable por segunda vez, y una invitación
+   * ACCEPTED sin membresía dejaría a la persona fuera sin poder volver a entrar. El evento se
+   * registra ahí dentro por lo mismo (ver `OrganizationMemberEventsProducer`): un aviso de una
+   * incorporación que se deshizo es exactamente lo que la historia pide no mandar.
+   *
+   * Fuera de la transacción quedan los dos efectos que no son estado del dominio: publicar lo
+   * pendiente de la outbox y refrescar el catálogo cacheado en Redis. Ninguno de los dos debe
+   * poder revertir una incorporación ya confirmada.
+   *
+   * @param invitation - Invitación ya resuelta y comprobada como pendiente.
+   * @param user - Usuario que se une, resuelto por RFC.
+   * @returns Nada: la membresía queda activa y la invitación en `ACCEPTED`.
+   *
+   * @throws {ConflictException} (409) Si esa persona ya es miembro activo de la organización.
+   *
+   * @example
+   * ```ts
+   * await organizationInvitationService.finalizeAcceptance(invitation, user);
+   * ```
+   */
   async finalizeAcceptance(
     invitation: OrganizationInvitationEntity,
     user: UserEntity,
@@ -161,16 +190,38 @@ export class OrganizationInvitationService {
       throw new ConflictException('Ya eres miembro de esta organización');
     }
 
-    /**
-     * La comprobación de arriba lee y esto escribe: dos aceptaciones simultáneas del mismo enlace
-     * pasan las dos. La segunda choca contra el índice único de `accounts` y sale con el mismo
-     * 409 que habría dado la comprobación, en vez de con un error de Postgres.
-     */
-    const account = await this.saveMembershipOrConflict(invitation, user);
+    const account = await this.dataSource.transaction(async (manager) => {
+      /**
+       * La comprobación de arriba lee y esto escribe: dos aceptaciones simultáneas del mismo
+       * enlace pasan las dos. La segunda choca contra el índice único de `accounts` y sale con el
+       * mismo 409 que habría dado la comprobación, en vez de con un error de Postgres.
+       */
+      const created = await this.saveMembershipOrConflict(
+        manager,
+        invitation,
+        user,
+      );
+
+      invitation.status = INVITATION_STATUS_ENUM.ACCEPTED;
+      await manager
+        .getRepository(OrganizationInvitationEntity)
+        .save(invitation);
+
+      /**
+       * El actor es el propio invitado: nadie lo dio de alta, aceptó él. Quien lo invitó ya
+       * quedó registrado en `organization_invitations.invited_by` y en el evento `invited`.
+       */
+      await this.organizationMemberEventsProducer.enqueueJoined(manager, {
+        membership: created,
+        actorUserId: user.id,
+      });
+
+      return created;
+    });
+
     account.organization = invitation.organization;
 
-    invitation.status = INVITATION_STATUS_ENUM.ACCEPTED;
-    await this.invitationRepository.save(invitation);
+    await this.organizationMemberEventsProducer.flushOutbox();
 
     await this.accountService.appendAccountToCatalog(user.id, account);
   }
@@ -178,6 +229,7 @@ export class OrganizationInvitationService {
   /**
    * Inserta la membresía de quien acepta la invitación, traduciendo el duplicado a un 409.
    *
+   * @param manager - `EntityManager` de la transacción que consuma la invitación.
    * @param invitation - Invitación que se está consumando.
    * @param user - Usuario que se une, resuelto por RFC.
    * @returns La membresía guardada.
@@ -186,16 +238,19 @@ export class OrganizationInvitationService {
    *
    * @example
    * ```ts
-   * const account = await this.saveMembershipOrConflict(invitation, user);
+   * const account = await this.saveMembershipOrConflict(manager, invitation, user);
    * ```
    */
   private async saveMembershipOrConflict(
+    manager: EntityManager,
     invitation: OrganizationInvitationEntity,
     user: UserEntity,
   ): Promise<AccountEntity> {
+    const repository = manager.getRepository(AccountEntity);
+
     try {
-      return await this.accountRepository.save(
-        this.accountRepository.create({
+      return await repository.save(
+        repository.create({
           userId: user.id,
           accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
           organizationId: invitation.organizationId,

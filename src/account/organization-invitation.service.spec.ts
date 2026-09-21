@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { OrganizationInvitationService } from './organization-invitation.service';
 import { OrganizationInvitationEntity } from './entities/organization-invitation.entity';
 import { AccountEntity } from './entities/account.entity';
@@ -12,6 +12,7 @@ import { OrganizationEntity } from './entities/organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { AccountService } from './account.service';
 import { OrganizationInvitationEventsProducer } from 'src/kafka/organization-invitation.producer';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 import { INVITATION_STATUS_ENUM } from './enums/invitation-status.enum';
 
 function createMockRepository() {
@@ -19,6 +20,28 @@ function createMockRepository() {
     findOne: jest.fn(),
     create: jest.fn((data) => data),
     save: jest.fn(async (data) => ({ id: 'saved-id', ...data })),
+  };
+}
+
+/**
+ * `DataSource.transaction` simulado: corre el callback con un manager que devuelve los mismos
+ * repositorios simulados. No prueba el commit ni el rollback —eso es de Postgres—, sí que la
+ * secuencia escriba por el manager de la transacción y no por su repositorio propio.
+ */
+function createMockDataSource(repositoriesByEntity: Map<unknown, unknown>) {
+  const manager = {
+    getRepository: jest.fn((entity: unknown) =>
+      repositoriesByEntity.get(entity),
+    ),
+  };
+
+  return {
+    manager,
+    dataSource: {
+      transaction: jest.fn(async (work: (manager: unknown) => unknown) =>
+        work(manager),
+      ),
+    },
   };
 }
 
@@ -49,6 +72,10 @@ describe('OrganizationInvitationService', () => {
   let userRepository: ReturnType<typeof createMockRepository>;
   let accountService: { appendAccountToCatalog: jest.Mock };
   let invitationEventsProducer: { emitInvited: jest.Mock };
+  let memberEventsProducer: {
+    enqueueJoined: jest.Mock;
+    flushOutbox: jest.Mock;
+  };
 
   beforeEach(async () => {
     invitationRepository = createMockRepository();
@@ -57,6 +84,16 @@ describe('OrganizationInvitationService', () => {
     userRepository = createMockRepository();
     accountService = { appendAccountToCatalog: jest.fn() };
     invitationEventsProducer = { emitInvited: jest.fn() };
+    memberEventsProducer = {
+      enqueueJoined: jest.fn(),
+      flushOutbox: jest.fn(),
+    };
+    const { dataSource } = createMockDataSource(
+      new Map<unknown, unknown>([
+        [AccountEntity, accountRepository],
+        [OrganizationInvitationEntity, invitationRepository],
+      ]),
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -79,6 +116,11 @@ describe('OrganizationInvitationService', () => {
           provide: OrganizationInvitationEventsProducer,
           useValue: invitationEventsProducer,
         },
+        {
+          provide: OrganizationMemberEventsProducer,
+          useValue: memberEventsProducer,
+        },
+        { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
 

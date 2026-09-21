@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { RolesService } from 'src/roles/roles.service';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 
 import { AccountMemberService } from '../account-member.service';
 import { UpdateAccountMemberDto } from '../dto/update-account-member.dto';
@@ -15,12 +18,22 @@ import { AccountEntity } from '../entities/account.entity';
  * Antes de cualquier escritura se comprueba que la organización no quede sin administradores.
  * Esa comprobación sólo hace falta cuando el cambio puede quitar uno: cambiar el puesto de
  * alguien, o reactivarlo, nunca reduce el número de administradores activos.
+ *
+ * **Reactivar cuenta como incorporación** y publica el mismo `organization.member.joined` que el
+ * alta y la aceptación de una invitación: para quien administra la organización, alguien que fue
+ * dado de baja y vuelve es alguien que hoy está dentro y ayer no. Cambiarle el rol o el puesto a
+ * quien ya estaba activo no publica nada — no es una incorporación, y avisarlo convertiría el
+ * aviso en ruido.
  */
 @Injectable()
 export class UpdateAccountMemberUseCase {
   constructor(
     private readonly accountMemberService: AccountMemberService,
     private readonly rolesService: RolesService,
+    private readonly organizationMemberEventsProducer: OrganizationMemberEventsProducer,
+
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async execute(
@@ -59,12 +72,43 @@ export class UpdateAccountMemberUseCase {
       );
     }
 
-    await this.accountMemberService.applyMembershipUpdate(id, dto);
+    /**
+     * Se mira el estado ANTERIOR: `dto.isActive === true` sobre quien ya estaba activo no
+     * reactiva a nadie, y publicarlo mandaría un aviso de incorporación cada vez que alguien
+     * edita el puesto de un miembro.
+     */
+    const reactivates = dto.isActive === true && !member.isActive;
+
+    const updated = await this.dataSource.transaction(async (manager) => {
+      await this.accountMemberService.applyMembershipUpdate(id, dto, manager);
+
+      /**
+       * Se relee dentro de la transacción y no se reutiliza `member`: el evento lleva el `roleId`
+       * con el que la persona queda dentro, que puede ser el que este mismo update acaba de
+       * cambiar.
+       */
+      const refreshed = await manager
+        .getRepository(AccountEntity)
+        .findOneOrFail({ where: { id } });
+
+      if (reactivates) {
+        await this.organizationMemberEventsProducer.enqueueJoined(manager, {
+          membership: refreshed,
+          actorUserId: callerId,
+        });
+      }
+
+      return refreshed;
+    });
+
+    if (reactivates) {
+      await this.organizationMemberEventsProducer.flushOutbox();
+    }
 
     return {
       success: true,
       message: 'Membresía actualizada correctamente',
-      data: await this.accountMemberService.findByIdOrFail(id),
+      data: updated,
     };
   }
 }

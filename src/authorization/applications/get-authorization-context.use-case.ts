@@ -7,8 +7,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { isStaticCatalogPermission } from 'src/roles/permission-catalog.util';
+import { PERSONAL_ACCOUNT_PERMISSION_KEYS } from 'src/roles/personal-account-permissions';
 import { RolesService } from 'src/roles/roles.service';
 import { STATIC_PERMISSION_KEY_ENUM } from 'src/roles/static-permission-catalog';
 
@@ -22,6 +24,13 @@ import { AuthorizationContextData } from '../interfaces/response/authorization-c
  * acciones que correspondan con lo que el backend va a aceptar. **No es una puerta**: cada
  * endpoint vuelve a validar su propio permiso, y ocultar un botón no protege nada. Que esto
  * responda 200 no autoriza ninguna operación.
+ *
+ * **Una cuenta PERSONAL no responde con los permisos de su rol.** Nace con el rol de sistema
+ * OWNER, que trae el catálogo entero, así que publicarlos tal cual le pintaría un menú con
+ * "Administrar miembros" y "Roles y permisos" de una organización que no tiene. Lo que se
+ * publica es el recorte del catálogo que le corresponde por ser personal (ver
+ * `personal-account-permissions.ts`), el MISMO que después aplica `AuthorizationService` al
+ * autorizar cada endpoint: el menú y la API dicen lo mismo porque leen lo mismo.
  *
  * Devuelve SÓLO las claves del catálogo estático. La base conserva además la rejilla CRUD
  * heredada del seed anterior (`USER.READ`, `ORGANIZATION.CREATE`, `DOCUMENT.DELETE`…), que no
@@ -92,36 +101,48 @@ export class GetAuthorizationContextUseCase {
         organizationId: membership.organizationId,
         roleId: membership.roleId,
         roleName: membership.role?.name ?? null,
-        permissions: await this.resolveEffectivePermissions(membership.roleId),
+        permissions: await this.resolveEffectivePermissions(membership),
       },
     };
   }
 
   /**
-   * Claves del catálogo estático que otorga un rol.
+   * Claves del catálogo estático que la membresía activa tiene concedidas.
    *
-   * Una membresía sin rol devuelve la lista vacía en vez de fallar: es una situación prevista
-   * (`accounts.role_id` es nullable) y significa exactamente "todavía no puede hacer nada", que
-   * es un menú vacío y no un error de pantalla.
+   * Una cuenta PERSONAL no consulta la base: sus permisos son los del catálogo que no exigen una
+   * organización, siempre los mismos, y no dependen ni de su rol ni de que lo tenga. Eso la deja
+   * con Planes, Suscripciones y sus documentos, y sin nada de administración.
    *
-   * @param roleId - Rol de la membresía activa.
-   * @returns Las claves del catálogo, en el orden en que `listPermissionsByRoleIds` las ordena.
+   * Una membresía de ORGANIZATION sin rol devuelve la lista vacía en vez de fallar: es una
+   * situación prevista (`accounts.role_id` es nullable) y significa exactamente "todavía no
+   * puede hacer nada", que es un menú vacío y no un error de pantalla.
+   *
+   * @param membership - Membresía activa del usuario.
+   * @returns Las claves del catálogo, en el orden en que `listPermissionsByRoleIds` las ordena,
+   *   o en el del catálogo si la cuenta es personal.
    *
    * @throws {QueryFailedError} Si la consulta contra Postgres falla.
    *
    * @example
    * ```ts
-   * await this.resolveEffectivePermissions('role-1'); // ['BILLING.READ', 'MEMBER.READ', …]
+   * await this.resolveEffectivePermissions(personalAccount);
+   * // ['BILLING.READ', 'BILLING.MANAGE', 'DOCUMENT.CREATE', …]
    * ```
    */
   private async resolveEffectivePermissions(
-    roleId: string | null,
+    membership: AccountEntity,
   ): Promise<STATIC_PERMISSION_KEY_ENUM[]> {
-    if (!roleId) return [];
+    if (membership.accountType === ACCOUNT_TYPE_ENUM.PERSONAL) {
+      return [...PERSONAL_ACCOUNT_PERMISSION_KEYS];
+    }
 
-    const byRole = await this.rolesService.listPermissionsByRoleIds([roleId]);
+    if (!membership.roleId) return [];
 
-    return (byRole.get(roleId) ?? [])
+    const byRole = await this.rolesService.listPermissionsByRoleIds([
+      membership.roleId,
+    ]);
+
+    return (byRole.get(membership.roleId) ?? [])
       .map((permission) => permission.key)
       .filter(isStaticCatalogPermission) as STATIC_PERMISSION_KEY_ENUM[];
   }

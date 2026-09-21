@@ -35,7 +35,13 @@ export class UpdateAccountUseCase {
       ACTION_KEY_ENUM.UPDATE,
     );
 
+    /**
+     * `name` es el nombre de visualización y cuenta como cambio de perfil igual que los demás:
+     * sin él en esta lista, renombrar la organización en el selector se guardaba en base pero no
+     * refrescaba el catálogo cacheado de nadie — ni siquiera el de quien acababa de editarlo.
+     */
     const hasOrganizationDetailChanges =
+      updateAccountDto.name !== undefined ||
       updateAccountDto.organizationName !== undefined ||
       updateAccountDto.address !== undefined ||
       updateAccountDto.rfc !== undefined ||

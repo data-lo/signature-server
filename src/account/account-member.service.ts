@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 
 // DTOs
 import { CreateAccountMemberDto } from './dto/create-account-member.dto';
@@ -170,6 +170,9 @@ export class AccountMemberService {
    *
    * @param dto - Organización, usuario, rol y puesto de la membresía.
    * @param invitedUser - Usuario invitado, de donde se copian las credenciales sincronizadas.
+   * @param manager - `EntityManager` de la transacción del llamador, cuando el alta va junto con
+   *   el evento de la outbox que la anuncia (ver `OrganizationMemberEventsProducer`). Sin él se
+   *   escribe con el repositorio propio, como hasta ahora.
    * @returns La membresía guardada.
    *
    * @throws {DuplicateOrganizationMembershipException} (409) Si ese usuario ya tiene una
@@ -180,18 +183,22 @@ export class AccountMemberService {
    * const membership = await accountMemberService.saveMembership(
    *   { organizationId: 'org-1', userId: 'user-1', roleId: 'role-1' },
    *   invitedUser,
+   *   manager,
    * );
    * ```
    */
   async saveMembership(
     dto: CreateAccountMemberDto,
     invitedUser: UserEntity,
+    manager?: EntityManager,
   ): Promise<AccountEntity> {
     const isActive = dto.isActive ?? true;
+    const repository =
+      manager?.getRepository(AccountEntity) ?? this.accountRepository;
 
     try {
-      return await this.accountRepository.save(
-        this.accountRepository.create({
+      return await repository.save(
+        repository.create({
           userId: dto.userId,
           accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
           organizationId: dto.organizationId,
@@ -367,12 +374,22 @@ export class AccountMemberService {
     return user;
   }
 
-  /** Escribe sólo los campos presentes; `status` se mantiene coherente con `isActive`. */
+  /**
+   * Escribe sólo los campos presentes; `status` se mantiene coherente con `isActive`.
+   *
+   * Acepta el `manager` de una transacción porque reactivar a alguien es una incorporación como
+   * cualquier otra y tiene que anunciarse con el mismo evento, dentro de la misma transacción
+   * (ver `OrganizationMemberEventsProducer`).
+   */
   async applyMembershipUpdate(
     id: string,
     dto: UpdateAccountMemberDto,
+    manager?: EntityManager,
   ): Promise<void> {
-    await this.accountRepository.update(id, {
+    const repository =
+      manager?.getRepository(AccountEntity) ?? this.accountRepository;
+
+    await repository.update(id, {
       ...(dto.roleId && { roleId: dto.roleId }),
       ...(dto.position !== undefined && { position: dto.position }),
       ...(dto.isActive !== undefined && {
@@ -499,7 +516,7 @@ export class AccountMemberService {
 
     if (activeAdminCount <= 1) {
       throw new ConflictException(
-        'No puedes cambiar el rol ni eliminar al único administrador activo de la organización',
+        'No puedes cambiar el rol ni desactivar al único administrador activo de la organización',
       );
     }
   }

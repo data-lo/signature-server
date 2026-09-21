@@ -453,3 +453,73 @@ export const documentCancellationPendingTemplate = (
 </body>
 </html>
 `;
+
+/**
+ * Aviso a propietarios y administradores de que alguien se incorporó a su organización.
+ *
+ * Es informativo y no una acción a resolver: quien lo recibe no tiene que aprobar nada —la
+ * persona ya está dentro—, sólo enterarse y, si algo no cuadra, ir a la pantalla de miembros.
+ * Por eso el botón lleva a la lista y no al perfil del nuevo miembro.
+ */
+export const organizationMemberJoinedTemplate = (
+  recipientName: string,
+  memberFullName: string,
+  memberEmail: string,
+  organizationName: string,
+  roleName: string,
+  membersUrl: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #2E7D32; margin-top: 0;">Nuevo miembro en ${organizationName}</h2>
+
+    <p style="color: #555555;">
+      Hola ${recipientName}, <strong>${memberFullName}</strong> se unió a
+      <strong>${organizationName}</strong> en Firmalo.
+    </p>
+
+    <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 24px 0;">
+      <tr>
+        <td style="color: #999999; font-size: 13px; padding: 6px 0;">Nombre</td>
+        <td style="color: #555555; font-size: 13px; padding: 6px 0;">${memberFullName}</td>
+      </tr>
+      <tr>
+        <td style="color: #999999; font-size: 13px; padding: 6px 0;">Correo</td>
+        <td style="color: #555555; font-size: 13px; padding: 6px 0;">${memberEmail}</td>
+      </tr>
+      <tr>
+        <td style="color: #999999; font-size: 13px; padding: 6px 0;">Rol asignado</td>
+        <td style="color: #555555; font-size: 13px; padding: 6px 0;">${roleName}</td>
+      </tr>
+    </table>
+
+    <table role="presentation" style="margin: 32px 0;">
+      <tr>
+        <td>
+          <a href="${membersUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
+            Ver miembros de la organización
+          </a>
+        </td>
+      </tr>
+    </table>
+
+    <p style="color: #555555; font-size: 13px;">
+      O copia este enlace y pégalo en tu navegador:
+      <a href="${membersUrl}" style="color: #2E7D32;">${membersUrl}</a>
+    </p>
+
+    <p style="color: #999999; font-size: 12px;">
+      Recibes este aviso porque administras ${organizationName}.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
