@@ -10,11 +10,15 @@ import { RESOURCE_KEY_ENUM } from '../../roles/enums/resource-key.enum';
  * ahí lo toma `@CurrentAuthorization()` y lo recibe el caso de uso. Nadie más vuelve a resolver
  * la membresía: es el contexto ya validado, no una pista para volver a comprobar.
  *
- * `organizationId` es `null` cuando la cuenta activa es PERSONAL. No es un caso degradado: el
- * catálogo estático gobierna las membresías de organización, pero una cuenta personal también
- * tiene rol (OWNER) y también pasa por aquí, y su dueño es el único que puede actuar sobre ella.
- * Una Policy que compare organizaciones tiene que contar con el `null` — ver
+ * `organizationId` es `null` cuando la cuenta activa es PERSONAL. No es un caso degradado: una
+ * cuenta personal también pasa por aquí, y su dueño es el único que puede actuar sobre ella. Una
+ * Policy que compare organizaciones tiene que contar con el `null` — ver
  * `DocumentAuthorizationPolicy`.
+ *
+ * `roleId` también puede llegar `null`, y sólo en ese mismo caso: los permisos de una cuenta
+ * PERSONAL salen del catálogo y no de su rol (ver `personal-account-permissions.ts`), así que
+ * tener rol dejó de ser condición para autorizarla. En una cuenta de organización siempre viene
+ * informado, porque ahí sin rol no hay permisos.
  */
 export interface AuthorizationContext {
   /** Usuario autenticado (`JwtPayload.sub`). */
@@ -26,8 +30,11 @@ export interface AuthorizationContext {
   /** Fila de `accounts`: la membresía concreta desde la que actúa el usuario. */
   accountId: string;
 
-  /** Rol de esa membresía, del que salieron los scopes. */
-  roleId: string;
+  /**
+   * Rol de esa membresía. `null` en una cuenta PERSONAL sin rol asignado: sus scopes no salieron
+   * de un rol sino del catálogo.
+   */
+  roleId: string | null;
 
   /** Recurso que declaró el endpoint. */
   resource: RESOURCE_KEY_ENUM;
