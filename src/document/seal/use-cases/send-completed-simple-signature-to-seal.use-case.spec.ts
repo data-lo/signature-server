@@ -7,7 +7,7 @@ import { SealEntity } from '../entities/seal.entity';
 import { VerificationCodeEntity } from '../../entities/verification-code.entity';
 import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../../enum/collaborator-status.enum';
 import { SealApiService } from '../services/seal-api.service';
 import { IncompleteSimpleSignatureDataException } from '../exceptions/seal.exceptions';
 import { SendCompletedSimpleSignatureToSealUseCase } from './send-completed-simple-signature-to-seal.use-case';
@@ -66,8 +66,8 @@ function givenSigner(overrides: Record<string, unknown> = {}) {
     id: 'collab-1',
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
-    status: SIGNEE_STATUS_ENUM.SIGNED,
-    signedAt: new Date('2026-08-20T15:04:05.000Z'),
+    status: COLLABORATOR_STATUS_ENUM.SIGNED,
+    resolvedAt: new Date('2026-08-20T15:04:05.000Z'),
     signatureSnapshotObjectKey: 'snapshot-collab-1.png',
     account: {
       user: {
@@ -360,7 +360,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
             {
               id: 'watcher-1',
               colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
-              status: SIGNEE_STATUS_ENUM.PENDING,
+              status: COLLABORATOR_STATUS_ENUM.PENDING,
             },
           ],
         }),
@@ -413,7 +413,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
             givenSigner(),
             givenSigner({
               id: 'collab-2',
-              status: SIGNEE_STATUS_ENUM.PENDING,
+              status: COLLABORATOR_STATUS_ENUM.PENDING,
             }),
           ],
         }),

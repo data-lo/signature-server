@@ -28,7 +28,7 @@ export class ProcessDocumentSentToSignEventUseCase {
 
   async execute(payload: DocumentEventPayload): Promise<void> {
     this.logger.log(
-      `Documento enviado a firma: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.timestamp}`,
+      `Documento enviado a firma: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
     /**

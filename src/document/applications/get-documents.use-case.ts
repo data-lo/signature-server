@@ -11,7 +11,7 @@ import { DocumentEntity } from '../entities/document.entity';
 import { DocumentUserPreferenceEntity } from '../preferences/document-user-preference.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import {
   DOCUMENT_SORT_FIELD_ENUM,
   SORT_DIRECTION_ENUM,
@@ -362,7 +362,7 @@ export class GetDocumentsUseCase {
          * aparecer como tarea.
          */
         qb.andWhere('document.status = :pendingStatus', {
-          pendingStatus: DOCUMENT_STATUS_ENUM.PENDING,
+          pendingStatus: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
         }).andWhere(
           `document.id IN (
             SELECT c.document_id FROM collaborators c
@@ -374,7 +374,7 @@ export class GetDocumentsUseCase {
           )`,
           {
             actingTypes: ACTING_COLLABORATOR_TYPES,
-            pendingSigneeStatus: SIGNEE_STATUS_ENUM.PENDING,
+            pendingSigneeStatus: COLLABORATOR_STATUS_ENUM.PENDING,
           },
         );
         return;
@@ -497,8 +497,8 @@ export class GetDocumentsUseCase {
     const owesAnswer = mine.some(
       (c) =>
         ACTING_COLLABORATOR_TYPES.includes(c.colaboratorType) &&
-        c.status === SIGNEE_STATUS_ENUM.PENDING &&
-        document.status === DOCUMENT_STATUS_ENUM.PENDING,
+        c.status === COLLABORATOR_STATUS_ENUM.PENDING &&
+        document.status === DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
     );
     if (owesAnswer) return DOCUMENT_PARTICIPATION_ENUM.REQUIRES_MY_SIGNATURE;
 

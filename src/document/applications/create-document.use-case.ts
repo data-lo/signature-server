@@ -160,7 +160,7 @@ export class CreateDocumentUseCase {
           fileName: file.originalname,
           status: In([
             DOCUMENT_STATUS_ENUM.CREATED,
-            DOCUMENT_STATUS_ENUM.PENDING,
+            DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
           ]),
         },
       });

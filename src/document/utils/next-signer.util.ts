@@ -1,6 +1,6 @@
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 
 /**
  * Único punto de verdad para "a quién le toca firmar": el colaborador (colaboratorType=SIGNER)
@@ -15,7 +15,7 @@ export function getNextPendingSigner(
     collaborators
       .filter((c) => c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER)
       .sort((a, b) => (a.signingOrder ?? 0) - (b.signingOrder ?? 0))
-      .find((c) => c.status === SIGNEE_STATUS_ENUM.PENDING) ?? null
+      .find((c) => c.status === COLLABORATOR_STATUS_ENUM.PENDING) ?? null
   );
 }
 
@@ -32,7 +32,7 @@ export function isSignerTurn(
   isSequential = true,
 ): boolean {
   if (!isSequential) {
-    return signer.status === SIGNEE_STATUS_ENUM.PENDING;
+    return signer.status === COLLABORATOR_STATUS_ENUM.PENDING;
   }
   const next = getNextPendingSigner(allSigners);
   return next?.id === signer.id;

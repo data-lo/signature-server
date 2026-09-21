@@ -12,7 +12,7 @@ import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { VerificationCodeEntity } from '../entities/verification-code.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { MinioService } from 'src/common/minio/minio.service';
 import { HashService } from 'src/common/hash/hash.service';
@@ -110,7 +110,7 @@ function mockDocument(overrides: Partial<DocumentEntity> = {}): DocumentEntity {
     fileName: 'contrato.pdf',
     objectKey: 'object-key-1',
     originalHash: 'hash-original',
-    status: DOCUMENT_STATUS_ENUM.PENDING,
+    status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
     isSequential: true,
     totalSigners: 1,
     completedSignersCount: 0,
@@ -133,7 +133,7 @@ function buildFielSigner(
     email: null,
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
     signatureType: SIGNATURE_TYPE_ENUM.FIEL,
-    status: SIGNEE_STATUS_ENUM.PENDING,
+    status: COLLABORATOR_STATUS_ENUM.PENDING,
     signingOrder: 0,
     ipAddress: '127.0.0.1',
     account: {
@@ -609,7 +609,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       id: 'p-a',
       userId: 'user-a',
       signingOrder: 0,
-      status: SIGNEE_STATUS_ENUM.SIGNED,
+      status: COLLABORATOR_STATUS_ENUM.SIGNED,
       advancedSignature: {
         originalHash: 'hash-original',
         signatureBase64: 'firma-de-user-a',
@@ -682,7 +682,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       id: 'p-a',
       userId: 'user-a',
       signingOrder: 0,
-      status: SIGNEE_STATUS_ENUM.SIGNED,
+      status: COLLABORATOR_STATUS_ENUM.SIGNED,
       advancedSignature: {
         originalHash: 'hash-original',
         signatureBase64: 'firma-de-user-a',
@@ -742,7 +742,7 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
       id: 'p-a',
       userId: 'user-a',
       signingOrder: 0,
-      status: SIGNEE_STATUS_ENUM.SIGNED,
+      status: COLLABORATOR_STATUS_ENUM.SIGNED,
       advancedSignature: {
         originalHash: 'hash-original',
         signatureBase64: 'firma-de-user-a',

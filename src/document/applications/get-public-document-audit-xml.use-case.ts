@@ -258,7 +258,7 @@ export class GetPublicDocumentAuditXmlUseCase {
       // registro y sólo respalda a las filas donde la canónica falta (mismo criterio que el envío
       // de firmas simples a Seal Service).
       curp: user?.personalInformation?.curp ?? user?.nationalId ?? null,
-      signedAt: toIsoStringOrNull(collaborator.signedAt),
+      signedAt: toIsoStringOrNull(collaborator.resolvedAt),
       signatureType: collaborator.signatureType ?? null,
       status: collaborator.status,
       ipAddress: collaborator.ipAddress ?? null,

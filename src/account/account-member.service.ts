@@ -91,6 +91,58 @@ export class AccountMemberService {
     });
   }
 
+  /**
+   * Membresía ACTIVA de un usuario en una organización, sólo si su rol concede `resource+action`.
+   *
+   * Es la contraparte de `assertHasOrganizationPermission` para preguntar por OTRO usuario y no
+   * por quien llama: al asignar a alguien una responsabilidad dentro de la organización —hoy, el
+   * reviewer de un documento— hay que comprobar que esa persona pueda ejercerla, y eso son dos
+   * cosas a la vez (que siga siendo miembro y que su rol lo habilite) que no tiene sentido
+   * preguntar por separado.
+   *
+   * Devuelve `null` en vez de lanzar, y a propósito: quien llama sabe qué significa el hueco en
+   * su contexto —"el aprobador elegido ya no está en la organización"— y puede redactar un
+   * mensaje que le sirva a quien lo lea. Aquí ese mensaje sería genérico.
+   *
+   * @param userId - Usuario del que se pregunta.
+   * @param organizationId - Organización en la que debe ser miembro activo.
+   * @param resource - Recurso del catálogo de permisos.
+   * @param action - Acción sobre ese recurso.
+   * @returns La membresía activa, o `null` si no existe, no tiene rol o el rol no concede el permiso.
+   *
+   * @throws {QueryFailedError} Si la consulta contra Postgres falla.
+   *
+   * @example
+   * ```ts
+   * const membership = await accountMemberService.findActiveMembershipWithPermission(
+   *   reviewerUserId,
+   *   organizationId,
+   *   RESOURCE_KEY_ENUM.DOCUMENT,
+   *   ACTION_KEY_ENUM.APPROVE,
+   * );
+   * ```
+   */
+  async findActiveMembershipWithPermission(
+    userId: string,
+    organizationId: string,
+    resource: RESOURCE_KEY_ENUM,
+    action: ACTION_KEY_ENUM,
+  ): Promise<AccountEntity | null> {
+    const membership = await this.accountRepository.findOne({
+      where: { userId, organizationId, isActive: true },
+    });
+
+    if (!membership) return null;
+
+    const hasPermission = await this.rolesService.hasPermission(
+      membership.roleId,
+      resource,
+      action,
+    );
+
+    return hasPermission ? membership : null;
+  }
+
   /** Usuario por id, exigiendo que exista. */
   async findUserOrFail(userId: string): Promise<UserEntity> {
     const user = await this.userRepository.findOne({ where: { id: userId } });

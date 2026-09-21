@@ -6,7 +6,7 @@ import { AUDIT_TYPE_ENUM } from 'src/audit-chain/enums/audit-type.enum';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from 'src/document/enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
 import { DocumentTransactionService } from 'src/document/document-transaction.service';
 
 import { DocumentEventAuditService } from '../document-event-audit.service';
@@ -44,7 +44,7 @@ export class ProcessDocumentCollaboratorSignedEventUseCase {
 
   async execute(payload: DocumentCollaboratorSignedPayload): Promise<void> {
     this.logger.log(
-      `Documento firmado por el colaborador ${payload.collaboratorId}: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.timestamp}`,
+      `Documento firmado por el colaborador ${payload.collaboratorId}: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
     try {
@@ -82,7 +82,7 @@ export class ProcessDocumentCollaboratorSignedEventUseCase {
   ): Promise<void> {
     const allSigned =
       signers.length > 0 &&
-      signers.every((s) => s.status === SIGNEE_STATUS_ENUM.SIGNED);
+      signers.every((s) => s.status === COLLABORATOR_STATUS_ENUM.SIGNED);
     const hasAdvancedSignature = signers.some(
       (s) => s.signatureType === SIGNATURE_TYPE_ENUM.FIEL,
     );

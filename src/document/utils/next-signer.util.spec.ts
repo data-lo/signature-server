@@ -1,6 +1,6 @@
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { getNextPendingSigner, isSignerTurn } from './next-signer.util';
 
 function buildCollaborator(
@@ -10,7 +10,7 @@ function buildCollaborator(
     id: 'p',
     documentId: 'doc-1',
     colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
-    status: SIGNEE_STATUS_ENUM.PENDING,
+    status: COLLABORATOR_STATUS_ENUM.PENDING,
     signingOrder: 0,
     ...overrides,
   } as CollaboratorEntity;
@@ -33,7 +33,7 @@ describe('next-signer.util', () => {
         buildCollaborator({
           id: 'p-1',
           signingOrder: 0,
-          status: SIGNEE_STATUS_ENUM.SIGNED,
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
         }),
         buildCollaborator({ id: 'p-2', signingOrder: 1 }),
       ];
@@ -63,7 +63,7 @@ describe('next-signer.util', () => {
       const signers = [
         buildCollaborator({
           id: 'p-1',
-          status: SIGNEE_STATUS_ENUM.SIGNED,
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
         }),
       ];
 
@@ -95,7 +95,7 @@ describe('next-signer.util', () => {
     it('con isSequential=false, sigue siendo false para un firmante que ya no está PENDING', () => {
       const signer = buildCollaborator({
         id: 'p-1',
-        status: SIGNEE_STATUS_ENUM.SIGNED,
+        status: COLLABORATOR_STATUS_ENUM.SIGNED,
       });
 
       expect(isSignerTurn(signer, [signer], false)).toBe(false);

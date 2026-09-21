@@ -11,6 +11,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   Min,
   ValidateIf,
@@ -19,8 +20,7 @@ import {
 
 /**
  * Vocabulario del payload en inglés (pedido por la historia de frontend), distinto de los
- * enums internos del dominio (`SIGNATURE_TYPE_ENUM`/`COLABORATOR_TYPE_ENUM`, en
- * español/minúsculas) — el mapeo entre ambos vive en `CreateDocumentSignatureFlowUseCase`.
+ * enums internos del dominio (`SIGNATURE_TYPE_ENUM`/`COLABORATOR_TYPE_ENUM`) — el mapeo entre ambos vive en `CreateDocumentSignatureFlowUseCase`.
  */
 export enum PAYLOAD_SIGNATURE_TYPE_ENUM {
   SIMPLE = 'SIMPLE',
@@ -136,6 +136,34 @@ export class DocumentDataDto {
   @IsOptional()
   @IsBoolean()
   requiresApproval?: boolean;
+
+  /**
+   * Usuario que aprobará el documento antes de que salga a firma (historia "Implementar flujo de
+   * aprobación previo al proceso de firma"). Es el `users.id` del aprobador, no el id de su
+   * membresía: el mismo usuario puede pertenecer a varias organizaciones y quien lo elige en la
+   * pantalla lo conoce como persona, no como cuenta.
+   *
+   * **Obligatorio cuando `requiresApproval` es `true`.** Se valida acá con `ValidateIf` para que
+   * el rechazo llegue como un 400 de validación —con el nombre del campo— y no como una excepción
+   * de negocio a medio camino del caso de uso. Lo que NO se puede comprobar aquí es si ese
+   * usuario existe, si tiene permiso para aprobar y si pertenece a la organización activa: eso
+   * necesita base de datos y vive en `CreateDocumentSignatureFlowUseCase`.
+   *
+   * Con `requiresApproval` en `false` se **rechaza** si llega con valor, en vez de ignorarlo: un
+   * cliente que manda aprobador y a la vez dice que no hace falta aprobación se está
+   * contradiciendo, y adivinar cuál de las dos cosas quería es justo lo que produce documentos
+   * que nadie entiende después. Es el mismo criterio con el que este DTO ya trata
+   * `requiresDifferentSignatures` cuando contradice al tipo de firma.
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Usuario que aprobará el documento. Obligatorio si `requiresApproval` es true; debe omitirse si es false.',
+  })
+  @ValidateIf((data: DocumentDataDto) => data.requiresApproval === true)
+  @IsUUID()
+  @IsNotEmpty()
+  reviewerUserId?: string;
 
   @ApiPropertyOptional({
     default: true,

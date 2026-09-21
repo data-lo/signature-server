@@ -7,7 +7,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { AdvancedSignaturePublicViewData } from '../interfaces/responses/advanced-signature-public-view-response';
 import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { DocumentService } from '../document.service';
@@ -51,8 +51,8 @@ export class GetPublicAdvancedSignatureUseCase {
     if (
       !collaborator ||
       collaborator.signatureType !== SIGNATURE_TYPE_ENUM.FIEL ||
-      collaborator.status !== SIGNEE_STATUS_ENUM.SIGNED ||
-      !collaborator.signedAt
+      collaborator.status !== COLLABORATOR_STATUS_ENUM.SIGNED ||
+      !collaborator.resolvedAt
     ) {
       throw new NotFoundException('Firma avanzada no encontrada');
     }
@@ -71,7 +71,7 @@ export class GetPublicAdvancedSignatureUseCase {
         signerName: certificate?.name ?? collaboratorDisplayName(collaborator),
         rfc: certificate?.rfc ?? null,
         certificateSerialNumber: certificate?.serialNumber ?? null,
-        signedAt: collaborator.signedAt.toISOString(),
+        signedAt: collaborator.resolvedAt.toISOString(),
       },
     };
   }

@@ -24,12 +24,17 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 // DTOs
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import { RejectDocumentApprovalDto } from './dto/reject-document-approval.dto';
 import { VerifyCodeDto } from './dto/verify-code.dto';
 import { SignDocumentDto } from './dto/sign-document.dto';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 
 // Use cases
+import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
+import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
+import { ApiApproveDocument } from './docs/api-approve-document.docs';
+import { ApiRejectDocumentApproval } from './docs/api-reject-document-approval.docs';
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
@@ -109,6 +114,8 @@ export class DocumentController {
     private readonly getDocuments: GetDocumentsUseCase,
     private readonly getDocument: GetDocumentUseCase,
     private readonly submitForAuthorizationUseCase: SubmitDocumentForAuthorizationUseCase,
+    private readonly approveDocumentUseCase: ApproveDocumentUseCase,
+    private readonly rejectDocumentApprovalUseCase: RejectDocumentApprovalUseCase,
     private readonly signDocument: SignDocumentUseCase,
     private readonly linkDocumentCollaborator: LinkDocumentCollaboratorUseCase,
     private readonly requestDocumentVerificationCode: RequestDocumentVerificationCodeUseCase,
@@ -266,6 +273,40 @@ export class DocumentController {
     @Param('id') id: string,
   ) {
     return this.submitForAuthorizationUseCase.execute(id, user.sub);
+  }
+
+  /**
+   * Decisión del reviewer sobre un documento que requiere aprobación (historia "Implementar flujo
+   * de aprobación previo al proceso de firma").
+   *
+   * Sin `@RequirePermission(DOCUMENT, APPROVE)`: ese permiso es lo que habilita a alguien a **ser
+   * elegido** aprobador, y ya se comprobó al crear el documento (ver `DocumentReviewerService`).
+   * Lo que autoriza esta petición concreta es ser el reviewer ASIGNADO a este documento, que es
+   * una pregunta sobre el recurso y no sobre el rol — por eso la resuelve el caso de uso, igual
+   * que hacen firmar y rechazar. Exigir además el permiso dejaría fuera al aprobador al que se lo
+   * quitaron después de asignárselo, con un documento atascado y nadie que pueda destrabarlo.
+   */
+  @Post(':documentId/approval/approve')
+  @ApiApproveDocument()
+  approveDocument(
+    @CurrentUser() user: JwtPayload,
+    @Param('documentId') documentId: string,
+  ) {
+    return this.approveDocumentUseCase.execute(documentId, user.sub);
+  }
+
+  @Post(':documentId/approval/reject')
+  @ApiRejectDocumentApproval()
+  rejectDocumentApproval(
+    @CurrentUser() user: JwtPayload,
+    @Param('documentId') documentId: string,
+    @Body() dto?: RejectDocumentApprovalDto,
+  ) {
+    return this.rejectDocumentApprovalUseCase.execute(
+      documentId,
+      user.sub,
+      dto?.resolutionNote,
+    );
   }
 
   @Patch(':id/sign')

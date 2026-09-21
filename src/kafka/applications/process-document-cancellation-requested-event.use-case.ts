@@ -22,7 +22,7 @@ export class ProcessDocumentCancellationRequestedEventUseCase {
 
   async execute(payload: DocumentEventPayload): Promise<void> {
     this.logger.log(
-      `Documento cancelación solicitada: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.timestamp}`,
+      `Documento cancelación solicitada: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
     try {

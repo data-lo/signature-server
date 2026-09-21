@@ -3,6 +3,10 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 export enum AuditAction {
   DOCUMENT_CREATED = 'DOCUMENT_CREATED',
+  /** El reviewer autorizó que el documento salga a firma. */
+  DOCUMENT_APPROVED = 'DOCUMENT_APPROVED',
+  /** El reviewer negó la autorización: el flujo de firma no llega a empezar. */
+  DOCUMENT_APPROVAL_REJECTED = 'DOCUMENT_APPROVAL_REJECTED',
   DOCUMENT_SENT_TO_SIGN = 'DOCUMENT_SENT_TO_SIGN',
   DOCUMENT_SIGNED = 'DOCUMENT_SIGNED',
   DOCUMENT_CANCELLATION_REQUESTED = 'DOCUMENT_CANCELLATION_REQUESTED',

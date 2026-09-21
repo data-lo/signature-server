@@ -9,7 +9,7 @@ import { DocumentAuthorizationPolicy } from '../policies/document-authorization.
 
 import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
-import { SIGNEE_STATUS_ENUM } from '../enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import {
@@ -118,9 +118,9 @@ export class GetDocumentUseCase {
     );
 
     const canAct =
-      document.status === DOCUMENT_STATUS_ENUM.PENDING &&
+      document.status === DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE &&
       isMyTurn &&
-      myParticipant?.status === SIGNEE_STATUS_ENUM.PENDING;
+      myParticipant?.status === COLLABORATOR_STATUS_ENUM.PENDING;
 
     const canRequestCancellation =
       isCreator && document.status === DOCUMENT_STATUS_ENUM.SIGNED;
@@ -214,7 +214,7 @@ export class GetDocumentUseCase {
               name: collaboratorDisplayName(c),
               email: collaboratorEmail(c),
               status: c.status,
-              signedAt: c.signedAt,
+              resolvedAt: c.resolvedAt,
               actualHash: transaction?.actualHash ?? null,
               chainHash: transaction?.chainHash ?? null,
               transactionTimeStamp: transaction?.timeStamp ?? null,

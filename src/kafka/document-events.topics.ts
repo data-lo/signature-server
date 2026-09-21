@@ -1,5 +1,15 @@
 export enum DOCUMENT_KAFKA_TOPICS {
   CREATED = 'document.created',
+  /** El documento nació requiriendo aprobación y está esperando la decisión de su reviewer. */
+  APPROVAL_REQUESTED = 'document.approval_requested',
+  /** El reviewer autorizó: el documento entra al flujo de firma. */
+  APPROVED = 'document.approved',
+  /**
+   * El reviewer NO autorizó. Distinto de `REJECTED`, que es un firmante rechazando el documento
+   * ya dentro del flujo de firma: aquí ese flujo no llegó a empezar, y un consumidor que los
+   * colapsara tendría que mirar el estado del documento para saber qué pasó realmente.
+   */
+  APPROVAL_REJECTED = 'document.approval_rejected',
   SENT_TO_SIGN = 'document.sent_to_sign',
   COLLABORATOR_SIGNED = 'document.collaborator_signed',
   SIGNED = 'document.signed',
@@ -8,11 +18,23 @@ export enum DOCUMENT_KAFKA_TOPICS {
   CANCELLED = 'document.cancelled',
 }
 
+/**
+ * Sobre común de todos los eventos de documento.
+ *
+ * `eventId`, `occurredAt` y `version` los pone la outbox al publicar (ver `OutboxService`), que es
+ * lo que permite a un consumidor descartar una reentrega y saber contra qué versión del contrato
+ * está leyendo. Son opcionales porque los eventos que todavía se publican por el camino directo
+ * —sin outbox— no los llevan: un consumidor que reciba uno de ésos simplemente no puede
+ * deduplicarlo, y eso es mejor que rechazarlo.
+ */
 export interface DocumentEventPayload {
+  eventId?: string;
   documentId: string;
   fileName: string;
   actorUserId: string;
-  timestamp: string;
+  /** ISO 8601 del momento en que ocurrió el hecho, no de su publicación. */
+  occurredAt: string;
+  version?: number;
 }
 
 /**
@@ -23,4 +45,16 @@ export interface DocumentEventPayload {
 export interface DocumentCollaboratorSignedPayload extends DocumentEventPayload {
   collaboratorId: string;
   signedAt: string;
+}
+
+/**
+ * Los tres eventos del flujo de aprobación. Llevan el colaborador REVIEWER además del documento
+ * porque la pregunta que responden es "quién tiene que decidir" o "quién decidió", y el reviewer
+ * es una fila concreta de `collaborators` — no basta con el documento para identificarlo.
+ */
+export interface DocumentApprovalEventPayload extends DocumentEventPayload {
+  /** Colaborador REVIEWER asignado al documento. */
+  collaboratorId: string;
+  /** Comentario del reviewer al negar la aprobación; `null` en los otros dos eventos. */
+  resolutionNote?: string | null;
 }

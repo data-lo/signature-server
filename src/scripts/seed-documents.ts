@@ -15,7 +15,7 @@ import { AccountEntity } from '../account/entities/account.entity';
 import { ACCOUNT_TYPE_ENUM } from '../account/enums/account-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../document/enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../document/enum/colaborator-type.enum';
-import { SIGNEE_STATUS_ENUM } from '../document/enum/signee-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../document/enum/collaborator-status.enum';
 import { UserRoles } from '../user/enums/user-roles';
 
 /**
@@ -146,9 +146,10 @@ async function ensurePersonalAccount(
 interface ParticipantSpec {
   user: UserEntity;
   role: COLABORATOR_TYPE_ENUM;
-  status: SIGNEE_STATUS_ENUM;
+  status: COLLABORATOR_STATUS_ENUM;
   signOrder: number;
-  signedAt?: Date;
+  /** Cuándo resolvió su participación (firmó, rechazó o aprobó); ver `CollaboratorEntity.resolvedAt`. */
+  resolvedAt?: Date;
   rejectionReason?: string;
 }
 
@@ -202,7 +203,7 @@ async function upsertDocument(
     (p) => p.role === COLABORATOR_TYPE_ENUM.SIGNER,
   );
   const completedSignerSpecs = signerSpecs.filter(
-    (p) => p.status === SIGNEE_STATUS_ENUM.SIGNED,
+    (p) => p.status === COLLABORATOR_STATUS_ENUM.SIGNED,
   );
 
   const document = await documentRepository.save(
@@ -242,7 +243,7 @@ async function upsertDocument(
           colaboratorType: p.role,
           status: p.status,
           signingOrder: p.signOrder,
-          signedAt: p.signedAt ?? null,
+          resolvedAt: p.resolvedAt ?? null,
           cancellationReason: p.rejectionReason ?? null,
           ipAddress: '127.0.0.1',
         }),
@@ -293,7 +294,7 @@ async function main() {
     SEED_USERS.map((spec) => upsertUser(dataSource, spec)),
   );
 
-  const S = SIGNEE_STATUS_ENUM;
+  const S = COLLABORATOR_STATUS_ENUM;
   const R = COLABORATOR_TYPE_ENUM;
 
   const documents: DocumentSpec[] = [
@@ -313,7 +314,7 @@ async function main() {
     },
     {
       fileName: `${QA_PREFIX} Pendiente (no es tu turno) - Contrato de Arrendamiento.pdf`,
-      status: DOCUMENT_STATUS_ENUM.PENDING,
+      status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
       createdBy: primaryUser,
       createdAt: daysAgo(20),
       participants: [
@@ -328,7 +329,7 @@ async function main() {
     },
     {
       fileName: `${QA_PREFIX} Pendiente (tu turno) - Convenio de Confidencialidad NDA.pdf`,
-      status: DOCUMENT_STATUS_ENUM.PENDING,
+      status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
       createdBy: primaryUser,
       createdAt: daysAgo(15),
       participants: [
@@ -353,14 +354,14 @@ async function main() {
           role: R.SIGNER,
           status: S.SIGNED,
           signOrder: 0,
-          signedAt: daysAgo(36),
+          resolvedAt: daysAgo(36),
         },
         {
           user: primaryUser,
           role: R.SIGNER,
           status: S.SIGNED,
           signOrder: 1,
-          signedAt: daysAgo(35),
+          resolvedAt: daysAgo(35),
         },
         { user: luis, role: R.WATCHER, status: S.PENDING, signOrder: 0 },
       ],
@@ -377,7 +378,7 @@ async function main() {
           role: R.SIGNER,
           status: S.SIGNED,
           signOrder: 0,
-          signedAt: daysAgo(8),
+          resolvedAt: daysAgo(8),
         },
       ],
     },
@@ -423,7 +424,7 @@ async function main() {
           role: R.SIGNER,
           status: S.SIGNED,
           signOrder: 0,
-          signedAt: daysAgo(45),
+          resolvedAt: daysAgo(45),
         },
       ],
     },
@@ -440,13 +441,13 @@ async function main() {
           role: R.SIGNER,
           status: S.SIGNED,
           signOrder: 0,
-          signedAt: daysAgo(65),
+          resolvedAt: daysAgo(65),
         },
       ],
     },
     {
       fileName: `${QA_PREFIX} Creado por ti (para terceros) - Informe de Auditoría.pdf`,
-      status: DOCUMENT_STATUS_ENUM.PENDING,
+      status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
       createdBy: primaryUser,
       createdAt: daysAgo(5),
       participants: [

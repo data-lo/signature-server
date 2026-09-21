@@ -43,6 +43,10 @@ import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { DocumentReviewerService } from './services/document-reviewer.service';
+import { DocumentApprovalService } from './services/document-approval.service';
+import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
+import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -76,6 +80,11 @@ import { ArchiveCompletedDocumentUseCase } from './applications/archive-document
     DeleteDocumentUseCase,
     CreateDocumentSignatureFlowUseCase,
     ArchiveCompletedDocumentUseCase,
+    /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
+    DocumentReviewerService,
+    DocumentApprovalService,
+    ApproveDocumentUseCase,
+    RejectDocumentApprovalUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -44,7 +44,7 @@ import { SendOrganizationInvitationEmailUseCase } from './applications/send-orga
       UserEntity,
     ]),
     SharedModule,
-    EventModule,
+    forwardRef(() => EventModule),
     DocumentTransactionModule,
     AuditChainModule,
     ClientsModule.registerAsync([
