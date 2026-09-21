@@ -3,8 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { getPersonalAccountPermissionScopes } from 'src/roles/personal-account-permissions';
 import { RolesService } from 'src/roles/roles.service';
 
 import { AuthorizationContext } from '../interfaces/authorization-context.interface';
@@ -39,14 +42,15 @@ export interface AuthorizeParams {
 }
 
 /**
- * Autorización general: resuelve el contexto de la petición y responde si el rol de la membresía
- * activa puede ejercer `resource + action`, y con qué alcances.
+ * Autorización general: resuelve el contexto de la petición y responde si la membresía activa
+ * puede ejercer `resource + action`, y con qué alcances.
  *
  * Es deliberadamente corto en responsabilidades. Hace CUATRO cosas y ninguna más:
  *
  * 1. resuelve la membresía del usuario en la cuenta/organización activa,
- * 2. comprueba que esa membresía esté activa y tenga rol,
- * 3. pregunta a `RolesService` los alcances concedidos para ese recurso y esa acción,
+ * 2. comprueba que esa membresía esté activa,
+ * 3. resuelve los alcances concedidos para ese recurso y esa acción — contra el rol si la
+ *    cuenta es de ORGANIZATION, contra el catálogo si es PERSONAL,
  * 4. devuelve el contexto, o lanza `ForbiddenException`.
  *
  * Lo que NO hace, y no debe empezar a hacer: cargar documentos, perfiles de facturación ni
@@ -54,11 +58,19 @@ export interface AuthorizeParams {
  * comparar nombres de rol. Todo eso pertenece a la Policy del recurso, que trabaja sobre el
  * contexto que sale de aquí.
  *
- * **Depende de que el catálogo esté sembrado.** Los permisos se leen de `role_permissions`, que
- * llenan `npm run seed:roles` y `npm run seed:static-permissions`; sobre una base sin el segundo,
- * los permisos del catálogo estático (BILLING, MEMBER, ROLE y los alcances de DOCUMENT) no
- * existen y esta autorización responde 403, que es la respuesta correcta a "el rol no tiene el
- * permiso" aunque la causa real sea operativa.
+ * **Una cuenta PERSONAL no pasa por `role_permissions`.** Sus permisos se derivan del catálogo
+ * estático, recortado a lo que no exige una organización (ver `personal-account-permissions.ts`).
+ * Es la única forma de que la persona pueda con lo suyo —su plan y sus documentos— sin heredar
+ * la administración de una organización que no tiene, y de que una cuenta vieja a la que nunca
+ * se le asignó rol siga funcionando.
+ *
+ * **Depende de que el catálogo esté sembrado, para las cuentas de organización.** Sus permisos
+ * se leen de `role_permissions`, que llenan `npm run seed:roles` y
+ * `npm run seed:static-permissions`; sobre una base sin el segundo, los permisos del catálogo
+ * estático (BILLING, MEMBER, ROLE y los alcances de DOCUMENT) no existen y esta autorización
+ * responde 403, que es la respuesta correcta a "el rol no tiene el permiso" aunque la causa real
+ * sea operativa. Las cuentas personales no dependen del seed: su recorte del catálogo vive en
+ * código.
  */
 @Injectable()
 export class AuthorizationService {
@@ -76,8 +88,8 @@ export class AuthorizationService {
    * @returns El contexto autorizado, con los alcances concedidos.
    *
    * @throws {ForbiddenException} (403) Si no llega ninguna referencia de cuenta activa, si el
-   *   usuario no tiene una membresía activa en ella, si esa membresía no tiene rol, o si el rol
-   *   no tiene concedido `resource + action` con ningún alcance.
+   *   usuario no tiene una membresía activa en ella, si esa membresía es de organización y no
+   *   tiene rol, o si no tiene concedido `resource + action` con ningún alcance.
    *
    * @example
    * ```ts
@@ -92,23 +104,7 @@ export class AuthorizationService {
    */
   async authorize(params: AuthorizeParams): Promise<AuthorizationContext> {
     const membership = await this.resolveActiveMembership(params);
-
-    /**
-     * Una membresía sin rol no es un caso de error operativo sino una situación prevista
-     * (`accounts.role_id` es nullable, reservado para invitaciones a medio completar): no puede
-     * ejercer ninguna acción, y decirlo como 403 es exactamente lo que le corresponde.
-     */
-    if (!membership.roleId) {
-      throw new ForbiddenException(
-        'Tu membresía no tiene un rol asignado en esta cuenta',
-      );
-    }
-
-    const scopes = await this.rolesService.getPermissionScopes(
-      membership.roleId,
-      params.resource,
-      params.action,
-    );
+    const scopes = await this.resolveGrantedScopes(membership, params);
 
     if (scopes.length === 0) {
       throw new ForbiddenException(
@@ -125,6 +121,60 @@ export class AuthorizationService {
       action: params.action,
       scopes,
     };
+  }
+
+  /**
+   * Los alcances que la membresía activa tiene concedidos para el `resource + action` pedido.
+   *
+   * Es el punto donde se separan los dos mundos, y el único: una cuenta de ORGANIZATION se
+   * resuelve contra su rol, exactamente como siempre, y una PERSONAL contra el catálogo
+   * recortado. La decisión se toma por `accountType` y no por si hay `organizationId`, porque
+   * el tipo es lo que declara qué es la cuenta; que una personal no tenga organización es una
+   * consecuencia de eso, no la definición.
+   *
+   * Una cuenta PERSONAL sin rol se autoriza igual. `accounts.role_id` es nullable y hubo altas
+   * que lo dejaron en NULL: exigirlo aquí dejaba a esas cuentas sin poder ni consultar su propio
+   * plan, con un 403 que no describía ningún problema de permisos sino un hueco en el dato.
+   *
+   * @param membership - Membresía activa ya resuelta.
+   * @param params - Los mismos parámetros que recibió `authorize`.
+   * @returns Los alcances concedidos; vacío si no tiene el permiso.
+   *
+   * @throws {ForbiddenException} (403) Si la membresía es de organización y no tiene rol.
+   *
+   * @example
+   * ```ts
+   * await this.resolveGrantedScopes(personalAccount, {
+   *   resource: RESOURCE_KEY_ENUM.BILLING,
+   *   action: ACTION_KEY_ENUM.MANAGE,
+   *   …
+   * }); // ['ANY']
+   * ```
+   */
+  private async resolveGrantedScopes(
+    membership: AccountEntity,
+    params: AuthorizeParams,
+  ): Promise<PERMISSION_SCOPE_ENUM[]> {
+    if (membership.accountType === ACCOUNT_TYPE_ENUM.PERSONAL) {
+      return getPersonalAccountPermissionScopes(params.resource, params.action);
+    }
+
+    /**
+     * Una membresía de organización sin rol no es un caso de error operativo sino una situación
+     * prevista (`accounts.role_id` es nullable, reservado para invitaciones a medio completar):
+     * no puede ejercer ninguna acción, y decirlo como 403 es lo que le corresponde.
+     */
+    if (!membership.roleId) {
+      throw new ForbiddenException(
+        'Tu membresía no tiene un rol asignado en esta cuenta',
+      );
+    }
+
+    return this.rolesService.getPermissionScopes(
+      membership.roleId,
+      params.resource,
+      params.action,
+    );
   }
 
   /**

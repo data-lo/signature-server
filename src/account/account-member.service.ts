@@ -516,7 +516,7 @@ export class AccountMemberService {
 
     if (activeAdminCount <= 1) {
       throw new ConflictException(
-        'No puedes cambiar el rol ni eliminar al único administrador activo de la organización',
+        'No puedes cambiar el rol ni desactivar al único administrador activo de la organización',
       );
     }
   }

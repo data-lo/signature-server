@@ -165,6 +165,31 @@ describe('AccountService', () => {
   describe('saveOrganizationWithOwnerAccount', () => {
     const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
 
+    /**
+     * Los dos nombres son distintos y los dos se guardan. Hasta ahora `dto.name` —el rotulado
+     * "Nombre de visualización" en el formulario— se descartaba en silencio y la organización
+     * quedaba con la razón social como único nombre, que es lo que acababa leyéndose en el
+     * selector de cuentas.
+     */
+    it('guarda la razón social y el nombre de visualización por separado', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'org-nueva-1' })
+        .mockResolvedValueOnce({ id: 'cuenta-owner-1' });
+      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-owner-1' });
+
+      await service.saveOrganizationWithOwnerAccount(
+        CURRENT_USER as never,
+        dto as never,
+      );
+
+      const [organization] = queryRunner.manager.create.mock.calls;
+      expect(organization[1]).toMatchObject({
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+      });
+    });
+
     it('guarda organizacion y cuenta OWNER en una sola transaccion', async () => {
       accountRepository.findOne.mockResolvedValue({
         id: 'generated-id',
@@ -522,6 +547,71 @@ describe('AccountService', () => {
       const result = await service.getAccountsCatalog('user-1');
 
       expect(result.data).toEqual([]);
+    });
+  });
+
+  /**
+   * `toCatalogEntry` es lo que acaba en `/accounts/me` y, de ahí, en el selector de cuentas del
+   * sidebar. Si el nombre de visualización no sale por aquí, el selector no tiene con qué
+   * rotularse por mucho que la columna exista.
+   */
+  describe('toCatalogEntry', () => {
+    it('publica la razón social y el nombre de visualización de la organización', () => {
+      const entry = service.toCatalogEntry({
+        id: 'cuenta-1',
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        createdAt: new Date('2026-07-04T12:00:00.000Z'),
+        organizationId: 'org-1',
+        organization: {
+          name: 'Acme Corp S.A. de C.V.',
+          displayName: 'Acme',
+        },
+        roleId: 'role-1',
+        isActive: true,
+      } as never);
+
+      expect(entry.organizationDetail).toEqual({
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+      });
+    });
+
+    it('una cuenta personal no trae datos de organización', () => {
+      const entry = service.toCatalogEntry({
+        id: 'cuenta-1',
+        accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+        createdAt: new Date('2026-07-04T12:00:00.000Z'),
+        organizationId: null,
+        organization: null,
+        roleId: 'role-1',
+        isActive: true,
+      } as never);
+
+      expect(entry.organizationDetail).toBeNull();
+    });
+  });
+
+  describe('updateOrganizationDetails', () => {
+    it('renombra el nombre de visualización sin tocar la razón social', async () => {
+      await service.updateOrganizationDetails('org-1', {
+        name: 'Acme MX',
+      } as never);
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        displayName: 'Acme MX',
+      });
+    });
+
+    it('escribe los dos nombres cuando llegan los dos', async () => {
+      await service.updateOrganizationDetails('org-1', {
+        name: 'Acme MX',
+        organizationName: 'Acme México S.A. de C.V.',
+      } as never);
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        name: 'Acme México S.A. de C.V.',
+        displayName: 'Acme MX',
+      });
     });
   });
 });
