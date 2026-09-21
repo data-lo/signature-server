@@ -6,6 +6,7 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
 import { RolesService } from 'src/roles/roles.service';
 import { STATIC_PERMISSION_KEY_ENUM } from 'src/roles/static-permission-catalog';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 
 import { GetAuthorizationContextUseCase } from './get-authorization-context.use-case';
 
@@ -41,6 +42,7 @@ describe('GetAuthorizationContextUseCase', () => {
       accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
       organizationId: 'org-1',
       roleId: 'role-1',
+      role: { id: 'role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER },
       isActive: true,
       ...overrides,
     } as AccountEntity;
@@ -51,7 +53,7 @@ describe('GetAuthorizationContextUseCase', () => {
     return { key, isStaticCatalog } as never;
   }
 
-  it('devuelve cuenta, tipo, organización, rol y permisos efectivos', async () => {
+  it('devuelve cuenta, tipo, organización, rol (id y nombre) y permisos efectivos', async () => {
     accountRepository.findOne.mockResolvedValue(organizationMembership());
     rolesService.listPermissionsByRoleIds.mockResolvedValue(
       new Map([
@@ -73,12 +75,29 @@ describe('GetAuthorizationContextUseCase', () => {
       accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
       organizationId: 'org-1',
       roleId: 'role-1',
+      roleName: SYSTEM_ROLE_NAME_ENUM.OWNER,
       permissions: [
         STATIC_PERMISSION_KEY_ENUM.ORGANIZATION_READ,
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE,
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN,
       ],
     });
+  });
+
+  /**
+   * Una membresía sin rol no tiene nombre que publicar. Se distingue de "todavía no lo sé" con
+   * `null` y no con una cadena vacía: el cliente decide cosas mirando este campo, y `''` se
+   * compararía como un nombre de rol más.
+   */
+  it('publica el nombre del rol como null cuando la membresía no tiene rol', async () => {
+    accountRepository.findOne.mockResolvedValue(
+      organizationMembership({ roleId: null, role: null }),
+    );
+
+    const response = await useCase.execute('user-1', 'account-1');
+
+    expect(response.data.roleName).toBeNull();
+    expect(response.data.roleId).toBeNull();
   });
 
   /**
@@ -150,6 +169,7 @@ describe('GetAuthorizationContextUseCase', () => {
 
       expect(accountRepository.findOne).toHaveBeenCalledWith({
         where: { id: 'account-1', userId: 'user-1', isActive: true },
+        relations: { role: true },
       });
     });
 

@@ -41,7 +41,7 @@ export class GetAuthorizationContextUseCase {
    *
    * @param userId - Usuario autenticado (`JwtPayload.sub`).
    * @param activeAccountId - Cuenta activa que el cliente declara, en `X-Active-Account-Id`.
-   * @returns Cuenta, tipo, organización, rol y permisos efectivos.
+   * @returns Cuenta, tipo, organización, rol (identificador y nombre) y permisos efectivos.
    *
    * @throws {BadRequestException} (400) Si la petición no declara cuenta activa.
    * @throws {ForbiddenException} (403) Si esa cuenta no existe, no es del usuario autenticado o
@@ -70,6 +70,13 @@ export class GetAuthorizationContextUseCase {
      */
     const membership = await this.accountRepository.findOne({
       where: { id: activeAccountId, userId, isActive: true },
+      /**
+       * El rol se carga para publicar su NOMBRE junto al identificador. El cliente no tiene con
+       * qué traducir un UUID de rol, y hay decisiones suyas que dependen de cuál es —comprobar
+       * que quien acaba de crear una organización quedó como su propietario antes de mandarlo a
+       * contratar un plan, por ejemplo—.
+       */
+      relations: { role: true },
     });
 
     if (!membership) {
@@ -84,6 +91,7 @@ export class GetAuthorizationContextUseCase {
         accountType: membership.accountType,
         organizationId: membership.organizationId,
         roleId: membership.roleId,
+        roleName: membership.role?.name ?? null,
         permissions: await this.resolveEffectivePermissions(membership.roleId),
       },
     };
