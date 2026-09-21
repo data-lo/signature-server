@@ -43,7 +43,7 @@ function simpleSigner(overrides: Partial<CollaboratorEntity> = {}) {
     status: COLLABORATOR_STATUS_ENUM.SIGNED,
     signedAt: new Date('2026-01-14T08:30:00.000Z'),
     ipAddress: '10.0.0.2',
-    geoLoc: { latitude: 19.43, longitude: -99.13 },
+    geolocation: { latitude: 19.43, longitude: -99.13 },
     email: null,
     advancedSignature: null,
     signatureSnapshotObjectKey: 'rubrica.png',

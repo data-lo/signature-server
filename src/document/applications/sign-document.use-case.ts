@@ -212,7 +212,7 @@ export class SignDocumentUseCase {
     myParticipant.status = COLLABORATOR_STATUS_ENUM.SIGNED;
     myParticipant.resolvedAt = new Date();
     // Evidencia declarada por el dispositivo, no verificada por el servidor.
-    myParticipant.geoLoc = geolocation;
+    myParticipant.geolocation = geolocation;
 
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       // Ya validado antes del claim; nunca contiene la llave privada ni la contraseña.

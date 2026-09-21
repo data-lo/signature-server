@@ -212,11 +212,15 @@ export class CollaboratorPayloadDto {
   email: string;
 
   /**
+   * Identificador fiscal del colaborador; en México, su RFC (se llamaba `rfc` hasta la historia
+   * "Estandarizar campos de colaboradores": el nombre del campo deja de dar por hecho el régimen
+   * fiscal, aunque la etiqueta que ve el usuario siga diciendo RFC, que es lo que captura).
+   *
    * Opcional incluso para VIEWER (antes era obligatorio para ese tipo; ver historia "Eliminar
    * campo RFC de la sección de Espectadores"). Cuando llega con valor se sigue validando como
    * string — sólo se relajó la obligatoriedad, no el formato. Los firmantes ya no lo mandan en
    * ningún flujo (historia "Selección de tipo de firma al crear documentos"): en firma simple
-   * nunca se pidió, y en firma avanzada el RFC real se extrae del certificado de e.firma al
+   * nunca se pidió, y en firma avanzada el dato real se extrae del certificado de e.firma al
    * momento de firmar (ver `EfirmaService.extaerRfcDeSubject`) — pedirlo al crear el documento
    * capturaba un dato que nadie contrastaba contra el certificado.
    * `CreateDocumentSignatureFlowUseCase` descarta lo que llegue acá para un SIGNER, así que un
@@ -226,12 +230,12 @@ export class CollaboratorPayloadDto {
   @ValidateIf(
     (c: CollaboratorPayloadDto) =>
       c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER &&
-      c.rfc !== undefined &&
-      c.rfc !== null &&
-      c.rfc !== '',
+      c.taxId !== undefined &&
+      c.taxId !== null &&
+      c.taxId !== '',
   )
   @IsString()
-  rfc?: string | null;
+  taxId?: string | null;
 
   /**
    * Ubicaciones de firma de este colaborador (ver historia "Ubicación de firmas por usuario").

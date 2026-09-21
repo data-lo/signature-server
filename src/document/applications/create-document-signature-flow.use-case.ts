@@ -62,7 +62,7 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
 };
 
 /**
- * Vocabulario de documentos -> vocabulario comercial. `fiel` y `ADVANCED` son el mismo tipo de
+ * Vocabulario de documentos -> vocabulario comercial. `FIEL` y `ADVANCED` son el mismo tipo de
  * firma con el nombre que le da cada módulo: el dominio de documentos habla de la FIEL del SAT y
  * facturación habla de firma avanzada.
  */
@@ -451,10 +451,11 @@ export class CreateDocumentSignatureFlowUseCase {
             email: participant.email.toLowerCase(),
             firstName: participant.firstName,
             lastName: participant.lastName,
-            // Solo el VIEWER guarda RFC: para un firmante el dato ya no se pide al crear el
-            // documento, y el del flujo avanzado sale del certificado de e.firma al firmar (ver
-            // `CollaboratorPayloadDto.rfc`). Se descarta explícitamente lo que mande el cliente.
-            rfc: isSigner ? null : (participant.rfc ?? null),
+            // Solo el VIEWER guarda identificador fiscal: para un firmante el dato ya no se
+            // pide al crear el documento, y el del flujo avanzado sale del certificado de
+            // e.firma al firmar (ver `CollaboratorPayloadDto.taxId`). Se descarta explícitamente
+            // lo que mande el cliente.
+            taxId: isSigner ? null : (participant.taxId ?? null),
             colaboratorType:
               COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN[participant.collaboratorType],
             signatureType: isSigner ? documentSignatureType : null,

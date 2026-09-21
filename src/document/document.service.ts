@@ -203,7 +203,7 @@ export class DocumentService {
   }
 
   /**
-   * Tipo de firma del documento (`simple` / `fiel`) para el listado, o `null` si no se puede
+   * Tipo de firma del documento (`SIMPLE` / `FIEL`) para el listado, o `null` si no se puede
    * determinar — lo consume la columna "Tipo de firma" de las tablas del frontend.
    *
    * El tipo no vive en `DocumentEntity` sino en cada SIGNER: es una decisión del documento que
@@ -472,7 +472,7 @@ export class DocumentService {
    * La geolocalización del firmante ya no viaja en esta respuesta (historia "Ocultar
    * geolocalización en hojas de firma y vistas públicas", ver `PublicSignerData`): la hoja dejó de
    * imprimirla y esta ruta —que abre cualquiera con el id, sin sesión— era el último lugar donde
-   * seguía publicándose. Se sigue guardando en `collaborator.geoLoc` como evidencia.
+   * seguía publicándose. Se sigue guardando en `collaborator.geolocation` como evidencia.
    */
   async toCompletedPublicSigner(
     documentId: string,

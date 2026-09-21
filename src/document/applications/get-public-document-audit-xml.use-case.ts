@@ -262,7 +262,7 @@ export class GetPublicDocumentAuditXmlUseCase {
       signatureType: collaborator.signatureType ?? null,
       status: collaborator.status,
       ipAddress: collaborator.ipAddress ?? null,
-      geoLocation: collaborator.geoLoc ?? null,
+      geoLocation: collaborator.geolocation ?? null,
       advancedSignature: collaborator.advancedSignature
         ? (collaborator.advancedSignature as unknown as Record<string, unknown>)
         : null,
