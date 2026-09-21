@@ -8,6 +8,13 @@ export class OrganizationDetailData {
     description: 'Razón social o nombre legal completo de la empresa',
   })
   name: string;
+
+  @ApiProperty({
+    example: 'Acme',
+    description:
+      'Nombre de visualización: el corto con el que la organización se presenta en la interfaz. Es el que rotula el selector de cuentas; `name` es el legal y sirve para documentos y trámites. Las organizaciones anteriores a la columna lo tienen copiado de `name`.',
+  })
+  displayName: string;
 }
 
 export class AccountData {

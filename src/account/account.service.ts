@@ -123,9 +123,17 @@ export class AccountService {
     });
   }
 
-  /** Alta de la fila `organizations` con el perfil que llega del formulario. */
+  /**
+   * Alta de la fila `organizations` con el perfil que llega del formulario.
+   *
+   * `name` y `displayName` son dos cosas distintas y las dos hacen falta: la razón social es el
+   * nombre legal y el de visualización es el corto con el que la organización aparece en el
+   * selector de cuentas. Antes sólo se escribía el primero y el segundo se perdía, y por eso el
+   * selector rotulaba cada organización con su nombre legal completo.
+   */
   async saveOrganization(profile: {
     name: string;
+    displayName: string;
     address?: string | null;
     rfc?: string | null;
     domainAllowed?: string | null;
@@ -135,6 +143,7 @@ export class AccountService {
     return this.organizationRepository.save(
       this.organizationRepository.create({
         name: profile.name,
+        displayName: profile.displayName,
         address: profile.address ?? null,
         rfc: profile.rfc ?? null,
         domainAllowed: profile.domainAllowed ?? null,
@@ -166,6 +175,7 @@ export class AccountService {
       ...(dto.organizationName !== undefined && {
         name: dto.organizationName,
       }),
+      ...(dto.name !== undefined && { displayName: dto.name }),
       ...(dto.address !== undefined && { address: dto.address }),
       ...(dto.rfc !== undefined && { rfc: dto.rfc }),
       ...(dto.domainAllowed !== undefined && {
@@ -399,6 +409,7 @@ export class AccountService {
       const organization = await queryRunner.manager.save(
         queryRunner.manager.create(OrganizationEntity, {
           name: dto.organizationName,
+          displayName: dto.name,
           address: dto.address ?? null,
           rfc: dto.rfc ?? null,
           domainAllowed: dto.domainAllowed ?? null,
@@ -623,7 +634,10 @@ export class AccountService {
       createdAt: account.createdAt,
       organizationId: account.organizationId,
       organizationDetail: account.organization
-        ? { name: account.organization.name }
+        ? {
+            name: account.organization.name,
+            displayName: account.organization.displayName,
+          }
         : null,
       roleId: account.roleId,
       isActive: account.isActive,

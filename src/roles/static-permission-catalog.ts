@@ -4,8 +4,8 @@ import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from './enums/system-role-name.enum';
 
 /**
- * Catálogo de permisos ESTÁTICOS de organización: la lista cerrada de cosas que una membresía
- * con `organizationId` podrá hacer, y qué rol de sistema trae cada una de fábrica.
+ * Catálogo de permisos ESTÁTICOS: la lista cerrada de cosas que una cuenta podrá hacer, y qué
+ * rol de sistema trae cada una de fábrica.
  *
  * Es la única fuente de verdad del catálogo. `npm run seed:static-permissions` lo materializa en
  * `resources`/`actions`/`permissions`/`role_permissions`, `permission-catalog.util.ts` lo publica
@@ -17,13 +17,18 @@ import { SYSTEM_ROLE_NAME_ENUM } from './enums/system-role-name.enum';
  * se acuerde: `normalizeCatalogDescription` las normaliza al escribirlas en base y al publicarlas,
  * y una prueba comprueba que el catálogo ya las declara así.
  *
- * Tres cosas que NO son este catálogo:
+ * Las cuentas personales TAMBIÉN pasan por aquí, pero sólo por la mitad del catálogo que no
+ * exige una organización detrás: `organizationOnly` marca cuál es cada mitad y
+ * `personal-account-permissions.ts` deriva de aquí lo que una cuenta PERSONAL puede ejercer,
+ * sin consultar su rol. Una cuenta PERSONAL nace con el rol de sistema OWNER —que trae el
+ * catálogo entero— y sin ese recorte se llevaría también los permisos de administrar una
+ * organización que no tiene.
+ *
+ * Dos cosas que NO son este catálogo:
  *
  * - **`organization_permissions`.** Es un sistema paralelo de nombres libres que cada ADMIN
  *   define para su organización ("puede aprobar gastos"); no otorga acceso técnico a nada y no
  *   se toca desde aquí.
- * - **Las cuentas personales.** El catálogo se usará sólo al autorizar membresías con
- *   `organizationId`; una cuenta PERSONAL no pasa por él.
  * - **La descripción del permiso en base de datos.** `permissions` no tiene columna
  *   `description` y este catálogo no agrega una: la descripción de cada permiso vive acá, en
  *   código, y viaja a la UI derivada en `permission-catalog.util.ts`. Las de `resources` y
@@ -57,6 +62,25 @@ export interface StaticPermissionDefinition {
   action: ACTION_KEY_ENUM;
   scope: PERMISSION_SCOPE_ENUM;
   description: string;
+
+  /**
+   * Si el permiso sólo tiene sentido dentro de una organización.
+   *
+   * Es un campo OBLIGATORIO, y ahí está su gracia: agregar una clave nueva al catálogo no
+   * compila hasta que alguien decida a cuál de los dos mundos pertenece. Un permiso futuro
+   * ligado a una organización queda fuera de las cuentas personales por construcción, sin que
+   * nadie tenga que acordarse de mantener una lista aparte.
+   *
+   * `true` para lo que necesita una organización detrás: su ficha (`ORGANIZATION.*`), sus
+   * miembros (`MEMBER.*`), sus roles (`ROLE.*`), leer los documentos de todos
+   * (`DOCUMENT.READ_ORGANIZATION`) y aprobarlos (`DOCUMENT.APPROVE`, que exige un aprobador
+   * miembro — ver `CreateDocumentSignatureFlowUseCase`, que rechaza `requiresApproval` en una
+   * cuenta personal).
+   *
+   * `false` para lo que una persona ejerce sobre lo suyo: su plan y sus pagos (`BILLING.*`) y
+   * sus propios documentos (crear, ver los suyos, mandarlos a firma, firmar y cancelar).
+   */
+  organizationOnly: boolean;
 }
 export function normalizeCatalogDescription(description: string): string {
   return description.trim().toUpperCase();
@@ -134,102 +158,119 @@ export const STATIC_PERMISSION_CATALOG: Record<
     action: ACTION_KEY_ENUM.READ,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'VER DATOS Y CONFIGURACIÓN DE LA ORGANIZACIÓN ACTIVA',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.ORGANIZATION_UPDATE]: {
     resource: RESOURCE_KEY_ENUM.ORGANIZATION,
     action: ACTION_KEY_ENUM.UPDATE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'EDITAR DATOS Y CONFIGURACIÓN DE LA ORGANIZACIÓN',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.BILLING_READ]: {
     resource: RESOURCE_KEY_ENUM.BILLING,
     action: ACTION_KEY_ENUM.READ,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'VER PLAN, PAGOS, FACTURAS Y ESTADO DE SUSCRIPCIÓN',
+    organizationOnly: false,
   },
   [STATIC_PERMISSION_KEY_ENUM.BILLING_MANAGE]: {
     resource: RESOURCE_KEY_ENUM.BILLING,
     action: ACTION_KEY_ENUM.MANAGE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'INICIAR PAGO, CAMBIAR, CANCELAR O ADMINISTRAR EL PLAN',
+    organizationOnly: false,
   },
   [STATIC_PERMISSION_KEY_ENUM.MEMBER_READ]: {
     resource: RESOURCE_KEY_ENUM.MEMBER,
     action: ACTION_KEY_ENUM.READ,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'VER MIEMBROS',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.MEMBER_INVITE]: {
     resource: RESOURCE_KEY_ENUM.MEMBER,
     action: ACTION_KEY_ENUM.INVITE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'INVITAR O AGREGAR MIEMBROS',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.MEMBER_UPDATE]: {
     resource: RESOURCE_KEY_ENUM.MEMBER,
     action: ACTION_KEY_ENUM.UPDATE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'CAMBIAR ROL O DATOS DE UN MIEMBRO',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.MEMBER_REMOVE]: {
     resource: RESOURCE_KEY_ENUM.MEMBER,
     action: ACTION_KEY_ENUM.REMOVE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'REVOCAR O ELIMINAR MEMBRESÍAS',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.ROLE_READ]: {
     resource: RESOURCE_KEY_ENUM.ROLE,
     action: ACTION_KEY_ENUM.READ,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'VER ROLES Y SUS PERMISOS',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.ROLE_MANAGE]: {
     resource: RESOURCE_KEY_ENUM.ROLE,
     action: ACTION_KEY_ENUM.MANAGE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'CREAR O EDITAR ROLES PERSONALIZADOS',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE]: {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.CREATE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'CREAR DOCUMENTOS',
+    organizationOnly: false,
   },
   [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN]: {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.READ,
     scope: PERMISSION_SCOPE_ENUM.OWN,
     description: 'VER DOCUMENTOS PROPIOS O DONDE PARTICIPA',
+    organizationOnly: false,
   },
   [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_ORGANIZATION]: {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.READ,
     scope: PERMISSION_SCOPE_ENUM.ORGANIZATION,
     description: 'VER DOCUMENTOS DE TODA LA ORGANIZACIÓN',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST]: {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.SEND_SIGNATURE_REQUEST,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'ENVIAR SOLICITUDES DE FIRMA',
+    organizationOnly: false,
   },
   [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF]: {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.SIGN,
     scope: PERMISSION_SCOPE_ENUM.SELF,
     description: 'FIRMAR COMO PARTICIPANTE',
+    organizationOnly: false,
   },
   [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE]: {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.APPROVE,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'APROBAR DOCUMENTOS, SI EL FLUJO LO REQUIERE',
+    organizationOnly: true,
   },
   [STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CANCEL]: {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.CANCEL,
     scope: PERMISSION_SCOPE_ENUM.ANY,
     description: 'SOLICITAR O CONFIRMAR CANCELACIONES, SEGÚN EL FLUJO',
+    organizationOnly: false,
   },
 };
 
