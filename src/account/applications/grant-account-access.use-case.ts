@@ -1,8 +1,11 @@
 import { ConflictException, Injectable } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { RolesService } from 'src/roles/roles.service';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 
 import { AccountMemberService } from '../account-member.service';
 import { CreateAccountMemberDto } from '../dto/create-account-member.dto';
@@ -14,12 +17,20 @@ import { AccountEntity } from '../entities/account.entity';
  *
  * Es el camino administrativo: quien lo usa ya sabe el `userId` del invitado, así que no hay
  * token que canjear ni correo que esperar.
+ *
+ * Avisa a propietarios y administradores igual que el alta desde la pantalla de miembros: para
+ * quien administra la organización, por cuál de los dos endpoints entró la persona es un detalle
+ * de implementación — lo que le importa es que hay alguien nuevo dentro.
  */
 @Injectable()
 export class GrantAccountAccessUseCase {
   constructor(
     private readonly accountMemberService: AccountMemberService,
     private readonly rolesService: RolesService,
+    private readonly organizationMemberEventsProducer: OrganizationMemberEventsProducer,
+
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async execute(
@@ -62,10 +73,38 @@ export class GrantAccountAccessUseCase {
       dto.userId,
     );
 
+    /**
+     * La membresía y el evento que la anuncia se escriben juntos (ver
+     * `OrganizationMemberEventsProducer`): un aviso de un acceso que la transacción terminó
+     * deshaciendo sería peor que no avisar.
+     *
+     * El alta puede pedirse inactiva (`dto.isActive === false`), y entonces no hay incorporación
+     * que anunciar: nadie ha quedado dentro todavía. Ese caso lo cubre la reactivación, que
+     * publica el evento cuando la membresía se vuelve activa de verdad.
+     */
+    const membership = await this.dataSource.transaction(async (manager) => {
+      const created = await this.accountMemberService.saveMembership(
+        dto,
+        invitedUser,
+        manager,
+      );
+
+      if (created.isActive) {
+        await this.organizationMemberEventsProducer.enqueueJoined(manager, {
+          membership: created,
+          actorUserId: callerId,
+        });
+      }
+
+      return created;
+    });
+
+    await this.organizationMemberEventsProducer.flushOutbox();
+
     return {
       success: true,
       message: 'Acceso otorgado correctamente',
-      data: await this.accountMemberService.saveMembership(dto, invitedUser),
+      data: membership,
     };
   }
 }
