@@ -28,14 +28,29 @@ import * as path from 'path';
  * tanto en `src/` como en `dist/` (nest-cli.json las copia al build).
  */
 
-const BORDER_COLOR = '#000000';
 const MUTED_TEXT_COLOR = '#333333';
 
-/** Ancho de los banners de guiones (`----Firmas----`) del layout de referencia. */
-const MONO_BANNER_WIDTH = 70;
+/**
+ * Ancho (en caracteres) de los banners de guiones (`----Firmas----`), calculado para que la línea
+ * llegue de margen a margen y quede alineada con el texto legal de apertura.
+ *
+ * JetBrains Mono es monoespaciada: cada carácter mide 0.6 × fontSize (verificado con
+ * `widthOfString` de pdfkit) — a los 8.5pt del estilo 'mono', 5.1pt por carácter. El ancho de
+ * contenido de la hoja es 512pt (carta de 612pt menos los 50pt de margen a cada lado, ver
+ * `SHEET_PAGE_MARGINS`), así que 512 / 5.1 ≈ 100.4 caracteres llenan la línea sin desbordar los
+ * márgenes.
+ */
+const MONO_BANNER_WIDTH = 100;
 
 /** Ancho de la columna de etiquetas de las tablas informativas. */
 const LABEL_COLUMN_WIDTH = 115;
+
+/**
+ * Tamaño de letra de las tablas informativas (etiqueta y valor), un punto por debajo del 'mono'
+ * normal (8.5). Sólo afecta a las tablas —no a los banners de guiones ni al encabezado, que
+ * también usan 'mono'— y es lo que le da más margen al contenido para no salirse de la hoja.
+ */
+const INFO_TABLE_FONT_SIZE = 7.5;
 
 /**
  * Tipografías de las plantillas de referencia:
@@ -192,11 +207,20 @@ function brandColumn(image: string, fit: [number, number]): Column {
 }
 
 /**
- * Tabla informativa de dos columnas (etiqueta / valor) con el borde fino de las plantillas. Es el
- * formato de las tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que
- * les da su separación visual.
+ * Tabla informativa de dos columnas (etiqueta / valor), sin bordes visibles. Es el formato de las
+ * tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que les da su
+ * separación visual.
+ *
+ * `valueFontSizeByRow` reduce el tamaño de letra del VALOR de renglones puntuales (por índice),
+ * dejando la etiqueta sin tocar. Lo usa la hoja avanzada para achicar el bloque base64 de "Firma
+ * Electrónica", que si no puede empujar "Fecha de Firma" fuera de la hoja cuando hay un solo
+ * firmante.
  */
-export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
+export function buildInfoTable(
+  rows: string[][],
+  marginTop = 0,
+  valueFontSizeByRow: Record<number, number> = {},
+): ContentTable {
   return {
     margin: [0, marginTop, 0, 0],
     table: {
@@ -205,16 +229,18 @@ export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
       // siguiente sin su etiqueta al lado — un dato suelto en un documento legal. Pasa con la
       // firma en base64 de la hoja avanzada, que ocupa varios renglones.
       dontBreakRows: true,
-      body: rows.map(([label, value]) => [
-        { text: label, style: 'mono' },
-        { text: value, style: 'mono' },
+      body: rows.map(([label, value], rowIndex) => [
+        { text: label, style: 'mono', fontSize: INFO_TABLE_FONT_SIZE },
+        {
+          text: value,
+          style: 'mono',
+          fontSize: valueFontSizeByRow[rowIndex] ?? INFO_TABLE_FONT_SIZE,
+        },
       ]) as Content[][],
     },
     layout: {
-      hLineWidth: () => 0.5,
-      vLineWidth: () => 0.5,
-      hLineColor: () => BORDER_COLOR,
-      vLineColor: () => BORDER_COLOR,
+      hLineWidth: () => 0,
+      vLineWidth: () => 0,
       paddingTop: () => 3,
       paddingBottom: () => 3,
     },

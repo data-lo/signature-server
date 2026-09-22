@@ -29,7 +29,7 @@ import {
 } from './signature-legal-text';
 
 /** Tipo de firma que rotula el encabezado, en la nomenclatura de la plantilla de referencia. */
-const SIGNATURE_TYPE_HEADING = 'Firma_Digital_Simple';
+const SIGNATURE_TYPE_HEADING = 'Firma_Electrónica_Simple';
 
 /** Banner de guiones que abre la hoja. */
 const BRAND_BANNER = 'Firmalo_Grafo';
@@ -43,8 +43,8 @@ const LEGAL_TEXT =
   '93 del Código de Comercio en relación con firmas electrónicas y mensajes de datos, gozando de ' +
   'presunción legal de atribución y conserva plena validez jurídica. La integridad de este ' +
   'documento está respaldada al integrar una constancia de conservación emitida por un PSC ' +
-  'debidamente acreditado por la Secretaría de Economía. Esta modalidad de firma no goza de ' +
-  'garantía de no repudio. Para actos que requieran dicha garantía, utiliza Firmalo Fiel.';
+  'debidamente acreditado por la Secretaría de Economía. Esta modalidad de firma tiene el ' +
+  'mismo valor legal que una firma autógrafa.';
 
 /** Introducción de la sección "Firmas" (plantilla de referencia). */
 const SIGNATURES_INTRO_TEXT =
@@ -110,7 +110,7 @@ export class SummaryDocumentService {
     signers: SummaryDocumentSigner[],
   ): TDocumentDefinitions {
     return {
-      pageSize: 'A4',
+      pageSize: 'LETTER',
       pageMargins: SHEET_PAGE_MARGINS,
       defaultStyle: SHEET_DEFAULT_STYLE,
       styles: SHEET_STYLES,
@@ -160,9 +160,9 @@ export class SummaryDocumentService {
    */
   private buildDocumentInfoRows(document: SummaryDocumentInfo): string[][] {
     return [
-      ['ID', document.id],
+      ['Id del Documento', document.id],
       ['Nombre del Documento', document.documentName],
-      ['Hash', document.hash],
+      ['Huella del Documento', document.hash],
       ['No. de Páginas', String(document.totalPages)],
       ['Creado por', document.createdBy],
     ];
@@ -174,9 +174,8 @@ export class SummaryDocumentService {
       [
         ['Nombre', signer.name],
         ['Tipo de Firma', SIGNATURE_TYPE_LABEL],
-        ['IP', signer.ipAddress],
         ['Sustentada', SIGNATURE_BACKING_LABEL],
-        ['OTP Code', signer.otpCode ?? ''],
+        ['Código de Verificación', signer.otpCode ?? ''],
         ['Fecha de Firma', formatSheetTimestamp(signer.signedAt)],
       ],
       index === 0 ? 0 : 12,

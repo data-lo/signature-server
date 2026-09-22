@@ -15,7 +15,7 @@
  */
 
 /** Firma simple: rótulo del mecanismo en la tabla de cada firmante. */
-export const SIMPLE_SIGNATURE_TYPE_LABEL = 'Digital Simple';
+export const SIMPLE_SIGNATURE_TYPE_LABEL = 'Electrónica Simple';
 
 /** Firma simple: fundamento legal (Arts. 89, 90 y 93 del Código de Comercio). */
 export const SIMPLE_SIGNATURE_BACKING_LABEL =
