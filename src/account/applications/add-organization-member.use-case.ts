@@ -167,9 +167,19 @@ export class AddOrganizationMemberUseCase {
      */
     await this.organizationMemberEventsProducer.flushOutbox();
 
+    /**
+     * Al catálogo va la membresía RECARGADA con su organización, no la que devolvió la
+     * transacción: aquélla sale de un `save()` y no trae la relación cargada, así que
+     * `toCatalogEntry` escribía `organizationDetail: null` en Redis. Como `getAccountsCatalog`
+     * lee de Redis y no cae a Postgres, al recién agregado le quedaba una entrada sin nombre y el
+     * selector de cuentas del frontend la pintaba como "Organización" —indistinguible de
+     * cualquier otra— hasta que alguien editara el perfil de la organización y disparara
+     * `refreshCatalogForOrganizationMembers`. Es el mismo cuidado que ya tiene el alta por
+     * invitación aceptada (`OrganizationInvitationService`) y el alta de la propia organización.
+     */
     await this.accountService.appendAccountToCatalog(
       invitedUser.id,
-      membership,
+      await this.accountService.findByIdOrFail(membership.id),
     );
 
     return {

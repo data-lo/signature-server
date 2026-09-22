@@ -126,6 +126,7 @@ describe('casos de uso de miembros de organización', () => {
   let accountService: {
     removeAccountFromCatalog: jest.Mock;
     appendAccountToCatalog: jest.Mock;
+    findByIdOrFail: jest.Mock;
     assertHasOrganizationPermission: jest.Mock;
     resolveOwnActiveAccountOrFail: jest.Mock;
   };
@@ -152,6 +153,13 @@ describe('casos de uso de miembros de organización', () => {
     accountService = {
       removeAccountFromCatalog: jest.fn(),
       appendAccountToCatalog: jest.fn(),
+      /**
+       * Espeja al real: recarga la cuenta CON su organización. El alta la usa para que la entrada
+       * del catálogo en Redis lleve el nombre de la organización — la fila que devuelve la
+       * transacción no trae la relación, y sin esto el nuevo miembro veía "Organización" a secas
+       * en el selector de cuentas.
+       */
+      findByIdOrFail: jest.fn(),
       // Espeja al real: devuelve la cuenta ACTIVA del llamador, de la que sale el organizationId.
       assertHasOrganizationPermission: jest
         .fn()
@@ -902,20 +910,43 @@ describe('casos de uso de miembros de organización', () => {
     });
 
     /** Sin esto, la organización no le aparece en el selector hasta que vuelva a iniciar sesión. */
-    it('agrega la organización al catálogo cacheado del nuevo miembro', async () => {
+    /**
+     * Lo que va al catálogo es la membresía RECARGADA, con su organización, y no la fila que
+     * devolvió la transacción. La diferencia se ve en Redis: `toCatalogEntry` deriva
+     * `organizationDetail` de la relación, `getAccountsCatalog` lee de Redis SIN caer a Postgres,
+     * y una entrada sin ese detalle deja al nuevo miembro con un selector de cuentas que dice
+     * "Organización" a secas —indistinguible de cualquier otra— hasta que alguien edite el perfil
+     * de la organización.
+     */
+    it('agrega la organización al catálogo cacheado del nuevo miembro, con su nombre', async () => {
+      const reloaded = savedMembershipRow({
+        organization: {
+          id: 'org-1',
+          name: 'Acme S.A. de C.V.',
+          displayName: 'Acme',
+        },
+      });
+
       userRepository.findOne.mockResolvedValue(NEW_USER);
       accountRepository.findOne
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(savedMembershipRow());
+      accountService.findByIdOrFail.mockResolvedValue(reloaded);
 
       await addOrganizationMember.execute('owner-1', 'admin-account-1', {
         email: NEW_USER.email,
         roleId: MEMBER_ROLE.id,
       });
 
+      expect(accountService.findByIdOrFail).toHaveBeenCalledWith(
+        'new-member-1',
+      );
       expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
         NEW_USER.id,
-        expect.objectContaining({ id: 'new-member-1' }),
+        expect.objectContaining({
+          id: 'new-member-1',
+          organization: expect.objectContaining({ displayName: 'Acme' }),
+        }),
       );
     });
 
