@@ -30,8 +30,17 @@ import * as path from 'path';
 
 const MUTED_TEXT_COLOR = '#333333';
 
-/** Ancho de los banners de guiones (`----Firmas----`) del layout de referencia. */
-const MONO_BANNER_WIDTH = 70;
+/**
+ * Ancho (en caracteres) de los banners de guiones (`----Firmas----`), calculado para que la línea
+ * llegue de margen a margen y quede alineada con el texto legal de apertura.
+ *
+ * JetBrains Mono es monoespaciada: cada carácter mide 0.6 × fontSize (verificado con
+ * `widthOfString` de pdfkit) — a los 8.5pt del estilo 'mono', 5.1pt por carácter. El ancho de
+ * contenido de la hoja es 512pt (carta de 612pt menos los 50pt de margen a cada lado, ver
+ * `SHEET_PAGE_MARGINS`), así que 512 / 5.1 ≈ 100.4 caracteres llenan la línea sin desbordar los
+ * márgenes.
+ */
+const MONO_BANNER_WIDTH = 100;
 
 /** Ancho de la columna de etiquetas de las tablas informativas. */
 const LABEL_COLUMN_WIDTH = 115;
