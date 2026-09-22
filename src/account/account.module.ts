@@ -31,6 +31,7 @@ import { GetOrganizationInvitationPreviewUseCase } from './applications/get-orga
 import { AcceptOrganizationInvitationUseCase } from './applications/accept-organization-invitation.use-case';
 import { GrantAccountAccessUseCase } from './applications/grant-account-access.use-case';
 import { GetOrganizationMembersUseCase } from './applications/get-organization-members.use-case';
+import { GetOrganizationUseCase } from './applications/get-organization.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
 import { GetAccountMemberUseCase } from './applications/get-account-member.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
@@ -77,6 +78,7 @@ import { RevokeAccountAccessUseCase } from './applications/revoke-account-access
     AcceptOrganizationInvitationUseCase,
     GrantAccountAccessUseCase,
     GetOrganizationMembersUseCase,
+    GetOrganizationUseCase,
     GetOrganizationMemberListUseCase,
     GetAccountMemberUseCase,
     UpdateAccountMemberUseCase,

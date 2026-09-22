@@ -166,6 +166,42 @@ export class AccountService {
     return currentUser;
   }
 
+  /**
+   * El perfil completo de una organización, para la pantalla que lo muestra.
+   *
+   * Existe aparte de `toCatalogEntry` porque aquel sirve al selector de cuentas y publica sólo lo
+   * que el selector rotula —razón social y nombre de visualización—. El resto del perfil se podía
+   * ESCRIBIR desde siempre (`PATCH /account/:id`) pero no leér: quien guardaba un domicilio no
+   * volvía a verlo. Ampliar el catálogo en su lugar habría engordado la entrada que viaja
+   * cacheada en Redis para cada miembro, con campos que el selector no usa.
+   *
+   * @param organizationId - Organización cuyo perfil se pide.
+   * @returns La fila de `organizations`.
+   *
+   * @throws {NotFoundException} Si no existe ninguna organización con ese id.
+   *
+   * @example
+   * ```ts
+   * const organization = await accountService.findOrganizationByIdOrFail('org-1');
+   * organization.rfc; // 'ACM010101AAA'
+   * ```
+   */
+  async findOrganizationByIdOrFail(
+    organizationId: string,
+  ): Promise<OrganizationEntity> {
+    const organization = await this.organizationRepository.findOne({
+      where: { id: organizationId },
+    });
+
+    if (!organization) {
+      throw new NotFoundException(
+        `Organización con ID ${organizationId} no encontrada`,
+      );
+    }
+
+    return organization;
+  }
+
   /** Escribe sólo los campos del perfil de organización que vinieron en el DTO. */
   async updateOrganizationDetails(
     organizationId: string,

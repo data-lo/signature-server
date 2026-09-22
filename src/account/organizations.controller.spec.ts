@@ -4,6 +4,7 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
 import { AddOrganizationMemberUseCase } from './applications/add-organization-member.use-case';
+import { GetOrganizationUseCase } from './applications/get-organization.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
@@ -15,6 +16,7 @@ describe('OrganizationsController', () => {
   let createOrganization: { execute: jest.Mock };
   let inviteOrganizationMember: { execute: jest.Mock };
   let addOrganizationMember: { execute: jest.Mock };
+  let getOrganization: { execute: jest.Mock };
   let getOrganizationMemberList: { execute: jest.Mock };
   let updateAccountMember: { execute: jest.Mock };
   let revokeAccountAccess: { execute: jest.Mock };
@@ -33,6 +35,7 @@ describe('OrganizationsController', () => {
     createOrganization = { execute: jest.fn() };
     inviteOrganizationMember = { execute: jest.fn() };
     addOrganizationMember = { execute: jest.fn() };
+    getOrganization = { execute: jest.fn() };
     getOrganizationMemberList = { execute: jest.fn() };
     updateAccountMember = { execute: jest.fn() };
     revokeAccountAccess = { execute: jest.fn() };
@@ -51,6 +54,7 @@ describe('OrganizationsController', () => {
           provide: AddOrganizationMemberUseCase,
           useValue: addOrganizationMember,
         },
+        { provide: GetOrganizationUseCase, useValue: getOrganization },
         {
           provide: GetOrganizationMemberListUseCase,
           useValue: getOrganizationMemberList,
@@ -105,6 +109,17 @@ describe('OrganizationsController', () => {
       'account-1',
       dto,
     );
+  });
+
+  /**
+   * Sólo el `organizationId` de la ruta: el llamador no hace falta porque la pertenencia ya la
+   * comprobó `PermissionsGuard` con ese mismo identificador, y pasárselo al caso de uso
+   * sugeriría que vuelve a decidir algo que ya está decidido.
+   */
+  it('findOne delega en GetOrganizationUseCase con el organizationId de la ruta', () => {
+    controller.findOne('org-1');
+
+    expect(getOrganization.execute).toHaveBeenCalledWith('org-1');
   });
 
   it('findMembers delega en GetOrganizationMemberListUseCase con el userId del JWT y el organizationId de la ruta', () => {
