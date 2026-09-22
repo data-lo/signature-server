@@ -61,7 +61,6 @@ describe('MinioService — objetos sensibles', () => {
       'partially-signed-documents';
     process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET = 'cancelled-documents';
     process.env.MINIO_REJECTED_DOCUMENTS_BUCKET = 'rejected-documents';
-    process.env.MINIO_OFICIAL_CARDS_BUCKET = 'oficial-id-cards';
     process.env.MINIO_SIGNATURE_IMAGES_BUCKET = 'signature-images';
     delete process.env.MINIO_IDENTITY_DOCUMENTS_BUCKET;
 

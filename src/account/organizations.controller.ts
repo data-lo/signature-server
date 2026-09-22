@@ -5,10 +5,8 @@ import {
   Delete,
   Get,
   Param,
-  ParseBoolPipe,
   Patch,
   Post,
-  Query,
 } from '@nestjs/common';
 
 // Swagger
@@ -65,7 +63,7 @@ export class OrganizationsController {
     private readonly revokeAccountAccess: RevokeAccountAccessUseCase,
     private readonly getMemberPermissions: GetMemberPermissionsUseCase,
     private readonly assignPermissionsToMember: AssignMemberPermissionsUseCase,
-  ) {}
+  ) { }
 
   @Post()
   @ApiCreateOrganization()
@@ -120,14 +118,11 @@ export class OrganizationsController {
   @RequirePermission(RESOURCE_KEY_ENUM.MEMBER, ACTION_KEY_ENUM.READ)
   findMembers(
     @CurrentUser() user: JwtPayload,
-    @Param('organizationId') organizationId: string,
-    @Query('includeInactive', new ParseBoolPipe({ optional: true }))
-    includeInactive?: boolean,
+    @Param('organizationId') organizationId: string
   ) {
     return this.getOrganizationMemberList.execute(
-      user.sub,
       organizationId,
-      includeInactive ?? false,
+
     );
   }
 

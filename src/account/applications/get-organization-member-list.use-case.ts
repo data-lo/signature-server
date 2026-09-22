@@ -20,7 +20,7 @@ import { OrganizationMemberData } from '../interfaces/response/account-member-re
  */
 @Injectable()
 export class GetOrganizationMemberListUseCase {
-  constructor(private readonly accountMemberService: AccountMemberService) {}
+  constructor(private readonly accountMemberService: AccountMemberService) { }
 
   /**
    * Lista los miembros de una organización para la pantalla de administración.
@@ -40,21 +40,14 @@ export class GetOrganizationMemberListUseCase {
    * ```
    */
   async execute(
-    callerId: string,
     organizationId: string,
-    includeInactive = false,
   ): Promise<BaseResponse<OrganizationMemberData[]>> {
-    /**
-     * Sin comprobación de permisos aquí: la hace `PermissionsGuard` con el
-     * `@RequirePermission(MEMBER, READ)` del controller, que además exige el permiso propio del
-     * recurso (`MEMBER.READ`) en vez del genérico `ORGANIZATION.READ`.
-     */
+    
     return {
       success: true,
       message: 'Miembros obtenidos correctamente',
       data: await this.accountMemberService.listDetailedByOrganization(
         organizationId,
-        { includeInactive },
       ),
     };
   }

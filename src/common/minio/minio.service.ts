@@ -40,7 +40,6 @@ export class MinioService {
   MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET: any;
   MINIO_CANCELLED_DOCUMENTS_BUCKET: any;
   MINIO_REJECTED_DOCUMENTS_BUCKET: any;
-  MINIO_OFICIAL_CARDS_BUCKET: any;
   MINIO_SIGNATURE_IMAGES_BUCKET: any;
   MINIO_IDENTITY_DOCUMENTS_BUCKET: string;
 
@@ -124,7 +123,6 @@ export class MinioService {
       !process.env.MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET ||
       !process.env.MINIO_REJECTED_DOCUMENTS_BUCKET ||
-      !process.env.MINIO_OFICIAL_CARDS_BUCKET ||
       !process.env.MINIO_SIGNATURE_IMAGES_BUCKET
     ) {
       throw new Error(
@@ -144,7 +142,7 @@ export class MinioService {
       process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET;
     this.MINIO_REJECTED_DOCUMENTS_BUCKET =
       process.env.MINIO_REJECTED_DOCUMENTS_BUCKET;
-    this.MINIO_OFICIAL_CARDS_BUCKET = process.env.MINIO_OFICIAL_CARDS_BUCKET;
+
     this.MINIO_SIGNATURE_IMAGES_BUCKET =
       process.env.MINIO_SIGNATURE_IMAGES_BUCKET;
     // Con valor por defecto y no en la lista obligatoria de arriba: agregar una variable nueva a
@@ -217,8 +215,6 @@ export class MinioService {
         return this.MINIO_CANCELLED_DOCUMENTS_BUCKET;
       case BUCKET_TYPES_ENUM.REJECTED_DOCUMENTS:
         return this.MINIO_REJECTED_DOCUMENTS_BUCKET;
-      case BUCKET_TYPES_ENUM.OFICIAL_CARDS:
-        return this.MINIO_OFICIAL_CARDS_BUCKET;
       case BUCKET_TYPES_ENUM.SIGNATURE_IMAGES:
         return this.MINIO_SIGNATURE_IMAGES_BUCKET;
       case BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS:

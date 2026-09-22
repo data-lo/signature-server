@@ -55,7 +55,7 @@ export class AccountMemberService {
     private userRepository: Repository<UserEntity>,
 
     private readonly rolesService: RolesService,
-  ) {}
+  ) { }
 
   /**
    * Resuelve la cuenta PERSONAL (1:1 con el usuario) de un usuario dado — usada donde un
@@ -296,19 +296,26 @@ export class AccountMemberService {
    */
   async listDetailedByOrganization(
     organizationId: string,
-    options: { includeInactive?: boolean } = {},
   ): Promise<OrganizationMemberData[]> {
     const members = await this.accountRepository.find({
       where: {
         organizationId,
-        ...(options.includeInactive ? {} : { isActive: true }),
       },
-      relations: { user: { personalInformation: true }, role: true },
-      order: { joinedAt: 'ASC' },
+      relations: {
+        user: {
+          personalInformation: true
+        },
+        role: true
+      },
+      order: {
+        isActive: 'DESC',
+        joinedAt: 'ASC',
+      },
     });
 
     return this.toDetailedMembers(members);
   }
+
 
   /**
    * Una membresía concreta con el mismo shape que la lista.
