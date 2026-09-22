@@ -26,6 +26,7 @@ import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { CreateOrganizationUseCase } from './applications/create-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
 import { AddOrganizationMemberUseCase } from './applications/add-organization-member.use-case';
+import { GetOrganizationUseCase } from './applications/get-organization.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
@@ -43,6 +44,7 @@ import { AssignMemberPermissionsDto } from 'src/organization-permissions/dto/ass
 import { ApiCreateOrganization } from './docs/api-create-organization.docs';
 import { ApiInviteOrganizationMember } from './docs/api-invite-organization-member.docs';
 import { ApiAddOrganizationMember } from './docs/api-add-organization-member.docs';
+import { ApiGetOrganization } from './docs/api-get-organization.docs';
 import { ApiGetOrganizationMemberList } from './docs/api-get-organization-member-list.docs';
 import { ApiUpdateOrganizationMemberRole } from './docs/api-update-organization-member-role.docs';
 import { ApiRemoveOrganizationMember } from './docs/api-remove-organization-member.docs';
@@ -57,6 +59,7 @@ export class OrganizationsController {
     private readonly createOrganization: CreateOrganizationUseCase,
     private readonly inviteOrganizationMember: InviteOrganizationMemberUseCase,
     private readonly addOrganizationMember: AddOrganizationMemberUseCase,
+    private readonly getOrganization: GetOrganizationUseCase,
     private readonly getOrganizationMemberList: GetOrganizationMemberListUseCase,
     private readonly updateAccountMember: UpdateAccountMemberUseCase,
     private readonly revokeAccountAccess: RevokeAccountAccessUseCase,
@@ -99,6 +102,17 @@ export class OrganizationsController {
     @Body() dto: AddOrganizationMemberDto,
   ) {
     return this.addOrganizationMember.execute(user.sub, accountId, dto);
+  }
+
+  /**
+   * Va antes que `:organizationId/members` sólo por orden de lectura: no compiten, porque un
+   * segmento no casa con dos.
+   */
+  @Get(':organizationId')
+  @ApiGetOrganization()
+  @RequirePermission(RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.READ)
+  findOne(@Param('organizationId') organizationId: string) {
+    return this.getOrganization.execute(organizationId);
   }
 
   @Get(':organizationId/members')
