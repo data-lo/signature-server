@@ -20,7 +20,7 @@ import { OrganizationMemberData } from '../interfaces/response/account-member-re
  */
 @Injectable()
 export class GetOrganizationMemberListUseCase {
-  constructor(private readonly accountMemberService: AccountMemberService) {}
+  constructor(private readonly accountMemberService: AccountMemberService) { }
 
   /**
    * Lista los miembros de una organización para la pantalla de administración.
@@ -54,7 +54,6 @@ export class GetOrganizationMemberListUseCase {
       message: 'Miembros obtenidos correctamente',
       data: await this.accountMemberService.listDetailedByOrganization(
         organizationId,
-        { includeInactive },
       ),
     };
   }
