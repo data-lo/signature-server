@@ -28,7 +28,6 @@ import * as path from 'path';
  * tanto en `src/` como en `dist/` (nest-cli.json las copia al build).
  */
 
-const BORDER_COLOR = '#000000';
 const MUTED_TEXT_COLOR = '#333333';
 
 /** Ancho de los banners de guiones (`----Firmas----`) del layout de referencia. */
@@ -192,9 +191,9 @@ function brandColumn(image: string, fit: [number, number]): Column {
 }
 
 /**
- * Tabla informativa de dos columnas (etiqueta / valor) con el borde fino de las plantillas. Es el
- * formato de las tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que
- * les da su separación visual.
+ * Tabla informativa de dos columnas (etiqueta / valor), sin bordes visibles. Es el formato de las
+ * tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que les da su
+ * separación visual.
  */
 export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
   return {
@@ -211,10 +210,8 @@ export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
       ]) as Content[][],
     },
     layout: {
-      hLineWidth: () => 0.5,
-      vLineWidth: () => 0.5,
-      hLineColor: () => BORDER_COLOR,
-      vLineColor: () => BORDER_COLOR,
+      hLineWidth: () => 0,
+      vLineWidth: () => 0,
       paddingTop: () => 3,
       paddingBottom: () => 3,
     },
