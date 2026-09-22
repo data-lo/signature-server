@@ -21,6 +21,7 @@ import { AccountMemberService } from '../account-member.service';
 import { CreateOrganizationUseCase } from './create-organization.use-case';
 import { UpdateAccountUseCase } from './update-account.use-case';
 import { GetAccountUseCase } from './get-account.use-case';
+import { GetOrganizationUseCase } from './get-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './invite-organization-member.use-case';
 
 const OWNER_ROLE = { id: 'owner-role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER };
@@ -80,6 +81,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
   let createOrganization: CreateOrganizationUseCase;
   let updateAccount: UpdateAccountUseCase;
   let getAccount: GetAccountUseCase;
+  let getOrganization: GetOrganizationUseCase;
   let inviteOrganizationMember: InviteOrganizationMemberUseCase;
 
   beforeEach(async () => {
@@ -126,6 +128,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
         CreateOrganizationUseCase,
         UpdateAccountUseCase,
         GetAccountUseCase,
+        GetOrganizationUseCase,
         InviteOrganizationMemberUseCase,
         {
           provide: getRepositoryToken(AccountEntity),
@@ -166,6 +169,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
     createOrganization = module.get(CreateOrganizationUseCase);
     updateAccount = module.get(UpdateAccountUseCase);
     getAccount = module.get(GetAccountUseCase);
+    getOrganization = module.get(GetOrganizationUseCase);
     inviteOrganizationMember = module.get(InviteOrganizationMemberUseCase);
   });
 
@@ -411,6 +415,84 @@ describe('casos de uso de cuentas y organizaciones', () => {
 
       await expect(getAccount.execute('intruder', 'account-1')).rejects.toThrow(
         ForbiddenException,
+      );
+    });
+  });
+
+  /**
+   * La lectura que faltaba: estos campos se podían escribir con `PATCH /account/:id` y ninguna
+   * respuesta los devolvía, así que quien guardaba un domicilio no volvía a verlo.
+   */
+  describe('GetOrganizationUseCase', () => {
+    const ORGANIZATION = {
+      id: 'org-1',
+      name: 'Acme Corp S.A. de C.V.',
+      displayName: 'Acme',
+      rfc: 'ACM010101AAA',
+      phoneNumber: '5512345678',
+      address: 'Av. Reforma 123, CDMX',
+      domainAllowed: 'acme.com',
+      isActive: true,
+      indexDocuments: true,
+    };
+
+    it('devuelve el perfil completo, con los campos que el catálogo no publica', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      const result = await getOrganization.execute('org-1');
+
+      expect(organizationRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'org-1' },
+      });
+      expect(result.data).toEqual({
+        id: 'org-1',
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+        rfc: 'ACM010101AAA',
+        phoneNumber: '5512345678',
+        address: 'Av. Reforma 123, CDMX',
+        domainAllowed: 'acme.com',
+        isActive: true,
+      });
+    });
+
+    /**
+     * `indexDocuments` no es información de la organización sino una preferencia sobre sus
+     * documentos: se queda fuera del contrato aunque la entidad lo tenga al lado.
+     */
+    it('no publica indexDocuments', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      const result = await getOrganization.execute('org-1');
+
+      expect(result.data).not.toHaveProperty('indexDocuments');
+    });
+
+    /** Los opcionales viajan en `null`, no se omiten: la pantalla distingue vacío de ausente. */
+    it('devuelve en null los campos que la organización todavía no tiene', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        rfc: null,
+        phoneNumber: null,
+        address: null,
+        domainAllowed: null,
+      });
+
+      const result = await getOrganization.execute('org-1');
+
+      expect(result.data).toMatchObject({
+        rfc: null,
+        phoneNumber: null,
+        address: null,
+        domainAllowed: null,
+      });
+    });
+
+    it('lanza NotFoundException si la organización no existe', async () => {
+      organizationRepository.findOne.mockResolvedValue(null);
+
+      await expect(getOrganization.execute('org-fantasma')).rejects.toThrow(
+        NotFoundException,
       );
     });
   });
