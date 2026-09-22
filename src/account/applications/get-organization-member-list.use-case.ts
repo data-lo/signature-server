@@ -40,15 +40,9 @@ export class GetOrganizationMemberListUseCase {
    * ```
    */
   async execute(
-    callerId: string,
     organizationId: string,
-    includeInactive = false,
   ): Promise<BaseResponse<OrganizationMemberData[]>> {
-    /**
-     * Sin comprobación de permisos aquí: la hace `PermissionsGuard` con el
-     * `@RequirePermission(MEMBER, READ)` del controller, que además exige el permiso propio del
-     * recurso (`MEMBER.READ`) en vez del genérico `ORGANIZATION.READ`.
-     */
+    
     return {
       success: true,
       message: 'Miembros obtenidos correctamente',
