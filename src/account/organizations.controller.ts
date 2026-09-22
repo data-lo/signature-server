@@ -123,7 +123,6 @@ export class OrganizationsController {
     @Param('organizationId') organizationId: string
   ) {
     return this.getOrganizationMemberList.execute(
-      user.sub,
       organizationId,
 
     );
