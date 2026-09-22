@@ -120,7 +120,7 @@ export class AdvancedSummaryDocumentService {
     signers: AdvancedSummaryDocumentSigner[],
   ): TDocumentDefinitions {
     return {
-      pageSize: 'A4',
+      pageSize: 'LETTER',
       pageMargins: SHEET_PAGE_MARGINS,
       defaultStyle: SHEET_DEFAULT_STYLE,
       styles: SHEET_STYLES,
@@ -172,15 +172,16 @@ export class AdvancedSummaryDocumentService {
     document: AdvancedSummaryDocumentInfo,
   ): string[][] {
     return [
-      ['ID', document.id],
+      ['Id del Documento', document.id],
       ['Nombre del Documento', document.documentName],
-      ['Hash', document.hash],
+      ['Huella del Documento', document.hash],
       ['No. de Páginas', String(document.totalPages)],
       ['Creado por', document.createdBy],
     ];
   }
 
   /** Una tabla por firmante, con los campos de la plantilla de referencia. */
+  /** No se muestra la IP por privacidad*/
   private buildSignerTable(
     signer: AdvancedSummaryDocumentSigner,
     index: number,
@@ -189,7 +190,6 @@ export class AdvancedSummaryDocumentService {
       [
         ['Nombre', signer.name],
         ['Tipo de Firma', SIGNATURE_TYPE_LABEL],
-        ['IP', signer.ipAddress],
         ['Sustentada', SIGNATURE_BACKING_LABEL],
         [
           'Número de Serie del Certificado',
