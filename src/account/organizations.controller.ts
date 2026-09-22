@@ -5,10 +5,8 @@ import {
   Delete,
   Get,
   Param,
-  ParseBoolPipe,
   Patch,
   Post,
-  Query,
 } from '@nestjs/common';
 
 // Swagger
