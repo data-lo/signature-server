@@ -37,6 +37,13 @@ const MONO_BANNER_WIDTH = 70;
 const LABEL_COLUMN_WIDTH = 115;
 
 /**
+ * Tamaño de letra de las tablas informativas (etiqueta y valor), un punto por debajo del 'mono'
+ * normal (8.5). Sólo afecta a las tablas —no a los banners de guiones ni al encabezado, que
+ * también usan 'mono'— y es lo que le da más margen al contenido para no salirse de la hoja.
+ */
+const INFO_TABLE_FONT_SIZE = 7.5;
+
+/**
  * Tipografías de las plantillas de referencia:
  *  - **Lato** para el texto corrido: párrafos legales, títulos de sección y pie de página.
  *  - **JetBrains Mono** para el contenido de las tablas informativas y los separadores de guiones,
@@ -214,13 +221,11 @@ export function buildInfoTable(
       // firma en base64 de la hoja avanzada, que ocupa varios renglones.
       dontBreakRows: true,
       body: rows.map(([label, value], rowIndex) => [
-        { text: label, style: 'mono' },
+        { text: label, style: 'mono', fontSize: INFO_TABLE_FONT_SIZE },
         {
           text: value,
           style: 'mono',
-          ...(valueFontSizeByRow[rowIndex] !== undefined
-            ? { fontSize: valueFontSizeByRow[rowIndex] }
-            : {}),
+          fontSize: valueFontSizeByRow[rowIndex] ?? INFO_TABLE_FONT_SIZE,
         },
       ]) as Content[][],
     },
