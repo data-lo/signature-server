@@ -38,9 +38,9 @@ const BRAND_BANNER = 'Firmalo_FIEL';
 const SIGNATURE_LINE_LENGTH = 64;
 
 /**
- * Tamaño de letra del VALOR de "Firma Electrónica" (el bloque base64), dos puntos por debajo del
- * 'mono' normal (8.5). Achica ese bloque para que "Fecha de Firma" no se corra fuera de la hoja
- * cuando el documento tiene un solo firmante.
+ * Tamaño de letra del VALOR de "Firma Electrónica" (el bloque base64), por debajo del tamaño de
+ * las tablas informativas (`INFO_TABLE_FONT_SIZE`, 7.5). Achica ese bloque para que "Fecha de
+ * Firma" no se corra fuera de la hoja cuando el documento tiene un solo firmante.
  */
 const SIGNATURE_VALUE_FONT_SIZE = 6.5;
 
