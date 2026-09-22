@@ -28,7 +28,6 @@ import * as path from 'path';
  * tanto en `src/` como en `dist/` (nest-cli.json las copia al build).
  */
 
-const BORDER_COLOR = '#000000';
 const MUTED_TEXT_COLOR = '#333333';
 
 /** Ancho de los banners de guiones (`----Firmas----`) del layout de referencia. */
@@ -192,11 +191,20 @@ function brandColumn(image: string, fit: [number, number]): Column {
 }
 
 /**
- * Tabla informativa de dos columnas (etiqueta / valor) con el borde fino de las plantillas. Es el
- * formato de las tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que
- * les da su separación visual.
+ * Tabla informativa de dos columnas (etiqueta / valor), sin bordes visibles. Es el formato de las
+ * tres secciones —Documento, Constancia NOM-151 y una por cada firmante— y lo que les da su
+ * separación visual.
+ *
+ * `valueFontSizeByRow` reduce el tamaño de letra del VALOR de renglones puntuales (por índice),
+ * dejando la etiqueta sin tocar. Lo usa la hoja avanzada para achicar el bloque base64 de "Firma
+ * Electrónica", que si no puede empujar "Fecha de Firma" fuera de la hoja cuando hay un solo
+ * firmante.
  */
-export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
+export function buildInfoTable(
+  rows: string[][],
+  marginTop = 0,
+  valueFontSizeByRow: Record<number, number> = {},
+): ContentTable {
   return {
     margin: [0, marginTop, 0, 0],
     table: {
@@ -205,16 +213,20 @@ export function buildInfoTable(rows: string[][], marginTop = 0): ContentTable {
       // siguiente sin su etiqueta al lado — un dato suelto en un documento legal. Pasa con la
       // firma en base64 de la hoja avanzada, que ocupa varios renglones.
       dontBreakRows: true,
-      body: rows.map(([label, value]) => [
+      body: rows.map(([label, value], rowIndex) => [
         { text: label, style: 'mono' },
-        { text: value, style: 'mono' },
+        {
+          text: value,
+          style: 'mono',
+          ...(valueFontSizeByRow[rowIndex] !== undefined
+            ? { fontSize: valueFontSizeByRow[rowIndex] }
+            : {}),
+        },
       ]) as Content[][],
     },
     layout: {
-      hLineWidth: () => 0.5,
-      vLineWidth: () => 0.5,
-      hLineColor: () => BORDER_COLOR,
-      vLineColor: () => BORDER_COLOR,
+      hLineWidth: () => 0,
+      vLineWidth: () => 0,
       paddingTop: () => 3,
       paddingBottom: () => 3,
     },

@@ -38,6 +38,13 @@ const BRAND_BANNER = 'Firmalo_FIEL';
 const SIGNATURE_LINE_LENGTH = 64;
 
 /**
+ * Tamaño de letra del VALOR de "Firma Electrónica" (el bloque base64), dos puntos por debajo del
+ * 'mono' normal (8.5). Achica ese bloque para que "Fecha de Firma" no se corra fuera de la hoja
+ * cuando el documento tiene un solo firmante.
+ */
+const SIGNATURE_VALUE_FONT_SIZE = 6.5;
+
+/**
  * Fundamento legal de la firma avanzada, tomado de la plantilla de referencia. Es OTRO texto que
  * el de la hoja simple —y no una variante del mismo—: la firma avanzada se sostiene en el artículo
  * 97 y en el certificado del SAT.
@@ -120,7 +127,7 @@ export class AdvancedSummaryDocumentService {
     signers: AdvancedSummaryDocumentSigner[],
   ): TDocumentDefinitions {
     return {
-      pageSize: 'A4',
+      pageSize: 'LETTER',
       pageMargins: SHEET_PAGE_MARGINS,
       defaultStyle: SHEET_DEFAULT_STYLE,
       styles: SHEET_STYLES,
@@ -172,34 +179,38 @@ export class AdvancedSummaryDocumentService {
     document: AdvancedSummaryDocumentInfo,
   ): string[][] {
     return [
-      ['ID', document.id],
+      ['Id del Documento', document.id],
       ['Nombre del Documento', document.documentName],
-      ['Hash', document.hash],
+      ['Huella del Documento', document.hash],
       ['No. de Páginas', String(document.totalPages)],
       ['Creado por', document.createdBy],
     ];
   }
 
   /** Una tabla por firmante, con los campos de la plantilla de referencia. */
+  /** No se muestra la IP por privacidad*/
   private buildSignerTable(
     signer: AdvancedSummaryDocumentSigner,
     index: number,
   ): ContentTable {
-    return buildInfoTable(
+    const rows = [
+      ['Nombre', signer.name],
+      ['Tipo de Firma', SIGNATURE_TYPE_LABEL],
+      ['Sustentada', SIGNATURE_BACKING_LABEL],
       [
-        ['Nombre', signer.name],
-        ['Tipo de Firma', SIGNATURE_TYPE_LABEL],
-        ['IP', signer.ipAddress],
-        ['Sustentada', SIGNATURE_BACKING_LABEL],
-        [
-          'Número de Serie del Certificado',
-          signer.certificateSerialNumber ?? '',
-        ],
-        ['Firma Electrónica', this.wrapSignature(signer.electronicSignature)],
-        ['Fecha de Firma', formatSheetTimestamp(signer.signedAt)],
+        'Número de Serie del Certificado',
+        signer.certificateSerialNumber ?? '',
       ],
-      index === 0 ? 0 : 12,
-    );
+      ['Firma Electrónica', this.wrapSignature(signer.electronicSignature)],
+      ['Fecha de Firma', formatSheetTimestamp(signer.signedAt)],
+    ];
+    const signatureRowIndex = rows.length - 2;
+
+    return buildInfoTable(rows, index === 0 ? 0 : 12, {
+      // Sólo el VALOR (el bloque base64) baja de tamaño; la etiqueta "Firma Electrónica" se queda
+      // en 'mono' normal para no romper la consistencia visual con los demás renglones.
+      [signatureRowIndex]: SIGNATURE_VALUE_FONT_SIZE,
+    });
   }
 
   /**
