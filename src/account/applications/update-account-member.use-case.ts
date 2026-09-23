@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { RolesService } from 'src/roles/roles.service';
 import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 
@@ -66,10 +67,30 @@ export class UpdateAccountMemberUseCase {
      * tenant a otro por el simple hecho de conocer su identificador.
      */
     if (dto.roleId) {
-      await this.rolesService.findAssignableRoleOrFail(
+      const role = await this.rolesService.findAssignableRoleOrFail(
         dto.roleId,
         member.organizationId as string,
       );
+
+      /**
+       * OWNER no se reparte: lo recibe automáticamente quien crea la cuenta, y es lo que
+       * distingue al dueño de un administrador nombrado por él. `InviteOrganizationMemberUseCase`
+       * ya lo rechazaba al invitar, pero este endpoint no, así que bastaba editar el rol de
+       * cualquier miembro para convertirlo en propietario. El modal tampoco lo ofrece, pero eso
+       * es presentación: la regla tiene que vivir acá. Para delegar la administración está ADMIN.
+       *
+       * Se comprueba sólo cuando el rol CAMBIA: guardar sobre el propietario su propio rol no
+       * reparte nada, y rechazarlo convertiría en error una edición que no modifica nada.
+       */
+      if (
+        changesRole &&
+        role.isSystemRole &&
+        role.name === SYSTEM_ROLE_NAME_ENUM.OWNER
+      ) {
+        throw new BadRequestException(
+          'El rol de propietario no se puede asignar a un miembro',
+        );
+      }
     }
 
     /**
