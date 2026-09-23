@@ -27,6 +27,16 @@ import { RevokeAccountAccessUseCase } from './revoke-account-access.use-case';
 
 const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
 const MEMBER_ROLE = { id: 'member-role-1', name: SYSTEM_ROLE_NAME_ENUM.MEMBER };
+/**
+ * El rol del dueño de la cuenta. Lleva `isSystemRole` porque la regla que lo protege mira las
+ * dos cosas: que sea de sistema y que se llame OWNER — un rol personalizado que una organización
+ * bautice "OWNER" no es el propietario.
+ */
+const OWNER_ROLE = {
+  id: 'owner-role-1',
+  name: SYSTEM_ROLE_NAME_ENUM.OWNER,
+  isSystemRole: true,
+};
 
 /** Los tres permisos que el catálogo estático le da a MEMBER, tal como los publica la API. */
 const MEMBER_PERMISSIONS: RolePermissionData[] = [
@@ -618,6 +628,57 @@ describe('casos de uso de miembros de organización', () => {
       );
     });
 
+    /**
+     * OWNER no se reparte: lo recibe quien crea la cuenta. El modal ya no lo ofrece, pero eso es
+     * presentación — sin esta regla bastaba mandar su `roleId` a la API para hacer propietario a
+     * cualquier miembro.
+     */
+    it('update rechaza asignarle a un miembro el rol de propietario', async () => {
+      const targetMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetMember)
+        .mockResolvedValueOnce(adminAccount());
+      rolesService.findAssignableRoleOrFail.mockResolvedValue(OWNER_ROLE);
+
+      await expect(
+        updateAccountMember.execute('owner-1', 'member-2', {
+          roleId: OWNER_ROLE.id,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * La regla mira el CAMBIO, no el rol: guardar sobre el propietario el rol que ya tiene no
+     * reparte nada, y rechazarlo convertiría en error abrir su edición y confirmar sin tocar el
+     * selector.
+     */
+    it('update deja guardar al propietario su propio rol sin cambios', async () => {
+      const owner = {
+        id: 'owner-account-1',
+        organizationId: 'org-1',
+        userId: 'user-owner',
+        roleId: OWNER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(owner)
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(owner);
+      rolesService.findAssignableRoleOrFail.mockResolvedValue(OWNER_ROLE);
+
+      await updateAccountMember.execute('owner-1', 'owner-account-1', {
+        roleId: OWNER_ROLE.id,
+      });
+
+      expect(accountRepository.update).toHaveBeenCalled();
+    });
     it('update permite desactivar (isActive:false) a un MEMBER sin pasar por la protección de último ADMIN', async () => {
       const targetMember = {
         id: 'member-2',
