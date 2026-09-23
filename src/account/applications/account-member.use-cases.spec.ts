@@ -483,18 +483,18 @@ describe('casos de uso de miembros de organización', () => {
     });
 
     /**
-     * Por defecto la tabla no muestra a quien fue dado de baja; la vista de administración puede
-     * pedirlo explícitamente para poder explicar por qué ese correo ya no se puede volver a
-     * agregar.
+     * La tabla nunca muestra a quien fue dado de baja. Hubo un `includeInactive` que los traía
+     * de vuelta; se retiró con el conmutador "Mostrar miembros dados de baja", así que ya no hay
+     * forma de pedirlos por esta vía y el filtro no depende de ningún argumento.
      */
-    it('incluye las membresías dadas de baja sólo cuando se piden', async () => {
+    it('lista únicamente las membresías activas, sin forma de pedir las dadas de baja', async () => {
       accountRepository.findOne.mockResolvedValue(adminAccount());
       accountRepository.find.mockResolvedValue([]);
 
       await getOrganizationMemberList.execute('org-1');
 
       expect(accountRepository.find).toHaveBeenCalledWith({
-        where: { organizationId: 'org-1' },
+        where: { organizationId: 'org-1', isActive: true },
         relations: { user: { personalInformation: true }, role: true },
         order: { joinedAt: 'ASC' },
       });
