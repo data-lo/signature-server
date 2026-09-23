@@ -133,7 +133,7 @@ describe('OrganizationsController', () => {
   });
 
   it('findMembers propaga includeInactive cuando la vista de administración lo pide', () => {
-    controller.findMembers(user, 'org-1', true);
+    controller.findMembers(user, 'org-1');
 
     expect(getOrganizationMemberList.execute).toHaveBeenCalledWith(
       'user-1',
