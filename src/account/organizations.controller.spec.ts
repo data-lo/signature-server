@@ -122,24 +122,15 @@ describe('OrganizationsController', () => {
     expect(getOrganization.execute).toHaveBeenCalledWith('org-1');
   });
 
-  it('findMembers delega en GetOrganizationMemberListUseCase con el userId del JWT y el organizationId de la ruta', () => {
+  /**
+   * Sólo el `organizationId` de la ruta: el llamador no hace falta porque el permiso `MEMBER.READ`
+   * ya lo comprobó `PermissionsGuard`, y el `includeInactive` que se propagaba desapareció con el
+   * conmutador "Mostrar miembros dados de baja".
+   */
+  it('findMembers delega en GetOrganizationMemberListUseCase con el organizationId de la ruta', () => {
     controller.findMembers(user, 'org-1');
 
-    expect(getOrganizationMemberList.execute).toHaveBeenCalledWith(
-      'user-1',
-      'org-1',
-      false,
-    );
-  });
-
-  it('findMembers propaga includeInactive cuando la vista de administración lo pide', () => {
-    controller.findMembers(user, 'org-1', true);
-
-    expect(getOrganizationMemberList.execute).toHaveBeenCalledWith(
-      'user-1',
-      'org-1',
-      true,
-    );
+    expect(getOrganizationMemberList.execute).toHaveBeenCalledWith('org-1');
   });
 
   /**

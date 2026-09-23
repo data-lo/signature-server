@@ -274,24 +274,23 @@ export class AccountMemberService {
   }
 
   /**
-   * Miembros de una organización para la pantalla de gestión, con rol, estado y permisos
+   * Miembros ACTIVOS de una organización para la pantalla de gestión, con rol, estado y permisos
    * derivados.
    *
-   * Por defecto sólo los activos: un miembro dado de baja no debe reaparecer en la tabla como si
-   * siguiera dentro. `includeInactive` los trae de vuelta —con su `status` real— para la vista de
-   * administración, que necesita poder explicar por qué un correo ya no puede volver a agregarse.
+   * Sólo los activos: un miembro dado de baja no debe reaparecer en la tabla como si siguiera
+   * dentro. Hubo un `includeInactive` que los traía de vuelta para una vista de administración;
+   * se retiró junto con el conmutador "Mostrar miembros dados de baja", porque esa vista no debe
+   * estar disponible en la interfaz. La membresía dada de baja se sigue pudiendo consultar de a
+   * una con `findDetailedMembership`, que es por donde la necesitan las altas.
    *
    * @param organizationId - Organización cuyos miembros se listan.
-   * @param options - `includeInactive: true` para incluir también las membresías dadas de baja.
-   * @returns Los miembros ordenados por fecha de ingreso ascendente.
+   * @returns Los miembros activos, ordenados por fecha de ingreso ascendente.
    *
    * @throws {QueryFailedError} Si la consulta contra Postgres falla.
    *
    * @example
    * ```ts
-   * const members = await accountMemberService.listDetailedByOrganization('org-1', {
-   *   includeInactive: true,
-   * });
+   * const members = await accountMemberService.listDetailedByOrganization('org-1');
    * ```
    */
   async listDetailedByOrganization(
@@ -300,15 +299,15 @@ export class AccountMemberService {
     const members = await this.accountRepository.find({
       where: {
         organizationId,
+        isActive: true,
       },
       relations: {
         user: {
-          personalInformation: true
+          personalInformation: true,
         },
-        role: true
+        role: true,
       },
       order: {
-        isActive: 'DESC',
         joinedAt: 'ASC',
       },
     });
