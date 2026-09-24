@@ -54,6 +54,22 @@ export class UpdateAccountMemberUseCase {
       dto.roleId !== undefined && dto.roleId !== member.roleId;
     const deactivates = dto.isActive === false;
 
+    /**
+     * Historia "Impedir desactivación de cuentas con perfil Owner". También se bloquea cambiarle
+     * el rol: si no, bastaban dos llamadas —degradarlo y luego desactivarlo— para saltarse la
+     * regla. Guardar sobre el propietario su mismo rol, o cambiarle sólo el puesto, sigue
+     * permitido.
+     */
+    if (deactivates) {
+      await this.accountMemberService.assertNotOwner(member, 'desactivar');
+    }
+    if (changesRole) {
+      await this.accountMemberService.assertNotOwner(
+        member,
+        'cambiar el rol de',
+      );
+    }
+
     if (changesRole || deactivates) {
       await this.accountMemberService.assertNotLastAdmin(
         member.organizationId,
