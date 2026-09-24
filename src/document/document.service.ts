@@ -47,6 +47,7 @@ import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { PublicSignerData } from './interfaces/responses/document-public-view-response';
 import { AccountMemberService } from 'src/account/account-member.service';
 import { getNextPendingSigner } from './utils/next-signer.util';
+import { sendToEachAddress } from './utils/send-to-each-address.util';
 import {
   collaboratorDisplayName,
   collaboratorEmail,
@@ -1562,9 +1563,14 @@ export class DocumentService {
   }
 
   /**
-   * Envía el PDF final firmado por correo a todos los colaboradores (firmantes, watchers y
+   * Envía el PDF final firmado por correo a todos los colaboradores (firmantes, testigos y
    * reviewers) y, por separado, a quien creó el documento — que no siempre es también un
    * colaborador, así que sin esto se quedaba sin ningún aviso de que ya se completó la firma.
+   *
+   * Un correo por dirección y por evento (historia "Corregir notificaciones por correo para
+   * testigos"): si la misma persona aparece en dos colaboradores, o si el creador es además
+   * firmante o testigo, recibe uno solo — el creador, el suyo. Cada envío falla por su cuenta y
+   * se registra; antes un `Promise.all` hacía que el primer fallo ocultara los demás.
    */
   async sendCompletionEmails(documentId: string): Promise<void> {
     const document = await this.findOne(documentId);
@@ -1586,22 +1592,39 @@ export class DocumentService {
       .filter((c) => c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER)
       .map(collaboratorDisplayName);
 
-    await Promise.all([
-      ...collaborators.map((collaborator) =>
-        this.emailService.sendDocumentSignedNotification(
-          collaboratorEmail(collaborator),
-          collaboratorDisplayName(collaborator),
+    const logFailure = (to: string, error: unknown) =>
+      this.logger.error(
+        `Error enviando el correo de finalización del documento ${documentId} a ${to}: ${error}`,
+      );
+
+    const notifyCreator = async () => {
+      try {
+        await this.emailService.sendDocumentCompletedToCreatorNotification(
+          creator.email,
+          `${creator.firstName} ${creator.lastName}`,
           document.fileName,
+          signerNames,
           signedBuffer,
-        ),
+        );
+      } catch (error) {
+        logFailure(creator.email, error);
+      }
+    };
+
+    await Promise.all([
+      sendToEachAddress(
+        collaborators,
+        (collaborator, to) =>
+          this.emailService.sendDocumentSignedNotification(
+            to,
+            collaboratorDisplayName(collaborator),
+            document.fileName,
+            signedBuffer,
+          ),
+        logFailure,
+        [creator.email],
       ),
-      this.emailService.sendDocumentCompletedToCreatorNotification(
-        creator.email,
-        `${creator.firstName} ${creator.lastName}`,
-        document.fileName,
-        signerNames,
-        signedBuffer,
-      ),
+      notifyCreator(),
     ]);
   }
 }

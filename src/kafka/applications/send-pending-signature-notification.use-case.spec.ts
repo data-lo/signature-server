@@ -191,11 +191,11 @@ describe('NotificationEventsConsumer', () => {
   });
 
   describe('colaborador WITNESS', () => {
-    function buildWatcher(overrides: Partial<CollaboratorEntity> = {}) {
+    function buildWitness(overrides: Partial<CollaboratorEntity> = {}) {
       return buildCollaborator({
         colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
-        email: 'espectador@correo.com',
-        firstName: 'Espectador',
+        email: 'testigo@correo.com',
+        firstName: 'Testigo',
         lastName: 'Uno',
         signatureType: null,
         signingOrder: null,
@@ -204,15 +204,15 @@ describe('NotificationEventsConsumer', () => {
     }
 
     it('envía el correo de testigo y lo marca NOTIFIED', async () => {
-      collaboratorRepository.findOne.mockResolvedValue(buildWatcher());
+      collaboratorRepository.findOne.mockResolvedValue(buildWitness());
 
       await consumer.handleCreated(payload);
 
       expect(
         emailService.sendDocumentWitnessAddedNotification,
       ).toHaveBeenCalledWith(
-        'espectador@correo.com',
-        'Espectador Uno',
+        'testigo@correo.com',
+        'Testigo Uno',
         'contrato.pdf',
         'Creador Uno',
         'creador@correo.com',
@@ -231,7 +231,7 @@ describe('NotificationEventsConsumer', () => {
 
     it('ya NOTIFIED: no envía nada ni vuelve a actualizar', async () => {
       collaboratorRepository.findOne.mockResolvedValue(
-        buildWatcher({ status: COLLABORATOR_STATUS_ENUM.NOTIFIED }),
+        buildWitness({ status: COLLABORATOR_STATUS_ENUM.NOTIFIED }),
       );
 
       await consumer.handleCreated(payload);
@@ -242,15 +242,63 @@ describe('NotificationEventsConsumer', () => {
       expect(collaboratorRepository.update).not.toHaveBeenCalled();
     });
 
-    it('si el correo falla, no lo marca NOTIFIED', async () => {
-      collaboratorRepository.findOne.mockResolvedValue(buildWatcher());
+    /**
+     * El claim va antes del envío (historia "Corregir notificaciones por correo para testigos"):
+     * si el correo falla, se devuelve a PENDING para que la siguiente entrega lo reintente, y el
+     * error queda registrado sin propagarse al consumidor.
+     */
+    it('si el correo falla, lo devuelve a PENDING para reintentarlo', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(buildWitness());
       emailService.sendDocumentWitnessAddedNotification.mockRejectedValue(
         new Error('SendGrid caído'),
       );
 
       await expect(consumer.handleCreated(payload)).resolves.toBeUndefined();
 
-      expect(collaboratorRepository.update).not.toHaveBeenCalled();
+      expect(collaboratorRepository.update).toHaveBeenNthCalledWith(
+        1,
+        { id: 'collaborator-1', status: COLLABORATOR_STATUS_ENUM.PENDING },
+        { status: COLLABORATOR_STATUS_ENUM.NOTIFIED },
+      );
+      expect(collaboratorRepository.update).toHaveBeenNthCalledWith(
+        2,
+        { id: 'collaborator-1', status: COLLABORATOR_STATUS_ENUM.NOTIFIED },
+        { status: COLLABORATOR_STATUS_ENUM.PENDING },
+      );
+    });
+
+    /**
+     * Dos entregas del mismo evento que pasan a la vez la guarda de PENDING —Kafka reentregando,
+     * o el re-aviso tras la aprobación coincidiendo con el original—: sólo la que gana el claim
+     * envía.
+     */
+    it('si otra entrega ya ganó el claim, no envía el correo', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(buildWitness());
+      collaboratorRepository.update.mockResolvedValue({ affected: 0 });
+
+      await consumer.handleCreated(payload);
+
+      expect(
+        emailService.sendDocumentWitnessAddedNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('marca NOTIFIED antes de enviar el correo', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(buildWitness());
+      const calls: string[] = [];
+      collaboratorRepository.update.mockImplementation(async () => {
+        calls.push('claim');
+        return { affected: 1 };
+      });
+      emailService.sendDocumentWitnessAddedNotification.mockImplementation(
+        async () => {
+          calls.push('email');
+        },
+      );
+
+      await consumer.handleCreated(payload);
+
+      expect(calls).toEqual(['claim', 'email']);
     });
   });
 

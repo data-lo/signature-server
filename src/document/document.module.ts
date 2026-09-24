@@ -44,6 +44,8 @@ import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
+import { WitnessNotificationService } from './services/witness-notification.service';
+import { NotificationEntity } from './entities/notification.entity';
 import { DocumentApprovalService } from './services/document-approval.service';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
@@ -83,6 +85,8 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
     /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
     DocumentReviewerService,
     DocumentApprovalService,
+    /** Avisos por correo a los testigos (ver el servicio para qué recibe el testigo y cuándo). */
+    WitnessNotificationService,
     ApproveDocumentUseCase,
     RejectDocumentApprovalUseCase,
   ],
@@ -100,6 +104,9 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
        * (`GetDocumentsUseCase`) no sabría a qué tabla apunta el alias.
        */
       DocumentUserPreferenceEntity,
+      // La lee `WitnessNotificationService` para re-publicar el aviso del testigo tras la
+      // aprobación, con la notificación que se creó junto con el documento.
+      NotificationEntity,
     ]),
     SharedModule,
     UserModule,

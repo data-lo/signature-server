@@ -8,6 +8,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentService } from '../document.service';
+import { WitnessNotificationService } from '../services/witness-notification.service';
 import { DocumentEntity } from '../entities/document.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
@@ -186,6 +187,7 @@ describe('casos de uso de documentos', () => {
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
   let accountMemberService: Record<string, jest.Mock>;
+  let witnessNotificationService: { notifyWitnessesOfRejection: jest.Mock };
   let verificationCodeService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
@@ -282,6 +284,9 @@ describe('casos de uso de documentos', () => {
       sendVerificationCodeNotification: jest.fn(),
     };
     auditService = { create: jest.fn() };
+    witnessNotificationService = {
+      notifyWitnessesOfRejection: jest.fn().mockResolvedValue(undefined),
+    };
     documentEventsProducer = {
       emitCreated: jest.fn(),
       emitSentToSign: jest.fn(),
@@ -404,6 +409,10 @@ describe('casos de uso de documentos', () => {
         { provide: AuditService, useValue: auditService },
         { provide: DocumentEventsProducer, useValue: documentEventsProducer },
         { provide: AccountMemberService, useValue: accountMemberService },
+        {
+          provide: WitnessNotificationService,
+          useValue: witnessNotificationService,
+        },
         {
           provide: VerificationCodeService,
           useValue: verificationCodeService,
@@ -2052,6 +2061,106 @@ describe('casos de uso de documentos', () => {
     });
 
     /**
+     * Historia "Corregir notificaciones por correo para testigos": el correo de finalización llega
+     * al testigo, una sola vez por dirección, y el creador recibe sólo su propia versión aunque
+     * además sea colaborador. Un envío fallido no impide los demás.
+     */
+    describe('correos de finalización', () => {
+      function witness(overrides: Record<string, unknown> = {}) {
+        return {
+          ...buildSigner({ id: 'witness-1', userId: 'witness-user' }),
+          colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+          account: null,
+          email: 'testigo@correo.com',
+          firstName: 'Tere',
+          lastName: 'Testigo',
+          ...overrides,
+        };
+      }
+
+      beforeEach(() => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          objectKey: 'object-key-1',
+          createdBy: 'creator-1',
+        });
+        minioService.getFileInBytesFormat.mockResolvedValue(
+          Buffer.from('pdf-final'),
+        );
+      });
+
+      it('manda el PDF final al testigo', async () => {
+        collaboratorRepository.find.mockResolvedValue([
+          buildSigner({ userId: 'user-1' }),
+          witness(),
+        ]);
+
+        await service.sendCompletionEmails('doc-1');
+
+        expect(
+          emailService.sendDocumentSignedNotification,
+        ).toHaveBeenCalledWith(
+          'testigo@correo.com',
+          'Tere Testigo',
+          'contrato.pdf',
+          Buffer.from('pdf-final'),
+        );
+      });
+
+      it('no repite el correo a una misma dirección ni al creador, que recibe el suyo', async () => {
+        collaboratorRepository.find.mockResolvedValue([
+          witness(),
+          witness({ id: 'witness-2', email: 'Testigo@Correo.com' }),
+          witness({ id: 'witness-3', email: 'creador@correo.com' }),
+        ]);
+
+        await service.sendCompletionEmails('doc-1');
+
+        expect(
+          emailService.sendDocumentSignedNotification,
+        ).toHaveBeenCalledTimes(1);
+        expect(
+          emailService.sendDocumentCompletedToCreatorNotification,
+        ).toHaveBeenCalledWith(
+          'creador@correo.com',
+          'Creador Uno',
+          'contrato.pdf',
+          [],
+          Buffer.from('pdf-final'),
+        );
+      });
+
+      it('un envío fallido no impide los demás ni lanza', async () => {
+        collaboratorRepository.find.mockResolvedValue([
+          witness({ id: 'witness-1', email: 'falla@correo.com' }),
+          witness({ id: 'witness-2', email: 'testigo@correo.com' }),
+        ]);
+        emailService.sendDocumentSignedNotification.mockImplementation(
+          async (to: string) => {
+            if (to === 'falla@correo.com') throw new Error('SendGrid caído');
+          },
+        );
+
+        await expect(
+          service.sendCompletionEmails('doc-1'),
+        ).resolves.toBeUndefined();
+
+        expect(
+          emailService.sendDocumentSignedNotification,
+        ).toHaveBeenCalledWith(
+          'testigo@correo.com',
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+        );
+        expect(
+          emailService.sendDocumentCompletedToCreatorNotification,
+        ).toHaveBeenCalled();
+      });
+    });
+
+    /**
      * Historia "Enviar información de firmantes simples al Seal Service al completar un
      * documento": el envío se dispara al firmar el último firmante y NO antes, porque el DTO
      * describe el documento completo.
@@ -3371,6 +3480,49 @@ describe('casos de uso de documentos', () => {
       expect(documentEventsProducer.emitRejected).toHaveBeenCalled();
     });
 
+    /** Historia "Corregir notificaciones por correo para testigos". */
+    it('avisa a los testigos del rechazo, con quién rechazó y el motivo', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+
+      await rejectDocument.execute('doc-1', 'user-1', 'No es válido');
+
+      expect(
+        witnessNotificationService.notifyWitnessesOfRejection,
+      ).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        documentName: 'contrato.pdf',
+        rejecterName: expect.any(String),
+        reason: 'No es válido',
+      });
+    });
+
+    it('avisa a los testigos aunque falle el correo al creador, y el rechazo se completa', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+      emailService.sendDocumentRejectedNotification.mockRejectedValue(
+        new Error('SendGrid caído'),
+      );
+      witnessNotificationService.notifyWitnessesOfRejection.mockRejectedValue(
+        new Error('base caída'),
+      );
+
+      const result = await rejectDocument.execute(
+        'doc-1',
+        'user-1',
+        'No es válido',
+      );
+
+      expect(result.success).toBe(true);
+      expect(
+        witnessNotificationService.notifyWitnessesOfRejection,
+      ).toHaveBeenCalled();
+    });
+
     it('rechaza con BadRequestException si el documento no está PENDING', async () => {
       documentRepository.findOne.mockResolvedValue(
         mockDocument({ status: DOCUMENT_STATUS_ENUM.SIGNED }),
@@ -3716,6 +3868,55 @@ describe('casos de uso de documentos', () => {
         expect.objectContaining({ status: DOCUMENT_STATUS_ENUM.CANCELLED }),
       );
       expect(documentEventsProducer.emitCancelled).toHaveBeenCalled();
+    });
+
+    /**
+     * Historia "Corregir notificaciones por correo para testigos": el testigo también recibe la
+     * cancelación, un correo por dirección, y un envío fallido no impide los demás.
+     */
+    it('avisa la cancelación a firmantes y testigos, una vez por dirección y sin cortar en el primer fallo', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+        {
+          ...buildSigner({ id: 'witness-1', userId: 'witness-user' }),
+          colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+          account: null,
+          email: 'testigo@correo.com',
+          firstName: 'Tere',
+          lastName: 'Testigo',
+        },
+        {
+          ...buildSigner({ id: 'witness-2', userId: 'witness-user-2' }),
+          colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+          account: null,
+          email: 'TESTIGO@correo.com',
+          firstName: 'Tere',
+          lastName: 'Duplicada',
+        },
+      ]);
+      emailService.sendDocumentCancelledNotification.mockImplementation(
+        async (to: string) => {
+          if (to !== 'testigo@correo.com') throw new Error('SendGrid caído');
+        },
+      );
+
+      const result = await confirmCancellation.execute('doc-1', 'user-1');
+
+      expect(result.success).toBe(true);
+      const recipients =
+        emailService.sendDocumentCancelledNotification.mock.calls.map(
+          ([to]: [string]) => to.toLowerCase(),
+        );
+      expect(recipients).toHaveLength(2);
+      expect(recipients).toContain('testigo@correo.com');
+      expect(
+        emailService.sendDocumentCancelledNotification,
+      ).toHaveBeenCalledWith(
+        'testigo@correo.com',
+        'Tere Testigo',
+        'contrato.pdf',
+      );
     });
 
     it('rechaza con BadRequestException si el documento no está en CANCELLATION_PENDING', async () => {
