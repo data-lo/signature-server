@@ -33,13 +33,13 @@ import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
  * —si acaso alguno— le corresponde.
  *
  * SIGNER: manda "tienes un documento por firmar", condicionado al turno (ver
- * `sendSignerNotification`). WATCHER: manda "te agregaron como observador" y, si el envío tiene
+ * `sendSignerNotification`). WITNESS: manda "te agregaron como testigo" y, si el envío tiene
  * éxito, lo marca NOTIFIED (historia "Actualizar estatus de watchers a NOTIFIED tras el envío de
- * correo...") — ver `sendWatcherNotification`. Cualquier otro tipo (p. ej. REVIEWER) no recibe
+ * correo...") — ver `sendWitnessNotification`. Cualquier otro tipo (p. ej. REVIEWER) no recibe
  * nada todavía.
  *
  * La guarda de `status !== PENDING` es compartida: para SIGNER evita reavisar a quien ya
- * respondió, y para WATCHER es además la condición de "no reprocesar" — un WATCHER que ya está
+ * respondió, y para WITNESS es además la condición de "no reprocesar" — un WITNESS que ya está
  * NOTIFIED nunca vuelve a pasar por aquí, ni si Kafka reentrega el mismo evento.
  */
 @Injectable()
@@ -112,8 +112,8 @@ export class SendPendingSignatureNotificationUseCase {
       return;
     }
 
-    if (collaborator.colaboratorType === COLABORATOR_TYPE_ENUM.WATCHER) {
-      await this.sendWatcherNotification(collaborator, payload);
+    if (collaborator.colaboratorType === COLABORATOR_TYPE_ENUM.WITNESS) {
+      await this.sendWitnessNotification(collaborator, payload);
       return;
     }
 
@@ -195,7 +195,7 @@ export class SendPendingSignatureNotificationUseCase {
    * `reject-document.use-case.ts` usa para el rechazo— y no una escritura plana: cierra la
    * ventana de carrera de una entrega duplicada del mismo evento intentando notificar dos veces.
    */
-  private async sendWatcherNotification(
+  private async sendWitnessNotification(
     collaborator: CollaboratorEntity,
     payload: NotificationEventPayload,
   ): Promise<void> {
@@ -204,7 +204,7 @@ export class SendPendingSignatureNotificationUseCase {
     });
     if (!document) {
       this.logger.warn(
-        `Documento ${payload.documentId} no encontrado al notificar al observador ${collaborator.id}`,
+        `Documento ${payload.documentId} no encontrado al notificar al testigo ${collaborator.id}`,
       );
       return;
     }
@@ -214,7 +214,7 @@ export class SendPendingSignatureNotificationUseCase {
     });
     if (!creator) {
       this.logger.warn(
-        `Usuario creador ${document.createdBy} no encontrado al notificar al observador ${collaborator.id} del documento ${document.id}`,
+        `Usuario creador ${document.createdBy} no encontrado al notificar al testigo ${collaborator.id} del documento ${document.id}`,
       );
       return;
     }
@@ -227,7 +227,7 @@ export class SendPendingSignatureNotificationUseCase {
       return;
     }
 
-    await this.emailService.sendDocumentWatcherAddedNotification(
+    await this.emailService.sendDocumentWitnessAddedNotification(
       recipientEmail,
       collaboratorDisplayName(collaborator),
       document.fileName,
@@ -248,7 +248,7 @@ export class SendPendingSignatureNotificationUseCase {
     }
 
     this.logger.log(
-      `Correo de observador enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
+      `Correo de testigo enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
     );
   }
 }

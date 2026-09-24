@@ -371,9 +371,9 @@ export const documentInvitationTemplate = (
 </html>
 `;
 
-/** Sin lenguaje de firma a propósito: un espectador sólo puede consultar el documento. */
-export const documentWatcherAddedTemplate = (
-  watcherName: string,
+/** Sin lenguaje de firma a propósito: un testigo sólo puede consultar el documento. */
+export const documentWitnessAddedTemplate = (
+  witnessName: string,
   documentName: string,
   creatorName: string,
   accessUrl: string,
@@ -387,12 +387,12 @@ export const documentWatcherAddedTemplate = (
 <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
 
-    <h2 style="color: #333333; margin-top: 0;">Te agregaron como observador de un documento</h2>
+    <h2 style="color: #333333; margin-top: 0;">Te agregaron como testigo de un documento</h2>
 
-    <p style="color: #555555;">Hola <strong>${watcherName}</strong>:</p>
+    <p style="color: #555555;">Hola <strong>${witnessName}</strong>:</p>
 
     <p style="color: #555555;">
-      <strong>${creatorName}</strong> te agregó como observador del documento
+      <strong>${creatorName}</strong> te agregó como testigo del documento
       <strong>${documentName}</strong>. Podrás dar seguimiento a su estado desde Firmalo.
     </p>
 

@@ -110,7 +110,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
       },
       {
-        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER,
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
         firstName: 'Carlos',
         lastName: 'Solares',
         email: 'auditor@mail.com',
@@ -629,13 +629,13 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     expect(result.success).toBe(true);
   });
 
-  it('el viewer se crea con colaboratorType WATCHER, sin signatureType ni verification_code', async () => {
+  it('el testigo se crea con colaboratorType WITNESS, sin signatureType ni verification_code', async () => {
     await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
     const viewerCall = collaboratorRepo.create.mock.calls.find(
       (call) => call[0].email === 'auditor@mail.com',
     );
-    expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WATCHER);
+    expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WITNESS);
     expect(viewerCall[0].signatureType).toBeNull();
     expect(viewerCall[0].taxId).toBe('AUDI990101YYY');
     // Solo 2 verification_codes en total (los 2 signers), ninguno para el viewer.

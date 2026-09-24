@@ -18,7 +18,7 @@ import {
   documentPendingTemplate,
   documentRejectedTemplate,
   documentSignedTemplate,
-  documentWatcherAddedTemplate,
+  documentWitnessAddedTemplate,
   organizationInvitationTemplate,
   organizationMemberJoinedTemplate,
   passwordResetOtpTemplate,
@@ -274,14 +274,14 @@ export class EmailService {
   }
 
   /**
-   * Avisa a un colaborador WATCHER que lo agregaron a un documento (historia "Actualizar estatus
+   * Avisa a un colaborador WITNESS (testigo) que lo agregaron a un documento (historia "Actualizar estatus
    * de watchers a NOTIFIED..."). `creatorEmail` va como replyTo, igual que
    * `sendDocumentPendingNotification`: quien responda preguntando de qué documento se trata llega
    * directo a quien lo creó.
    */
-  async sendDocumentWatcherAddedNotification(
+  async sendDocumentWitnessAddedNotification(
     to: string,
-    watcherName: string,
+    witnessName: string,
     documentName: string,
     creatorName: string,
     creatorEmail: string,
@@ -289,9 +289,9 @@ export class EmailService {
   ): Promise<void> {
     await this.sendEmail(
       to,
-      EmailSubject.DOCUMENT_WATCHER_ADDED,
-      documentWatcherAddedTemplate(
-        watcherName,
+      EmailSubject.DOCUMENT_WITNESS_ADDED,
+      documentWitnessAddedTemplate(
+        witnessName,
         documentName,
         creatorName,
         accessUrl,

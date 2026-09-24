@@ -14,7 +14,7 @@ export class CreateDocumentSignaturesData {
 
   @ApiProperty({
     example: 2,
-    description: 'Firmantes + reviewers + viewers creados',
+    description: 'Firmantes + reviewers + testigos (WITNESS) creados',
   })
   collaboratorsCount: number;
 

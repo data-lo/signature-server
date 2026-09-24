@@ -181,7 +181,7 @@ export class DocumentService {
 
   async getCollaboratorNames(documentId: string): Promise<{
     signers: string[];
-    watchers: string[];
+    witnesses: string[];
     reviewers: string[];
   }> {
     const collaborators = await this.collaboratorRepository.find({
@@ -197,7 +197,7 @@ export class DocumentService {
 
     return {
       signers: byType(COLABORATOR_TYPE_ENUM.SIGNER),
-      watchers: byType(COLABORATOR_TYPE_ENUM.WATCHER),
+      witnesses: byType(COLABORATOR_TYPE_ENUM.WITNESS),
       reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
     };
   }

@@ -31,7 +31,7 @@ import { DocumentTransactionService } from '../document-transaction.service';
 import { DocumentService } from '../document.service';
 
 /**
- * Da de alta un documento con sus colaboradores (firmantes, observadores y revisores).
+ * Da de alta un documento con sus colaboradores (firmantes, testigos y revisores).
  *
  * @remarks
  * Flujo:
@@ -54,7 +54,7 @@ import { DocumentService } from '../document.service';
  * fija el tipo de firma del documento, y sus filas quedan con `signature_type` en `null`.
  *
  * Sólo los firmantes necesitan cuenta en la plataforma —les hace falta firma e INE registradas—;
- * observadores y revisores pueden invitarse sólo por correo.
+ * testigos y revisores pueden invitarse sólo por correo.
  */
 @Injectable()
 export class CreateDocumentUseCase {
@@ -123,8 +123,8 @@ export class CreateDocumentUseCase {
 
       const {
         signerIds,
-        watcherIds,
-        watcherEmails,
+        witnessIds,
+        witnessEmails,
         reviewerIds,
         reviewerEmails,
         signatureCoordinates,
@@ -132,17 +132,19 @@ export class CreateDocumentUseCase {
 
       const allParticipantIds = [
         ...signerIds,
-        ...(watcherIds ?? []),
+        ...(witnessIds ?? []),
         ...(reviewerIds ?? []),
       ];
       const uniqueParticipantIds = new Set(allParticipantIds);
 
       if (uniqueParticipantIds.size !== allParticipantIds.length) {
-        throw new BadRequestException('Cada participante debe tener un solo rol; no puede repetirse entre firmantes, observadores y revisores.',);
+        throw new BadRequestException(
+          'Cada participante debe tener un solo rol; no puede repetirse entre firmantes, testigos y revisores.',
+        );
       }
 
       const allParticipantEmails = [
-        ...(watcherEmails ?? []),
+        ...(witnessEmails ?? []),
         ...(reviewerEmails ?? []),
       ];
       const uniqueParticipantEmails = new Set(
@@ -150,7 +152,7 @@ export class CreateDocumentUseCase {
       );
       if (uniqueParticipantEmails.size !== allParticipantEmails.length) {
         throw new BadRequestException(
-          'No puedes invitar al mismo correo más de una vez entre watchers y reviewers',
+          'No puedes invitar al mismo correo más de una vez entre testigos y reviewers',
         );
       }
 
@@ -235,19 +237,19 @@ export class CreateDocumentUseCase {
             ipAddress: ip,
           }),
         ),
-        ...(watcherIds ?? []).map((userId) =>
+        ...(witnessIds ?? []).map((userId) =>
           this.collaboratorRepository.create({
             documentId: savedDocument.id,
             accountId: accountIdByUserId.get(userId),
-            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
             ipAddress: ip,
           }),
         ),
-        ...(watcherEmails ?? []).map((email) =>
+        ...(witnessEmails ?? []).map((email) =>
           this.collaboratorRepository.create({
             documentId: savedDocument.id,
             email,
-            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
             ipAddress: ip,
           }),
         ),
@@ -286,7 +288,7 @@ export class CreateDocumentUseCase {
       const url = await this.documentService.getDocumentMinioURL(
         savedDocument.id,
       );
-      const { signers, watchers, reviewers } =
+      const { signers, witnesses, reviewers } =
         await this.documentService.getCollaboratorNames(savedDocument.id);
       const requestedBy = await this.userService.findOne(createdBy);
 
@@ -299,7 +301,7 @@ export class CreateDocumentUseCase {
           fileType: savedDocument.fileType,
           totalPages: savedDocument.totalPages,
           signers,
-          watchers,
+          witnesses,
           reviewers,
           creator: `${requestedBy.firstName} ${requestedBy.lastName}`,
           status: savedDocument.status,

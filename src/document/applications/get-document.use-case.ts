@@ -25,7 +25,7 @@ import { DocumentService } from '../document.service';
  * `GET /document/:id`: el detalle que alimenta la pantalla de firma.
  *
  * Además del documento, resuelve qué es el usuario dentro de él —creador, firmante en turno,
- * firmante que ya respondió, observador—, porque de eso depende todo lo que la pantalla le
+ * firmante que ya respondió, testigo—, porque de eso depende todo lo que la pantalla le
  * ofrece.
  *
  * El acceso se decide en dos tiempos, que es el reparto que sostiene toda la autorización de la

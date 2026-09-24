@@ -67,7 +67,7 @@ describe('NotificationEventsConsumer', () => {
     userRepository = createMockRepository();
     emailService = {
       sendDocumentPendingNotification: jest.fn().mockResolvedValue(undefined),
-      sendDocumentWatcherAddedNotification: jest
+      sendDocumentWitnessAddedNotification: jest
         .fn()
         .mockResolvedValue(undefined),
     };
@@ -185,15 +185,15 @@ describe('NotificationEventsConsumer', () => {
 
     expect(emailService.sendDocumentPendingNotification).not.toHaveBeenCalled();
     expect(
-      emailService.sendDocumentWatcherAddedNotification,
+      emailService.sendDocumentWitnessAddedNotification,
     ).not.toHaveBeenCalled();
     expect(collaboratorRepository.update).not.toHaveBeenCalled();
   });
 
-  describe('colaborador WATCHER', () => {
+  describe('colaborador WITNESS', () => {
     function buildWatcher(overrides: Partial<CollaboratorEntity> = {}) {
       return buildCollaborator({
-        colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
         email: 'espectador@correo.com',
         firstName: 'Espectador',
         lastName: 'Uno',
@@ -203,13 +203,13 @@ describe('NotificationEventsConsumer', () => {
       });
     }
 
-    it('envía el correo de observador y lo marca NOTIFIED', async () => {
+    it('envía el correo de testigo y lo marca NOTIFIED', async () => {
       collaboratorRepository.findOne.mockResolvedValue(buildWatcher());
 
       await consumer.handleCreated(payload);
 
       expect(
-        emailService.sendDocumentWatcherAddedNotification,
+        emailService.sendDocumentWitnessAddedNotification,
       ).toHaveBeenCalledWith(
         'espectador@correo.com',
         'Espectador Uno',
@@ -237,14 +237,14 @@ describe('NotificationEventsConsumer', () => {
       await consumer.handleCreated(payload);
 
       expect(
-        emailService.sendDocumentWatcherAddedNotification,
+        emailService.sendDocumentWitnessAddedNotification,
       ).not.toHaveBeenCalled();
       expect(collaboratorRepository.update).not.toHaveBeenCalled();
     });
 
     it('si el correo falla, no lo marca NOTIFIED', async () => {
       collaboratorRepository.findOne.mockResolvedValue(buildWatcher());
-      emailService.sendDocumentWatcherAddedNotification.mockRejectedValue(
+      emailService.sendDocumentWitnessAddedNotification.mockRejectedValue(
         new Error('SendGrid caído'),
       );
 
