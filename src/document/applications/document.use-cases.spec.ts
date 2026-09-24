@@ -69,6 +69,8 @@ import { DeleteDocumentUseCase } from './delete-document.use-case';
 import { SubmitDocumentForAuthorizationUseCase } from './submit-document-for-authorization.use-case';
 import { GetDocumentFileUrlUseCase } from './get-document-file-url.use-case';
 import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
+import { DocumentReadAccessService } from '../services/document-read-access.service';
+import { AuthorizationService } from 'src/authorization/services/authorization.service';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
@@ -103,6 +105,23 @@ function readOwnAuthorization(userId: string): AuthorizationContext {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.READ,
     scopes: [PERMISSION_SCOPE_ENUM.OWN],
+  };
+}
+
+/** Contexto de un miembro de `organizationId`, con los alcances de lectura que le dé su rol. */
+function organizationReadAuthorization(
+  userId: string,
+  organizationId: string,
+  scopes: PERMISSION_SCOPE_ENUM[],
+): AuthorizationContext {
+  return {
+    userId,
+    organizationId,
+    accountId: `account-${userId}-${organizationId}`,
+    roleId: 'role-1',
+    resource: RESOURCE_KEY_ENUM.DOCUMENT,
+    action: ACTION_KEY_ENUM.READ,
+    scopes,
   };
 }
 
@@ -186,6 +205,7 @@ describe('casos de uso de documentos', () => {
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
   let accountMemberService: Record<string, jest.Mock>;
+  let authorizationService: { authorize: jest.Mock };
   let verificationCodeService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
@@ -291,6 +311,19 @@ describe('casos de uso de documentos', () => {
       emitCancellationRequested: jest.fn(),
       emitCancelled: jest.fn(),
     };
+    /**
+     * Por omisión el usuario no tiene membresía en ninguna otra organización: la segunda consulta
+     * de `DocumentReadAccessService` responde 403 salvo en las pruebas que la configuran.
+     */
+    authorizationService = {
+      authorize: jest
+        .fn()
+        .mockRejectedValue(
+          new ForbiddenException(
+            'No tienes una membresía activa en esta cuenta',
+          ),
+        ),
+    };
     accountMemberService = {
       assertIsActiveMember: jest
         .fn()
@@ -370,6 +403,8 @@ describe('casos de uso de documentos', () => {
       providers: [
         DocumentService,
         DocumentAuthorizationPolicy,
+        DocumentReadAccessService,
+        { provide: AuthorizationService, useValue: authorizationService },
         CreateDocumentUseCase,
         GetDocumentsUseCase,
         GetDocumentUseCase,
@@ -740,13 +775,24 @@ describe('casos de uso de documentos', () => {
       });
     }
 
-    /** El listado con los filtros indicados; el resto va con los valores por omisión del DTO. */
-    function list(filters: Record<string, unknown> = {}, qb?: any) {
+    /**
+     * El listado con los filtros indicados; el resto va con los valores por omisión del DTO.
+     * Los alcances son los de un administrador (`OWN` + `ORGANIZATION`) salvo que se pidan otros.
+     */
+    function list(
+      filters: Record<string, unknown> = {},
+      qb?: any,
+      scopes: PERMISSION_SCOPE_ENUM[] = [
+        PERMISSION_SCOPE_ENUM.OWN,
+        PERMISSION_SCOPE_ENUM.ORGANIZATION,
+      ],
+    ) {
       const builder = qb ?? createMockQueryBuilder();
       documentRepository.createQueryBuilder.mockReturnValue(builder);
       return getDocuments.execute({
         userId: 'user-1',
         accountId: 'account-1',
+        scopes,
         filters: { page: 1, limit: 25, ...filters } as any,
       });
     }
@@ -805,6 +851,7 @@ describe('casos de uso de documentos', () => {
         getDocuments.execute({
           userId: 'user-1',
           accountId: undefined as any,
+          scopes: [PERMISSION_SCOPE_ENUM.OWN],
           filters: { page: 1, limit: 25 } as any,
         }),
       ).rejects.toThrow(BadRequestException);
@@ -934,6 +981,7 @@ describe('casos de uso de documentos', () => {
       await getDocuments.execute({
         userId: 'user-1',
         accountId: 'account-org-member-1',
+        scopes: [PERMISSION_SCOPE_ENUM.OWN, PERMISSION_SCOPE_ENUM.ORGANIZATION],
         filters: { page: 1, limit: 25 } as any,
       });
 
@@ -985,6 +1033,54 @@ describe('casos de uso de documentos', () => {
       expect(allConditions(qb)).not.toContain(
         'document.accountId = :accountId',
       );
+    });
+
+    /**
+     * Con sólo `DOCUMENT.READ_OWN`, dentro de la organización se lista lo que el usuario creó en
+     * ella, no todo. Antes la lista mostraba todo lo de la organización a cualquier miembro, y al
+     * abrir un documento ajeno la Policy le respondía 403.
+     */
+    it('en una organización, con sólo OWN lista lo que el usuario creó en ella', async () => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb, [PERMISSION_SCOPE_ENUM.OWN]);
+
+      const [[ownership, parameters]] = visibilityWithParameters(qb);
+      expect(ownership).toBe(
+        'document.organizationId = :organizationId AND document.createdBy = :ownerUserId',
+      );
+      expect(parameters).toEqual({
+        organizationId: 'org-1',
+        ownerUserId: 'user-1',
+      });
+    });
+
+    it('en una organización, con ORGANIZATION lista todo lo de ella sin acotar por creador', async () => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-admin-1',
+        organizationId: 'org-1',
+      });
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb, [PERMISSION_SCOPE_ENUM.ORGANIZATION]);
+
+      const [[ownership, parameters]] = visibilityWithParameters(qb);
+      expect(ownership).toBe('document.organizationId = :organizationId');
+      expect(parameters).toEqual({ organizationId: 'org-1' });
+    });
+
+    it('en la cuenta personal los alcances no cambian lo visible', async () => {
+      personalAccount();
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb, [PERMISSION_SCOPE_ENUM.OWN]);
+
+      const [[ownership]] = visibilityWithParameters(qb);
+      expect(ownership).toBe('document.accountId = :accountId');
     });
 
     /**
@@ -4588,6 +4684,7 @@ describe('casos de uso de documentos', () => {
       await getDocuments.execute({
         userId: 'user-1',
         accountId: 'account-1',
+        scopes: [PERMISSION_SCOPE_ENUM.OWN],
         filters: { page: 1, limit: 25, withUrl: true } as any,
       });
 
@@ -5012,40 +5109,240 @@ describe('casos de uso de documentos', () => {
   });
 
   describe('GetDocumentFileUrlUseCase', () => {
+    /** Instancia real: la Policy usa `isAccessibleBy`, que es un método de la entidad. */
+    function fileDocument(overrides: Record<string, unknown> = {}) {
+      return Object.assign(new DocumentEntity(), {
+        id: 'doc-1',
+        createdBy: 'creator-1',
+        objectKey: 'object-key-1',
+        status: DOCUMENT_STATUS_ENUM.CREATED,
+        organizationId: 'org-1',
+        collaborators: [],
+        ...overrides,
+      });
+    }
+
     /**
      * El acceso se comprueba antes de resolver nada: sin esto, un tercero con el UUID obtendría
      * una URL prefirmada del archivo aunque no tenga nada que ver con el documento.
      */
     it('comprueba el acceso antes de generar la URL', async () => {
-      documentRepository.findOne.mockResolvedValue({
-        id: 'doc-1',
-        createdBy: 'creator-1',
-        objectKey: 'object-key-1',
-        status: DOCUMENT_STATUS_ENUM.CREATED,
-      });
+      documentRepository.findOne.mockResolvedValue(
+        fileDocument({ organizationId: null }),
+      );
 
-      const result = await getDocumentFileUrl.execute('doc-1', 'creator-1');
+      const result = await getDocumentFileUrl.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('creator-1'),
+      });
 
       expect(result.secureUrl).toBe('https://minio/file');
     });
 
     it('no genera ninguna URL si el usuario no tiene acceso', async () => {
-      documentRepository.findOne.mockResolvedValue({
-        id: 'doc-1',
-        createdBy: 'creator-1',
-        objectKey: 'object-key-1',
-        status: DOCUMENT_STATUS_ENUM.CREATED,
-      });
-      collaboratorRepository.findOne.mockResolvedValue(null);
+      documentRepository.findOne.mockResolvedValue(
+        fileDocument({ organizationId: null }),
+      );
       userService.findOne.mockResolvedValue({
         id: 'user-2',
         email: 'ajeno@correo.com',
       });
 
       await expect(
-        getDocumentFileUrl.execute('doc-1', 'user-2'),
+        getDocumentFileUrl.execute({
+          documentId: 'doc-1',
+          authorization: readOwnAuthorization('user-2'),
+        }),
       ).rejects.toThrow(ForbiddenException);
       expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Bug corregido: el administrador veía el detalle de un documento de su organización y el
+     * visor se quedaba vacío, porque el archivo sólo se servía al creador y a los participantes.
+     */
+    it('sirve el archivo a quien tiene READ_ORGANIZATION en la organización del documento', async () => {
+      documentRepository.findOne.mockResolvedValue(fileDocument());
+
+      const result = await getDocumentFileUrl.execute({
+        documentId: 'doc-1',
+        authorization: organizationReadAuthorization('admin-1', 'org-1', [
+          PERMISSION_SCOPE_ENUM.OWN,
+          PERMISSION_SCOPE_ENUM.ORGANIZATION,
+        ]),
+      });
+
+      expect(result.secureUrl).toBe('https://minio/file');
+    });
+
+    it('niega el archivo a un miembro con sólo OWN que no participa en el documento', async () => {
+      documentRepository.findOne.mockResolvedValue(fileDocument());
+
+      await expect(
+        getDocumentFileUrl.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization('member-1', 'org-1', [
+            PERMISSION_SCOPE_ENUM.OWN,
+          ]),
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    it('responde 404 si el documento no existe', async () => {
+      documentRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        getDocumentFileUrl.execute({
+          documentId: 'doc-x',
+          authorization: readOwnAuthorization('user-1'),
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  /**
+   * Historia "Corregir acceso y carga de documentos de todas las organizaciones para usuarios con
+   * permiso de lectura": el permiso se evalúa contra la organización del documento, no sólo
+   * contra la activa.
+   */
+  describe('lectura del detalle con DOCUMENT.READ_ORGANIZATION', () => {
+    function organizationDocument(organizationId: string) {
+      return Object.assign(new DocumentEntity(), {
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        fileType: 'application/pdf',
+        totalPages: 1,
+        objectKey: 'object-key-1',
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+        createdBy: 'creator-1',
+        organizationId,
+        requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+        collaborators: [buildSigner({ userId: 'signer-1' })],
+      });
+    }
+
+    const ADMIN_SCOPES = [
+      PERMISSION_SCOPE_ENUM.OWN,
+      PERMISSION_SCOPE_ENUM.ORGANIZATION,
+    ];
+
+    it('deja ver un documento de la organización activa a quien tiene ORGANIZATION, sin participar en él', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-1'),
+      );
+
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: organizationReadAuthorization(
+          'admin-1',
+          'org-1',
+          ADMIN_SCOPES,
+        ),
+      });
+
+      expect(result.data.id).toBe('doc-1');
+      expect(result.data.myRole).toBeNull();
+      expect(result.data.canSign).toBe(false);
+      expect(authorizationService.authorize).not.toHaveBeenCalled();
+    });
+
+    it('deja ver un documento de OTRA organización del usuario en la que tiene ORGANIZATION', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+      authorizationService.authorize.mockResolvedValue(
+        organizationReadAuthorization('admin-1', 'org-2', ADMIN_SCOPES),
+      );
+
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: organizationReadAuthorization(
+          'admin-1',
+          'org-1',
+          ADMIN_SCOPES,
+        ),
+      });
+
+      expect(result.data.id).toBe('doc-1');
+      expect(authorizationService.authorize).toHaveBeenCalledWith({
+        userId: 'admin-1',
+        organizationId: 'org-2',
+        resource: RESOURCE_KEY_ENUM.DOCUMENT,
+        action: ACTION_KEY_ENUM.READ,
+      });
+    });
+
+    it('también desde la cuenta personal activa, si en la organización del documento tiene ORGANIZATION', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+      authorizationService.authorize.mockResolvedValue(
+        organizationReadAuthorization('admin-1', 'org-2', ADMIN_SCOPES),
+      );
+
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('admin-1'),
+      });
+
+      expect(result.data.id).toBe('doc-1');
+    });
+
+    it('niega el documento de otra organización en la que el usuario no es miembro', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization(
+            'admin-1',
+            'org-1',
+            ADMIN_SCOPES,
+          ),
+        }),
+      ).rejects.toThrow('No tienes permiso para consultar este documento');
+      expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    it('niega el documento de otra organización donde el usuario sólo tiene OWN y no participa', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+      authorizationService.authorize.mockResolvedValue(
+        organizationReadAuthorization('admin-1', 'org-2', [
+          PERMISSION_SCOPE_ENUM.OWN,
+        ]),
+      );
+
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization(
+            'admin-1',
+            'org-1',
+            ADMIN_SCOPES,
+          ),
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('no consulta otra organización cuando el documento es de la activa y el alcance no alcanza', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-1'),
+      );
+
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization('member-1', 'org-1', [
+            PERMISSION_SCOPE_ENUM.OWN,
+          ]),
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(authorizationService.authorize).not.toHaveBeenCalled();
     });
   });
 });
