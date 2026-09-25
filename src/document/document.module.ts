@@ -42,6 +42,7 @@ import { ConfirmDocumentCancellationUseCase } from './applications/confirm-docum
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
+import { GetDocumentApproversUseCase } from './applications/get-document-approvers.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
 import { DocumentApprovalService } from './services/document-approval.service';
@@ -79,6 +80,7 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
     UpdateDocumentUseCase,
     DeleteDocumentUseCase,
     CreateDocumentSignatureFlowUseCase,
+    GetDocumentApproversUseCase,
     ArchiveCompletedDocumentUseCase,
     /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
     DocumentReviewerService,
