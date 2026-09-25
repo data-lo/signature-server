@@ -86,6 +86,14 @@ export class DocumentGetData {
   creatorRfc: string | null;
 
   @ApiProperty({
+    example: 'Acme',
+    nullable: true,
+    description:
+      'Nombre visible (organizations.display_name) de la organización dueña del documento. Null en los documentos de cuenta personal, que no pertenecen a ninguna organización.',
+  })
+  organizationName: string | null;
+
+  @ApiProperty({
     enum: SIGNATURE_TYPE_ENUM,
     nullable: true,
     description:

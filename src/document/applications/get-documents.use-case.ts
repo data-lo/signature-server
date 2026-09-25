@@ -169,6 +169,8 @@ export class GetDocumentsUseCase {
         'requester.personalInformation',
         'requesterPersonalInfo',
       )
+      // La columna "Organización" del listado muestra a qué organización pertenece cada fila.
+      .leftJoinAndSelect('document.organization', 'organization')
       .leftJoinAndSelect('document.collaborators', 'collaborator')
       .leftJoinAndSelect('collaborator.account', 'collaboratorAccount')
       .leftJoinAndSelect('collaboratorAccount.user', 'collaboratorUser')
@@ -257,6 +259,12 @@ export class GetDocumentsUseCase {
           reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
           creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
           creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,
+          /**
+           * Nombre visible (`displayName`) de la organización dueña del documento; null en los
+           * documentos de cuenta personal, que no tienen organización. El listado lo presenta
+           * como "Ninguna": el texto es de la interfaz, aquí sólo viaja el dato.
+           */
+          organizationName: doc.organization?.displayName ?? null,
           totalPages: doc.totalPages,
           status: doc.status,
           signatureType: this.documentService.resolveDocumentSignatureType(
