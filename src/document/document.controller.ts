@@ -128,14 +128,21 @@ export class DocumentController {
     private readonly archiveCompletedDocument: ArchiveCompletedDocumentUseCase,
   ) {}
 
+  /**
+   * Mismo permiso y misma Policy que `GET /document/:id`: el archivo se deja cargar exactamente
+   * cuando el detalle se deja ver.
+   */
   @Get('file/:id')
   @ApiGetDocumentFileUrl()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
   async getDocumentUrl(
-    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
     @Query('download') download?: string,
   ) {
-    return this.getDocumentFileUrl.execute(id, user.sub, {
+    return this.getDocumentFileUrl.execute({
+      documentId: id,
+      authorization,
       asAttachment: download === 'true',
     });
   }
@@ -242,11 +249,13 @@ export class DocumentController {
   findAll(
     @CurrentUser() user: JwtPayload,
     @ActiveAccountId() accountId: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
     @Query() query: GetDocumentsQueryDto,
   ) {
     return this.getDocuments.execute({
       userId: user.sub,
       accountId,
+      scopes: authorization.scopes,
       filters: query,
     });
   }

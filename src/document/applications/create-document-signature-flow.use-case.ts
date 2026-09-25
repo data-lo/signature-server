@@ -16,6 +16,7 @@ import {
   SignaturePositionDto,
 } from '../dto/create-document-signatures.dto';
 import { assertNoOverlappingSignaturePositions } from '../utils/signature-collision.util';
+import { assertSignaturePositionsInsideDocument } from '../utils/signature-position.util';
 
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
@@ -50,7 +51,7 @@ const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   COLABORATOR_TYPE_ENUM
 > = {
   [PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER]: COLABORATOR_TYPE_ENUM.SIGNER,
-  [PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER]: COLABORATOR_TYPE_ENUM.WATCHER,
+  [PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS]: COLABORATOR_TYPE_ENUM.WITNESS,
 };
 
 const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
@@ -124,7 +125,7 @@ export interface CreateDocumentSignaturesResult {
  * Orquesta POST /api/v1/documents/signatures (ver historias "Backend: Orquestación para
  * Creación de Documento y Flujo de Firmas" + "Frontend: Carga de Documentos y Configuración de
  * Firmantes" — la segunda redefinió el contrato de la primera: un solo arreglo `collaborators`
- * con collaboratorType SIGNER/VIEWER, en vez de dos arreglos separados, y multipart con el
+ * con collaboratorType SIGNER/WITNESS, en vez de dos arreglos separados, y multipart con el
  * archivo real en vez de un objectKey pre-subido).
  *
  * Trata a todos los colaboradores como invitación por email (accountId siempre null) — no
@@ -207,10 +208,27 @@ export class CreateDocumentSignatureFlowUseCase {
     ).length;
 
     // `ArrayMinSize(1)` del DTO solo garantiza que haya colaboradores: un documento con puros
-    // VIEWER nace en PENDING y no puede completarse nunca porque no hay a quién pedirle una firma.
+    // WITNESS nace en PENDING y no puede completarse nunca porque no hay a quién pedirle una firma.
     if (totalSigners === 0) {
       throw new BadRequestException(
         'El documento debe tener al menos un colaborador de tipo SIGNER',
+      );
+    }
+
+    /**
+     * Historia "Hacer obligatorias las coordenadas de posición de firma". El DTO ya lo exige para
+     * las peticiones HTTP; se repite aquí porque el caso de uso no debe depender de que alguien
+     * lo haya llamado a través del `ValidationPipe`. Un firmante sin posición firmaba sin que su
+     * firma apareciera en el PDF.
+     */
+    const signerWithoutPosition = dto.collaborators.find(
+      (c) =>
+        c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER &&
+        !c.signatures?.length,
+    );
+    if (signerWithoutPosition) {
+      throw new BadRequestException(
+        `Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de ${signerWithoutPosition.email}`,
       );
     }
 
@@ -261,6 +279,18 @@ export class CreateDocumentSignatureFlowUseCase {
       : null;
 
     const totalPages = await this.documentSigningService.getPdfPages(file);
+
+    // Antes de subir el archivo: una posición fuera del documento es un error del payload, y
+    // enterarse después dejaría un PDF huérfano en Minio.
+    assertSignaturePositionsInsideDocument(
+      dto.collaborators.flatMap((c) =>
+        c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER
+          ? (c.signatures ?? [])
+          : [],
+      ),
+      totalPages,
+    );
+
     const originalHash = await this.hashService.generateFileHash(file);
 
     const uploadResponse = await this.minioService.uploadObject(
@@ -415,11 +445,12 @@ export class CreateDocumentSignatureFlowUseCase {
         const isSigner =
           participant.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;
 
-        // Se crea SIEMPRE (incluso con un arreglo vacío) para todo SIGNER de este flujo —
-        // `simpleSignatureId` asignado (con o sin posiciones) distingue a estos colaboradores
-        // de los creados por el endpoint POST /document más antiguo (que nunca lo asigna y
-        // sigue cayendo al apilado automático en finalizeSignedDocument, sin cambios). Un
-        // arreglo vacío significa "sin posición: se firma sin estampado visual" (ver historia).
+        // Se crea para todo SIGNER de este flujo — `simpleSignatureId` asignado distingue a estos
+        // colaboradores de los creados por el endpoint POST /document más antiguo (que nunca lo
+        // asigna y sigue cayendo al apilado automático en finalizeSignedDocument, sin cambios).
+        // Desde la historia "Hacer obligatorias las coordenadas de posición de firma" el arreglo
+        // nunca llega vacío (se rechaza arriba); los documentos anteriores sí pueden tenerlo, y
+        // para ellos sigue significando "se firma sin estampado visual".
         let simpleSignatureId: string | null = null;
         if (isSigner) {
           const simpleSignature = await simpleSignatureRepo.save(
@@ -451,7 +482,7 @@ export class CreateDocumentSignatureFlowUseCase {
             email: participant.email.toLowerCase(),
             firstName: participant.firstName,
             lastName: participant.lastName,
-            // Solo el VIEWER guarda identificador fiscal: para un firmante el dato ya no se
+            // Solo el WITNESS guarda identificador fiscal: para un firmante el dato ya no se
             // pide al crear el documento, y el del flujo avanzado sale del certificado de
             // e.firma al firmar (ver `CollaboratorPayloadDto.taxId`). Se descarta explícitamente
             // lo que mande el cliente.

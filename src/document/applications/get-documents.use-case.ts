@@ -4,6 +4,7 @@ import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 
 import { AccountMemberService } from 'src/account/account-member.service';
 import { MinioService } from 'src/common/minio/minio.service';
+import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { UserService } from 'src/user/user.service';
 
 import { GetDocumentsQueryDto } from '../dto/get-documents-query.dto';
@@ -28,6 +29,11 @@ export interface GetDocumentsParams {
   /** Cuenta activa (`X-Account-Id`): acota lo visible al contexto en el que está trabajando. */
   accountId: string;
   /**
+   * Alcances de `DOCUMENT + READ` que `PermissionsGuard` concedió en la cuenta activa. Deciden si
+   * dentro de una organización se ve todo lo suyo (`ORGANIZATION`) o sólo lo propio (`OWN`).
+   */
+  scopes: PERMISSION_SCOPE_ENUM[];
+  /**
    * Recorte, búsqueda, orden y paginación.
    *
    * `view` escoge un subconjunto de lo visible y NUNCA lo amplía; el acceso lo decide la cuenta
@@ -46,7 +52,7 @@ export interface DocumentsPagination {
 /**
  * Los roles que tienen algo que HACER con un documento.
  *
- * `WATCHER` queda fuera: un observador recibe copia y puede consultarlo, pero no se le pide
+ * `WITNESS` queda fuera: un testigo recibe copia y puede consultarlo, pero no se le pide
  * nada, así que un documento nunca "requiere su firma o revisión" y meterlo en esa vista sería
  * darle una tarea que no existe.
  */
@@ -112,7 +118,7 @@ export class GetDocumentsUseCase {
    *   termina antes de empezar.
    * @throws {ForbiddenException} Cuando el usuario no es miembro activo de la cuenta.
    */
-  async execute({ userId, accountId, filters }: GetDocumentsParams) {
+  async execute({ userId, accountId, scopes, filters }: GetDocumentsParams) {
     if (!accountId) {
       throw new BadRequestException(
         'Falta el header X-Account-Id de la cuenta activa',
@@ -172,7 +178,13 @@ export class GetDocumentsUseCase {
       .skip((page - 1) * limit)
       .take(limit);
 
-    this.applyVisibility(qb, { callerEmail, activeAccount, accountId });
+    this.applyVisibility(qb, {
+      userId,
+      callerEmail,
+      activeAccount,
+      accountId,
+      canReadOrganization: scopes.includes(PERMISSION_SCOPE_ENUM.ORGANIZATION),
+    });
     this.applyView(qb, view, userId);
     this.excludeArchived(qb, userId);
 
@@ -241,7 +253,7 @@ export class GetDocumentsUseCase {
           fileName: doc.fileName,
           fileType: doc.fileType,
           signers: byType(COLABORATOR_TYPE_ENUM.SIGNER),
-          watchers: byType(COLABORATOR_TYPE_ENUM.WATCHER),
+          witnesses: byType(COLABORATOR_TYPE_ENUM.WITNESS),
           reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
           creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
           creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,
@@ -317,26 +329,48 @@ export class GetDocumentsUseCase {
    * los seguía viendo desde la organización: el listado no cambiaba al cambiar de cuenta (bug
    * "Corregir documentos persistentes al cambiar de cuenta activa"). Ver
    * `callerParticipatesFromAccountSubquery`.
+   *
+   * **Dentro de una organización, lo de la organización se acota por alcance.** Con
+   * `ORGANIZATION` (`DOCUMENT.READ_ORGANIZATION`) se ve todo lo de ella; con sólo `OWN`, lo que el
+   * usuario creó en ella. Antes se mostraba todo a cualquier miembro, y quien tenía sólo `OWN`
+   * veía en la lista documentos ajenos que después `DocumentAuthorizationPolicy` le negaba al
+   * abrirlos. En la cuenta personal no cambia nada: todo lo de la cuenta es del propio usuario.
    */
   private applyVisibility(
     qb: SelectQueryBuilder<DocumentEntity>,
     context: {
+      userId: string;
       callerEmail: string | null;
       activeAccount: { organizationId?: string | null };
       accountId: string;
+      canReadOrganization: boolean;
     },
   ): void {
-    const { callerEmail, activeAccount, accountId } = context;
+    const {
+      userId,
+      callerEmail,
+      activeAccount,
+      accountId,
+      canReadOrganization,
+    } = context;
     const isPersonalAccount = !activeAccount.organizationId;
 
     qb.andWhere(
       new Brackets((where) => {
         if (isPersonalAccount) {
           where.where('document.accountId = :accountId', { accountId });
-        } else {
+        } else if (canReadOrganization) {
           where.where('document.organizationId = :organizationId', {
             organizationId: activeAccount.organizationId,
           });
+        } else {
+          where.where(
+            'document.organizationId = :organizationId AND document.createdBy = :ownerUserId',
+            {
+              organizationId: activeAccount.organizationId,
+              ownerUserId: userId,
+            },
+          );
         }
 
         where.orWhere(

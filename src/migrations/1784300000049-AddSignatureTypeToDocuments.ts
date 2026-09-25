@@ -34,9 +34,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * repetible cuesta dos líneas y hace que converja desde cualquiera de los dos puntos de partida
  * en vez de abortar el arranque con "column already exists".
  */
-export class AddSignatureTypeToDocuments1784300000049
-  implements MigrationInterface
-{
+export class AddSignatureTypeToDocuments1784300000049 implements MigrationInterface {
   name = 'AddSignatureTypeToDocuments1784300000049';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

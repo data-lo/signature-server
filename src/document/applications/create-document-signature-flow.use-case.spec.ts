@@ -106,11 +106,22 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         lastName: 'Gómez',
         email: 'maria.gomez@mail.com',
         taxId: null,
-        signatures: [],
+        // Desde la historia "Hacer obligatorias las coordenadas de posición de firma" todo
+        // firmante trae al menos una posición. En otra página que la de Juan, para no solaparse.
+        signatures: [
+          {
+            signatureId: 'sig-maria',
+            page: 2,
+            xRatio: 0.1,
+            yRatio: 0.1,
+            widthRatio: 0.2,
+            heightRatio: 0.08,
+          },
+        ],
         requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
       },
       {
-        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER,
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
         firstName: 'Carlos',
         lastName: 'Solares',
         email: 'auditor@mail.com',
@@ -629,25 +640,24 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     expect(result.success).toBe(true);
   });
 
-  it('el viewer se crea con colaboratorType WATCHER, sin signatureType ni verification_code', async () => {
+  it('el testigo se crea con colaboratorType WITNESS, sin signatureType ni verification_code', async () => {
     await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
     const viewerCall = collaboratorRepo.create.mock.calls.find(
       (call) => call[0].email === 'auditor@mail.com',
     );
-    expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WATCHER);
+    expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WITNESS);
     expect(viewerCall[0].signatureType).toBeNull();
     expect(viewerCall[0].taxId).toBe('AUDI990101YYY');
     // Solo 2 verification_codes en total (los 2 signers), ninguno para el viewer.
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
   });
 
-  it('crea una SimpleSignatureEntity por firmante, incluso con un arreglo vacío de posiciones', async () => {
+  it('crea una SimpleSignatureEntity por firmante con sus propias posiciones', async () => {
     await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
 
-    // Juan (signatures con 1 elemento) y María (signatures: []) — ambos SIGNER, ambos deben
-    // recibir una fila propia (ver historia "Ubicación de firmas por usuario": simpleSignatureId
-    // asignado, con o sin posiciones, distingue a estos colaboradores del flujo /document viejo).
+    // Juan y María —ambos SIGNER— reciben cada uno su fila, con las posiciones que colocaron
+    // (ver historia "Ubicación de firmas por usuario"). El VIEWER no recibe ninguna.
     expect(simpleSignatureRepo.save).toHaveBeenCalledTimes(2);
     expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -664,8 +674,121 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       }),
     );
     expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ signatureCoordinates: [] }),
+      expect.objectContaining({
+        signatureCoordinates: [
+          expect.objectContaining({ signatureId: 'sig-maria', page: 2 }),
+        ],
+      }),
     );
+  });
+
+  /**
+   * Historia "Hacer obligatorias las coordenadas de posición de firma": cada firmante tiene que
+   * traer dónde va su firma, y lo que traiga tiene que caber en el documento. Todo se rechaza
+   * antes de subir el archivo y de cobrar el crédito.
+   */
+  describe('coordenadas de posición de firma', () => {
+    function withMariaSignatures(
+      signatures: CreateDocumentSignaturesDto['collaborators'][number]['signatures'],
+    ): CreateDocumentSignaturesDto {
+      return {
+        ...baseDto,
+        collaborators: baseDto.collaborators.map((collaborator) =>
+          collaborator.email === 'maria.gomez@mail.com'
+            ? { ...collaborator, signatures }
+            : collaborator,
+        ),
+      };
+    }
+
+    function position(overrides: Record<string, number> = {}) {
+      return {
+        signatureId: 'sig-maria',
+        page: 2,
+        xRatio: 0.1,
+        yRatio: 0.1,
+        widthRatio: 0.2,
+        heightRatio: 0.08,
+        ...overrides,
+      };
+    }
+
+    it.each([
+      ['sin el arreglo', undefined],
+      ['con el arreglo vacío', []],
+    ])(
+      'rechaza a un firmante %s de posiciones, nombrándolo, antes de subir el archivo',
+      async (_name, signatures) => {
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            withMariaSignatures(signatures),
+            file,
+            '127.0.0.1',
+          ),
+        ).rejects.toThrow(
+          'Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de maria.gomez@mail.com',
+        );
+        expect(minioService.uploadObject).not.toHaveBeenCalled();
+        expect(documentRepo.save).not.toHaveBeenCalled();
+      },
+    );
+
+    it('no exige posiciones a un VIEWER', async () => {
+      await expect(
+        useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('rechaza una posición en una página que el documento no tiene', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          withMariaSignatures([position({ page: 4 })]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(
+        'La ubicación de firma está en la página 4, pero el documento sólo tiene 3',
+      );
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a lo ancho', { xRatio: 0.9, widthRatio: 0.2 }],
+      ['a lo alto', { yRatio: 0.95, heightRatio: 0.08 }],
+    ])('rechaza una caja que se sale de la página %s', async (_name, box) => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          withMariaSignatures([position(box)]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('acepta una caja pegada al borde, como la deja el frontend al acomodarla', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        withMariaSignatures([position({ xRatio: 1 - 0.2, yRatio: 1 - 0.08 })]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signatureCoordinates: [
+            expect.objectContaining({ xRatio: 0.8, yRatio: 1 - 0.08 }),
+          ],
+        }),
+      );
+    });
   });
 
   it('bug corregido: rechaza con BadRequestException si dos firmantes colocan una posición que se solapa en la misma página', async () => {

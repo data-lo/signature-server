@@ -359,7 +359,7 @@ describe('SendCompletedSimpleSignatureToSealUseCase', () => {
             givenSigner(),
             {
               id: 'watcher-1',
-              colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+              colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
               status: COLLABORATOR_STATUS_ENUM.PENDING,
             },
           ],

@@ -49,7 +49,10 @@ describe('outbox transaccional', () => {
   beforeEach(async () => {
     managedEventRepository = {
       create: jest.fn((data: unknown) => data),
-      save: jest.fn(async (data: unknown) => ({ id: 'event-1', ...(data as object) })),
+      save: jest.fn(async (data: unknown) => ({
+        id: 'event-1',
+        ...(data as object),
+      })),
     };
     eventRepository = {
       find: jest.fn().mockResolvedValue([]),
@@ -198,18 +201,18 @@ describe('outbox transaccional', () => {
 
   describe('idempotencia del consumo', () => {
     it('reclama el evento la primera vez', async () => {
-      await expect(idempotency.claim('event-1', 'document-events')).resolves.toBe(
-        true,
-      );
+      await expect(
+        idempotency.claim('event-1', 'document-events'),
+      ).resolves.toBe(true);
     });
 
     /** La reentrega del mismo evento no inserta nada, y eso es lo que la delata. */
     it('descarta la reentrega del mismo evento para el mismo consumidor', async () => {
       insertBuilder.execute.mockResolvedValue({ raw: [] });
 
-      await expect(idempotency.claim('event-1', 'document-events')).resolves.toBe(
-        false,
-      );
+      await expect(
+        idempotency.claim('event-1', 'document-events'),
+      ).resolves.toBe(false);
     });
 
     /**
@@ -220,15 +223,17 @@ describe('outbox transaccional', () => {
       await expect(
         idempotency.claim(undefined, 'document-events'),
       ).resolves.toBe(true);
-      expect(processedEventRepository.createQueryBuilder).not.toHaveBeenCalled();
+      expect(
+        processedEventRepository.createQueryBuilder,
+      ).not.toHaveBeenCalled();
     });
 
     it('ante un fallo de base, procesa igual antes que perder el evento', async () => {
       insertBuilder.execute.mockRejectedValue(new Error('base caída'));
 
-      await expect(idempotency.claim('event-1', 'document-events')).resolves.toBe(
-        true,
-      );
+      await expect(
+        idempotency.claim('event-1', 'document-events'),
+      ).resolves.toBe(true);
     });
   });
 });

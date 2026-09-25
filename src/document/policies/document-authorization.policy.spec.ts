@@ -233,7 +233,7 @@ describe('DocumentAuthorizationPolicy', () => {
           document: buildDocument(),
           authorization: signAuthorization([PERMISSION_SCOPE_ENUM.SELF]),
           participant: buildSigner(SIGNER_ID, {
-            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
           }),
         }),
       ).toThrow(ForbiddenException);

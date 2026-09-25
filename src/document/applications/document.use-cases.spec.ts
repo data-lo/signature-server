@@ -8,6 +8,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentService } from '../document.service';
+import { WitnessNotificationService } from '../services/witness-notification.service';
 import { DocumentEntity } from '../entities/document.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
@@ -69,6 +70,8 @@ import { DeleteDocumentUseCase } from './delete-document.use-case';
 import { SubmitDocumentForAuthorizationUseCase } from './submit-document-for-authorization.use-case';
 import { GetDocumentFileUrlUseCase } from './get-document-file-url.use-case';
 import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
+import { DocumentReadAccessService } from '../services/document-read-access.service';
+import { AuthorizationService } from 'src/authorization/services/authorization.service';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
@@ -103,6 +106,23 @@ function readOwnAuthorization(userId: string): AuthorizationContext {
     resource: RESOURCE_KEY_ENUM.DOCUMENT,
     action: ACTION_KEY_ENUM.READ,
     scopes: [PERMISSION_SCOPE_ENUM.OWN],
+  };
+}
+
+/** Contexto de un miembro de `organizationId`, con los alcances de lectura que le dé su rol. */
+function organizationReadAuthorization(
+  userId: string,
+  organizationId: string,
+  scopes: PERMISSION_SCOPE_ENUM[],
+): AuthorizationContext {
+  return {
+    userId,
+    organizationId,
+    accountId: `account-${userId}-${organizationId}`,
+    roleId: 'role-1',
+    resource: RESOURCE_KEY_ENUM.DOCUMENT,
+    action: ACTION_KEY_ENUM.READ,
+    scopes,
   };
 }
 
@@ -186,6 +206,7 @@ describe('casos de uso de documentos', () => {
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
   let accountMemberService: Record<string, jest.Mock>;
+  let witnessNotificationService: { notifyWitnessesOfRejection: jest.Mock };
   let verificationCodeService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
@@ -282,6 +303,9 @@ describe('casos de uso de documentos', () => {
       sendVerificationCodeNotification: jest.fn(),
     };
     auditService = { create: jest.fn() };
+    witnessNotificationService = {
+      notifyWitnessesOfRejection: jest.fn().mockResolvedValue(undefined),
+    };
     documentEventsProducer = {
       emitCreated: jest.fn(),
       emitSentToSign: jest.fn(),
@@ -290,6 +314,19 @@ describe('casos de uso de documentos', () => {
       emitRejected: jest.fn(),
       emitCancellationRequested: jest.fn(),
       emitCancelled: jest.fn(),
+    };
+    /**
+     * Por omisión el usuario no tiene membresía en ninguna otra organización: la segunda consulta
+     * de `DocumentReadAccessService` responde 403 salvo en las pruebas que la configuran.
+     */
+    authorizationService = {
+      authorize: jest
+        .fn()
+        .mockRejectedValue(
+          new ForbiddenException(
+            'No tienes una membresía activa en esta cuenta',
+          ),
+        ),
     };
     accountMemberService = {
       assertIsActiveMember: jest
@@ -370,6 +407,8 @@ describe('casos de uso de documentos', () => {
       providers: [
         DocumentService,
         DocumentAuthorizationPolicy,
+        DocumentReadAccessService,
+        { provide: AuthorizationService, useValue: authorizationService },
         CreateDocumentUseCase,
         GetDocumentsUseCase,
         GetDocumentUseCase,
@@ -404,6 +443,10 @@ describe('casos de uso de documentos', () => {
         { provide: AuditService, useValue: auditService },
         { provide: DocumentEventsProducer, useValue: documentEventsProducer },
         { provide: AccountMemberService, useValue: accountMemberService },
+        {
+          provide: WitnessNotificationService,
+          useValue: witnessNotificationService,
+        },
         {
           provide: VerificationCodeService,
           useValue: verificationCodeService,
@@ -470,7 +513,7 @@ describe('casos de uso de documentos', () => {
       mimetype: 'application/pdf',
     } as Express.Multer.File;
 
-    const dto = { signerIds: ['user-1'], watcherIds: [] } as any;
+    const dto = { signerIds: ['user-1'], witnessIds: [] } as any;
 
     beforeEach(() => {
       // findOne se usa para dos cosas distintas en create(): el chequeo de nombre
@@ -546,7 +589,7 @@ describe('casos de uso de documentos', () => {
     it('setea totalSigners igual a la cantidad de firmantes seleccionados', async () => {
       const dtoConVariosFirmantes = {
         signerIds: ['user-1', 'user-2', 'user-3'],
-        watcherIds: [],
+        witnessIds: [],
       } as any;
 
       await createDocument.execute(
@@ -561,10 +604,10 @@ describe('casos de uso de documentos', () => {
       expect(savedDocumentCall.totalSigners).toBe(3);
     });
 
-    it('crea colaboradores WATCHER solo-por-email sin llamar a userService.findOne para ellos', async () => {
+    it('crea colaboradores WITNESS solo-por-email sin llamar a userService.findOne para ellos', async () => {
       const dtoConWatcherPorEmail = {
         signerIds: ['user-1'],
-        watcherEmails: ['invitado@correo.com'],
+        witnessEmails: ['invitado@correo.com'],
       } as any;
 
       await createDocument.execute(
@@ -583,7 +626,7 @@ describe('casos de uso de documentos', () => {
         (c: any) => c.email === 'invitado@correo.com',
       );
       expect(watcherByEmail).toMatchObject({
-        colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
       });
       expect(watcherByEmail.accountId).toBeUndefined();
     });
@@ -630,8 +673,8 @@ describe('casos de uso de documentos', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('rechaza si el mismo usuario está entre firmantes y watchers', async () => {
-      const dupDto = { signerIds: ['user-1'], watcherIds: ['user-1'] } as any;
+    it('rechaza si el mismo usuario está entre firmantes y testigos', async () => {
+      const dupDto = { signerIds: ['user-1'], witnessIds: ['user-1'] } as any;
 
       await expect(
         createDocument.execute(
@@ -645,10 +688,10 @@ describe('casos de uso de documentos', () => {
       expect(minioService.uploadObject).not.toHaveBeenCalled();
     });
 
-    it('rechaza si el mismo email se repite entre watchers y reviewers', async () => {
+    it('rechaza si el mismo email se repite entre testigos y reviewers', async () => {
       const dupDto = {
         signerIds: ['user-1'],
-        watcherEmails: ['x@correo.com'],
+        witnessEmails: ['x@correo.com'],
         reviewerEmails: ['x@correo.com'],
       } as any;
 
@@ -740,13 +783,24 @@ describe('casos de uso de documentos', () => {
       });
     }
 
-    /** El listado con los filtros indicados; el resto va con los valores por omisión del DTO. */
-    function list(filters: Record<string, unknown> = {}, qb?: any) {
+    /**
+     * El listado con los filtros indicados; el resto va con los valores por omisión del DTO.
+     * Los alcances son los de un administrador (`OWN` + `ORGANIZATION`) salvo que se pidan otros.
+     */
+    function list(
+      filters: Record<string, unknown> = {},
+      qb?: any,
+      scopes: PERMISSION_SCOPE_ENUM[] = [
+        PERMISSION_SCOPE_ENUM.OWN,
+        PERMISSION_SCOPE_ENUM.ORGANIZATION,
+      ],
+    ) {
       const builder = qb ?? createMockQueryBuilder();
       documentRepository.createQueryBuilder.mockReturnValue(builder);
       return getDocuments.execute({
         userId: 'user-1',
         accountId: 'account-1',
+        scopes,
         filters: { page: 1, limit: 25, ...filters } as any,
       });
     }
@@ -805,6 +859,7 @@ describe('casos de uso de documentos', () => {
         getDocuments.execute({
           userId: 'user-1',
           accountId: undefined as any,
+          scopes: [PERMISSION_SCOPE_ENUM.OWN],
           filters: { page: 1, limit: 25 } as any,
         }),
       ).rejects.toThrow(BadRequestException);
@@ -934,6 +989,7 @@ describe('casos de uso de documentos', () => {
       await getDocuments.execute({
         userId: 'user-1',
         accountId: 'account-org-member-1',
+        scopes: [PERMISSION_SCOPE_ENUM.OWN, PERMISSION_SCOPE_ENUM.ORGANIZATION],
         filters: { page: 1, limit: 25 } as any,
       });
 
@@ -988,6 +1044,54 @@ describe('casos de uso de documentos', () => {
     });
 
     /**
+     * Con sólo `DOCUMENT.READ_OWN`, dentro de la organización se lista lo que el usuario creó en
+     * ella, no todo. Antes la lista mostraba todo lo de la organización a cualquier miembro, y al
+     * abrir un documento ajeno la Policy le respondía 403.
+     */
+    it('en una organización, con sólo OWN lista lo que el usuario creó en ella', async () => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-member-1',
+        organizationId: 'org-1',
+      });
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb, [PERMISSION_SCOPE_ENUM.OWN]);
+
+      const [[ownership, parameters]] = visibilityWithParameters(qb);
+      expect(ownership).toBe(
+        'document.organizationId = :organizationId AND document.createdBy = :ownerUserId',
+      );
+      expect(parameters).toEqual({
+        organizationId: 'org-1',
+        ownerUserId: 'user-1',
+      });
+    });
+
+    it('en una organización, con ORGANIZATION lista todo lo de ella sin acotar por creador', async () => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-org-admin-1',
+        organizationId: 'org-1',
+      });
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb, [PERMISSION_SCOPE_ENUM.ORGANIZATION]);
+
+      const [[ownership, parameters]] = visibilityWithParameters(qb);
+      expect(ownership).toBe('document.organizationId = :organizationId');
+      expect(parameters).toEqual({ organizationId: 'org-1' });
+    });
+
+    it('en la cuenta personal los alcances no cambian lo visible', async () => {
+      personalAccount();
+      const qb = createMockQueryBuilder();
+
+      await list({}, qb, [PERMISSION_SCOPE_ENUM.OWN]);
+
+      const [[ownership]] = visibilityWithParameters(qb);
+      expect(ownership).toBe('document.accountId = :accountId');
+    });
+
+    /**
      * El emparejamiento por correo se hace en minúsculas porque `collaborators.email` conserva lo
      * que tecleó quien invitó, mientras que `users.email` está normalizado (bug "las solicitudes
      * FIEL sin 2FA no aparecen en Por firmar"). Ahora además el correo lo resuelve el servidor:
@@ -1019,7 +1123,7 @@ describe('casos de uso de documentos', () => {
           ([sql]: [unknown]) =>
             typeof sql === 'string' && sql.includes('c.colaborator_type IN'),
         );
-        // Un observador no firma ni revisa: nada le "requiere su firma".
+        // Un testigo no firma ni revisa: nada le "requiere su firma".
         expect(params.actingTypes).toEqual([
           COLABORATOR_TYPE_ENUM.SIGNER,
           COLABORATOR_TYPE_ENUM.REVIEWER,
@@ -1306,6 +1410,47 @@ describe('casos de uso de documentos', () => {
         );
       });
 
+      /**
+       * Historia "Renombrar rol Espectador a Testigo": la fila agrupa a los testigos bajo
+       * `witnesses` (antes `watchers`), aparte de firmantes y reviewers.
+       */
+      it('agrupa a los testigos bajo `witnesses`', async () => {
+        const qb = createMockQueryBuilder(
+          [
+            documentWith({
+              collaborators: [
+                {
+                  ...myPendingSignature(),
+                  account: {
+                    userId: 'user-1',
+                    user: { firstName: 'Ana', lastName: 'López' },
+                  },
+                },
+                {
+                  colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+                  status: COLLABORATOR_STATUS_ENUM.NOTIFIED,
+                  signingOrder: null,
+                  account: null,
+                  firstName: 'Carlos',
+                  lastName: 'Solares',
+                  email: 'carlos@correo.com',
+                },
+              ],
+            }),
+          ],
+          1,
+        );
+
+        const result = await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        expect(result.items[0]).toMatchObject({
+          signers: ['Ana López'],
+          witnesses: ['Carlos Solares'],
+          reviewers: [],
+        });
+        expect(result.items[0]).not.toHaveProperty('watchers');
+      });
+
       /** Ya firmé: el documento sigue en mi lista, pero no me pide nada. */
       it('deja de pedir firma en cuanto el usuario ya respondió', async () => {
         const qb = createMockQueryBuilder(
@@ -1499,7 +1644,7 @@ describe('casos de uso de documentos', () => {
         const result = await listWithSigners([
           signer(SIGNATURE_TYPE_ENUM.SIMPLE),
           {
-            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
             signatureType: null,
           },
         ]);
@@ -2008,6 +2153,106 @@ describe('casos de uso de documentos', () => {
       expect(document.completedSignersCount).toBe(1);
       // Esta firma era la última que faltaba: el documento quedó completo.
       expect(result.data).toEqual({ id: 'doc-1', documentCompleted: true });
+    });
+
+    /**
+     * Historia "Corregir notificaciones por correo para testigos": el correo de finalización llega
+     * al testigo, una sola vez por dirección, y el creador recibe sólo su propia versión aunque
+     * además sea colaborador. Un envío fallido no impide los demás.
+     */
+    describe('correos de finalización', () => {
+      function witness(overrides: Record<string, unknown> = {}) {
+        return {
+          ...buildSigner({ id: 'witness-1', userId: 'witness-user' }),
+          colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+          account: null,
+          email: 'testigo@correo.com',
+          firstName: 'Tere',
+          lastName: 'Testigo',
+          ...overrides,
+        };
+      }
+
+      beforeEach(() => {
+        documentRepository.findOne.mockResolvedValue({
+          id: 'doc-1',
+          fileName: 'contrato.pdf',
+          objectKey: 'object-key-1',
+          createdBy: 'creator-1',
+        });
+        minioService.getFileInBytesFormat.mockResolvedValue(
+          Buffer.from('pdf-final'),
+        );
+      });
+
+      it('manda el PDF final al testigo', async () => {
+        collaboratorRepository.find.mockResolvedValue([
+          buildSigner({ userId: 'user-1' }),
+          witness(),
+        ]);
+
+        await service.sendCompletionEmails('doc-1');
+
+        expect(
+          emailService.sendDocumentSignedNotification,
+        ).toHaveBeenCalledWith(
+          'testigo@correo.com',
+          'Tere Testigo',
+          'contrato.pdf',
+          Buffer.from('pdf-final'),
+        );
+      });
+
+      it('no repite el correo a una misma dirección ni al creador, que recibe el suyo', async () => {
+        collaboratorRepository.find.mockResolvedValue([
+          witness(),
+          witness({ id: 'witness-2', email: 'Testigo@Correo.com' }),
+          witness({ id: 'witness-3', email: 'creador@correo.com' }),
+        ]);
+
+        await service.sendCompletionEmails('doc-1');
+
+        expect(
+          emailService.sendDocumentSignedNotification,
+        ).toHaveBeenCalledTimes(1);
+        expect(
+          emailService.sendDocumentCompletedToCreatorNotification,
+        ).toHaveBeenCalledWith(
+          'creador@correo.com',
+          'Creador Uno',
+          'contrato.pdf',
+          [],
+          Buffer.from('pdf-final'),
+        );
+      });
+
+      it('un envío fallido no impide los demás ni lanza', async () => {
+        collaboratorRepository.find.mockResolvedValue([
+          witness({ id: 'witness-1', email: 'falla@correo.com' }),
+          witness({ id: 'witness-2', email: 'testigo@correo.com' }),
+        ]);
+        emailService.sendDocumentSignedNotification.mockImplementation(
+          async (to: string) => {
+            if (to === 'falla@correo.com') throw new Error('SendGrid caído');
+          },
+        );
+
+        await expect(
+          service.sendCompletionEmails('doc-1'),
+        ).resolves.toBeUndefined();
+
+        expect(
+          emailService.sendDocumentSignedNotification,
+        ).toHaveBeenCalledWith(
+          'testigo@correo.com',
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+        );
+        expect(
+          emailService.sendDocumentCompletedToCreatorNotification,
+        ).toHaveBeenCalled();
+      });
     });
 
     /**
@@ -3330,6 +3575,49 @@ describe('casos de uso de documentos', () => {
       expect(documentEventsProducer.emitRejected).toHaveBeenCalled();
     });
 
+    /** Historia "Corregir notificaciones por correo para testigos". */
+    it('avisa a los testigos del rechazo, con quién rechazó y el motivo', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+
+      await rejectDocument.execute('doc-1', 'user-1', 'No es válido');
+
+      expect(
+        witnessNotificationService.notifyWitnessesOfRejection,
+      ).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        documentName: 'contrato.pdf',
+        rejecterName: expect.any(String),
+        reason: 'No es válido',
+      });
+    });
+
+    it('avisa a los testigos aunque falle el correo al creador, y el rechazo se completa', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+      emailService.sendDocumentRejectedNotification.mockRejectedValue(
+        new Error('SendGrid caído'),
+      );
+      witnessNotificationService.notifyWitnessesOfRejection.mockRejectedValue(
+        new Error('base caída'),
+      );
+
+      const result = await rejectDocument.execute(
+        'doc-1',
+        'user-1',
+        'No es válido',
+      );
+
+      expect(result.success).toBe(true);
+      expect(
+        witnessNotificationService.notifyWitnessesOfRejection,
+      ).toHaveBeenCalled();
+    });
+
     it('rechaza con BadRequestException si el documento no está PENDING', async () => {
       documentRepository.findOne.mockResolvedValue(
         mockDocument({ status: DOCUMENT_STATUS_ENUM.SIGNED }),
@@ -3677,6 +3965,55 @@ describe('casos de uso de documentos', () => {
       expect(documentEventsProducer.emitCancelled).toHaveBeenCalled();
     });
 
+    /**
+     * Historia "Corregir notificaciones por correo para testigos": el testigo también recibe la
+     * cancelación, un correo por dirección, y un envío fallido no impide los demás.
+     */
+    it('avisa la cancelación a firmantes y testigos, una vez por dirección y sin cortar en el primer fallo', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+        {
+          ...buildSigner({ id: 'witness-1', userId: 'witness-user' }),
+          colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+          account: null,
+          email: 'testigo@correo.com',
+          firstName: 'Tere',
+          lastName: 'Testigo',
+        },
+        {
+          ...buildSigner({ id: 'witness-2', userId: 'witness-user-2' }),
+          colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+          account: null,
+          email: 'TESTIGO@correo.com',
+          firstName: 'Tere',
+          lastName: 'Duplicada',
+        },
+      ]);
+      emailService.sendDocumentCancelledNotification.mockImplementation(
+        async (to: string) => {
+          if (to !== 'testigo@correo.com') throw new Error('SendGrid caído');
+        },
+      );
+
+      const result = await confirmCancellation.execute('doc-1', 'user-1');
+
+      expect(result.success).toBe(true);
+      const recipients =
+        emailService.sendDocumentCancelledNotification.mock.calls.map(
+          ([to]: [string]) => to.toLowerCase(),
+        );
+      expect(recipients).toHaveLength(2);
+      expect(recipients).toContain('testigo@correo.com');
+      expect(
+        emailService.sendDocumentCancelledNotification,
+      ).toHaveBeenCalledWith(
+        'testigo@correo.com',
+        'Tere Testigo',
+        'contrato.pdf',
+      );
+    });
+
     it('rechaza con BadRequestException si el documento no está en CANCELLATION_PENDING', async () => {
       documentRepository.findOne.mockResolvedValue(
         mockDocument({ status: DOCUMENT_STATUS_ENUM.SIGNED }),
@@ -3885,7 +4222,7 @@ describe('casos de uso de documentos', () => {
         expect(userService.findOne).not.toHaveBeenCalled();
       });
 
-      it('solo considera a los SIGNER: watchers y reviewers no salen en la vista pública', async () => {
+      it('solo considera a los SIGNER: testigos y reviewers no salen en la vista pública', async () => {
         documentRepository.findOne.mockResolvedValue(
           signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
         );
@@ -4588,6 +4925,7 @@ describe('casos de uso de documentos', () => {
       await getDocuments.execute({
         userId: 'user-1',
         accountId: 'account-1',
+        scopes: [PERMISSION_SCOPE_ENUM.OWN],
         filters: { page: 1, limit: 25, withUrl: true } as any,
       });
 
@@ -5012,40 +5350,240 @@ describe('casos de uso de documentos', () => {
   });
 
   describe('GetDocumentFileUrlUseCase', () => {
+    /** Instancia real: la Policy usa `isAccessibleBy`, que es un método de la entidad. */
+    function fileDocument(overrides: Record<string, unknown> = {}) {
+      return Object.assign(new DocumentEntity(), {
+        id: 'doc-1',
+        createdBy: 'creator-1',
+        objectKey: 'object-key-1',
+        status: DOCUMENT_STATUS_ENUM.CREATED,
+        organizationId: 'org-1',
+        collaborators: [],
+        ...overrides,
+      });
+    }
+
     /**
      * El acceso se comprueba antes de resolver nada: sin esto, un tercero con el UUID obtendría
      * una URL prefirmada del archivo aunque no tenga nada que ver con el documento.
      */
     it('comprueba el acceso antes de generar la URL', async () => {
-      documentRepository.findOne.mockResolvedValue({
-        id: 'doc-1',
-        createdBy: 'creator-1',
-        objectKey: 'object-key-1',
-        status: DOCUMENT_STATUS_ENUM.CREATED,
-      });
+      documentRepository.findOne.mockResolvedValue(
+        fileDocument({ organizationId: null }),
+      );
 
-      const result = await getDocumentFileUrl.execute('doc-1', 'creator-1');
+      const result = await getDocumentFileUrl.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('creator-1'),
+      });
 
       expect(result.secureUrl).toBe('https://minio/file');
     });
 
     it('no genera ninguna URL si el usuario no tiene acceso', async () => {
-      documentRepository.findOne.mockResolvedValue({
-        id: 'doc-1',
-        createdBy: 'creator-1',
-        objectKey: 'object-key-1',
-        status: DOCUMENT_STATUS_ENUM.CREATED,
-      });
-      collaboratorRepository.findOne.mockResolvedValue(null);
+      documentRepository.findOne.mockResolvedValue(
+        fileDocument({ organizationId: null }),
+      );
       userService.findOne.mockResolvedValue({
         id: 'user-2',
         email: 'ajeno@correo.com',
       });
 
       await expect(
-        getDocumentFileUrl.execute('doc-1', 'user-2'),
+        getDocumentFileUrl.execute({
+          documentId: 'doc-1',
+          authorization: readOwnAuthorization('user-2'),
+        }),
       ).rejects.toThrow(ForbiddenException);
       expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Bug corregido: el administrador veía el detalle de un documento de su organización y el
+     * visor se quedaba vacío, porque el archivo sólo se servía al creador y a los participantes.
+     */
+    it('sirve el archivo a quien tiene READ_ORGANIZATION en la organización del documento', async () => {
+      documentRepository.findOne.mockResolvedValue(fileDocument());
+
+      const result = await getDocumentFileUrl.execute({
+        documentId: 'doc-1',
+        authorization: organizationReadAuthorization('admin-1', 'org-1', [
+          PERMISSION_SCOPE_ENUM.OWN,
+          PERMISSION_SCOPE_ENUM.ORGANIZATION,
+        ]),
+      });
+
+      expect(result.secureUrl).toBe('https://minio/file');
+    });
+
+    it('niega el archivo a un miembro con sólo OWN que no participa en el documento', async () => {
+      documentRepository.findOne.mockResolvedValue(fileDocument());
+
+      await expect(
+        getDocumentFileUrl.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization('member-1', 'org-1', [
+            PERMISSION_SCOPE_ENUM.OWN,
+          ]),
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    it('responde 404 si el documento no existe', async () => {
+      documentRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        getDocumentFileUrl.execute({
+          documentId: 'doc-x',
+          authorization: readOwnAuthorization('user-1'),
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  /**
+   * Historia "Corregir acceso y carga de documentos de todas las organizaciones para usuarios con
+   * permiso de lectura": el permiso se evalúa contra la organización del documento, no sólo
+   * contra la activa.
+   */
+  describe('lectura del detalle con DOCUMENT.READ_ORGANIZATION', () => {
+    function organizationDocument(organizationId: string) {
+      return Object.assign(new DocumentEntity(), {
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        fileType: 'application/pdf',
+        totalPages: 1,
+        objectKey: 'object-key-1',
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+        createdBy: 'creator-1',
+        organizationId,
+        requestedBy: { firstName: 'Creador', lastName: 'Uno' },
+        collaborators: [buildSigner({ userId: 'signer-1' })],
+      });
+    }
+
+    const ADMIN_SCOPES = [
+      PERMISSION_SCOPE_ENUM.OWN,
+      PERMISSION_SCOPE_ENUM.ORGANIZATION,
+    ];
+
+    it('deja ver un documento de la organización activa a quien tiene ORGANIZATION, sin participar en él', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-1'),
+      );
+
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: organizationReadAuthorization(
+          'admin-1',
+          'org-1',
+          ADMIN_SCOPES,
+        ),
+      });
+
+      expect(result.data.id).toBe('doc-1');
+      expect(result.data.myRole).toBeNull();
+      expect(result.data.canSign).toBe(false);
+      expect(authorizationService.authorize).not.toHaveBeenCalled();
+    });
+
+    it('deja ver un documento de OTRA organización del usuario en la que tiene ORGANIZATION', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+      authorizationService.authorize.mockResolvedValue(
+        organizationReadAuthorization('admin-1', 'org-2', ADMIN_SCOPES),
+      );
+
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: organizationReadAuthorization(
+          'admin-1',
+          'org-1',
+          ADMIN_SCOPES,
+        ),
+      });
+
+      expect(result.data.id).toBe('doc-1');
+      expect(authorizationService.authorize).toHaveBeenCalledWith({
+        userId: 'admin-1',
+        organizationId: 'org-2',
+        resource: RESOURCE_KEY_ENUM.DOCUMENT,
+        action: ACTION_KEY_ENUM.READ,
+      });
+    });
+
+    it('también desde la cuenta personal activa, si en la organización del documento tiene ORGANIZATION', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+      authorizationService.authorize.mockResolvedValue(
+        organizationReadAuthorization('admin-1', 'org-2', ADMIN_SCOPES),
+      );
+
+      const result = await getDocument.execute({
+        documentId: 'doc-1',
+        authorization: readOwnAuthorization('admin-1'),
+      });
+
+      expect(result.data.id).toBe('doc-1');
+    });
+
+    it('niega el documento de otra organización en la que el usuario no es miembro', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization(
+            'admin-1',
+            'org-1',
+            ADMIN_SCOPES,
+          ),
+        }),
+      ).rejects.toThrow('No tienes permiso para consultar este documento');
+      expect(minioService.getFile).not.toHaveBeenCalled();
+    });
+
+    it('niega el documento de otra organización donde el usuario sólo tiene OWN y no participa', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-2'),
+      );
+      authorizationService.authorize.mockResolvedValue(
+        organizationReadAuthorization('admin-1', 'org-2', [
+          PERMISSION_SCOPE_ENUM.OWN,
+        ]),
+      );
+
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization(
+            'admin-1',
+            'org-1',
+            ADMIN_SCOPES,
+          ),
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('no consulta otra organización cuando el documento es de la activa y el alcance no alcanza', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        organizationDocument('org-1'),
+      );
+
+      await expect(
+        getDocument.execute({
+          documentId: 'doc-1',
+          authorization: organizationReadAuthorization('member-1', 'org-1', [
+            PERMISSION_SCOPE_ENUM.OWN,
+          ]),
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(authorizationService.authorize).not.toHaveBeenCalled();
     });
   });
 });

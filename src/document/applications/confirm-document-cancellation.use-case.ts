@@ -20,10 +20,8 @@ import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
-import {
-  collaboratorDisplayName,
-  collaboratorEmail,
-} from '../utils/collaborator-display.util';
+import { collaboratorDisplayName } from '../utils/collaborator-display.util';
+import { sendToEachAddress } from '../utils/send-to-each-address.util';
 import { DocumentService } from '../document.service';
 
 /**
@@ -134,21 +132,21 @@ export class ConfirmDocumentCancellationUseCase {
       actorUserId: currentUserId,
     });
 
-    try {
-      await Promise.all(
-        collaborators.map((collaborator) =>
-          this.emailService.sendDocumentCancelledNotification(
-            collaboratorEmail(collaborator),
-            collaboratorDisplayName(collaborator),
-            document.fileName,
-          ),
+    // A todos los colaboradores —testigos incluidos—, un correo por dirección. Cada envío falla
+    // por su cuenta: antes un `Promise.all` dejaba registrado sólo el primer fallo.
+    await sendToEachAddress(
+      collaborators,
+      (collaborator, to) =>
+        this.emailService.sendDocumentCancelledNotification(
+          to,
+          collaboratorDisplayName(collaborator),
+          document.fileName,
         ),
-      );
-    } catch (error) {
-      this.logger.error(
-        `Error notificando la cancelación del documento ${documentId}: ${error}`,
-      );
-    }
+      (to, error) =>
+        this.logger.error(
+          `Error notificando la cancelación del documento ${documentId} a ${to}: ${error}`,
+        ),
+    );
 
     return {
       success: true,

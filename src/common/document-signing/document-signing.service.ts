@@ -27,6 +27,13 @@ import {
   toVisibleRect,
 } from './page-geometry';
 
+/**
+ * Respuesta cuando pdf-lib no puede abrir el archivo recibido (ver `getPdfPages`). Nombra las
+ * causas habituales para que el usuario sepa qué revisar antes de reintentar.
+ */
+export const UNREADABLE_PDF_MESSAGE =
+  'No se pudo leer el documento. Verifica que sea un PDF válido, que no esté dañado ni protegido con contraseña, y vuelve a cargarlo.';
+
 // Posición por defecto: esquina inferior derecha de una página A4 (595 x 842 pt)
 
 // Para ajustar los limites solo hayq ue modificar las tres constantes siguientes. Si la firma queda fuera de estos rangos, se normaliza a DEFAULT_SIGNATURE_SIZE.
@@ -528,16 +535,38 @@ export class PdfSignatureService {
     return { width, height };
   }
 
-  async getPdfPages(file: Express.Multer.File) {
+  /**
+   * Cuenta las páginas del PDF recibido.
+   *
+   * Es la primera lectura real del archivo en los flujos de alta (`CreateDocumentSignatureFlowUseCase`,
+   * `CreateDocumentUseCase`), antes de calcular su hash y de subirlo a MinIO, así que también
+   * funciona como validación: un archivo que pdf-lib no puede abrir no llega a guardarse.
+   *
+   * Un PDF ilegible es un problema del archivo que mandó el cliente, no del servidor: responde
+   * 400 con un mensaje que el usuario puede accionar. Antes respondía 500 con el error interno de
+   * pdf-lib pegado al texto ("Error obteniendo la cantidad total de imagenes del pdf: Error: No
+   * PDF header found"), que en pantalla parecía una falla del sistema y no decía qué hacer.
+   *
+   * @param file - Archivo recibido por multer (en memoria).
+   * @returns El número de páginas del documento.
+   *
+   * @throws {BadRequestException} Si el archivo no es un PDF legible (dañado, incompleto o
+   * protegido con contraseña).
+   *
+   * @example
+   * ```ts
+   * const totalPages = await this.documentSigningService.getPdfPages(file); // 3
+   * ```
+   */
+  async getPdfPages(file: Express.Multer.File): Promise<number> {
     try {
-      const buffer = file.buffer;
-      const pdf = await PDFDocument.load(buffer);
-      const totalPages = pdf.getPageCount();
-      return totalPages;
+      const pdf = await PDFDocument.load(file.buffer);
+      return pdf.getPageCount();
     } catch (error) {
-      throw new InternalServerErrorException(
-        `Error obteniendo la cantidad total de imagenes del pdf: ${error}`,
+      this.logger.warn(
+        `No se pudo leer el PDF recibido (${file.originalname}, ${file.size} bytes): ${error}`,
       );
+      throw new BadRequestException(UNREADABLE_PDF_MESSAGE);
     }
   }
 }

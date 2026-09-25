@@ -125,7 +125,9 @@ describe('AssertPlanActionUseCase', () => {
 
       expect(
         (fallo as PlanActionNotIncludedException).getResponse(),
-      ).toMatchObject({ message: 'Tu plan actual no incluye esta funcionalidad.' });
+      ).toMatchObject({
+        message: 'Tu plan actual no incluye esta funcionalidad.',
+      });
     });
 
     it.each([

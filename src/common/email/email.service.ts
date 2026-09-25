@@ -18,7 +18,8 @@ import {
   documentPendingTemplate,
   documentRejectedTemplate,
   documentSignedTemplate,
-  documentWatcherAddedTemplate,
+  documentWitnessAddedTemplate,
+  documentRejectedToWitnessTemplate,
   organizationInvitationTemplate,
   organizationMemberJoinedTemplate,
   passwordResetOtpTemplate,
@@ -185,6 +186,43 @@ export class EmailService {
     );
   }
 
+  /**
+   * Notifica a un testigo que un firmante rechazó el documento, con el motivo.
+   *
+   * @param to - Correo del testigo.
+   * @param witnessName - Nombre con el que se le saluda.
+   * @param rejecterName - Quién rechazó el documento.
+   * @param documentName - Nombre del documento.
+   * @param reason - Motivo del rechazo.
+   * @returns Nada.
+   *
+   * @throws {InternalServerErrorException} Si el proveedor de correo rechaza el envío.
+   *
+   * @example
+   * ```ts
+   * await emailService.sendDocumentRejectedToWitnessNotification('ana@x.com', 'Ana', 'Juan Pérez', 'contrato.pdf', 'Faltan cláusulas');
+   * ```
+   */
+  async sendDocumentRejectedToWitnessNotification(
+    to: string,
+    witnessName: string,
+    rejecterName: string,
+    documentName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_REJECTED,
+      documentRejectedToWitnessTemplate(
+        witnessName,
+        rejecterName,
+        documentName,
+        reason,
+      ),
+      EmailType.NOTIFICATION,
+    );
+  }
+
   async sendDocumentCancellationPendingNotification(
     to: string,
     documentName: string,
@@ -274,14 +312,14 @@ export class EmailService {
   }
 
   /**
-   * Avisa a un colaborador WATCHER que lo agregaron a un documento (historia "Actualizar estatus
+   * Avisa a un colaborador WITNESS (testigo) que lo agregaron a un documento (historia "Actualizar estatus
    * de watchers a NOTIFIED..."). `creatorEmail` va como replyTo, igual que
    * `sendDocumentPendingNotification`: quien responda preguntando de qué documento se trata llega
    * directo a quien lo creó.
    */
-  async sendDocumentWatcherAddedNotification(
+  async sendDocumentWitnessAddedNotification(
     to: string,
-    watcherName: string,
+    witnessName: string,
     documentName: string,
     creatorName: string,
     creatorEmail: string,
@@ -289,9 +327,9 @@ export class EmailService {
   ): Promise<void> {
     await this.sendEmail(
       to,
-      EmailSubject.DOCUMENT_WATCHER_ADDED,
-      documentWatcherAddedTemplate(
-        watcherName,
+      EmailSubject.DOCUMENT_WITNESS_ADDED,
+      documentWitnessAddedTemplate(
+        witnessName,
         documentName,
         creatorName,
         accessUrl,

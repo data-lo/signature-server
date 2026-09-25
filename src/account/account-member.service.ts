@@ -55,7 +55,7 @@ export class AccountMemberService {
     private userRepository: Repository<UserEntity>,
 
     private readonly rolesService: RolesService,
-  ) { }
+  ) {}
 
   /**
    * Resuelve la cuenta PERSONAL (1:1 con el usuario) de un usuario dado — usada donde un
@@ -541,6 +541,43 @@ export class AccountMemberService {
       action,
       'No tienes permisos de administrador sobre esta organización',
     );
+  }
+
+  /**
+   * Rechaza la operación si `target` es el propietario (rol de sistema OWNER) de la organización
+   * (historia "Impedir desactivación de cuentas con perfil Owner").
+   *
+   * Es una regla distinta de `assertNotLastAdmin`, y más estricta: aquélla deja desactivar al
+   * propietario mientras quede otro administrador activo; ésta no lo deja nunca. El propietario
+   * es quien creó la cuenta y no hay flujo para transferir la propiedad, así que quitarlo dejaría
+   * a la organización sin dueño aunque tuviera administradores.
+   *
+   * Se compara contra el id del rol de SISTEMA y no contra el nombre: una organización puede
+   * crear roles propios, y uno llamado igual no debe heredar esta protección.
+   *
+   * @param target - Membresía sobre la que se quiere actuar.
+   * @param message - Qué se intentaba hacer, para que el error lo diga (p. ej. "desactivar").
+   * @returns Nada: validar es no lanzar.
+   *
+   * @throws {ConflictException} (409) Si `target` tiene el rol OWNER.
+   *
+   * @example
+   * ```ts
+   * await this.accountMemberService.assertNotOwner(membership, 'desactivar');
+   * ```
+   */
+  async assertNotOwner(target: AccountEntity, message: string): Promise<void> {
+    if (!target.roleId) return;
+
+    const ownerRole = await this.rolesService.findSystemRoleByName(
+      SYSTEM_ROLE_NAME_ENUM.OWNER,
+    );
+
+    if (target.roleId === ownerRole.id) {
+      throw new ConflictException(
+        `No se puede ${message} una cuenta con perfil de propietario (Owner)`,
+      );
+    }
   }
 
   /**
