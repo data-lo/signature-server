@@ -9,6 +9,9 @@ import { AccountService } from './account.service';
 import { RolesService } from 'src/roles/roles.service';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { DuplicateOrganizationMembershipException } from './exceptions/organization.exceptions';
+import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 const OWNER_ROLE = { id: 'owner-role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER };
 const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
@@ -34,6 +37,7 @@ describe('AccountMemberService', () => {
     findByIdOrFail: jest.Mock;
     assertHasPermission: jest.Mock;
     findSystemRoleByName: jest.Mock;
+    hasPermission: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -43,6 +47,10 @@ describe('AccountMemberService', () => {
     accountService = { removeAccountFromCatalog: jest.fn() };
     rolesService = {
       findByIdOrFail: jest.fn().mockResolvedValue(MEMBER_ROLE),
+      // Sólo ADMIN concede DOCUMENT.APPROVE en estas pruebas.
+      hasPermission: jest
+        .fn()
+        .mockImplementation(async (roleId: string) => roleId === ADMIN_ROLE.id),
       // Resuelve por nombre: `assertNotLastAdmin` pide OWNER y ADMIN, y devolver siempre el
       // mismo rol escondería que los cuenta a los dos.
       findSystemRoleByName: jest
@@ -154,6 +162,81 @@ describe('AccountMemberService', () => {
       await expect(
         service.assertNotLastAdmin('org-1', ADMIN),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  /**
+   * Historia "Corregir carga de aprobadores al requerir aprobación durante la creación de
+   * documentos": la lista de la que se elige al aprobador.
+   */
+  describe('listActiveMembersWithPermission', () => {
+    function membership(id: string, roleId: string | null) {
+      return {
+        id,
+        userId: `user-${id}`,
+        organizationId: 'org-1',
+        roleId,
+        isActive: true,
+        user: { id: `user-${id}`, email: `${id}@empresa.com` },
+      };
+    }
+
+    it('consulta sólo membresías activas y en estado ACTIVE de esa organización', async () => {
+      accountRepository.find.mockResolvedValue([]);
+
+      await service.listActiveMembersWithPermission(
+        'org-1',
+        RESOURCE_KEY_ENUM.DOCUMENT,
+        ACTION_KEY_ENUM.APPROVE,
+      );
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          isActive: true,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        },
+        relations: { user: true },
+        order: { createdAt: 'ASC' },
+      });
+    });
+
+    it('devuelve sólo a quienes tienen un rol con el permiso', async () => {
+      accountRepository.find.mockResolvedValue([
+        membership('a', ADMIN_ROLE.id),
+        membership('m', MEMBER_ROLE.id),
+        membership('sin-rol', null),
+        membership('b', ADMIN_ROLE.id),
+      ]);
+
+      const result = await service.listActiveMembersWithPermission(
+        'org-1',
+        RESOURCE_KEY_ENUM.DOCUMENT,
+        ACTION_KEY_ENUM.APPROVE,
+      );
+
+      expect(result.map((member) => member.id)).toEqual(['a', 'b']);
+    });
+
+    it('resuelve el permiso una vez por rol, no por miembro', async () => {
+      accountRepository.find.mockResolvedValue([
+        membership('a', ADMIN_ROLE.id),
+        membership('b', ADMIN_ROLE.id),
+        membership('m', MEMBER_ROLE.id),
+      ]);
+
+      await service.listActiveMembersWithPermission(
+        'org-1',
+        RESOURCE_KEY_ENUM.DOCUMENT,
+        ACTION_KEY_ENUM.APPROVE,
+      );
+
+      expect(rolesService.hasPermission).toHaveBeenCalledTimes(2);
+      expect(rolesService.hasPermission).toHaveBeenCalledWith(
+        ADMIN_ROLE.id,
+        RESOURCE_KEY_ENUM.DOCUMENT,
+        ACTION_KEY_ENUM.APPROVE,
+      );
     });
   });
 

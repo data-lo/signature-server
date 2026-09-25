@@ -143,6 +143,67 @@ export class AccountMemberService {
     return hasPermission ? membership : null;
   }
 
+  /**
+   * Miembros activos de una organización cuyo rol concede `resource + action`, con su usuario
+   * cargado.
+   *
+   * Es la lista de la que sale el selector de aprobadores (historia "Corregir carga de
+   * aprobadores al requerir aprobación"), y el mismo criterio con el que
+   * `findActiveMembershipWithPermission` valida después al elegido: membresía activa y rol con el
+   * permiso. Sólo cuentan las membresías en estado ACTIVE: una invitación pendiente o un miembro
+   * suspendido no pueden iniciar sesión, así que no podrían aprobar nada.
+   *
+   * El permiso se resuelve una vez por rol distinto, no por miembro: en una organización los
+   * miembros se reparten entre pocos roles.
+   *
+   * @param organizationId - Organización cuyos miembros se listan.
+   * @param resource - Recurso del permiso buscado.
+   * @param action - Acción del permiso buscado.
+   * @returns Las membresías que cumplen, por antigüedad en la organización.
+   *
+   * @example
+   * ```ts
+   * const approvers = await accountMemberService.listActiveMembersWithPermission(
+   *   'org-1',
+   *   RESOURCE_KEY_ENUM.DOCUMENT,
+   *   ACTION_KEY_ENUM.APPROVE,
+   * );
+   * ```
+   */
+  async listActiveMembersWithPermission(
+    organizationId: string,
+    resource: RESOURCE_KEY_ENUM,
+    action: ACTION_KEY_ENUM,
+  ): Promise<AccountEntity[]> {
+    const members = await this.accountRepository.find({
+      where: {
+        organizationId,
+        isActive: true,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+      },
+      relations: { user: true },
+      order: { createdAt: 'ASC' },
+    });
+
+    const roleIds = [
+      ...new Set(
+        members
+          .map((member) => member.roleId)
+          .filter((roleId): roleId is string => !!roleId),
+      ),
+    ];
+    const grantingRoleIds = new Set<string>();
+    for (const roleId of roleIds) {
+      if (await this.rolesService.hasPermission(roleId, resource, action)) {
+        grantingRoleIds.add(roleId);
+      }
+    }
+
+    return members.filter(
+      (member) => !!member.roleId && grantingRoleIds.has(member.roleId),
+    );
+  }
+
   /** Usuario por id, exigiendo que exista. */
   async findUserOrFail(userId: string): Promise<UserEntity> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
