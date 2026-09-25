@@ -63,7 +63,7 @@ export class OrganizationsController {
     private readonly revokeAccountAccess: RevokeAccountAccessUseCase,
     private readonly getMemberPermissions: GetMemberPermissionsUseCase,
     private readonly assignPermissionsToMember: AssignMemberPermissionsUseCase,
-  ) { }
+  ) {}
 
   @Post()
   @ApiCreateOrganization()
@@ -118,12 +118,9 @@ export class OrganizationsController {
   @RequirePermission(RESOURCE_KEY_ENUM.MEMBER, ACTION_KEY_ENUM.READ)
   findMembers(
     @CurrentUser() user: JwtPayload,
-    @Param('organizationId') organizationId: string
+    @Param('organizationId') organizationId: string,
   ) {
-    return this.getOrganizationMemberList.execute(
-      organizationId,
-
-    );
+    return this.getOrganizationMemberList.execute(organizationId);
   }
 
   @Patch('members/:accountId/role')

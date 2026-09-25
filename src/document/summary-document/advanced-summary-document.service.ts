@@ -197,10 +197,7 @@ export class AdvancedSummaryDocumentService {
       ['Nombre', signer.name],
       ['Tipo de Firma', SIGNATURE_TYPE_LABEL],
       ['Sustentada', SIGNATURE_BACKING_LABEL],
-      [
-        'Número de Serie del Certificado',
-        signer.certificateSerialNumber ?? '',
-      ],
+      ['Número de Serie del Certificado', signer.certificateSerialNumber ?? ''],
       ['Firma Electrónica', this.wrapSignature(signer.electronicSignature)],
       ['Fecha de Firma', formatSheetTimestamp(signer.signedAt)],
     ];

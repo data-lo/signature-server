@@ -4,9 +4,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Permite conservar varias versiones locales de un mismo `stripe_price_id`.
  * Cada nueva versión conserva el historial de órdenes que apuntan al `plan_price_id` anterior.
  */
-export class AllowPlanPriceVersions1784300000038
-  implements MigrationInterface
-{
+export class AllowPlanPriceVersions1784300000038 implements MigrationInterface {
   name = 'AllowPlanPriceVersions1784300000038';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

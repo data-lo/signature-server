@@ -22,6 +22,7 @@ import { SummaryDocumentModule } from './summary-document/summary-document.modul
 import { BillingModule } from 'src/billing/billing.module';
 import { SignatureQrService } from './services/signature-qr.service';
 import { DocumentAuthorizationPolicy } from './policies/document-authorization.policy';
+import { DocumentReadAccessService } from './services/document-read-access.service';
 
 // Use cases
 import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';

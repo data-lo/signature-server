@@ -26,7 +26,8 @@ export function setTestModuleGraphEnv(): void {
   process.env.MINIO_SECRET_KEY ??= 'test-secret-key';
 
   process.env.MINIO_CREATED_DOCUMENTS_BUCKET ??= 'created-documents';
-  process.env.MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET ??= 'partially-signed-documents';
+  process.env.MINIO_PARTIALLY_SIGNED_DOCUMENTS_BUCKET ??=
+    'partially-signed-documents';
   process.env.MINIO_SIGNED_DOCUMENTS_BUCKET ??= 'signed-documents';
   process.env.MINIO_FINALIZED_DOCUMENTS_BUCKET ??= 'finalized-documents';
   process.env.MINIO_REJECTED_DOCUMENTS_BUCKET ??= 'rejected-documents';

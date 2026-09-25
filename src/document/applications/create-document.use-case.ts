@@ -74,7 +74,7 @@ export class CreateDocumentUseCase {
     private readonly accountMemberService: AccountMemberService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly documentService: DocumentService,
-  ) { }
+  ) {}
 
   /**
    * Ejecuta el caso de uso.
@@ -106,10 +106,11 @@ export class CreateDocumentUseCase {
         );
       }
 
-      const activeAccount = await this.accountMemberService.assertIsActiveMember(
-        createdBy,
-        accountId,
-      );
+      const activeAccount =
+        await this.accountMemberService.assertIsActiveMember(
+          createdBy,
+          accountId,
+        );
 
       if (!file) {
         throw new BadRequestException('Archivo no proporcionado');

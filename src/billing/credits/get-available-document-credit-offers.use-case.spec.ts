@@ -61,9 +61,9 @@ describe('GetAvailableDocumentCreditOffersUseCase', () => {
   describe('plan gratuito', () => {
     /** El ejemplo de la historia: Free → 1 documento por $39 MXN. */
     it('devuelve el paquete configurado para Free, con todo lo que la tarjeta necesita', async () => {
-      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue([
-        precio(),
-      ]);
+      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue(
+        [precio()],
+      );
 
       await expect(consultar()).resolves.toEqual([
         {
@@ -96,16 +96,18 @@ describe('GetAvailableDocumentCreditOffersUseCase', () => {
         id: 'perfil-1',
         currentPlanType: 'premium',
       });
-      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue([
-        precio({
-          id: 'catalog-price-premium',
-          amount: 9900,
-          catalogItem: {
-            name: 'Paquete de 10 documentos',
-            documentCreditPack: { documentsGranted: 10 },
-          },
-        }),
-      ]);
+      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue(
+        [
+          precio({
+            id: 'catalog-price-premium',
+            amount: 9900,
+            catalogItem: {
+              name: 'Paquete de 10 documentos',
+              documentCreditPack: { documentsGranted: 10 },
+            },
+          }),
+        ],
+      );
 
       const ofertas = await consultar();
 
@@ -131,9 +133,9 @@ describe('GetAvailableDocumentCreditOffersUseCase', () => {
         currentPlanType: 'premium',
         cancelAtPeriodEnd: true,
       });
-      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue([
-        precio(),
-      ]);
+      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue(
+        [precio()],
+      );
 
       await expect(consultar()).resolves.toHaveLength(1);
       expect(
@@ -178,10 +180,9 @@ describe('GetAvailableDocumentCreditOffersUseCase', () => {
      * pintar un botón que revienta al pulsarlo.
      */
     it('descarta los paquetes que no tienen precio publicado en Stripe', async () => {
-      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue([
-        precio({ id: 'sin-stripe', stripePriceId: null }),
-        precio(),
-      ]);
+      billingCatalogService.findAvailableDocumentCreditPrices.mockResolvedValue(
+        [precio({ id: 'sin-stripe', stripePriceId: null }), precio()],
+      );
 
       const ofertas = await consultar();
 
