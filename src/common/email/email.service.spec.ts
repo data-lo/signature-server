@@ -42,4 +42,61 @@ describe('EmailService', () => {
       'SENDGRID_API_KEY is not defined',
     );
   });
+
+  /**
+   * Historia "Corregir notificación por correo a aprobadores asignados": el correo tiene que decir
+   * que hay algo pendiente de APROBAR —no de firmar— e identificar el documento y el camino para
+   * llegar a él.
+   */
+  describe('sendDocumentApprovalRequestedNotification', () => {
+    const accessUrl =
+      'http://localhost:3000/access-document?docId=doc-1&collabId=reviewer-1&email=ana%40acme.mx';
+
+    it('manda al aprobador el aviso de aprobación pendiente, con el creador como replyTo', async () => {
+      const sendEmail = jest
+        .spyOn(service, 'sendEmail')
+        .mockResolvedValue(undefined);
+
+      await service.sendDocumentApprovalRequestedNotification(
+        'ana@acme.mx',
+        'Ana López',
+        'contrato.pdf',
+        'Sara Ramírez',
+        'sara@acme.mx',
+        accessUrl,
+      );
+
+      expect(sendEmail).toHaveBeenCalledWith(
+        'ana@acme.mx',
+        'Tienes un documento pendiente de aprobación',
+        expect.any(String),
+        'NOTIFICATION',
+        'sara@acme.mx',
+      );
+
+      const html = sendEmail.mock.calls[0][2] as string;
+      expect(html).toContain('pendiente de aprobación');
+      expect(html).toContain('Ana López');
+      expect(html).toContain('contrato.pdf');
+      expect(html).toContain('Sara Ramírez');
+      expect(html).toContain(`href="${accessUrl}"`);
+    });
+
+    it('propaga el error de envío para que quien llama lo registre', async () => {
+      jest
+        .spyOn(service, 'sendEmail')
+        .mockRejectedValue(new Error('Failed to send email'));
+
+      await expect(
+        service.sendDocumentApprovalRequestedNotification(
+          'ana@acme.mx',
+          'Ana López',
+          'contrato.pdf',
+          'Sara Ramírez',
+          'sara@acme.mx',
+          accessUrl,
+        ),
+      ).rejects.toThrow('Failed to send email');
+    });
+  });
 });

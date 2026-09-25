@@ -456,6 +456,78 @@ export const documentWitnessAddedTemplate = (
 </html>
 `;
 
+/**
+ * Aviso al aprobador asignado de que un documento espera su decisión.
+ *
+ * Sin lenguaje de firma a propósito: el aprobador no firma, autoriza que el documento salga a
+ * firma. El botón entra por `/access-document`, que lleva al detalle del documento, donde están
+ * las acciones de aprobar y rechazar.
+ *
+ * @param reviewerName - Nombre del aprobador, tal como se le saluda.
+ * @param documentName - Nombre del documento que espera aprobación.
+ * @param creatorName - Nombre de quien creó el documento y pidió la aprobación.
+ * @param accessUrl - Enlace de acceso al documento (ver `buildDocumentAccessUrl`).
+ * @returns El HTML completo del correo.
+ *
+ * @example
+ * ```ts
+ * const html = documentApprovalRequestedTemplate(
+ *   'Ana López',
+ *   'contrato.pdf',
+ *   'Sara Ramírez',
+ *   'https://app.firmalo.mx/access-document?docId=doc-1&collabId=col-1&email=ana%40acme.mx',
+ * );
+ * ```
+ */
+export const documentApprovalRequestedTemplate = (
+  reviewerName: string,
+  documentName: string,
+  creatorName: string,
+  accessUrl: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #333333; margin-top: 0;">Tienes un documento pendiente de aprobación</h2>
+
+    <p style="color: #555555;">Hola <strong>${reviewerName}</strong>:</p>
+
+    <p style="color: #555555;">
+      <strong>${creatorName}</strong> te asignó como aprobador del documento
+      <strong>${documentName}</strong>. El documento no se enviará a firma hasta que lo apruebes;
+      también puedes rechazarlo indicando el motivo.
+    </p>
+
+    <table role="presentation" style="margin: 32px 0;">
+      <tr>
+        <td>
+          <a href="${accessUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
+            Revisar documento
+          </a>
+        </td>
+      </tr>
+    </table>
+
+    <p style="color: #555555; font-size: 13px;">
+      O copia este enlace y pégalo en tu navegador:
+      <a href="${accessUrl}" style="color: #2E7D32;">${accessUrl}</a>
+    </p>
+
+    <p style="color: #999999; font-size: 12px;">
+      Si no esperabas este mensaje, puedes ignorarlo.
+    </p>
+
+  </div>
+</body>
+</html>
+`;
+
 export const documentCancellationPendingTemplate = (
   documentName: string,
   signerName: string,
