@@ -4,9 +4,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Hace que `plan_type` sea la llave de negocio del plan y alinea sus relaciones.
  * Conserva los datos de los entornos que todavía usan las columnas `*_plan_code`.
  */
-export class RefactorPlansToPlanType1784300000036
-  implements MigrationInterface
-{
+export class RefactorPlansToPlanType1784300000036 implements MigrationInterface {
   name = 'RefactorPlansToPlanType1784300000036';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -70,20 +68,50 @@ export class RefactorPlansToPlanType1784300000036
     await queryRunner.query(
       'ALTER TABLE "billing_profiles" DROP CONSTRAINT IF EXISTS "FK_billing_profiles_current_plan"',
     );
-    await queryRunner.query('ALTER TABLE "plans" DROP CONSTRAINT IF EXISTS "PK_plans"');
-    await queryRunner.query('ALTER TABLE "plans" RENAME COLUMN "plan_type" TO "code"');
-    await queryRunner.query('ALTER TABLE "plan_prices" RENAME COLUMN "plan_type" TO "plan_code"');
-    await queryRunner.query('ALTER TABLE "document_pack_offers" RENAME COLUMN "eligible_plan_type" TO "eligible_plan_code"');
-    await queryRunner.query('ALTER TABLE "billing_profiles" RENAME COLUMN "current_plan_type" TO "current_plan_code"');
-    await queryRunner.query('ALTER TABLE "plans" RENAME COLUMN "is_active" TO "active"');
-    await queryRunner.query('ALTER TABLE "plans" RENAME COLUMN "documents_included" TO "monthly_document_limit"');
-    await queryRunner.query('ALTER TABLE "plans" ADD COLUMN "allow_simple_signature" boolean NOT NULL DEFAULT true');
-    await queryRunner.query('ALTER TABLE "plans" ADD COLUMN "allow_advanced_signature" boolean NOT NULL DEFAULT true');
-    await queryRunner.query('ALTER TABLE "plans" DROP CONSTRAINT IF EXISTS "CHK_plans_documents_included"');
-    await queryRunner.query('ALTER TABLE "plans" ADD CONSTRAINT "CHK_plans_monthly_document_limit" CHECK ("monthly_document_limit" > 0)');
-    await queryRunner.query('ALTER TABLE "plans" ADD CONSTRAINT "PK_plans" PRIMARY KEY ("code")');
-    await queryRunner.query('ALTER TABLE "plan_prices" ADD CONSTRAINT "FK_plan_prices_plan" FOREIGN KEY ("plan_code") REFERENCES "plans"("code") ON DELETE CASCADE');
-    await queryRunner.query('ALTER TABLE "document_pack_offers" ADD CONSTRAINT "FK_document_pack_offers_plan" FOREIGN KEY ("eligible_plan_code") REFERENCES "plans"("code") ON DELETE CASCADE');
-    await queryRunner.query('ALTER TABLE "billing_profiles" ADD CONSTRAINT "FK_billing_profiles_current_plan" FOREIGN KEY ("current_plan_code") REFERENCES "plans"("code") ON DELETE SET NULL');
+    await queryRunner.query(
+      'ALTER TABLE "plans" DROP CONSTRAINT IF EXISTS "PK_plans"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" RENAME COLUMN "plan_type" TO "code"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plan_prices" RENAME COLUMN "plan_type" TO "plan_code"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "document_pack_offers" RENAME COLUMN "eligible_plan_type" TO "eligible_plan_code"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "billing_profiles" RENAME COLUMN "current_plan_type" TO "current_plan_code"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" RENAME COLUMN "is_active" TO "active"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" RENAME COLUMN "documents_included" TO "monthly_document_limit"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" ADD COLUMN "allow_simple_signature" boolean NOT NULL DEFAULT true',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" ADD COLUMN "allow_advanced_signature" boolean NOT NULL DEFAULT true',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" DROP CONSTRAINT IF EXISTS "CHK_plans_documents_included"',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" ADD CONSTRAINT "CHK_plans_monthly_document_limit" CHECK ("monthly_document_limit" > 0)',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plans" ADD CONSTRAINT "PK_plans" PRIMARY KEY ("code")',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "plan_prices" ADD CONSTRAINT "FK_plan_prices_plan" FOREIGN KEY ("plan_code") REFERENCES "plans"("code") ON DELETE CASCADE',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "document_pack_offers" ADD CONSTRAINT "FK_document_pack_offers_plan" FOREIGN KEY ("eligible_plan_code") REFERENCES "plans"("code") ON DELETE CASCADE',
+    );
+    await queryRunner.query(
+      'ALTER TABLE "billing_profiles" ADD CONSTRAINT "FK_billing_profiles_current_plan" FOREIGN KEY ("current_plan_code") REFERENCES "plans"("code") ON DELETE SET NULL',
+    );
   }
 }

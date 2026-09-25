@@ -21,7 +21,7 @@ import { OrganizationMemberData } from '../interfaces/response/account-member-re
  */
 @Injectable()
 export class GetOrganizationMemberListUseCase {
-  constructor(private readonly accountMemberService: AccountMemberService) { }
+  constructor(private readonly accountMemberService: AccountMemberService) {}
 
   /**
    * Lista los miembros activos de una organización para la pantalla de administración.

@@ -31,7 +31,6 @@ function buildPrice(overrides: Record<string, unknown> = {}) {
   };
 }
 
-
 /** Un paquete de documentos del catálogo local, ya vendible salvo que la prueba lo estropee. */
 function buildCreditPrice(overrides: Record<string, unknown> = {}) {
   return {
@@ -88,7 +87,10 @@ describe('BillingCatalogService', () => {
     catalogPriceRepository.findOne.mockResolvedValue(price);
 
     await expect(
-      service.findSellableRecurringPrice('price_premium_monthly', personalOwner),
+      service.findSellableRecurringPrice(
+        'price_premium_monthly',
+        personalOwner,
+      ),
     ).resolves.toBe(price);
 
     expect(catalogPriceRepository.findOne).toHaveBeenCalledWith({
@@ -104,25 +106,27 @@ describe('BillingCatalogService', () => {
 
   it('rechaza un precio inexistente, inactivo o cuyo plan está dado de baja', async () => {
     catalogPriceRepository.findOne.mockResolvedValue(null);
-    await expect(service.findSellableRecurringPrice('price_missing', personalOwner)).rejects.toThrow(
-      SubscriptionPriceNotAvailableException,
-    );
+    await expect(
+      service.findSellableRecurringPrice('price_missing', personalOwner),
+    ).rejects.toThrow(SubscriptionPriceNotAvailableException);
 
     catalogPriceRepository.findOne.mockResolvedValue(
-      buildPrice({ catalogItem: { isActive: false, plan: { isActive: true } } }),
+      buildPrice({
+        catalogItem: { isActive: false, plan: { isActive: true } },
+      }),
     );
-    await expect(service.findSellableRecurringPrice('price_archived', personalOwner)).rejects.toThrow(
-      SubscriptionPriceNotAvailableException,
-    );
+    await expect(
+      service.findSellableRecurringPrice('price_archived', personalOwner),
+    ).rejects.toThrow(SubscriptionPriceNotAvailableException);
   });
 
   it('conserva la búsqueda laxa para una factura histórica', async () => {
     const price = buildPrice({ isActive: false });
     catalogPriceRepository.findOne.mockResolvedValue(price);
 
-    await expect(service.findPriceForInvoice('price_premium_monthly')).resolves.toBe(
-      price,
-    );
+    await expect(
+      service.findPriceForInvoice('price_premium_monthly'),
+    ).resolves.toBe(price);
     expect(catalogPriceRepository.findOne).toHaveBeenLastCalledWith({
       where: { stripePriceId: 'price_premium_monthly' },
       relations: { catalogItem: { plan: true } },
@@ -147,7 +151,10 @@ describe('BillingCatalogService', () => {
     );
 
     await expect(
-      service.findSellableRecurringPrice('price_premium_monthly', personalOwner),
+      service.findSellableRecurringPrice(
+        'price_premium_monthly',
+        personalOwner,
+      ),
     ).rejects.toThrow(SubscriptionPriceNotAvailableException);
 
     await expect(
@@ -327,8 +334,9 @@ describe('BillingCatalogService', () => {
     });
 
     it('rechaza un paquete fuera de su ventana de vigencia', async () => {
-      await rechaza(buildCreditPrice({ effectiveFrom: new Date(Date.now() + 60_000) }));
+      await rechaza(
+        buildCreditPrice({ effectiveFrom: new Date(Date.now() + 60_000) }),
+      );
     });
   });
-
 });

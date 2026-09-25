@@ -43,6 +43,10 @@ import { AssertPlanActionUseCase } from './assert-plan-action.use-case';
     GetBillingAccessUseCase,
     AssertPlanActionUseCase,
   ],
-  exports: [BillingOwnerService, GetBillingAccessUseCase, AssertPlanActionUseCase],
+  exports: [
+    BillingOwnerService,
+    GetBillingAccessUseCase,
+    AssertPlanActionUseCase,
+  ],
 })
 export class BillingEntitlementsModule {}

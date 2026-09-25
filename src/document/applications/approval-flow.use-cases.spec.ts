@@ -14,6 +14,7 @@ import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { ApproveDocumentUseCase } from './approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './reject-document-approval.use-case';
 import { DocumentService } from '../document.service';
+import { WitnessNotificationService } from '../services/witness-notification.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
@@ -63,6 +64,7 @@ describe('flujo de aprobación', () => {
   let documentService: Record<string, jest.Mock>;
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
+  let witnessNotificationService: Record<string, jest.Mock>;
   let managedDocumentRepository: Record<string, jest.Mock>;
   let managedCollaboratorRepository: Record<string, jest.Mock>;
 
@@ -75,6 +77,9 @@ describe('flujo de aprobación', () => {
       notifyCreatorOfApprovalRejection: jest.fn().mockResolvedValue(undefined),
     };
     auditService = { create: jest.fn().mockResolvedValue(undefined) };
+    witnessNotificationService = {
+      announcePendingWitnesses: jest.fn().mockResolvedValue(1),
+    };
     documentEventsProducer = {
       enqueueApprovalEvent: jest.fn().mockResolvedValue({ id: 'event-1' }),
       flushOutbox: jest.fn().mockResolvedValue(undefined),
@@ -116,6 +121,10 @@ describe('flujo de aprobación', () => {
         { provide: DocumentService, useValue: documentService },
         { provide: AuditService, useValue: auditService },
         { provide: DocumentEventsProducer, useValue: documentEventsProducer },
+        {
+          provide: WitnessNotificationService,
+          useValue: witnessNotificationService,
+        },
       ],
     }).compile();
 
@@ -266,6 +275,38 @@ describe('flujo de aprobación', () => {
 
     it('un fallo de correo no deshace la aprobación', async () => {
       documentService.notifyNextSigner.mockRejectedValue(new Error('SMTP'));
+
+      const result = await approveDocument.execute('doc-1', REVIEWER_USER_ID);
+
+      expect(result.success).toBe(true);
+    });
+
+    /**
+     * Historia "Corregir notificaciones por correo para testigos": mientras el documento esperaba
+     * aprobación el aviso del testigo se descartaba, y nadie lo volvía a intentar al aprobarse.
+     */
+    it('avisa a los testigos pendientes al aprobarse', async () => {
+      await approveDocument.execute('doc-1', REVIEWER_USER_ID);
+
+      expect(
+        witnessNotificationService.announcePendingWitnesses,
+      ).toHaveBeenCalledWith('doc-1', REVIEWER_USER_ID);
+    });
+
+    it('avisa a los testigos aunque haya fallado el aviso a los firmantes', async () => {
+      documentService.notifyNextSigner.mockRejectedValue(new Error('SMTP'));
+
+      await approveDocument.execute('doc-1', REVIEWER_USER_ID);
+
+      expect(
+        witnessNotificationService.announcePendingWitnesses,
+      ).toHaveBeenCalled();
+    });
+
+    it('un fallo al avisar a los testigos no deshace la aprobación', async () => {
+      witnessNotificationService.announcePendingWitnesses.mockRejectedValue(
+        new Error('Kafka caído'),
+      );
 
       const result = await approveDocument.execute('doc-1', REVIEWER_USER_ID);
 

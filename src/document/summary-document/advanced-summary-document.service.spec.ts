@@ -257,7 +257,9 @@ describe('AdvancedSummaryDocumentService', () => {
       ([label]) => label === 'Fecha de Firma',
     )?.[1];
 
-    expect(fechaDeFirma).toBe(String(new Date('2026-01-15T10:30:00Z').getTime()));
+    expect(fechaDeFirma).toBe(
+      String(new Date('2026-01-15T10:30:00Z').getTime()),
+    );
     expect(fechaDeFirma).toMatch(/^\d+$/);
   });
 

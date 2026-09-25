@@ -147,7 +147,10 @@ export class DocumentGetResponse extends BaseResponse {
  * repartidos entre `data` y `meta`.
  */
 export class DocumentsListResponse {
-  @ApiProperty({ type: [DocumentGetData], description: 'Documentos de la página' })
+  @ApiProperty({
+    type: [DocumentGetData],
+    description: 'Documentos de la página',
+  })
   items: DocumentGetData[];
 
   @ApiProperty({ type: DocumentsPaginationResponse })

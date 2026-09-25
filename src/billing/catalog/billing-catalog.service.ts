@@ -190,9 +190,7 @@ export class BillingCatalogService {
       return rechazar('el precio o su ítem están dados de baja');
     }
 
-    if (
-      price.catalogItem.itemType !== CATALOG_ITEM_TYPE_ENUM.DOCUMENT_CREDIT
-    ) {
+    if (price.catalogItem.itemType !== CATALOG_ITEM_TYPE_ENUM.DOCUMENT_CREDIT) {
       return rechazar('el ítem no es un paquete de documentos');
     }
 
@@ -220,7 +218,9 @@ export class BillingCatalogService {
     }
 
     if (!this.isAvailableToOwner(price, owner)) {
-      return rechazar('queda fuera del alcance del catálogo para este propietario');
+      return rechazar(
+        'queda fuera del alcance del catálogo para este propietario',
+      );
     }
 
     return price;

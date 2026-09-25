@@ -83,9 +83,12 @@ describe('ResumeSubscriptionUseCase', () => {
     it('quita la marca sin tocar estado, plan ni periodo', async () => {
       await reanudar();
 
-      expect(billingProfileRepository.update).toHaveBeenCalledWith('profile-1', {
-        cancelAtPeriodEnd: false,
-      });
+      expect(billingProfileRepository.update).toHaveBeenCalledWith(
+        'profile-1',
+        {
+          cancelAtPeriodEnd: false,
+        },
+      );
     });
 
     it('responde el estado con la renovación restablecida', async () => {

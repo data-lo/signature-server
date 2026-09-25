@@ -10,7 +10,7 @@ import { DocumentEventPayload } from '../document-events.topics';
  * `document.signed`: el documento quedó firmado por todos.
  *
  * Se deja constancia para **todos** los colaboradores, no sólo los firmantes: el aviso de
- * documento completado sale a observadores y revisores por igual.
+ * documento completado sale a testigos y revisores por igual.
  */
 @Injectable()
 export class ProcessDocumentSignedEventUseCase {

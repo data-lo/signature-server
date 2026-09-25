@@ -5,7 +5,7 @@ import { FindOptionsRelations, Repository } from 'typeorm';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { MinioService } from 'src/common/minio/minio.service';
 
-import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
+import { DocumentReadAccessService } from '../services/document-read-access.service';
 
 import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
@@ -25,13 +25,15 @@ import { DocumentService } from '../document.service';
  * `GET /document/:id`: el detalle que alimenta la pantalla de firma.
  *
  * Además del documento, resuelve qué es el usuario dentro de él —creador, firmante en turno,
- * firmante que ya respondió, observador—, porque de eso depende todo lo que la pantalla le
+ * firmante que ya respondió, testigo—, porque de eso depende todo lo que la pantalla le
  * ofrece.
  *
  * El acceso se decide en dos tiempos, que es el reparto que sostiene toda la autorización de la
  * plataforma: `PermissionsGuard` ya comprobó que el rol de la membresía activa puede leer
  * documentos y dejó los alcances concedidos en el contexto; aquí, con el documento ya cargado,
- * `DocumentAuthorizationPolicy` confronta esos alcances con ESTE documento.
+ * `DocumentAuthorizationPolicy` confronta esos alcances con ESTE documento. Si no alcanzan y el
+ * documento es de otra organización del usuario, `DocumentReadAccessService` vuelve a preguntar
+ * con sus alcances en ESA organización.
  */
 @Injectable()
 export class GetDocumentUseCase {
@@ -42,7 +44,7 @@ export class GetDocumentUseCase {
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentService: DocumentService,
-    private readonly authorizationPolicy: DocumentAuthorizationPolicy,
+    private readonly readAccess: DocumentReadAccessService,
   ) {}
 
   /**
@@ -95,7 +97,7 @@ export class GetDocumentUseCase {
       currentUserId,
     );
 
-    this.authorizationPolicy.assertCanRead({
+    await this.readAccess.assertCanRead({
       document,
       authorization,
       participant: myParticipant ?? null,

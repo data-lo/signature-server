@@ -149,7 +149,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
    * cuenta de cada uno, el usuario de esa cuenta, su información personal y su firma vigente.
    *
    * El filtro por rol va en el `ON` del join y no en un `WHERE`: con el filtro en el `WHERE`, un
-   * documento que además tuviera observadores se descartaría entero en vez de devolverse sin
+   * documento que además tuviera testigos se descartaría entero en vez de devolverse sin
    * ellos.
    */
   private findDocumentWithSigners(

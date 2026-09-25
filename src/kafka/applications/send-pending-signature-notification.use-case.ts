@@ -33,13 +33,13 @@ import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
  * —si acaso alguno— le corresponde.
  *
  * SIGNER: manda "tienes un documento por firmar", condicionado al turno (ver
- * `sendSignerNotification`). WATCHER: manda "te agregaron como observador" y, si el envío tiene
+ * `sendSignerNotification`). WITNESS: manda "te agregaron como testigo" y, si el envío tiene
  * éxito, lo marca NOTIFIED (historia "Actualizar estatus de watchers a NOTIFIED tras el envío de
- * correo...") — ver `sendWatcherNotification`. Cualquier otro tipo (p. ej. REVIEWER) no recibe
+ * correo...") — ver `sendWitnessNotification`. Cualquier otro tipo (p. ej. REVIEWER) no recibe
  * nada todavía.
  *
  * La guarda de `status !== PENDING` es compartida: para SIGNER evita reavisar a quien ya
- * respondió, y para WATCHER es además la condición de "no reprocesar" — un WATCHER que ya está
+ * respondió, y para WITNESS es además la condición de "no reprocesar" — un WITNESS que ya está
  * NOTIFIED nunca vuelve a pasar por aquí, ni si Kafka reentrega el mismo evento.
  */
 @Injectable()
@@ -112,8 +112,8 @@ export class SendPendingSignatureNotificationUseCase {
       return;
     }
 
-    if (collaborator.colaboratorType === COLABORATOR_TYPE_ENUM.WATCHER) {
-      await this.sendWatcherNotification(collaborator, payload);
+    if (collaborator.colaboratorType === COLABORATOR_TYPE_ENUM.WITNESS) {
+      await this.sendWitnessNotification(collaborator, payload);
       return;
     }
 
@@ -187,15 +187,18 @@ export class SendPendingSignatureNotificationUseCase {
   }
 
   /**
-   * El estatus sólo se mueve a NOTIFIED DESPUÉS de que el correo salga bien: si `sendEmail` lanza,
-   * el `try/catch` de `execute()` lo traga y el colaborador se queda en PENDING, listo para
-   * reprocesarse si Kafka reentrega el evento.
+   * El claim `PENDING → NOTIFIED` se hace ANTES de enviar, condicionado a `status: PENDING` —mismo
+   * patrón que `reject-document.use-case.ts` usa para el rechazo—, y sólo quien lo gana manda el
+   * correo. Antes se enviaba primero y se marcaba después: dos entregas simultáneas del mismo
+   * evento (Kafka reentregando, o el re-aviso tras la aprobación coincidiendo con el original)
+   * pasaban las dos la guarda de PENDING y el testigo recibía el correo dos veces (historia
+   * "Corregir notificaciones por correo para testigos").
    *
-   * El update es un claim atómico condicionado a `status: PENDING` —mismo patrón que
-   * `reject-document.use-case.ts` usa para el rechazo— y no una escritura plana: cierra la
-   * ventana de carrera de una entrega duplicada del mismo evento intentando notificar dos veces.
+   * Si el envío falla, el estatus vuelve a PENDING —también condicionado, para no pisar a nadie—
+   * y el error sube a `execute()`, que lo registra. El testigo queda listo para reintentarse con
+   * la siguiente entrega del evento, igual que antes.
    */
-  private async sendWatcherNotification(
+  private async sendWitnessNotification(
     collaborator: CollaboratorEntity,
     payload: NotificationEventPayload,
   ): Promise<void> {
@@ -204,7 +207,7 @@ export class SendPendingSignatureNotificationUseCase {
     });
     if (!document) {
       this.logger.warn(
-        `Documento ${payload.documentId} no encontrado al notificar al observador ${collaborator.id}`,
+        `Documento ${payload.documentId} no encontrado al notificar al testigo ${collaborator.id}`,
       );
       return;
     }
@@ -214,7 +217,7 @@ export class SendPendingSignatureNotificationUseCase {
     });
     if (!creator) {
       this.logger.warn(
-        `Usuario creador ${document.createdBy} no encontrado al notificar al observador ${collaborator.id} del documento ${document.id}`,
+        `Usuario creador ${document.createdBy} no encontrado al notificar al testigo ${collaborator.id} del documento ${document.id}`,
       );
       return;
     }
@@ -227,28 +230,37 @@ export class SendPendingSignatureNotificationUseCase {
       return;
     }
 
-    await this.emailService.sendDocumentWatcherAddedNotification(
-      recipientEmail,
-      collaboratorDisplayName(collaborator),
-      document.fileName,
-      `${creator.firstName ?? ''} ${creator.lastName ?? ''}`.trim() ||
-        creator.email,
-      creator.email,
-      buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
-    );
-
     const claim = await this.collaboratorRepository.update(
       { id: collaborator.id, status: COLLABORATOR_STATUS_ENUM.PENDING },
       { status: COLLABORATOR_STATUS_ENUM.NOTIFIED },
     );
     if (claim.affected !== 1) {
       this.logger.warn(
-        `El colaborador ${collaborator.id} ya no estaba PENDING al intentar marcarlo NOTIFIED (posible entrega duplicada del evento)`,
+        `El testigo ${collaborator.id} ya no estaba PENDING: otra entrega del evento ya lo notificó (documento ${document.id})`,
       );
+      return;
+    }
+
+    try {
+      await this.emailService.sendDocumentWitnessAddedNotification(
+        recipientEmail,
+        collaboratorDisplayName(collaborator),
+        document.fileName,
+        `${creator.firstName ?? ''} ${creator.lastName ?? ''}`.trim() ||
+          creator.email,
+        creator.email,
+        buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
+      );
+    } catch (error) {
+      await this.collaboratorRepository.update(
+        { id: collaborator.id, status: COLLABORATOR_STATUS_ENUM.NOTIFIED },
+        { status: COLLABORATOR_STATUS_ENUM.PENDING },
+      );
+      throw error;
     }
 
     this.logger.log(
-      `Correo de observador enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
+      `Correo de testigo enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
     );
   }
 }

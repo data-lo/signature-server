@@ -28,9 +28,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * evento compiten por insertar la misma fila y sólo una gana—, y el `consumer` está en la llave
  * porque cada consumidor procesa el mismo evento por su cuenta y no debe bloquear a los demás.
  */
-export class IntroduceTransactionalOutbox1784300000062
-  implements MigrationInterface
-{
+export class IntroduceTransactionalOutbox1784300000062 implements MigrationInterface {
   name = 'IntroduceTransactionalOutbox1784300000062';
 
   /**

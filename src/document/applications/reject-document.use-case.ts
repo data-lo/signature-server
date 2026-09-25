@@ -24,6 +24,7 @@ import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { isSignerTurn } from '../utils/next-signer.util';
 import { DocumentService } from '../document.service';
+import { WitnessNotificationService } from '../services/witness-notification.service';
 
 /**
  * `PATCH /document/:id/reject`: el firmante autenticado se niega a firmar, si es su turno.
@@ -51,6 +52,7 @@ export class RejectDocumentUseCase {
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly documentService: DocumentService,
+    private readonly witnessNotificationService: WitnessNotificationService,
   ) {}
 
   async execute(
@@ -166,6 +168,21 @@ export class RejectDocumentUseCase {
     } catch (error) {
       this.logger.error(
         `Error notificando el rechazo del documento ${documentId}: ${error}`,
+      );
+    }
+
+    // Aparte del aviso al creador: si aquél falla, los testigos igual se enteran. El servicio ya
+    // registra cada envío fallido; el catch cubre un fallo al consultar a los testigos.
+    try {
+      await this.witnessNotificationService.notifyWitnessesOfRejection({
+        documentId,
+        documentName: document.fileName,
+        rejecterName: collaboratorDisplayName(myParticipant),
+        reason,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Error notificando el rechazo del documento ${documentId} a sus testigos: ${error}`,
       );
     }
 
