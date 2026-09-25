@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsDefined,
   IsEmail,
   IsOptional,
   IsUUID,
@@ -82,7 +83,16 @@ export class CreateDocumentDto {
   @IsEmail({}, { each: true })
   reviewerEmails?: string[];
 
+  /**
+   * Obligatorio desde la historia "Hacer obligatorias las coordenadas de posición de firma". Antes
+   * era opcional y, sin él, `CreateDocumentUseCase` estampaba en `DEFAULT_COORDINATES`: una
+   * posición que nadie eligió.
+   */
   @ApiProperty({ type: SignatureCoordinatesDto })
+  @IsDefined({
+    message:
+      'Es obligatorio indicar la ubicación de la firma (signatureCoordinates)',
+  })
   @ValidateNested()
   @Type(() => SignatureCoordinatesDto)
   @Transform(({ value }) => {
@@ -96,7 +106,6 @@ export class CreateDocumentDto {
     }
     return plainToInstance(SignatureCoordinatesDto, parsed);
   })
-  @IsOptional()
   signatureCoordinates: SignatureCoordinatesDto;
 
   @ApiProperty({

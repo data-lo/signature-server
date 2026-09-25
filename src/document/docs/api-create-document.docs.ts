@@ -39,7 +39,7 @@ export function ApiCreateDocument() {
     ApiResponse({
       status: 400,
       description:
-        'Datos de entrada inválidos, formato de archivo no soportado o documento no proporcionado',
+        'Datos de entrada inválidos (incluida la falta de signatureCoordinates), formato de archivo no soportado o documento no proporcionado',
       type: BadRequestResponse,
     }),
     ApiResponse({

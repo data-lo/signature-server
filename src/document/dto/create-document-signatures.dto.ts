@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type, plainToInstance } from 'class-transformer';
 import {
   ArrayMinSize,
+  ArrayNotEmpty,
   IsArray,
   IsBoolean,
   IsEmail,
@@ -10,6 +11,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   IsUUID,
   Max,
@@ -79,9 +81,13 @@ function parseJson<T>(cls: new () => T) {
 /**
  * Ubicación de una firma sobre una página, en ratios 0-1 relativos al tamaño de esa página (no
  * píxeles absolutos) — ver historia "Ubicación de firmas por usuario". Un mismo firmante puede
- * traer varias instancias de este DTO (una por cada página/zona donde colocó su firma); el
- * frontend siempre manda el arreglo completo, vacío si no colocó ninguna (ver
- * `CollaboratorPayloadDto.signatures`).
+ * traer varias instancias de este DTO (una por cada página/zona donde colocó su firma), y desde
+ * la historia "Hacer obligatorias las coordenadas de posición de firma" tiene que traer al menos
+ * una (ver `CollaboratorPayloadDto.signatures`).
+ *
+ * Aquí sólo se valida la forma de cada campo. Lo que depende de otros campos o del PDF —que la
+ * caja quepa en la página y que la página exista— lo comprueba
+ * `assertSignaturePositionsInsideDocument` en el caso de uso.
  */
 export class SignaturePositionDto {
   /** Generado por el cliente (para poder mover/borrar una firma específica en la UI); si no llega, el backend genera uno. */
@@ -107,15 +113,16 @@ export class SignaturePositionDto {
   @Max(1)
   yRatio: number;
 
+  /** Mayor que cero: una caja sin ancho no es una posición de firma, aunque esté en rango. */
   @ApiProperty({ example: 0.2 })
   @IsNumber()
-  @Min(0)
+  @IsPositive({ message: 'widthRatio debe ser mayor que 0' })
   @Max(1)
   widthRatio: number;
 
   @ApiProperty({ example: 0.08 })
   @IsNumber()
-  @Min(0)
+  @IsPositive({ message: 'heightRatio debe ser mayor que 0' })
   @Max(1)
   heightRatio: number;
 }
@@ -259,13 +266,27 @@ export class CollaboratorPayloadDto {
    * Ubicaciones de firma de este colaborador (ver historia "Ubicación de firmas por usuario").
    * Solo aplica a SIGNER; el backend además refuerza requiresTwoFactorAuth=true cuando el
    * documento es de firma SIMPLE, sin importar lo que llegue en el payload (ver
-   * CreateDocumentSignatureFlowUseCase). Un arreglo vacío u
-   * omitido es válido: significa que este firmante no tiene ninguna posición asignada, y al
-   * firmar se valida su firma sin estampar nada en el PDF (ver finalizeSignedDocument).
+   * CreateDocumentSignatureFlowUseCase).
+   *
+   * **Obligatorio y con al menos una posición para cada SIGNER** (historia "Hacer obligatorias
+   * las coordenadas de posición de firma"). Antes un arreglo vacío u omitido era válido y el
+   * firmante firmaba sin que su firma se estampara en el PDF. Para un VIEWER no se valida: no
+   * firma, y lo que mande se ignora al guardar.
    */
-  @ApiPropertyOptional({ type: [SignaturePositionDto] })
-  @IsOptional()
-  @IsArray()
+  @ApiPropertyOptional({
+    type: [SignaturePositionDto],
+    description:
+      'Obligatorio para SIGNER, con al menos una posición. Se ignora para VIEWER.',
+  })
+  @ValidateIf(
+    (c: CollaboratorPayloadDto) =>
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+  )
+  // Sin `@IsArray`: `ArrayNotEmpty` ya rechaza cualquier cosa que no sea un arreglo, y con los dos
+  // un campo omitido devolvía el mismo mensaje dos veces.
+  @ArrayNotEmpty({
+    message: 'Es obligatorio indicar la ubicación de la firma de cada firmante',
+  })
   @ValidateNested({ each: true })
   @Type(() => SignaturePositionDto)
   signatures?: SignaturePositionDto[];

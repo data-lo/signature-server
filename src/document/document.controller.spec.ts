@@ -117,18 +117,21 @@ describe('DocumentController', () => {
   });
 
   /**
-   * El control de acceso a la descarga es su propio paso y vive en el caso de uso: la pantalla
-   * de detalle y el archivo se comprueban por separado, y cuando sólo se validaba la primera el
-   * visor pedía este endpoint y recibía 403.
+   * El control de acceso a la descarga vive en el caso de uso, con el MISMO contexto autorizado
+   * que el detalle: cuando el archivo se autorizaba con otra regla, el administrador con
+   * `DOCUMENT.READ_ORGANIZATION` veía el detalle y el visor recibía 403.
    */
-  it('getDocumentUrl delega en GetDocumentFileUrlUseCase con el userId autenticado', async () => {
-    await controller.getDocumentUrl(user, 'doc-1');
-
-    expect(useCase(GetDocumentFileUrlUseCase).execute).toHaveBeenCalledWith(
+  it('getDocumentUrl delega en GetDocumentFileUrlUseCase el documento y el contexto autorizado', async () => {
+    await controller.getDocumentUrl(
       'doc-1',
-      'user-1',
-      { asAttachment: false },
+      authorization(ACTION_KEY_ENUM.READ),
     );
+
+    expect(useCase(GetDocumentFileUrlUseCase).execute).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      authorization: authorization(ACTION_KEY_ENUM.READ),
+      asAttachment: false,
+    });
   });
 
   /**
@@ -144,12 +147,14 @@ describe('DocumentController', () => {
     ['', false],
     ['1', false],
   ])('con download=%s pide asAttachment=%s', async (download, expected) => {
-    await controller.getDocumentUrl(user, 'doc-1', download);
+    await controller.getDocumentUrl(
+      'doc-1',
+      authorization(ACTION_KEY_ENUM.READ),
+      download,
+    );
 
     expect(useCase(GetDocumentFileUrlUseCase).execute).toHaveBeenCalledWith(
-      'doc-1',
-      'user-1',
-      { asAttachment: expected },
+      expect.objectContaining({ documentId: 'doc-1', asAttachment: expected }),
     );
   });
 
@@ -262,14 +267,16 @@ describe('DocumentController', () => {
    * cuenta activa salen del contexto autenticado —nunca de la query— y todo lo demás viaja tal
    * cual al caso de uso.
    */
-  it('findAll delega en GetDocumentsUseCase el usuario, la cuenta activa y los filtros', () => {
+  it('findAll delega en GetDocumentsUseCase el usuario, la cuenta activa, sus alcances y los filtros', () => {
     const query = { page: 1, limit: 25, view: 'all' } as any;
+    const readContext = authorization(ACTION_KEY_ENUM.READ);
 
-    controller.findAll(user, 'account-1', query);
+    controller.findAll(user, 'account-1', readContext, query);
 
     expect(useCase(GetDocumentsUseCase).execute).toHaveBeenCalledWith({
       userId: 'user-1',
       accountId: 'account-1',
+      scopes: readContext.scopes,
       filters: query,
     });
   });
