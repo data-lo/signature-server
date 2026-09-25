@@ -33,6 +33,11 @@ export class RevokeAccountAccessUseCase {
       ACTION_KEY_ENUM.DELETE,
     );
 
+    // Antes que la regla del último administrador: al propietario no se le puede dar de baja
+    // aunque haya otros administradores (historia "Impedir desactivación de cuentas con perfil
+    // Owner").
+    await this.accountMemberService.assertNotOwner(membership, 'desactivar');
+
     await this.accountMemberService.assertNotLastAdmin(
       membership.organizationId,
       membership,

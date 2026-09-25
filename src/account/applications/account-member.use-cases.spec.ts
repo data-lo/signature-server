@@ -188,7 +188,11 @@ describe('casos de uso de miembros de organización', () => {
       listPermissionsByRoleIds: jest
         .fn()
         .mockResolvedValue(new Map([[MEMBER_ROLE.id, MEMBER_PERMISSIONS]])),
-      findSystemRoleByName: jest.fn().mockResolvedValue(ADMIN_ROLE),
+      // Cada rol de sistema con su propio id: la protección del propietario compara contra el
+      // id de OWNER, y devolver ADMIN para todo haría pasar por propietario a cualquier ADMIN.
+      findSystemRoleByName: jest.fn(async (name: SYSTEM_ROLE_NAME_ENUM) =>
+        name === SYSTEM_ROLE_NAME_ENUM.OWNER ? OWNER_ROLE : ADMIN_ROLE,
+      ),
       // Espeja el seed real: ADMIN tiene los 12 permisos (incluye todo ORGANIZATION),
       // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
       assertHasPermission: jest
@@ -679,6 +683,68 @@ describe('casos de uso de miembros de organización', () => {
 
       expect(accountRepository.update).toHaveBeenCalled();
     });
+    /** Historia "Impedir desactivación de cuentas con perfil Owner". */
+    describe('propietario (OWNER)', () => {
+      const owner = {
+        id: 'owner-account-1',
+        organizationId: 'org-1',
+        userId: 'user-owner',
+        roleId: OWNER_ROLE.id,
+        isActive: true,
+      };
+
+      it('rechaza desactivarlo aunque haya otros administradores activos', async () => {
+        accountRepository.findOne
+          .mockResolvedValueOnce(owner)
+          .mockResolvedValueOnce(adminAccount());
+        accountRepository.count.mockResolvedValue(3);
+
+        await expect(
+          updateAccountMember.execute('admin-1', 'owner-account-1', {
+            isActive: false,
+          }),
+        ).rejects.toThrow(
+          new ConflictException(
+            'No se puede desactivar una cuenta con perfil de propietario (Owner)',
+          ),
+        );
+        expect(accountRepository.update).not.toHaveBeenCalled();
+      });
+
+      /** Sin esto bastaba degradarlo primero y desactivarlo después. */
+      it('rechaza cambiarle el rol', async () => {
+        accountRepository.findOne
+          .mockResolvedValueOnce(owner)
+          .mockResolvedValueOnce(adminAccount());
+        accountRepository.count.mockResolvedValue(3);
+
+        await expect(
+          updateAccountMember.execute('admin-1', 'owner-account-1', {
+            roleId: ADMIN_ROLE.id,
+          }),
+        ).rejects.toThrow(
+          'No se puede cambiar el rol de una cuenta con perfil de propietario (Owner)',
+        );
+        expect(accountRepository.update).not.toHaveBeenCalled();
+      });
+
+      it('sí deja cambiarle el puesto', async () => {
+        accountRepository.findOne
+          .mockResolvedValueOnce(owner)
+          .mockResolvedValueOnce(adminAccount())
+          .mockResolvedValueOnce(owner);
+
+        await updateAccountMember.execute('admin-1', 'owner-account-1', {
+          position: 'Dirección general',
+        });
+
+        expect(accountRepository.update).toHaveBeenCalledWith(
+          'owner-account-1',
+          { position: 'Dirección general' },
+        );
+      });
+    });
+
     it('update permite desactivar (isActive:false) a un MEMBER sin pasar por la protección de último ADMIN', async () => {
       const targetMember = {
         id: 'member-2',
@@ -1111,6 +1177,30 @@ describe('casos de uso de miembros de organización', () => {
       await expect(
         revokeAccountAccess.execute('owner-1', 'admin-account-1'),
       ).rejects.toThrow(ConflictException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+      expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+
+    /** Historia "Impedir desactivación de cuentas con perfil Owner". */
+    it('rechaza dar de baja al propietario aunque haya otros administradores activos', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'owner-account-1',
+          organizationId: 'org-1',
+          userId: 'user-owner',
+          roleId: OWNER_ROLE.id,
+          isActive: true,
+        })
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.count.mockResolvedValue(3);
+
+      await expect(
+        revokeAccountAccess.execute('admin-1', 'owner-account-1'),
+      ).rejects.toThrow(
+        new ConflictException(
+          'No se puede desactivar una cuenta con perfil de propietario (Owner)',
+        ),
+      );
       expect(accountRepository.update).not.toHaveBeenCalled();
       expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
     });
