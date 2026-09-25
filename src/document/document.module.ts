@@ -14,6 +14,7 @@ import { SignatureModule } from 'src/signature/signature.module';
 import { AuditModule } from 'src/audit/audit.module';
 import { KafkaModule } from 'src/kafka/kafka.module';
 import { AccountModule } from 'src/account/account.module';
+import { AuthorizationModule } from 'src/authorization/authorization.module';
 import { DocumentTransactionModule } from './document-transaction.module';
 import { EfirmaModule } from 'src/efirma/efirma.module';
 import { SealModule } from './seal/seal.module';
@@ -44,6 +45,7 @@ import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
+import { DocumentReadAccessService } from './services/document-read-access.service';
 import { DocumentApprovalService } from './services/document-approval.service';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
@@ -60,6 +62,12 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
      * caso de uso de este módulo, no por la Policy directamente.
      */
     DocumentAuthorizationPolicy,
+    /**
+     * La Policy más la segunda consulta contra la organización del documento (ver el servicio).
+     * La comparten el detalle y el archivo, para que un documento que se deja ver no tenga un
+     * archivo que no se deja cargar.
+     */
+    DocumentReadAccessService,
     GetDocumentFileUrlUseCase,
     GetPublicDocumentUseCase,
     GetPublicSealArtifactUseCase,
@@ -107,6 +115,8 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
     AuditModule,
     KafkaModule,
     AccountModule,
+    /** `AuthorizationService`, para resolver el contexto en la organización del documento. */
+    AuthorizationModule,
     DocumentTransactionModule,
     EfirmaModule,
     SealModule,

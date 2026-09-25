@@ -16,6 +16,7 @@ import {
   SignaturePositionDto,
 } from '../dto/create-document-signatures.dto';
 import { assertNoOverlappingSignaturePositions } from '../utils/signature-collision.util';
+import { assertSignaturePositionsInsideDocument } from '../utils/signature-position.util';
 
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
@@ -214,6 +215,23 @@ export class CreateDocumentSignatureFlowUseCase {
       );
     }
 
+    /**
+     * Historia "Hacer obligatorias las coordenadas de posición de firma". El DTO ya lo exige para
+     * las peticiones HTTP; se repite aquí porque el caso de uso no debe depender de que alguien
+     * lo haya llamado a través del `ValidationPipe`. Un firmante sin posición firmaba sin que su
+     * firma apareciera en el PDF.
+     */
+    const signerWithoutPosition = dto.collaborators.find(
+      (c) =>
+        c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER &&
+        !c.signatures?.length,
+    );
+    if (signerWithoutPosition) {
+      throw new BadRequestException(
+        `Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de ${signerWithoutPosition.email}`,
+      );
+    }
+
     const activeAccount = await this.accountMemberService.assertIsActiveMember(
       createdBy,
       accountId,
@@ -261,6 +279,18 @@ export class CreateDocumentSignatureFlowUseCase {
       : null;
 
     const totalPages = await this.documentSigningService.getPdfPages(file);
+
+    // Antes de subir el archivo: una posición fuera del documento es un error del payload, y
+    // enterarse después dejaría un PDF huérfano en Minio.
+    assertSignaturePositionsInsideDocument(
+      dto.collaborators.flatMap((c) =>
+        c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER
+          ? (c.signatures ?? [])
+          : [],
+      ),
+      totalPages,
+    );
+
     const originalHash = await this.hashService.generateFileHash(file);
 
     const uploadResponse = await this.minioService.uploadObject(
@@ -415,11 +445,12 @@ export class CreateDocumentSignatureFlowUseCase {
         const isSigner =
           participant.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;
 
-        // Se crea SIEMPRE (incluso con un arreglo vacío) para todo SIGNER de este flujo —
-        // `simpleSignatureId` asignado (con o sin posiciones) distingue a estos colaboradores
-        // de los creados por el endpoint POST /document más antiguo (que nunca lo asigna y
-        // sigue cayendo al apilado automático en finalizeSignedDocument, sin cambios). Un
-        // arreglo vacío significa "sin posición: se firma sin estampado visual" (ver historia).
+        // Se crea para todo SIGNER de este flujo — `simpleSignatureId` asignado distingue a estos
+        // colaboradores de los creados por el endpoint POST /document más antiguo (que nunca lo
+        // asigna y sigue cayendo al apilado automático en finalizeSignedDocument, sin cambios).
+        // Desde la historia "Hacer obligatorias las coordenadas de posición de firma" el arreglo
+        // nunca llega vacío (se rechaza arriba); los documentos anteriores sí pueden tenerlo, y
+        // para ellos sigue significando "se firma sin estampado visual".
         let simpleSignatureId: string | null = null;
         if (isSigner) {
           const simpleSignature = await simpleSignatureRepo.save(
