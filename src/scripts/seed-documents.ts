@@ -363,7 +363,7 @@ async function main() {
           signOrder: 1,
           resolvedAt: daysAgo(35),
         },
-        { user: luis, role: R.WATCHER, status: S.PENDING, signOrder: 0 },
+        { user: luis, role: R.WITNESS, status: S.PENDING, signOrder: 0 },
       ],
     },
     {
@@ -452,7 +452,7 @@ async function main() {
       createdAt: daysAgo(5),
       participants: [
         { user: ana, role: R.SIGNER, status: S.PENDING, signOrder: 0 },
-        { user: luis, role: R.WATCHER, status: S.PENDING, signOrder: 0 },
+        { user: luis, role: R.WITNESS, status: S.PENDING, signOrder: 0 },
       ],
     },
   ];

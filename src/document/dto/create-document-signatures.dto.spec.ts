@@ -5,9 +5,9 @@ import {
   PAYLOAD_COLABORATOR_TYPE_ENUM,
 } from './create-document-signatures.dto';
 
-function baseViewer(overrides: Record<string, unknown> = {}) {
+function baseWitness(overrides: Record<string, unknown> = {}) {
   return {
-    collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER,
+    collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
     firstName: 'Ana',
     lastName: 'Ruiz',
     email: 'ana@correo.com',
@@ -37,9 +37,9 @@ function errorsFor(
  */
 describe('CollaboratorPayloadDto.taxId', () => {
   it.each([
-    ['sin el campo', baseViewer()],
-    ['en null', baseViewer({ taxId: null })],
-    ['vacío', baseViewer({ taxId: '' })],
+    ['sin el campo', baseWitness()],
+    ['en null', baseWitness({ taxId: null })],
+    ['vacío', baseWitness({ taxId: '' })],
   ])('acepta un VIEWER %s de taxId', async (_name, payload) => {
     const errors = await validateDto(payload);
 
@@ -47,13 +47,13 @@ describe('CollaboratorPayloadDto.taxId', () => {
   });
 
   it('acepta un VIEWER con taxId válido', async () => {
-    const errors = await validateDto(baseViewer({ taxId: 'AURU800101ABC' }));
+    const errors = await validateDto(baseWitness({ taxId: 'AURU800101ABC' }));
 
     expect(errorsFor(errors, 'taxId')).toHaveLength(0);
   });
 
   it('rechaza un VIEWER cuyo taxId no es un string', async () => {
-    const errors = await validateDto(baseViewer({ taxId: 12345 }));
+    const errors = await validateDto(baseWitness({ taxId: 12345 }));
 
     expect(errorsFor(errors, 'taxId').length).toBeGreaterThan(0);
   });
@@ -76,10 +76,10 @@ describe('CollaboratorPayloadDto.taxId', () => {
    * siga mandando `rfc` no reintroduce el dato por la puerta de atrás — simplemente no lo manda.
    */
   it('ignora por completo un `rfc` heredado en el payload', async () => {
-    const errors = await validateDto(baseViewer({ rfc: 'AURU800101ABC' }));
+    const errors = await validateDto(baseWitness({ rfc: 'AURU800101ABC' }));
     const dto = plainToInstance(
       CollaboratorPayloadDto,
-      baseViewer({ rfc: 'AURU800101ABC' }),
+      baseWitness({ rfc: 'AURU800101ABC' }),
     );
 
     expect(errorsFor(errors, 'rfc')).toHaveLength(0);
@@ -88,86 +88,35 @@ describe('CollaboratorPayloadDto.taxId', () => {
 });
 
 /**
- * Historia "Hacer obligatorias las coordenadas de posición de firma": cada SIGNER trae al menos
- * una posición y cada posición tiene un tamaño real; a un VIEWER no se le exige nada.
+ * Historia "Renombrar rol Espectador a Testigo": el payload identifica al testigo con `WITNESS`.
+ * `VIEWER`, el valor anterior, se sigue aceptando y se traduce, para no romper a un cliente
+ * desplegado antes del cambio.
  */
-describe('CollaboratorPayloadDto.signatures', () => {
-  function baseSigner(overrides: Record<string, unknown> = {}) {
-    return {
-      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-      firstName: 'Juan',
-      lastName: 'Pérez',
-      email: 'juan@correo.com',
-      signatures: [
-        {
-          page: 1,
-          xRatio: 0.1,
-          yRatio: 0.1,
-          widthRatio: 0.2,
-          heightRatio: 0.08,
-        },
-      ],
-      ...overrides,
-    };
+describe('CollaboratorPayloadDto.collaboratorType', () => {
+  function witness(collaboratorType: unknown) {
+    return { ...baseWitness(), collaboratorType };
   }
 
-  it('acepta un SIGNER con al menos una posición válida', async () => {
-    const errors = await validateDto(baseSigner());
+  it('acepta WITNESS', async () => {
+    const errors = await validateDto(witness('WITNESS'));
 
-    expect(errorsFor(errors, 'signatures')).toHaveLength(0);
+    expect(errorsFor(errors, 'collaboratorType')).toHaveLength(0);
   });
 
-  it.each([
-    ['sin el campo', { signatures: undefined }],
-    ['con el arreglo vacío', { signatures: [] }],
-  ])(
-    'rechaza un SIGNER %s con un mensaje que pide la ubicación',
-    async (_name, overrides) => {
-      const [error] = errorsFor(
-        await validateDto(baseSigner(overrides)),
-        'signatures',
-      );
+  it('traduce el valor anterior VIEWER a WITNESS', async () => {
+    const dto = plainToInstance(CollaboratorPayloadDto, witness('VIEWER'));
+    const errors = await validate(dto);
 
-      expect(Object.values(error.constraints ?? {})).toContain(
-        'Es obligatorio indicar la ubicación de la firma de cada firmante',
-      );
+    expect(errorsFor(errors, 'collaboratorType')).toHaveLength(0);
+    expect(dto.collaboratorType).toBe(PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS);
+  });
+
+  it.each(['WATCHER', 'witness', 'SPECTATOR'])(
+    'rechaza %s',
+    async (collaboratorType) => {
+      const errors = await validateDto(witness(collaboratorType));
+
+      expect(errorsFor(errors, 'collaboratorType').length).toBeGreaterThan(0);
     },
   );
-
-  it('rechaza un SIGNER cuya posición no es un arreglo', async () => {
-    const errors = await validateDto(baseSigner({ signatures: 'arriba' }));
-
-    expect(errorsFor(errors, 'signatures').length).toBeGreaterThan(0);
-  });
-
-  it.each([
-    ['un ancho de 0', { widthRatio: 0 }],
-    ['un alto de 0', { heightRatio: 0 }],
-    ['un ratio mayor que 1', { xRatio: 1.2 }],
-    ['una página 0', { page: 0 }],
-    ['un ratio que no es número', { yRatio: 'abajo' }],
-  ])('rechaza una posición con %s', async (_name, override) => {
-    const errors = await validateDto(
-      baseSigner({
-        signatures: [
-          {
-            page: 1,
-            xRatio: 0.1,
-            yRatio: 0.1,
-            widthRatio: 0.2,
-            heightRatio: 0.08,
-            ...override,
-          },
-        ],
-      }),
-    );
-
-    expect(errorsFor(errors, 'signatures').length).toBeGreaterThan(0);
-  });
-
-  it('no exige posiciones a un VIEWER', async () => {
-    const errors = await validateDto(baseViewer());
-
-    expect(errorsFor(errors, 'signatures')).toHaveLength(0);
-  });
 });

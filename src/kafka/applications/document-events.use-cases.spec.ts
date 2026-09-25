@@ -175,7 +175,7 @@ describe('consumidor de eventos de documento', () => {
       buildCollaborator({ id: 'p-a' }),
       buildCollaborator({
         id: 'p-b',
-        colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
         accountId: null,
         email: 'watcher@correo.com',
       }),

@@ -94,7 +94,7 @@ export class DocumentAuthorizationPolicy {
    * `SIGN + SELF` es el único alcance que el catálogo concede sobre la firma, y dice literalmente
    * "sólo en nombre propio": no basta con tener el permiso, hay que ser el firmante. Por eso se
    * exigen las tres cosas a la vez — el alcance, una participación y que esa participación sea la
-   * del usuario autenticado, como firmante y no como observador o revisor.
+   * del usuario autenticado, como firmante y no como testigo o revisor.
    *
    * **No valida el estado del documento ni el turno.** Que esté pendiente, que le toque a esta
    * persona o que el código de verificación esté consumido son reglas del flujo de firma y viven

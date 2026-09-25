@@ -102,7 +102,7 @@ describe('DocumentController', () => {
   });
 
   it('create delega en CreateDocumentUseCase con el userId y el X-Account-Id', async () => {
-    const dto = { signerIds: ['user-2'], watcherIds: [] } as any;
+    const dto = { signerIds: ['user-2'], witnessIds: [] } as any;
     const file = { originalname: 'contrato.pdf' } as Express.Multer.File;
 
     await controller.create(user, 'account-1', dto, file, '127.0.0.1');

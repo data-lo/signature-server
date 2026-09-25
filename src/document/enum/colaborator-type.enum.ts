@@ -8,11 +8,17 @@
  * collaborator_type": son el mismo texto que se persiste en `collaborators.colaborator_type` (ver
  * migración `UppercaseSignatureAndCollaboratorTypes`), el que sale en el campo `role` de los
  * participantes y el que compara `ParticipantRole` en el frontend. No confundir con
- * `PAYLOAD_COLABORATOR_TYPE_ENUM` (`SIGNER`/`VIEWER`), que es el vocabulario de ENTRADA del
+ * `PAYLOAD_COLABORATOR_TYPE_ENUM` (`SIGNER`/`WITNESS`), que es el vocabulario de ENTRADA del
  * payload de creación y ya estaba en mayúsculas.
  */
 export enum COLABORATOR_TYPE_ENUM {
   SIGNER = 'SIGNER',
   REVIEWER = 'REVIEWER',
-  WATCHER = 'WATCHER',
+  /**
+   * Testigo: recibe copia y puede consultar el documento, pero no firma ni aprueba. Se llamaba
+   * `WATCHER` hasta la historia "Renombrar rol Espectador a Testigo"; la migración
+   * `RenameWatcherCollaboratorTypeToWitness` renombró la etiqueta en Postgres, así que las filas
+   * existentes se leen como `WITNESS` sin reescribirse.
+   */
+  WITNESS = 'WITNESS',
 }

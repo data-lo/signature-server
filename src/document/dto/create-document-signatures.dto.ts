@@ -31,8 +31,17 @@ export enum PAYLOAD_SIGNATURE_TYPE_ENUM {
 
 export enum PAYLOAD_COLABORATOR_TYPE_ENUM {
   SIGNER = 'SIGNER',
-  VIEWER = 'VIEWER',
+  /** Testigo. Era `VIEWER` hasta la historia "Renombrar rol Espectador a Testigo". */
+  WITNESS = 'WITNESS',
 }
+
+/**
+ * Valor que el payload usaba para el testigo antes de la historia "Renombrar rol Espectador a
+ * Testigo". Se sigue aceptando —y se traduce a `WITNESS`— para que una pestaña con el frontend
+ * anterior, abierta mientras se despliega, no reciba un 400 al enviar. Se puede retirar cuando
+ * ya no quede ningún cliente que lo mande.
+ */
+const LEGACY_WITNESS_PAYLOAD_VALUE = 'VIEWER';
 
 /**
  * Espejo de `documentData.signatureType` en vocabulario de dominio. Ya no admite `MIX`: desde la
@@ -200,7 +209,16 @@ export class DocumentDataDto {
 }
 
 export class CollaboratorPayloadDto {
-  @ApiProperty({ enum: PAYLOAD_COLABORATOR_TYPE_ENUM })
+  @ApiProperty({
+    enum: PAYLOAD_COLABORATOR_TYPE_ENUM,
+    description:
+      '`SIGNER` o `WITNESS`. `VIEWER` se acepta temporalmente como sinónimo obsoleto de `WITNESS`.',
+  })
+  @Transform(({ value }) =>
+    value === LEGACY_WITNESS_PAYLOAD_VALUE
+      ? PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS
+      : value,
+  )
   @IsEnum(PAYLOAD_COLABORATOR_TYPE_ENUM)
   collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM;
 
@@ -223,7 +241,7 @@ export class CollaboratorPayloadDto {
    * "Estandarizar campos de colaboradores": el nombre del campo deja de dar por hecho el régimen
    * fiscal, aunque la etiqueta que ve el usuario siga diciendo RFC, que es lo que captura).
    *
-   * Opcional incluso para VIEWER (antes era obligatorio para ese tipo; ver historia "Eliminar
+   * Opcional incluso para WITNESS (antes era obligatorio para ese tipo; ver historia "Eliminar
    * campo RFC de la sección de Espectadores"). Cuando llega con valor se sigue validando como
    * string — sólo se relajó la obligatoriedad, no el formato. Los firmantes ya no lo mandan en
    * ningún flujo (historia "Selección de tipo de firma al crear documentos"): en firma simple
@@ -236,7 +254,7 @@ export class CollaboratorPayloadDto {
   @ApiPropertyOptional({ example: 'PEAJ800101XXX', nullable: true })
   @ValidateIf(
     (c: CollaboratorPayloadDto) =>
-      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER &&
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS &&
       c.taxId !== undefined &&
       c.taxId !== null &&
       c.taxId !== '',

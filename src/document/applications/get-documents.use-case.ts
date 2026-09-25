@@ -52,7 +52,7 @@ export interface DocumentsPagination {
 /**
  * Los roles que tienen algo que HACER con un documento.
  *
- * `WATCHER` queda fuera: un observador recibe copia y puede consultarlo, pero no se le pide
+ * `WITNESS` queda fuera: un testigo recibe copia y puede consultarlo, pero no se le pide
  * nada, así que un documento nunca "requiere su firma o revisión" y meterlo en esa vista sería
  * darle una tarea que no existe.
  */
@@ -253,7 +253,7 @@ export class GetDocumentsUseCase {
           fileName: doc.fileName,
           fileType: doc.fileType,
           signers: byType(COLABORATOR_TYPE_ENUM.SIGNER),
-          watchers: byType(COLABORATOR_TYPE_ENUM.WATCHER),
+          witnesses: byType(COLABORATOR_TYPE_ENUM.WITNESS),
           reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
           creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
           creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,

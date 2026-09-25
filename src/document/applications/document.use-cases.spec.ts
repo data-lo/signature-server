@@ -505,7 +505,7 @@ describe('casos de uso de documentos', () => {
       mimetype: 'application/pdf',
     } as Express.Multer.File;
 
-    const dto = { signerIds: ['user-1'], watcherIds: [] } as any;
+    const dto = { signerIds: ['user-1'], witnessIds: [] } as any;
 
     beforeEach(() => {
       // findOne se usa para dos cosas distintas en create(): el chequeo de nombre
@@ -581,7 +581,7 @@ describe('casos de uso de documentos', () => {
     it('setea totalSigners igual a la cantidad de firmantes seleccionados', async () => {
       const dtoConVariosFirmantes = {
         signerIds: ['user-1', 'user-2', 'user-3'],
-        watcherIds: [],
+        witnessIds: [],
       } as any;
 
       await createDocument.execute(
@@ -596,10 +596,10 @@ describe('casos de uso de documentos', () => {
       expect(savedDocumentCall.totalSigners).toBe(3);
     });
 
-    it('crea colaboradores WATCHER solo-por-email sin llamar a userService.findOne para ellos', async () => {
+    it('crea colaboradores WITNESS solo-por-email sin llamar a userService.findOne para ellos', async () => {
       const dtoConWatcherPorEmail = {
         signerIds: ['user-1'],
-        watcherEmails: ['invitado@correo.com'],
+        witnessEmails: ['invitado@correo.com'],
       } as any;
 
       await createDocument.execute(
@@ -618,7 +618,7 @@ describe('casos de uso de documentos', () => {
         (c: any) => c.email === 'invitado@correo.com',
       );
       expect(watcherByEmail).toMatchObject({
-        colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
       });
       expect(watcherByEmail.accountId).toBeUndefined();
     });
@@ -665,8 +665,8 @@ describe('casos de uso de documentos', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('rechaza si el mismo usuario está entre firmantes y watchers', async () => {
-      const dupDto = { signerIds: ['user-1'], watcherIds: ['user-1'] } as any;
+    it('rechaza si el mismo usuario está entre firmantes y testigos', async () => {
+      const dupDto = { signerIds: ['user-1'], witnessIds: ['user-1'] } as any;
 
       await expect(
         createDocument.execute(
@@ -680,10 +680,10 @@ describe('casos de uso de documentos', () => {
       expect(minioService.uploadObject).not.toHaveBeenCalled();
     });
 
-    it('rechaza si el mismo email se repite entre watchers y reviewers', async () => {
+    it('rechaza si el mismo email se repite entre testigos y reviewers', async () => {
       const dupDto = {
         signerIds: ['user-1'],
-        watcherEmails: ['x@correo.com'],
+        witnessEmails: ['x@correo.com'],
         reviewerEmails: ['x@correo.com'],
       } as any;
 
@@ -1115,7 +1115,7 @@ describe('casos de uso de documentos', () => {
           ([sql]: [unknown]) =>
             typeof sql === 'string' && sql.includes('c.colaborator_type IN'),
         );
-        // Un observador no firma ni revisa: nada le "requiere su firma".
+        // Un testigo no firma ni revisa: nada le "requiere su firma".
         expect(params.actingTypes).toEqual([
           COLABORATOR_TYPE_ENUM.SIGNER,
           COLABORATOR_TYPE_ENUM.REVIEWER,
@@ -1402,6 +1402,47 @@ describe('casos de uso de documentos', () => {
         );
       });
 
+      /**
+       * Historia "Renombrar rol Espectador a Testigo": la fila agrupa a los testigos bajo
+       * `witnesses` (antes `watchers`), aparte de firmantes y reviewers.
+       */
+      it('agrupa a los testigos bajo `witnesses`', async () => {
+        const qb = createMockQueryBuilder(
+          [
+            documentWith({
+              collaborators: [
+                {
+                  ...myPendingSignature(),
+                  account: {
+                    userId: 'user-1',
+                    user: { firstName: 'Ana', lastName: 'López' },
+                  },
+                },
+                {
+                  colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+                  status: COLLABORATOR_STATUS_ENUM.NOTIFIED,
+                  signingOrder: null,
+                  account: null,
+                  firstName: 'Carlos',
+                  lastName: 'Solares',
+                  email: 'carlos@correo.com',
+                },
+              ],
+            }),
+          ],
+          1,
+        );
+
+        const result = await list({ view: DOCUMENT_VIEW_ENUM.ALL }, qb);
+
+        expect(result.items[0]).toMatchObject({
+          signers: ['Ana López'],
+          witnesses: ['Carlos Solares'],
+          reviewers: [],
+        });
+        expect(result.items[0]).not.toHaveProperty('watchers');
+      });
+
       /** Ya firmé: el documento sigue en mi lista, pero no me pide nada. */
       it('deja de pedir firma en cuanto el usuario ya respondió', async () => {
         const qb = createMockQueryBuilder(
@@ -1595,7 +1636,7 @@ describe('casos de uso de documentos', () => {
         const result = await listWithSigners([
           signer(SIGNATURE_TYPE_ENUM.SIMPLE),
           {
-            colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+            colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
             signatureType: null,
           },
         ]);
@@ -3981,7 +4022,7 @@ describe('casos de uso de documentos', () => {
         expect(userService.findOne).not.toHaveBeenCalled();
       });
 
-      it('solo considera a los SIGNER: watchers y reviewers no salen en la vista pública', async () => {
+      it('solo considera a los SIGNER: testigos y reviewers no salen en la vista pública', async () => {
         documentRepository.findOne.mockResolvedValue(
           signedDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
         );

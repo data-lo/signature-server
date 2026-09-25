@@ -51,7 +51,7 @@ const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   COLABORATOR_TYPE_ENUM
 > = {
   [PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER]: COLABORATOR_TYPE_ENUM.SIGNER,
-  [PAYLOAD_COLABORATOR_TYPE_ENUM.VIEWER]: COLABORATOR_TYPE_ENUM.WATCHER,
+  [PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS]: COLABORATOR_TYPE_ENUM.WITNESS,
 };
 
 const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
@@ -125,7 +125,7 @@ export interface CreateDocumentSignaturesResult {
  * Orquesta POST /api/v1/documents/signatures (ver historias "Backend: Orquestación para
  * Creación de Documento y Flujo de Firmas" + "Frontend: Carga de Documentos y Configuración de
  * Firmantes" — la segunda redefinió el contrato de la primera: un solo arreglo `collaborators`
- * con collaboratorType SIGNER/VIEWER, en vez de dos arreglos separados, y multipart con el
+ * con collaboratorType SIGNER/WITNESS, en vez de dos arreglos separados, y multipart con el
  * archivo real en vez de un objectKey pre-subido).
  *
  * Trata a todos los colaboradores como invitación por email (accountId siempre null) — no
@@ -208,7 +208,7 @@ export class CreateDocumentSignatureFlowUseCase {
     ).length;
 
     // `ArrayMinSize(1)` del DTO solo garantiza que haya colaboradores: un documento con puros
-    // VIEWER nace en PENDING y no puede completarse nunca porque no hay a quién pedirle una firma.
+    // WITNESS nace en PENDING y no puede completarse nunca porque no hay a quién pedirle una firma.
     if (totalSigners === 0) {
       throw new BadRequestException(
         'El documento debe tener al menos un colaborador de tipo SIGNER',
@@ -482,7 +482,7 @@ export class CreateDocumentSignatureFlowUseCase {
             email: participant.email.toLowerCase(),
             firstName: participant.firstName,
             lastName: participant.lastName,
-            // Solo el VIEWER guarda identificador fiscal: para un firmante el dato ya no se
+            // Solo el WITNESS guarda identificador fiscal: para un firmante el dato ya no se
             // pide al crear el documento, y el del flujo avanzado sale del certificado de
             // e.firma al firmar (ver `CollaboratorPayloadDto.taxId`). Se descarta explícitamente
             // lo que mande el cliente.

@@ -12,9 +12,9 @@
  *
  *  - `REVIEWER`: `PENDING` -> `APPROVED` | `REJECTED`.
  *  - `SIGNER`: `PENDING` -> `SIGNED` | `REJECTED`.
- *  - `WATCHER`: `PENDING` -> `NOTIFIED`.
+ *  - `WITNESS`: `PENDING` -> `NOTIFIED`.
  *
- * `NOTIFIED` sigue siendo exclusivo de WATCHER: se le asigna cuando se le envía con éxito el
+ * `NOTIFIED` sigue siendo exclusivo de WITNESS: se le asigna cuando se le envía con éxito el
  * correo de aviso (ver `SendPendingSignatureNotificationUseCase`). No aparece en la lista de la
  * historia porque ésta habla de reviewers y firmantes, pero quitarlo dejaría al watcher sin el
  * único estado que lo distingue de uno al que todavía no se le ha escrito.
@@ -27,6 +27,6 @@ export enum COLLABORATOR_STATUS_ENUM {
   REJECTED = 'REJECTED',
   /** Sólo SIGNER. */
   SIGNED = 'SIGNED',
-  /** Sólo WATCHER: se le envió el correo de aviso. */
+  /** Sólo WITNESS: se le envió el correo de aviso. */
   NOTIFIED = 'NOTIFIED',
 }

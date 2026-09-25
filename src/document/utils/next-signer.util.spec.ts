@@ -41,12 +41,12 @@ describe('next-signer.util', () => {
       expect(getNextPendingSigner(signers)?.id).toBe('p-2');
     });
 
-    it('ignora colaboradores que no son firmantes (watchers/reviewers)', () => {
+    it('ignora colaboradores que no son firmantes (testigos/reviewers)', () => {
       const signers = [
         buildCollaborator({
           id: 'watcher-1',
           signingOrder: 0,
-          colaboratorType: COLABORATOR_TYPE_ENUM.WATCHER,
+          colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
         }),
         buildCollaborator({
           id: 'reviewer-1',

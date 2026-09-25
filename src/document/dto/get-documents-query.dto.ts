@@ -83,7 +83,7 @@ export class GetDocumentsQueryDto {
 
   @ApiPropertyOptional({
     description:
-      'Nombre o correo de un participante (firmante, revisor u observador) del documento.',
+      'Nombre o correo de un participante (firmante, revisor u testigo) del documento.',
     maxLength: MAX_SEARCH_LENGTH,
   })
   @IsOptional()
