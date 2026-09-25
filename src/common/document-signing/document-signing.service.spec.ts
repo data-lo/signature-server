@@ -1,7 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import * as zlib from 'zlib';
 import { PDFDocument, degrees } from 'pdf-lib';
-import { PdfSignatureService } from './document-signing.service';
+import {
+  PdfSignatureService,
+  UNREADABLE_PDF_MESSAGE,
+} from './document-signing.service';
+import { BadRequestException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 
 // PNG 1x1 transparente mínimo — suficiente para que pdf-lib.embedPng() lo acepte.
 const MINIMAL_PNG = Buffer.from(
@@ -624,6 +629,69 @@ describe('PdfSignatureService', () => {
       });
 
       expect(pageIndex).toBe(0);
+    });
+  });
+  describe('getPdfPages', () => {
+    const MB = 1024 * 1024;
+
+    function asMulterFile(buffer: Buffer): Express.Multer.File {
+      return {
+        buffer,
+        size: buffer.length,
+        originalname: 'documento.pdf',
+        mimetype: 'application/pdf',
+      } as Express.Multer.File;
+    }
+
+    /**
+     * PDF de `pages` hojas que pesa al menos `targetBytes`: el relleno va como adjunto de bytes
+     * aleatorios (incomprimibles), que es lo más parecido en peso a un escaneo sin tener que
+     * incluir uno en el repo.
+     */
+    async function buildHeavyPdf(pages: number, targetBytes: number) {
+      const pdfDoc = await PDFDocument.create();
+      for (let i = 0; i < pages; i++) pdfDoc.addPage([612, 792]);
+      if (targetBytes > 0) {
+        await pdfDoc.attach(randomBytes(targetBytes), 'relleno.bin', {
+          mimeType: 'application/octet-stream',
+        });
+      }
+      return Buffer.from(await pdfDoc.save());
+    }
+
+    it.each([
+      ['pequeño (sin relleno)', 2, 0],
+      ['mediano (~5 MB)', 10, 5 * MB],
+      ['grande (~12 MB, el tamaño que fallaba)', 40, 12 * MB],
+      ['cercano al límite (~19.5 MB)', 80, 19.5 * MB],
+    ])(
+      'cuenta las páginas de un PDF %s',
+      async (_label, pages, targetBytes) => {
+        const buffer = await buildHeavyPdf(pages, targetBytes);
+        expect(buffer.length).toBeGreaterThanOrEqual(targetBytes);
+
+        await expect(service.getPdfPages(asMulterFile(buffer))).resolves.toBe(
+          pages,
+        );
+      },
+      30_000,
+    );
+
+    it('un archivo que no es PDF responde 400 con un mensaje accionable, no 500', async () => {
+      const notAPdf = Buffer.from('esto no es un pdf');
+
+      const result = service.getPdfPages(asMulterFile(notAPdf));
+
+      await expect(result).rejects.toBeInstanceOf(BadRequestException);
+      await expect(result).rejects.toThrow(UNREADABLE_PDF_MESSAGE);
+    });
+
+    it('un PDF truncado a la mitad del encabezado también responde 400', async () => {
+      const truncated = (await buildPdf([[612, 792]])).subarray(0, 4);
+
+      await expect(
+        service.getPdfPages(asMulterFile(truncated)),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });
