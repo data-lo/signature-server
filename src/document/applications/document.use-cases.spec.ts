@@ -363,7 +363,7 @@ describe('casos de uso de documentos', () => {
           certificateNumber: '30001000000400002434',
           certificatePem: '-----BEGIN CERTIFICATE-----...',
         },
-        // Evidencia de la consulta OCSP al SAT (`OscpService`): forma parte del payload de
+        // Evidencia de la consulta OCSP al SAT (`CertificateValidationApiService`): forma parte del payload de
         // sellado, así que sin ella la firma se registra pero el sellado nunca sale.
         ocspEvidence: {
           status: 'good',
