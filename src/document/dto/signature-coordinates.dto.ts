@@ -1,4 +1,4 @@
-import { IsNumber } from 'class-validator';
+import { IsNumber, IsPositive, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class SignatureCoordinatesDto {
@@ -7,6 +7,7 @@ export class SignatureCoordinatesDto {
     description: 'Coordenada horizontal de la firma en el documento (px)',
   })
   @IsNumber()
+  @Min(0)
   x: number;
 
   @ApiProperty({
@@ -14,6 +15,7 @@ export class SignatureCoordinatesDto {
     description: 'Coordenada vertical de la firma en el documento (px)',
   })
   @IsNumber()
+  @Min(0)
   y: number;
 
   @ApiProperty({
@@ -21,6 +23,7 @@ export class SignatureCoordinatesDto {
     description: 'Ancho de la firma en el documento (px)',
   })
   @IsNumber()
+  @IsPositive()
   width: number;
 
   @ApiProperty({
@@ -28,5 +31,6 @@ export class SignatureCoordinatesDto {
     description: 'Alto de la firma en el documento (px)',
   })
   @IsNumber()
+  @IsPositive()
   height: number;
 }
