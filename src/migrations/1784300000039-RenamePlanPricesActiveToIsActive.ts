@@ -1,9 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /** Alinea el estado de `plan_prices` con la convención `is_active` del catálogo. */
-export class RenamePlanPricesActiveToIsActive1784300000039
-  implements MigrationInterface
-{
+export class RenamePlanPricesActiveToIsActive1784300000039 implements MigrationInterface {
   name = 'RenamePlanPricesActiveToIsActive1784300000039';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

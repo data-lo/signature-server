@@ -19,7 +19,7 @@ export const INCOMPLETE_UPLOAD_MESSAGE =
  * Nest; antes no estaban aquí y el usuario veía "Multipart: Unexpected end of form" en inglés.
  */
 const MULTER_MESSAGE_TRANSLATIONS: Record<string, string> = {
-  'File too large': `El archivo excede el tamaño máximo permitido por el servidor (${Math.floor(MAX_UPLOAD_SAFETY_NET_BYTES / (1024 * 1024),)}MB)`,
+  'File too large': `El archivo excede el tamaño máximo permitido por el servidor (${Math.floor(MAX_UPLOAD_SAFETY_NET_BYTES / (1024 * 1024))}MB)`,
   'Too many files': 'Se excedió la cantidad máxima de archivos permitidos',
   'Unexpected field': 'Se recibió un campo de archivo inesperado',
   'Too many parts': 'La petición contiene demasiadas partes',

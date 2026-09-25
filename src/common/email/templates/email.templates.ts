@@ -153,6 +153,42 @@ export const documentRejectedTemplate = (
 </html>
 `;
 
+/**
+ * Versión para el testigo del aviso de rechazo: el de `documentRejectedTemplate` le habla a quien
+ * envió el documento ("que enviaste a firmar"), que no es el caso del testigo.
+ */
+export const documentRejectedToWitnessTemplate = (
+  witnessName: string,
+  rejecterName: string,
+  documentName: string,
+  reason: string,
+): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+
+    <h2 style="color: #E65100; margin-top: 0;">Documento rechazado</h2>
+
+    <p style="color: #555555;">Hola <strong>${witnessName}</strong>,</p>
+
+    <p style="color: #555555;">
+      <strong>${rejecterName}</strong> rechazó el documento <strong>${documentName}</strong>, del que eres testigo. El proceso de firma se detuvo y no es necesario que hagas nada.
+    </p>
+
+    <div style="background-color: #fff8f0; border-left: 4px solid #E65100; padding: 16px; margin: 24px 0;">
+      <p style="margin: 0; color: #333333;">${reason}</p>
+    </div>
+
+  </div>
+</body>
+</html>
+`;
+
 export const documentCancelledTemplate = (
   participantName: string,
   documentName: string,

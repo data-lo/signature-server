@@ -55,7 +55,7 @@ export class AccountMemberService {
     private userRepository: Repository<UserEntity>,
 
     private readonly rolesService: RolesService,
-  ) { }
+  ) {}
 
   /**
    * Resuelve la cuenta PERSONAL (1:1 con el usuario) de un usuario dado — usada donde un
@@ -314,7 +314,6 @@ export class AccountMemberService {
 
     return this.toDetailedMembers(members);
   }
-
 
   /**
    * Una membresía concreta con el mismo shape que la lista.

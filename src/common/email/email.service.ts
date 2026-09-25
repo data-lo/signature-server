@@ -19,6 +19,7 @@ import {
   documentRejectedTemplate,
   documentSignedTemplate,
   documentWitnessAddedTemplate,
+  documentRejectedToWitnessTemplate,
   organizationInvitationTemplate,
   organizationMemberJoinedTemplate,
   passwordResetOtpTemplate,
@@ -181,6 +182,43 @@ export class EmailService {
       to,
       EmailSubject.DOCUMENT_REJECTED,
       documentRejectedTemplate(creatorName, rejecterName, documentName, reason),
+      EmailType.NOTIFICATION,
+    );
+  }
+
+  /**
+   * Notifica a un testigo que un firmante rechazó el documento, con el motivo.
+   *
+   * @param to - Correo del testigo.
+   * @param witnessName - Nombre con el que se le saluda.
+   * @param rejecterName - Quién rechazó el documento.
+   * @param documentName - Nombre del documento.
+   * @param reason - Motivo del rechazo.
+   * @returns Nada.
+   *
+   * @throws {InternalServerErrorException} Si el proveedor de correo rechaza el envío.
+   *
+   * @example
+   * ```ts
+   * await emailService.sendDocumentRejectedToWitnessNotification('ana@x.com', 'Ana', 'Juan Pérez', 'contrato.pdf', 'Faltan cláusulas');
+   * ```
+   */
+  async sendDocumentRejectedToWitnessNotification(
+    to: string,
+    witnessName: string,
+    rejecterName: string,
+    documentName: string,
+    reason: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_REJECTED,
+      documentRejectedToWitnessTemplate(
+        witnessName,
+        rejecterName,
+        documentName,
+        reason,
+      ),
       EmailType.NOTIFICATION,
     );
   }

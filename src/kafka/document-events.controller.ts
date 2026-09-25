@@ -90,7 +90,9 @@ export class DocumentEventsConsumer {
   async handleCollaboratorSigned(
     @Payload() payload: DocumentCollaboratorSignedPayload,
   ) {
-    await this.once(payload, () => this.processCollaboratorSigned.execute(payload));
+    await this.once(payload, () =>
+      this.processCollaboratorSigned.execute(payload),
+    );
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.SIGNED)
@@ -105,7 +107,9 @@ export class DocumentEventsConsumer {
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.CANCELLATION_REQUESTED)
   async handleCancellationRequested(@Payload() payload: DocumentEventPayload) {
-    await this.once(payload, () => this.processCancellationRequested.execute(payload));
+    await this.once(payload, () =>
+      this.processCancellationRequested.execute(payload),
+    );
   }
 
   @EventPattern(DOCUMENT_KAFKA_TOPICS.CANCELLED)

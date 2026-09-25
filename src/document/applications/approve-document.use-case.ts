@@ -14,6 +14,7 @@ import { DocumentEntity } from '../entities/document.entity';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { DocumentApprovalService } from '../services/document-approval.service';
+import { WitnessNotificationService } from '../services/witness-notification.service';
 
 /**
  * `POST /api/v1/documents/:documentId/approval/approve`: el reviewer autoriza que el documento
@@ -38,6 +39,7 @@ export class ApproveDocumentUseCase {
     private readonly documentService: DocumentService,
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
+    private readonly witnessNotificationService: WitnessNotificationService,
   ) {}
 
   /**
@@ -151,6 +153,23 @@ export class ApproveDocumentUseCase {
     } catch (error) {
       this.logger.error(
         `Error notificando a los firmantes del documento ${documentId} tras su aprobación: ${error}`,
+      );
+    }
+
+    /**
+     * Los testigos se enteran en este momento y no al crearse el documento: mientras esperaba
+     * aprobación el consumidor descartó su aviso, y sin esto nunca lo recibían (historia
+     * "Corregir notificaciones por correo para testigos"). Aparte del bloque de arriba para que un
+     * fallo al avisar a los firmantes no deje también sin aviso a los testigos.
+     */
+    try {
+      await this.witnessNotificationService.announcePendingWitnesses(
+        documentId,
+        currentUserId,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error avisando a los testigos del documento ${documentId} tras su aprobación: ${error}`,
       );
     }
 

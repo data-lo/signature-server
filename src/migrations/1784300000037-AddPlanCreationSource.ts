@@ -1,9 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /** Distingue planes creados manualmente de los dados de alta por un webhook de Stripe. */
-export class AddPlanCreationSource1784300000037
-  implements MigrationInterface
-{
+export class AddPlanCreationSource1784300000037 implements MigrationInterface {
   name = 'AddPlanCreationSource1784300000037';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
