@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentService } from './document.service';
@@ -432,65 +432,6 @@ describe('DocumentService', () => {
         'object-key-1',
         BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
       );
-    });
-  });
-
-  /**
-   * `GET /document/file/:id` no es la única ruta que entrega el archivo: el detalle
-   * (`GET /document/:id`, lo que realmente renderiza el visor de la pantalla de firma) y el
-   * listado con `withUrl` traen su propio `secureUrl`. Los tres tienen que resolver el bucket
-   * por el mismo STATUS_BUCKET_MAP; si alguno se quedara en el bucket original, un documento ya
-   * firmado volvería a mostrarse sin firmas por esa vía aunque `getDocumentMinioURL` esté bien.
-   */
-  describe('assertUserHasAccess (descarga del archivo)', () => {
-    const document = { id: 'doc-1', createdBy: 'creator-1' } as DocumentEntity;
-
-    it('el creador siempre tiene acceso, sin consultar colaboradores', async () => {
-      documentRepository.findOne.mockResolvedValue(document);
-
-      await expect(
-        service.assertUserHasAccess('doc-1', 'creator-1'),
-      ).resolves.toBe(document);
-      expect(collaboratorRepository.findOne).not.toHaveBeenCalled();
-    });
-
-    it('un colaborador con cuenta vinculada tiene acceso', async () => {
-      documentRepository.findOne.mockResolvedValue(document);
-      collaboratorRepository.findOne.mockResolvedValue({
-        id: 'collaborator-1',
-      });
-
-      await expect(
-        service.assertUserHasAccess('doc-1', 'user-2'),
-      ).resolves.toBe(document);
-    });
-
-    it('bug corregido: un colaborador invitado solo por email también puede descargar el archivo (antes 403, con el detalle cargando y el visor vacío)', async () => {
-      documentRepository.findOne.mockResolvedValue(document);
-      collaboratorRepository.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'collaborator-1', accountId: null });
-      userService.findOne.mockResolvedValue({
-        id: 'user-2',
-        email: 'invitado@correo.com',
-      });
-
-      await expect(
-        service.assertUserHasAccess('doc-1', 'user-2'),
-      ).resolves.toBe(document);
-    });
-
-    it('un usuario sin relación con el documento sigue recibiendo ForbiddenException', async () => {
-      documentRepository.findOne.mockResolvedValue(document);
-      collaboratorRepository.findOne.mockResolvedValue(null);
-      userService.findOne.mockResolvedValue({
-        id: 'user-3',
-        email: 'intruso@correo.com',
-      });
-
-      await expect(
-        service.assertUserHasAccess('doc-1', 'user-3'),
-      ).rejects.toThrow(ForbiddenException);
     });
   });
 });

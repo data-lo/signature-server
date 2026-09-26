@@ -411,11 +411,21 @@ export class DocumentController {
    * con sufijo: Nest resuelve por orden de declaración y `:id` sin sufijo casaría primero.
    * `POST` y no `PATCH` porque no modifica el documento: crea (o renueva) la preferencia de
    * archivado de quien llama.
+   *
+   * Mismo permiso y misma Policy que `GET /document/:id`: se archiva lo que se puede ver, con
+   * independencia de quién haya creado el documento (ver `ArchiveCompletedDocumentUseCase`).
    */
   @Post(':id/archive')
   @ApiArchiveDocument()
-  archive(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.archiveCompletedDocument.execute(id, user.sub);
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
+  archive(
+    @Param('id') id: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
+  ) {
+    return this.archiveCompletedDocument.execute({
+      documentId: id,
+      authorization,
+    });
   }
 
   @Patch(':id')
