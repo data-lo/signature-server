@@ -56,7 +56,6 @@ import { isAdvancedSignatureDocument } from './utils/advanced-signature-document
 import { toIsoStringOrNull } from './utils/iso-date.util';
 import {
   buildAdvancedSignatureUrl,
-  buildAllDocumentsUrl,
   buildDocumentAccessUrl,
   buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
@@ -711,7 +710,6 @@ export class DocumentService {
       creator.email,
       document.fileName,
       buildDocumentAccessUrl(documentId, nextSigner.id, signerEmail),
-      buildAllDocumentsUrl(),
     );
   }
 

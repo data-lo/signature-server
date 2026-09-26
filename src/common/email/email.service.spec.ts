@@ -44,6 +44,42 @@ describe('EmailService', () => {
   });
 
   /**
+   * Historia "Actualizar acciones en correo de invitación a firma": el aviso al firmante lleva un
+   * único botón, "Firmar documento", y ya no recibe el enlace al listado.
+   */
+  describe('sendDocumentPendingNotification', () => {
+    const documentUrl =
+      'http://localhost:3000/access-document?docId=doc-1&collabId=signer-1&email=ana%40acme.mx';
+
+    it('manda el aviso con "Firmar documento" hacia el flujo de firma y el creador como replyTo', async () => {
+      const sendEmail = jest
+        .spyOn(service, 'sendEmail')
+        .mockResolvedValue(undefined);
+
+      await service.sendDocumentPendingNotification(
+        'ana@acme.mx',
+        'Ana López',
+        'sara@acme.mx',
+        'contrato.pdf',
+        documentUrl,
+      );
+
+      expect(sendEmail).toHaveBeenCalledWith(
+        'ana@acme.mx',
+        expect.any(String),
+        expect.any(String),
+        'NOTIFICATION',
+        'sara@acme.mx',
+      );
+
+      const html = sendEmail.mock.calls[0][2] as string;
+      expect(html).toContain('Firmar documento');
+      expect(html).toContain(`href="${documentUrl}"`);
+      expect(html).not.toContain('Ver todo a firmar');
+    });
+  });
+
+  /**
    * Historia "Corregir notificación por correo a aprobadores asignados": el correo tiene que decir
    * que hay algo pendiente de APROBAR —no de firmar— e identificar el documento y el camino para
    * llegar a él.

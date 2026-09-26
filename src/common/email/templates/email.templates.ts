@@ -1,9 +1,36 @@
+/**
+ * Correo de solicitud de firma: avisa al firmante en turno que un documento espera su firma.
+ *
+ * Lleva una sola acción, "Firmar documento", que abre el flujo de firma de ESE documento. Tuvo un
+ * segundo botón, "Ver todo a firmar", hacia el listado; se retiró porque competía con la acción
+ * que el correo pide y el listado queda a un clic desde la pantalla de firma. El botón único usa
+ * la misma tabla de una celda que `documentInvitationTemplate`, que es la forma en que los
+ * clientes de correo respetan el ancho y el relleno del enlace.
+ *
+ * @param signerName - Nombre del firmante, para el saludo.
+ * @param creatorEmail - Correo de quien solicita la firma; se muestra como enlace `mailto:`.
+ * @param documentName - Nombre del documento a firmar.
+ * @param documentUrl - Entrada al flujo de firma (`/access-document?docId=…&collabId=…&email=…`,
+ *   ver `buildDocumentAccessUrl`). Es el destino del botón y del enlace de texto.
+ * @returns El HTML completo del correo.
+ *
+ * @throws Nada: sólo interpola texto.
+ *
+ * @example
+ * ```ts
+ * const html = documentPendingTemplate(
+ *   'Ana López',
+ *   'creador@correo.com',
+ *   'contrato.pdf',
+ *   buildDocumentAccessUrl('doc-1', 'collab-1', 'ana@correo.com'),
+ * );
+ * ```
+ */
 export const documentPendingTemplate = (
   signerName: string,
   creatorEmail: string,
   documentName: string,
   documentUrl: string,
-  allDocumentsUrl: string,
 ): string => `
 <!DOCTYPE html>
 <html lang="es">
@@ -25,14 +52,9 @@ export const documentPendingTemplate = (
 
     <table role="presentation" style="margin: 32px 0;">
       <tr>
-        <td style="padding-right: 12px;">
-          <a href="${documentUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
-            Ver este documento
-          </a>
-        </td>
         <td>
-          <a href="${allDocumentsUrl}" style="display: inline-block; background-color: #ffffff; color: #2E7D32; text-decoration: none; font-weight: bold; padding: 13px 24px; border-radius: 6px; border: 1px solid #2E7D32;">
-            Ver todo a firmar
+          <a href="${documentUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
+            Firmar documento
           </a>
         </td>
       </tr>

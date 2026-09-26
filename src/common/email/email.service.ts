@@ -89,14 +89,38 @@ export class EmailService {
     }
   }
 
-  /** Notifica al firmante en turno que se solicita su firma, con links a la pantalla de firma y al listado de documentos. */
+  /**
+   * Notifica al firmante en turno que se solicita su firma, con un único botón "Firmar documento".
+   *
+   * Ya no recibe el enlace al listado de documentos: el correo dejó de ofrecer "Ver todo a
+   * firmar" (ver `documentPendingTemplate`).
+   *
+   * @param to - Correo del firmante.
+   * @param signerName - Nombre del firmante, para el saludo.
+   * @param creatorEmail - Correo de quien solicita la firma; va también como `replyTo`.
+   * @param documentName - Nombre del documento.
+   * @param documentUrl - Entrada al flujo de firma de ese documento (`buildDocumentAccessUrl`).
+   * @returns Nada.
+   *
+   * @throws {InternalServerErrorException} Si SendGrid rechaza el envío.
+   *
+   * @example
+   * ```ts
+   * await emailService.sendDocumentPendingNotification(
+   *   'ana@correo.com',
+   *   'Ana López',
+   *   'creador@correo.com',
+   *   'contrato.pdf',
+   *   buildDocumentAccessUrl('doc-1', 'collab-1', 'ana@correo.com'),
+   * );
+   * ```
+   */
   async sendDocumentPendingNotification(
     to: string,
     signerName: string,
     creatorEmail: string,
     documentName: string,
     documentUrl: string,
-    allDocumentsUrl: string,
   ): Promise<void> {
     await this.sendEmail(
       to,
@@ -106,7 +130,6 @@ export class EmailService {
         creatorEmail,
         documentName,
         documentUrl,
-        allDocumentsUrl,
       ),
       EmailType.NOTIFICATION,
       creatorEmail, // 👈 Pasamos el correo del creador como replyTo

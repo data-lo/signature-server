@@ -1,7 +1,6 @@
 import {
   ADVANCED_SIGNATURE_QUERY_PARAM,
   buildAdvancedSignatureUrl,
-  buildAllDocumentsUrl,
   buildDocumentAccessUrl,
   buildPublicDocumentUrl,
 } from './document-access-url.util';
@@ -49,24 +48,11 @@ describe('document-access-url.util', () => {
     it('quita las diagonales finales para no generar URLs con //', () => {
       process.env.FRONTEND_URL = 'https://app.example.com/';
 
-      expect(buildAllDocumentsUrl()).toBe(
-        'https://app.example.com/dashboard/documents',
-      );
       expect(buildPublicDocumentUrl('doc-1')).toBe(
         'https://app.example.com/public/documents/doc-1',
       );
       expect(buildDocumentAccessUrl('doc-1', 'collab-1', 'a@b.com')).toContain(
         'https://app.example.com/access-document?',
-      );
-    });
-  });
-
-  describe('buildAllDocumentsUrl', () => {
-    it('apunta ya bajo /dashboard, evitando el redirect 308 heredado', () => {
-      process.env.FRONTEND_URL = 'https://app.example.com';
-
-      expect(buildAllDocumentsUrl()).toBe(
-        'https://app.example.com/dashboard/documents',
       );
     });
   });
