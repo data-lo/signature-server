@@ -23,10 +23,13 @@ export class CreateOrganizationDto {
   @IsString()
   address?: string;
 
-  @ApiPropertyOptional({ example: 'ACM010101AAA' })
+  @ApiPropertyOptional({
+    example: 'ACM010101AAA',
+    description: 'Identificador fiscal de la organización (en México, su RFC)',
+  })
   @IsOptional()
   @IsString()
-  rfc?: string;
+  taxId?: string;
 
   @ApiPropertyOptional({ example: 'acme.com' })
   @IsOptional()

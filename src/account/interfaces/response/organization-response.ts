@@ -32,10 +32,10 @@ export class OrganizationProfileData {
 
   @ApiProperty({
     example: 'ACM010101AAA',
-    description: 'RFC de la organización',
+    description: 'Identificador fiscal de la organización (en México, su RFC)',
     nullable: true,
   })
-  rfc: string | null;
+  taxId: string | null;
 
   @ApiProperty({
     example: '5512345678',

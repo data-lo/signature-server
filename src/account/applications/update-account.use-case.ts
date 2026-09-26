@@ -44,7 +44,7 @@ export class UpdateAccountUseCase {
       updateAccountDto.name !== undefined ||
       updateAccountDto.organizationName !== undefined ||
       updateAccountDto.address !== undefined ||
-      updateAccountDto.rfc !== undefined ||
+      updateAccountDto.taxId !== undefined ||
       updateAccountDto.domainAllowed !== undefined ||
       updateAccountDto.phoneNumber !== undefined ||
       updateAccountDto.indexDocuments !== undefined;
