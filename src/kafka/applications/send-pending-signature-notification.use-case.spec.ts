@@ -1,12 +1,15 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotificationEventsConsumer } from '../notification-events.controller';
 import { SendPendingSignatureNotificationUseCase } from './send-pending-signature-notification.use-case';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
+import { NotificationEntity } from 'src/document/entities/notification.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { COLABORATOR_TYPE_ENUM } from 'src/document/enum/colaborator-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
+import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 import { EmailService } from 'src/common/email/email.service';
 import type { NotificationEventPayload } from '../notification-events.topics';
@@ -50,6 +53,7 @@ describe('NotificationEventsConsumer', () => {
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let documentRepository: ReturnType<typeof createMockRepository>;
   let userRepository: ReturnType<typeof createMockRepository>;
+  let notificationRepository: ReturnType<typeof createMockRepository>;
   let emailService: Record<string, jest.Mock>;
 
   const payload: NotificationEventPayload = {
@@ -65,9 +69,13 @@ describe('NotificationEventsConsumer', () => {
     collaboratorRepository = createMockRepository();
     documentRepository = createMockRepository();
     userRepository = createMockRepository();
+    notificationRepository = createMockRepository();
     emailService = {
       sendDocumentPendingNotification: jest.fn().mockResolvedValue(undefined),
       sendDocumentWitnessAddedNotification: jest
+        .fn()
+        .mockResolvedValue(undefined),
+      sendDocumentApprovalRequestedNotification: jest
         .fn()
         .mockResolvedValue(undefined),
     };
@@ -80,6 +88,7 @@ describe('NotificationEventsConsumer', () => {
       lastName: 'Uno',
     });
     collaboratorRepository.update.mockResolvedValue({ affected: 1 });
+    notificationRepository.update.mockResolvedValue({ affected: 1 });
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [NotificationEventsConsumer],
@@ -96,6 +105,10 @@ describe('NotificationEventsConsumer', () => {
         {
           provide: getRepositoryToken(UserEntity),
           useValue: userRepository,
+        },
+        {
+          provide: getRepositoryToken(NotificationEntity),
+          useValue: notificationRepository,
         },
         { provide: EmailService, useValue: emailService },
       ],
@@ -176,18 +189,237 @@ describe('NotificationEventsConsumer', () => {
     expect(emailService.sendDocumentPendingNotification).not.toHaveBeenCalled();
   });
 
-  it('no envía nada para un colaborador REVIEWER', async () => {
-    collaboratorRepository.findOne.mockResolvedValue(
-      buildCollaborator({ colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER }),
-    );
+  /**
+   * Historia "Corregir notificación por correo a aprobadores asignados": el aprobador quedaba
+   * asignado pero el consumidor lo dejaba caer sin correo. El aprobador se elige de los miembros
+   * de la organización, así que su colaborador tiene cuenta y de ella salen nombre y correo.
+   */
+  describe('colaborador REVIEWER', () => {
+    const reviewerPayload: NotificationEventPayload = {
+      ...payload,
+      notificationId: 'notification-reviewer-1',
+      collaboratorId: 'reviewer-1',
+      actorType: 'account',
+    };
 
-    await consumer.handleCreated(payload);
+    function buildReviewer(overrides: Partial<CollaboratorEntity> = {}) {
+      return buildCollaborator({
+        id: 'reviewer-1',
+        accountId: 'account-reviewer-1',
+        email: null,
+        firstName: null,
+        lastName: null,
+        colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+        signatureType: null,
+        signingOrder: null,
+        account: {
+          id: 'account-reviewer-1',
+          user: {
+            id: 'user-reviewer-1',
+            email: 'ana@acme.mx',
+            firstName: 'Ana',
+            lastName: 'López',
+          },
+        } as CollaboratorEntity['account'],
+        ...overrides,
+      });
+    }
 
-    expect(emailService.sendDocumentPendingNotification).not.toHaveBeenCalled();
-    expect(
-      emailService.sendDocumentWitnessAddedNotification,
-    ).not.toHaveBeenCalled();
-    expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    beforeEach(() => {
+      collaboratorRepository.findOne.mockResolvedValue(buildReviewer());
+      documentRepository.findOne.mockResolvedValue(
+        buildDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_APPROVAL }),
+      );
+    });
+
+    it('asignación inicial: envía al aprobador el correo de documento pendiente de aprobación', async () => {
+      await consumer.handleCreated(reviewerPayload);
+
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).toHaveBeenCalledWith(
+        'ana@acme.mx',
+        'Ana López',
+        'contrato.pdf',
+        'Creador Uno',
+        'creador@correo.com',
+        // Mismo punto de entrada que firmantes y testigos: lleva al detalle, donde se aprueba.
+        expect.stringContaining(
+          '/access-document?docId=doc-1&collabId=reviewer-1',
+        ),
+      );
+      expect(
+        emailService.sendDocumentPendingNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('marca la notificación como enviada ANTES de mandar el correo, y como entregada después', async () => {
+      const calls: string[] = [];
+      notificationRepository.update.mockImplementation(async (_where, set) => {
+        calls.push(set.delivered ? 'delivered' : 'claim');
+        return { affected: 1 };
+      });
+      emailService.sendDocumentApprovalRequestedNotification.mockImplementation(
+        async () => {
+          calls.push('email');
+        },
+      );
+
+      await consumer.handleCreated(reviewerPayload);
+
+      expect(calls).toEqual(['claim', 'email', 'delivered']);
+      expect(notificationRepository.update).toHaveBeenNthCalledWith(
+        1,
+        { id: 'notification-reviewer-1', isNotified: false },
+        { isNotified: true, sentAt: expect.any(Date) },
+      );
+      expect(notificationRepository.update).toHaveBeenLastCalledWith(
+        { id: 'notification-reviewer-1' },
+        { delivered: true },
+      );
+    });
+
+    it('no toca el estatus del aprobador: tiene que seguir PENDING para poder aprobar', async () => {
+      await consumer.handleCreated(reviewerPayload);
+
+      expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('sin duplicados: si Kafka reentrega el mismo evento, el correo sale una sola vez', async () => {
+      notificationRepository.update
+        .mockResolvedValueOnce({ affected: 1 }) // claim de la primera entrega
+        .mockResolvedValueOnce({ affected: 1 }) // delivered de la primera entrega
+        .mockResolvedValueOnce({ affected: 0 }); // claim de la reentrega: ya estaba enviada
+
+      await consumer.handleCreated(reviewerPayload);
+      await consumer.handleCreated(reviewerPayload);
+
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('si otra entrega ya ganó el claim, no envía el correo', async () => {
+      notificationRepository.update.mockResolvedValue({ affected: 0 });
+
+      await consumer.handleCreated(reviewerPayload);
+
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('asignación posterior: un aprobador nuevo, con su propia notificación, recibe su correo', async () => {
+      await consumer.handleCreated(reviewerPayload);
+
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildReviewer({
+          id: 'reviewer-2',
+          account: {
+            id: 'account-reviewer-2',
+            user: {
+              id: 'user-reviewer-2',
+              email: 'luis@acme.mx',
+              firstName: 'Luis',
+              lastName: 'Pérez',
+            },
+          } as CollaboratorEntity['account'],
+        }),
+      );
+      await consumer.handleCreated({
+        ...reviewerPayload,
+        notificationId: 'notification-reviewer-2',
+        collaboratorId: 'reviewer-2',
+      });
+
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).toHaveBeenCalledTimes(2);
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).toHaveBeenLastCalledWith(
+        'luis@acme.mx',
+        'Luis Pérez',
+        'contrato.pdf',
+        'Creador Uno',
+        'creador@correo.com',
+        expect.stringContaining('collabId=reviewer-2'),
+      );
+      expect(notificationRepository.update).toHaveBeenCalledWith(
+        { id: 'notification-reviewer-2', isNotified: false },
+        expect.objectContaining({ isNotified: true }),
+      );
+    });
+
+    it('no avisa si el documento ya no espera aprobación', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        buildDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
+      );
+
+      await consumer.handleCreated(reviewerPayload);
+
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).not.toHaveBeenCalled();
+      expect(notificationRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('no avisa a un aprobador que ya decidió', async () => {
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildReviewer({ status: COLLABORATOR_STATUS_ENUM.APPROVED }),
+      );
+
+      await consumer.handleCreated(reviewerPayload);
+
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('si el correo falla, lo registra, revierte el claim y no propaga el error', async () => {
+      const logError = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      emailService.sendDocumentApprovalRequestedNotification.mockRejectedValue(
+        new Error('SendGrid caído'),
+      );
+
+      await expect(
+        consumer.handleCreated(reviewerPayload),
+      ).resolves.toBeUndefined();
+
+      expect(notificationRepository.update).toHaveBeenLastCalledWith(
+        { id: 'notification-reviewer-1', isNotified: true },
+        { isNotified: false, sentAt: null },
+      );
+      expect(notificationRepository.update).not.toHaveBeenCalledWith(
+        expect.anything(),
+        { delivered: true },
+      );
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining('SendGrid caído'),
+        expect.anything(),
+      );
+      logError.mockRestore();
+    });
+
+    it('mientras espera aprobación, a los firmantes no se les manda nada', async () => {
+      const signer = buildCollaborator();
+      collaboratorRepository.findOne.mockResolvedValue(signer);
+      collaboratorRepository.find.mockResolvedValue([signer]);
+
+      await consumer.handleCreated(payload);
+
+      expect(
+        emailService.sendDocumentPendingNotification,
+      ).not.toHaveBeenCalled();
+      expect(
+        emailService.sendDocumentApprovalRequestedNotification,
+      ).not.toHaveBeenCalled();
+    });
   });
 
   describe('colaborador WITNESS', () => {

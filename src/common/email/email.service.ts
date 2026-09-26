@@ -11,6 +11,7 @@ import * as sgMail from '@sendgrid/mail';
 
 // Internal modules
 import {
+  documentApprovalRequestedTemplate,
   documentCancellationPendingTemplate,
   documentCancelledTemplate,
   documentCompletedForCreatorTemplate,
@@ -330,6 +331,56 @@ export class EmailService {
       EmailSubject.DOCUMENT_WITNESS_ADDED,
       documentWitnessAddedTemplate(
         witnessName,
+        documentName,
+        creatorName,
+        accessUrl,
+      ),
+      EmailType.NOTIFICATION,
+      creatorEmail,
+    );
+  }
+
+  /**
+   * Avisa al aprobador asignado que tiene un documento pendiente de aprobación.
+   *
+   * `creatorEmail` va como replyTo, igual que en el aviso a firmantes y testigos: quien responda
+   * preguntando por el documento llega directo a quien pidió la aprobación.
+   *
+   * @param to - Correo del aprobador.
+   * @param reviewerName - Nombre del aprobador, para el saludo.
+   * @param documentName - Nombre del documento que espera aprobación.
+   * @param creatorName - Nombre de quien creó el documento.
+   * @param creatorEmail - Correo de quien creó el documento; se usa como replyTo.
+   * @param accessUrl - Enlace de acceso al documento (ver `buildDocumentAccessUrl`).
+   * @returns Nada, una vez que SendGrid aceptó el mensaje.
+   *
+   * @throws {InternalServerErrorException} Si SendGrid rechaza o no recibe el envío.
+   *
+   * @example
+   * ```ts
+   * await emailService.sendDocumentApprovalRequestedNotification(
+   *   'ana@acme.mx',
+   *   'Ana López',
+   *   'contrato.pdf',
+   *   'Sara Ramírez',
+   *   'sara@acme.mx',
+   *   accessUrl,
+   * );
+   * ```
+   */
+  async sendDocumentApprovalRequestedNotification(
+    to: string,
+    reviewerName: string,
+    documentName: string,
+    creatorName: string,
+    creatorEmail: string,
+    accessUrl: string,
+  ): Promise<void> {
+    await this.sendEmail(
+      to,
+      EmailSubject.DOCUMENT_APPROVAL_REQUESTED,
+      documentApprovalRequestedTemplate(
+        reviewerName,
         documentName,
         creatorName,
         accessUrl,
