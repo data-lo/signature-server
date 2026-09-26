@@ -1597,6 +1597,70 @@ describe('casos de uso de documentos', () => {
     });
 
     /**
+     * Historia "Mostrar 'Ninguna' en la columna Organización": el listado manda el nombre visible
+     * de la organización dueña del documento, o null si no tiene. El "Ninguna" lo pone la tabla.
+     */
+    it('devuelve el nombre visible de la organización del documento (join a organizations)', async () => {
+      const qb = createMockQueryBuilder(
+        [
+          {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            fileType: 'application/pdf',
+            totalPages: 3,
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            createdAt: new Date('2026-03-15T23:55:00.000Z'),
+            collaborators: [],
+            requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+            organizationId: 'org-1',
+            organization: {
+              id: 'org-1',
+              name: 'Acme Corp S.A. de C.V.',
+              displayName: 'Acme',
+            },
+          },
+        ],
+        1,
+      );
+
+      const result = await list({}, qb);
+
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith(
+        'document.organization',
+        'organization',
+      );
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({ organizationName: 'Acme' }),
+      );
+    });
+
+    it('deja `organizationName` en null en los documentos sin organización (cuenta personal)', async () => {
+      const qb = createMockQueryBuilder(
+        [
+          {
+            id: 'doc-1',
+            fileName: 'contrato.pdf',
+            fileType: 'application/pdf',
+            totalPages: 3,
+            status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+            createdAt: new Date('2026-03-15T23:55:00.000Z'),
+            collaborators: [],
+            requestedBy: { firstName: 'Sara', lastName: 'Ramírez' },
+            organizationId: null,
+            organization: null,
+          },
+        ],
+        1,
+      );
+
+      const result = await list({}, qb);
+
+      expect(result.items[0]).toEqual(
+        expect.objectContaining({ organizationName: null }),
+      );
+    });
+
+    /**
      * Historia "Mostrar tipo de firma en las tablas de documentos": el tipo no vive en el
      * documento sino en cada firmante, y el listado lo resuelve para la columna del frontend.
      */
