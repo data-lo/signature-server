@@ -10,5 +10,6 @@ export enum EmailSubject {
   ORGANIZATION_INVITATION = 'Te invitaron a una organización',
   DOCUMENT_INVITATION = 'Te invitaron a firmar un documento',
   DOCUMENT_WITNESS_ADDED = 'Te agregaron como testigo de un documento',
+  DOCUMENT_APPROVAL_REQUESTED = 'Tienes un documento pendiente de aprobación',
   ORGANIZATION_MEMBER_JOINED = 'Nuevo miembro en tu organización',
 }
