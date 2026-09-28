@@ -52,7 +52,7 @@ export class CreateAccountUseCase {
          */
         displayName: createAccountDto.name,
         address: createAccountDto.address,
-        rfc: createAccountDto.rfc,
+        taxId: createAccountDto.taxId,
         domainAllowed: createAccountDto.domainAllowed,
         phoneNumber: createAccountDto.phoneNumber,
         indexDocuments: createAccountDto.indexDocuments,
