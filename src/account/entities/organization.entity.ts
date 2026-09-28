@@ -42,8 +42,15 @@ export class OrganizationEntity {
   @Column({ nullable: true, type: 'text' })
   address: string | null;
 
-  @Column({ nullable: true })
-  rfc: string | null;
+  /**
+   * Identificador fiscal de la organización; en México, su RFC.
+   *
+   * Se llamaba `rfc` hasta `RenameOrganizationRfcToTaxId1784300000067`: el nombre técnico deja de
+   * atarse a un régimen fiscal concreto, como ya había pasado con `collaborators.tax_id`. La
+   * etiqueta que ve el usuario sigue diciendo "RFC", porque es lo que se captura.
+   */
+  @Column({ name: 'tax_id', nullable: true })
+  taxId: string | null;
 
   @Column({ nullable: true, name: 'domain_allowed' })
   domainAllowed: string | null;

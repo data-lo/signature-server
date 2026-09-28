@@ -35,7 +35,7 @@ export class GetOrganizationUseCase {
    * @example
    * ```ts
    * const response = await getOrganization.execute('org-1');
-   * response.data.rfc; // 'ACM010101AAA'
+   * response.data.taxId; // 'ACM010101AAA'
    * ```
    */
   async execute(
@@ -51,7 +51,7 @@ export class GetOrganizationUseCase {
         id: organization.id,
         name: organization.name,
         displayName: organization.displayName,
-        rfc: organization.rfc,
+        taxId: organization.taxId,
         phoneNumber: organization.phoneNumber,
         address: organization.address,
         domainAllowed: organization.domainAllowed,
