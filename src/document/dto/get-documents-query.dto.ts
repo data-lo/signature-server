@@ -81,6 +81,25 @@ export class GetDocumentsQueryDto {
   })
   statuses?: DOCUMENT_STATUS_ENUM[];
 
+  /**
+   * Filtro "Archivados": invierte la exclusión del archivado en vez de sumarse a ella.
+   *
+   * Archivar es una preferencia personal (`document_user_preferences.archived_at`), no un estatus
+   * del documento, así que no cabe en `statuses`; y tampoco es un `view`, que es excluyente: como
+   * filtro aparte se combina con cualquiera de ellos ("archivados que creé yo") y con la búsqueda,
+   * las fechas, el orden y la paginación. Sin el parámetro —o en `false`— el listado sigue
+   * dejando fuera lo archivado, como siempre.
+   */
+  @ApiPropertyOptional({
+    description:
+      'Con `true`, lista SÓLO los documentos que el usuario autenticado archivó. Sin él (o en `false`), los excluye.',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  archived?: boolean = false;
+
   @ApiPropertyOptional({
     description:
       'Nombre o correo de un participante (firmante, revisor u testigo) del documento.',

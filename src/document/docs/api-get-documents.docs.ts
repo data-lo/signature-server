@@ -29,7 +29,8 @@ export function ApiGetDocuments() {
       description:
         'Devuelve los documentos visibles para el usuario en la cuenta activa: los de la cuenta ' +
         'u organización, los que creó y aquellos en los que participa. `view` recorta ese ' +
-        'conjunto, nunca lo amplía. Excluye los que el propio usuario archivó.',
+        'conjunto, nunca lo amplía. Excluye los que el propio usuario archivó, salvo con ' +
+        '`archived=true`, que lista sólo ésos.',
     }),
     ApiHeader({
       name: 'X-Account-Id',
@@ -57,6 +58,13 @@ export function ApiGetDocuments() {
       enum: DOCUMENT_STATUS_ENUM,
       description:
         'Uno o varios estatus. Repetible (`?statuses=pending&statuses=signed`) o separado por comas',
+    }),
+    ApiQuery({
+      name: 'archived',
+      required: false,
+      type: Boolean,
+      description:
+        'Con `true`, sólo los documentos que el usuario autenticado archivó. Sin él (o `false`), se excluyen. Se combina con `view` y con el resto de los filtros.',
     }),
     ApiQuery({
       name: 'participant',
