@@ -29,6 +29,7 @@ import { AuthorizationContext } from 'src/authorization/interfaces/authorization
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { REQUIRED_PERMISSION_METADATA } from 'src/authorization/constants/permission-metadata.constant';
 
 type Mocked = { execute: jest.Mock };
 
@@ -413,12 +414,35 @@ describe('DocumentController', () => {
     );
   });
 
-  it('archive delega en ArchiveCompletedDocumentUseCase con el userId autenticado', () => {
-    controller.archive(user, 'doc-1');
+  /**
+   * Archivar se autoriza por permisos, no por quién creó el documento: el controller pasa el
+   * contexto que dejó el guard y el caso de uso lo confronta con el documento.
+   */
+  it('archive delega en ArchiveCompletedDocumentUseCase con el contexto autorizado', () => {
+    const context = authorization(ACTION_KEY_ENUM.READ);
+
+    controller.archive('doc-1', context);
 
     expect(
       useCase(ArchiveCompletedDocumentUseCase).execute,
-    ).toHaveBeenCalledWith('doc-1', 'user-1');
+    ).toHaveBeenCalledWith({ documentId: 'doc-1', authorization: context });
+  });
+
+  /**
+   * Sin este metadato `PermissionsGuard` dejaría pasar la ruta sin comprobar nada (ver "migración
+   * incremental" en `authorization-permissions.e2e-spec.ts`): un rol sin `DOCUMENT.READ` podría
+   * archivar.
+   */
+  it('archive exige DOCUMENT + READ, el mismo permiso que el detalle', () => {
+    const required: unknown = Reflect.getMetadata(
+      REQUIRED_PERMISSION_METADATA,
+      DocumentController.prototype.archive,
+    );
+
+    expect(required).toEqual({
+      resource: RESOURCE_KEY_ENUM.DOCUMENT,
+      action: ACTION_KEY_ENUM.READ,
+    });
   });
 
   it('remove delega en DeleteDocumentUseCase con el userId autenticado', () => {

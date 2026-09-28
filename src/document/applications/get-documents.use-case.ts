@@ -86,7 +86,8 @@ const SORT_COLUMNS: Record<DOCUMENT_SORT_FIELD_ENUM, string> = {
  * 2. Valida los rangos de fecha.
  * 3. Resuelve el correo del usuario en el servidor, que es con el que se busca su participación.
  * 4. Aplica la VISIBILIDAD: la cuenta activa (o su organización) y aquello en lo que participa.
- * 5. Aplica el `view` pedido y excluye lo que este usuario archivó.
+ * 5. Aplica el `view` pedido y el filtro de archivado: excluye lo que este usuario archivó o, con
+ *    `archived=true`, muestra sólo eso.
  * 6. Suma los filtros opcionales: id, estados, búsqueda, participante y rangos de fecha.
  * 7. Pagina, ordena con desempate estable y arma la respuesta; opcionalmente firma URLs de MinIO.
  *
@@ -145,6 +146,7 @@ export class GetDocumentsUseCase {
       limit = 25,
       id,
       withUrl,
+      archived = false,
     } = filters;
 
     this.assertValidDateRange(createdFrom, createdTo, 'creación');
@@ -188,7 +190,7 @@ export class GetDocumentsUseCase {
       canReadOrganization: scopes.includes(PERMISSION_SCOPE_ENUM.ORGANIZATION),
     });
     this.applyView(qb, view, userId);
-    this.excludeArchived(qb, userId);
+    this.applyArchiveFilter(qb, userId, archived);
 
     if (id) {
       qb.andWhere('document.id = :id', { id });
@@ -438,26 +440,50 @@ export class GetDocumentsUseCase {
   }
 
   /**
-   * Fuera lo que ESTE usuario archivó.
+   * Recorta el listado según lo que ESTE usuario archivó: por omisión lo deja fuera y, con el
+   * filtro "Archivados", deja sólo eso.
    *
    * `leftJoin` y no `innerJoin`: la mayoría de los documentos no tienen preferencia de nadie, y
    * un `INNER JOIN` vaciaría el listado entero. Sin fila, `archivedAt` es `NULL` y el documento
-   * pasa el filtro — que es exactamente lo que significa "no he dicho nada sobre este documento".
+   * pasa el filtro por omisión — que es exactamente lo que significa "no he dicho nada sobre este
+   * documento". Con `archived`, esa misma fila ausente lo deja fuera.
    *
    * El `user_id` va en la condición del JOIN y no en el `WHERE`: puesto abajo, un documento
-   * archivado por OTRO participante traería su fila y desaparecería también de mi listado, con lo
-   * que archivar dejaría de ser una decisión personal.
+   * archivado por OTRO participante traería su fila y desaparecería también de mi listado —o,
+   * con el filtro, aparecería en mis archivados—, con lo que archivar dejaría de ser una decisión
+   * personal.
+   *
+   * No sustituye al acceso: corre después de `applyVisibility` y del `view`, así que un documento
+   * que el usuario archivó y ya no puede ver (perdió el rol, salió de la organización) tampoco
+   * aparece entre sus archivados.
+   *
+   * @param qb - Consulta del listado, con la visibilidad ya aplicada.
+   * @param userId - Usuario que consulta; sólo cuentan SUS preferencias.
+   * @param archived - `true` para listar sólo lo archivado; `false` para excluirlo.
+   * @returns Nada: agrega el `LEFT JOIN` y la condición a `qb`.
+   *
+   * @throws Nada: sólo arma la consulta.
+   *
+   * @example
+   * ```ts
+   * this.applyArchiveFilter(qb, 'user-1', true); // sólo lo que user-1 archivó
+   * ```
    */
-  private excludeArchived(
+  private applyArchiveFilter(
     qb: SelectQueryBuilder<DocumentEntity>,
     userId: string,
+    archived: boolean,
   ): void {
     qb.leftJoin(
       DocumentUserPreferenceEntity,
       'myPreference',
       'myPreference.documentId = document.id AND myPreference.userId = :preferenceUserId',
       { preferenceUserId: userId },
-    ).andWhere('myPreference.archivedAt IS NULL');
+    ).andWhere(
+      archived
+        ? 'myPreference.archivedAt IS NOT NULL'
+        : 'myPreference.archivedAt IS NULL',
+    );
   }
 
   /**

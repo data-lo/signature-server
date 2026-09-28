@@ -135,7 +135,7 @@ export class AccountService {
     name: string;
     displayName: string;
     address?: string | null;
-    rfc?: string | null;
+    taxId?: string | null;
     domainAllowed?: string | null;
     phoneNumber?: string | null;
     indexDocuments?: boolean;
@@ -145,7 +145,7 @@ export class AccountService {
         name: profile.name,
         displayName: profile.displayName,
         address: profile.address ?? null,
-        rfc: profile.rfc ?? null,
+        taxId: profile.taxId ?? null,
         domainAllowed: profile.domainAllowed ?? null,
         phoneNumber: profile.phoneNumber ?? null,
         indexDocuments: profile.indexDocuments ?? false,
@@ -183,7 +183,7 @@ export class AccountService {
    * @example
    * ```ts
    * const organization = await accountService.findOrganizationByIdOrFail('org-1');
-   * organization.rfc; // 'ACM010101AAA'
+   * organization.taxId; // 'ACM010101AAA'
    * ```
    */
   async findOrganizationByIdOrFail(
@@ -213,7 +213,7 @@ export class AccountService {
       }),
       ...(dto.name !== undefined && { displayName: dto.name }),
       ...(dto.address !== undefined && { address: dto.address }),
-      ...(dto.rfc !== undefined && { rfc: dto.rfc }),
+      ...(dto.taxId !== undefined && { taxId: dto.taxId }),
       ...(dto.domainAllowed !== undefined && {
         domainAllowed: dto.domainAllowed,
       }),
@@ -447,7 +447,7 @@ export class AccountService {
           name: dto.organizationName,
           displayName: dto.name,
           address: dto.address ?? null,
-          rfc: dto.rfc ?? null,
+          taxId: dto.taxId ?? null,
           domainAllowed: dto.domainAllowed ?? null,
           phoneNumber: dto.phoneNumber ?? null,
           indexDocuments: dto.indexDocuments ?? false,

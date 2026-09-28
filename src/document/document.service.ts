@@ -116,8 +116,9 @@ function isRatioSignaturePosition(
  *
  *  - resolver documentos y colaboradores (`findOne`, `resolveMyCollaborator`,
  *    `findOrLinkMySignerCollaborator`, `findMySignerCollaborator`),
- *  - decidir el acceso y el bucket de cada archivo (`assertUserHasAccess`,
- *    `resolveDocumentBucket`, `getDocumentMinioURL`),
+ *  - decidir el bucket de cada archivo (`resolveDocumentBucket`, `getDocumentMinioURL`); quién
+ *    puede ver o archivar un documento ya no se decide aquí sino en `DocumentReadAccessService`,
+ *    contra los permisos de la cuenta,
  *  - firmar con e.firma y congelar la rúbrica del momento (`validateAndSignWithEfirma`,
  *    `snapshotSignatureImage`),
  *  - estampar el PDF, anexar la hoja de firmas y sellar con el PSC (`stampSignaturesOnto`,
@@ -537,47 +538,6 @@ export class DocumentService {
         `El documento con id ${documentId} no se encuentra`,
       );
     }
-    return document;
-  }
-
-  /**
-   * Verifica si el usuario tiene acceso al documento (creador o colaborador). Usado para proteger
-   * la descarga del archivo.
-   *
-   * Mismo criterio que `resolveMyCollaborator`: por cuenta vinculada o, si la invitación sigue
-   * pendiente de vincular, por email. Sin esto la pantalla de detalle cargaba pero el archivo
-   * no (el visor pedía `/document/file/:id` y recibía 403), dejando la firma a medias.
-   */
-  async assertUserHasAccess(
-    documentId: string,
-    userId: string,
-  ): Promise<DocumentEntity> {
-    const document = await this.findOne(documentId);
-    if (document.createdBy === userId) {
-      return document;
-    }
-
-    const linkedCollaborator = await this.collaboratorRepository.findOne({
-      where: { documentId, account: { userId } },
-    });
-    if (linkedCollaborator) {
-      return document;
-    }
-
-    const user = await this.userService.findOne(userId);
-    const invitedCollaborator = user.email
-      ? await this.collaboratorRepository.findOne({
-          where: {
-            documentId,
-            accountId: IsNull(),
-            email: ILike(user.email),
-          },
-        })
-      : null;
-    if (!invitedCollaborator) {
-      throw new ForbiddenException('No tienes acceso a este documento');
-    }
-
     return document;
   }
 

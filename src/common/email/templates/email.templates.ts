@@ -1,11 +1,150 @@
+const FIRMALO_LOGO_URL = 'https://firmalo.com.mx/brand/firmalo-logo.svg';
+const PRIVACY_NOTICE_URL = 'https://firmalo.com.mx/privacidad';
+
+const colors = {
+  primary: '#2e4677',
+  link: '#155dfc',
+  background: '#f3f4f6',
+  border: '#e5e7eb',
+  text: '#364153',
+  muted: '#6b7280',
+  white: '#ffffff',
+  // Los avisos de cancelación y rechazo conservan sus colores de alerta: no deben leerse como un
+  // correo más de la marca.
+  danger: '#C62828',
+  dangerSoft: '#fff5f5',
+  warning: '#E65100',
+  warningSoft: '#fff8f0',
+} as const;
+
+type Tone = 'primary' | 'danger' | 'warning';
+
+const toneColor: Record<Tone, string> = {
+  primary: colors.primary,
+  danger: colors.danger,
+  warning: colors.warning,
+};
+
+const paragraph = (content: string): string =>
+  `<p style="margin: 0 0 16px; color: ${colors.text}; font-size: 15px; line-height: 24px;">${content}</p>`;
+
+const note = (content: string): string =>
+  `<p style="margin: 0 0 12px; color: ${colors.muted}; font-size: 12px; line-height: 18px;">${content}</p>`;
+
+const link = (href: string, label: string = href): string =>
+  `<a href="${href}" style="color: ${colors.link}; text-decoration: underline; word-break: break-all;">${label}</a>`;
+
+const primaryButton = (href: string, label: string): string => `
+<a href="${href}" style="display: inline-block; background-color: ${colors.primary}; color: ${colors.white}; text-decoration: none; font-weight: bold; font-size: 15px; padding: 14px 24px; border-radius: 6px;">${label}</a>`;
+
+const buttons = (...items: string[]): string => `
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 28px 0;">
+  <tr>
+    ${items.map((item) => `<td style="padding: 0 12px 8px 0;">${item}</td>`).join('\n    ')}
+  </tr>
+</table>`;
+
+const linkFallback = (href: string): string => `
+<p style="margin: 0 0 16px; color: ${colors.muted}; font-size: 13px; line-height: 20px;">
+  O copia este enlace y pégalo en tu navegador:<br>${link(href)}
+</p>`;
+
+const codeBox = (code: string): string => `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0;">
+  <tr>
+    <td align="center" style="background-color: ${colors.background}; border: 1px solid ${colors.border}; border-radius: 8px; padding: 20px;">
+      <span style="font-family: 'Courier New', Courier, monospace; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: ${colors.primary};">${code}</span>
+    </td>
+  </tr>
+</table>`;
+
+const calloutBox = (
+  content: string,
+  tone: Exclude<Tone, 'primary'>,
+): string => {
+  const [border, background] =
+    tone === 'danger'
+      ? [colors.danger, colors.dangerSoft]
+      : [colors.warning, colors.warningSoft];
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0;">
+  <tr>
+    <td style="background-color: ${background}; border-left: 4px solid ${border}; padding: 16px; color: ${colors.text}; font-size: 15px; line-height: 22px;">${content}</td>
+  </tr>
+</table>`;
+};
+
+const legalNotice = (content: string): string => `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0 0;">
+  <tr>
+    <td style="border-top: 1px solid ${colors.border}; padding-top: 16px; color: ${colors.muted}; font-size: 11px; line-height: 17px; text-align: justify;">${content}</td>
+  </tr>
+</table>`;
+
+/**
+ * Estructura común de todos los correos: logo de Firmalo, franja con el color del aviso, título,
+ * cuerpo y pie con el aviso de privacidad. Está hecha con tablas y estilos en línea porque es lo
+ * único que respetan de forma consistente los clientes de correo.
+ */
+const emailLayout = ({
+  title,
+  body,
+  tone = 'primary',
+}: {
+  title: string;
+  body: string;
+  tone?: Tone;
+}): string => `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: ${colors.background}; font-family: Arial, Helvetica, sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: ${colors.background};">
+    <tr>
+      <td align="center" style="padding: 32px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; background-color: ${colors.white}; border: 1px solid ${colors.border}; border-radius: 8px; overflow: hidden;">
+          <tr>
+            <td style="height: 4px; line-height: 4px; font-size: 0; background-color: ${toneColor[tone]};">&nbsp;</td>
+          </tr>
+          <tr>
+            <td align="left" style="padding: 28px 40px 20px; border-bottom: 1px solid ${colors.border};">
+              <img src="${FIRMALO_LOGO_URL}" alt="Firmalo" width="140" style="display: block; width: 140px; max-width: 140px; height: auto; border: 0; outline: none; text-decoration: none;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 40px 36px;">
+              <h1 style="margin: 0 0 20px; color: ${toneColor[tone]}; font-size: 22px; line-height: 30px; font-weight: bold;">${title}</h1>
+              ${body}
+            </td>
+          </tr>
+        </table>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px;">
+          <tr>
+            <td align="center" style="padding: 20px 16px 0; color: ${colors.muted}; font-size: 12px; line-height: 18px;">
+              Consulta nuestro ${link(PRIVACY_NOTICE_URL, 'Aviso de Privacidad')} para conocer cómo tratamos tus datos personales.<br>
+              © Firmalo · ${link('https://firmalo.com.mx', 'firmalo.com.mx')}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+
 /**
  * Correo de solicitud de firma: avisa al firmante en turno que un documento espera su firma.
  *
  * Lleva una sola acción, "Firmar documento", que abre el flujo de firma de ESE documento. Tuvo un
  * segundo botón, "Ver todo a firmar", hacia el listado; se retiró porque competía con la acción
- * que el correo pide y el listado queda a un clic desde la pantalla de firma. El botón único usa
- * la misma tabla de una celda que `documentInvitationTemplate`, que es la forma en que los
- * clientes de correo respetan el ancho y el relleno del enlace.
+ * que el correo pide y el listado queda a un clic desde la pantalla de firma. El botón único se arma
+ * igual que el de `documentInvitationTemplate` (`buttons(primaryButton(…))`, una tabla de una
+ * celda), que es la forma en que los clientes de correo respetan el ancho y el relleno del enlace.
  *
  * @param signerName - Nombre del firmante, para el saludo.
  * @param creatorEmail - Correo de quien solicita la firma; se muestra como enlace `mailto:`.
@@ -31,149 +170,65 @@ export const documentPendingTemplate = (
   creatorEmail: string,
   documentName: string,
   documentUrl: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #333333; margin-top: 0;">Firma de documentos</h2>
-
-    <p style="color: #555555;">Hola <strong>${signerName}</strong>:</p>
-
-    <p style="color: #555555;">
-      <a href="mailto:${creatorEmail}" style="color: #2E7D32;">${creatorEmail}</a>
-      ha solicitado que firmes el documento llamado <strong>${documentName}</strong>.
-    </p>
-
-    <table role="presentation" style="margin: 32px 0;">
-      <tr>
-        <td>
-          <a href="${documentUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
-            Firmar documento
-          </a>
-        </td>
-      </tr>
-    </table>
-
-    <p style="color: #555555; font-size: 13px;">
-      O copia este enlace y pégalo en tu navegador:
-      <a href="${documentUrl}" style="color: #2E7D32;">${documentUrl}</a>
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, por favor contáctanos.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Firma de documentos',
+    body: `
+      ${paragraph(`Hola <strong>${signerName}</strong>:`)}
+      ${paragraph(`${link(`mailto:${creatorEmail}`, creatorEmail)} ha solicitado que firmes el documento llamado <strong>${documentName}</strong>.`)}
+      ${buttons(primaryButton(documentUrl, 'Firmar documento'))}
+      ${linkFallback(documentUrl)}
+      ${note('Si no esperabas este mensaje, por favor contáctanos.')}
+    `,
+  });
 
 export const documentSignedTemplate = (
   participantName: string,
   documentName: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #2E7D32; margin-top: 0;">Documento firmado exitosamente</h2>
-
-    <p style="color: #555555;">Hola <strong>${participantName}</strong>,</p>
-
-    <p style="color: #555555;">
-      El documento <strong>${documentName}</strong> ha sido firmado por todos los participantes.
-      Adjuntamos el comprobante en formato PDF.
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Este correo es tu comprobante de que el proceso de firma se completó correctamente.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Documento firmado exitosamente',
+    body: `
+      ${paragraph(`Hola <strong>${participantName}</strong>:`)}
+      ${paragraph(`El documento <strong>${documentName}</strong> ha sido firmado por todos los participantes. Adjuntamos el comprobante en formato PDF.`)}
+      ${note('Este correo es tu comprobante de que el proceso de firma se completó correctamente.')}
+    `,
+  });
 
 /** Ver documentSignedTemplate: mismo evento, pero dirigido a quien creó el documento y con la lista de firmantes (que un participante ya conoce, pero el creador quiere ver de un vistazo). */
 export const documentCompletedForCreatorTemplate = (
   creatorName: string,
   documentName: string,
   signerNames: string[],
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #2E7D32; margin-top: 0;">Documento firmado exitosamente</h2>
-
-    <p style="color: #555555;">Hola <strong>${creatorName}</strong>,</p>
-
-    <p style="color: #555555;">
-      El documento <strong>${documentName}</strong> que enviaste a firmar ha sido firmado por
-      todos los participantes. Adjuntamos el comprobante en formato PDF.
-    </p>
-
-    <p style="color: #555555; margin-bottom: 8px;">Firmantes:</p>
-    <ul style="color: #333333; padding-left: 20px; margin-top: 0;">
-      ${signerNames.map((name) => `<li>${name}</li>`).join('\n      ')}
-    </ul>
-
-    <p style="color: #999999; font-size: 12px;">
-      Este correo es tu comprobante de que el proceso de firma se completó correctamente.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Documento firmado exitosamente',
+    body: `
+      ${paragraph(`Hola <strong>${creatorName}</strong>:`)}
+      ${paragraph(`El documento <strong>${documentName}</strong> que enviaste a firmar ha sido firmado por todos los participantes. Adjuntamos el comprobante en formato PDF.`)}
+      <p style="margin: 0 0 8px; color: ${colors.text}; font-size: 15px; font-weight: bold;">Firmantes:</p>
+      <ul style="margin: 0 0 20px; padding-left: 20px; color: ${colors.text}; font-size: 15px; line-height: 24px;">
+        ${signerNames.map((name) => `<li>${name}</li>`).join('\n        ')}
+      </ul>
+      ${note('Este correo es tu comprobante de que el proceso de firma se completó correctamente.')}
+    `,
+  });
 
 export const documentRejectedTemplate = (
   creatorName: string,
   rejecterName: string,
   documentName: string,
   reason: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #E65100; margin-top: 0;">Documento rechazado</h2>
-
-    <p style="color: #555555;">Hola <strong>${creatorName}</strong>,</p>
-
-    <p style="color: #555555;">
-      <strong>${rejecterName}</strong> rechazó el documento <strong>${documentName}</strong> que enviaste a firmar.
-    </p>
-
-    <div style="background-color: #fff8f0; border-left: 4px solid #E65100; padding: 16px; margin: 24px 0;">
-      <p style="margin: 0; color: #333333;">${reason}</p>
-    </div>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Documento rechazado',
+    tone: 'warning',
+    body: `
+      ${paragraph(`Hola <strong>${creatorName}</strong>:`)}
+      ${paragraph(`<strong>${rejecterName}</strong> rechazó el documento <strong>${documentName}</strong> que enviaste a firmar.`)}
+      ${calloutBox(reason, 'warning')}
+    `,
+  });
 
 /**
  * Versión para el testigo del aviso de rechazo: el de `documentRejectedTemplate` le habla a quien
@@ -184,250 +239,108 @@ export const documentRejectedToWitnessTemplate = (
   rejecterName: string,
   documentName: string,
   reason: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #E65100; margin-top: 0;">Documento rechazado</h2>
-
-    <p style="color: #555555;">Hola <strong>${witnessName}</strong>,</p>
-
-    <p style="color: #555555;">
-      <strong>${rejecterName}</strong> rechazó el documento <strong>${documentName}</strong>, del que eres testigo. El proceso de firma se detuvo y no es necesario que hagas nada.
-    </p>
-
-    <div style="background-color: #fff8f0; border-left: 4px solid #E65100; padding: 16px; margin: 24px 0;">
-      <p style="margin: 0; color: #333333;">${reason}</p>
-    </div>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Documento rechazado',
+    tone: 'warning',
+    body: `
+      ${paragraph(`Hola <strong>${witnessName}</strong>:`)}
+      ${paragraph(`<strong>${rejecterName}</strong> rechazó el documento <strong>${documentName}</strong>, del que eres testigo. El proceso de firma se detuvo y no es necesario que hagas nada.`)}
+      ${calloutBox(reason, 'warning')}
+    `,
+  });
 
 export const documentCancelledTemplate = (
   participantName: string,
   documentName: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #C62828; margin-top: 0;">Documento cancelado</h2>
-
-    <p style="color: #555555;">Hola <strong>${participantName}</strong>,</p>
-
-    <p style="color: #555555;">
-      El documento <strong>${documentName}</strong> fue cancelado. Ya no es necesario realizar ninguna acción sobre él.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Documento cancelado',
+    tone: 'danger',
+    body: `
+      ${paragraph(`Hola <strong>${participantName}</strong>:`)}
+      ${paragraph(`El documento <strong>${documentName}</strong> fue cancelado. Ya no es necesario realizar ninguna acción sobre él.`)}
+    `,
+  });
 
 export const organizationInvitationTemplate = (
   organizationName: string,
   joinUrl: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+): string =>
+  emailLayout({
+    title: 'Te invitaron a una organización',
+    body: `
+      ${paragraph(`Has sido invitado a unirte a <strong>${organizationName}</strong> en Firmalo.`)}
+      ${buttons(primaryButton(joinUrl, `Unirme a ${organizationName}`))}
+      ${linkFallback(joinUrl)}
+      ${note('Si no esperabas este mensaje, puedes ignorarlo.')}
+    `,
+  });
 
-    <h2 style="color: #2E7D32; margin-top: 0;">Te invitaron a una organización</h2>
-
-    <p style="color: #555555;">
-      Has sido invitado a unirte a <strong>${organizationName}</strong> en Firmalo.
-    </p>
-
-    <table role="presentation" style="margin: 32px 0;">
-      <tr>
-        <td>
-          <a href="${joinUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
-            Unirme a ${organizationName}
-          </a>
-        </td>
-      </tr>
-    </table>
-
-    <p style="color: #555555; font-size: 13px;">
-      O copia este enlace y pégalo en tu navegador:
-      <a href="${joinUrl}" style="color: #2E7D32;">${joinUrl}</a>
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, puedes ignorarlo.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
-
+/**
+ * Código OTP con el que el firmante se autentica al firmar. Lleva el aviso legal porque es el paso
+ * que liga el correo del firmante —como medio atribuible— con su firma y su intención de firmar.
+ */
 export const verificationCodeTemplate = (
   documentName: string,
   code: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+): string =>
+  emailLayout({
+    title: 'Código de verificación',
+    body: `
+      ${paragraph(`Tu código de verificación para firmar <strong>${documentName}</strong> es:`)}
+      ${codeBox(code)}
+      ${paragraph('Este código vence en 15 minutos.')}
+      ${note('Si no esperabas este mensaje, por favor contáctanos.')}
+      ${legalNotice(`
+        Recibes este correo porque en Firmalo se te indicó como firmante del documento mencionado
+        en este mensaje. Por ello, tu dirección de correo electrónico se utiliza como mecanismo de
+        autenticación y como medio atribuible para identificarte. Al ingresar este código de
+        verificación en Firmalo, confirmas tu identidad y manifiestas tu voluntad de firmar
+        electrónicamente dicho documento. Te recomendamos no compartir este correo, sus enlaces ni
+        el código de verificación con ninguna otra persona. Si no reconoces al remitente, el
+        contenido del documento o el proceso de firma, te sugerimos no firmar el documento.
+      `)}
+    `,
+  });
 
-    <h2 style="color: #333333; margin-top: 0;">Código de verificación</h2>
+export const passwordResetOtpTemplate = (code: string): string =>
+  emailLayout({
+    title: 'Recupera tu contraseña',
+    body: `
+      ${paragraph('Recibimos una solicitud para restablecer tu contraseña. Usa el siguiente código para continuar:')}
+      ${codeBox(code)}
+      ${paragraph('Este código vence en 15 minutos.')}
+      ${note('Si no solicitaste este cambio, ignora este correo — tu contraseña seguirá siendo la misma.')}
+    `,
+  });
 
-    <p style="color: #555555;">
-      Tu código de verificación para firmar <strong>${documentName}</strong> es:
-    </p>
-
-    <div style="background-color: #f4f4f4; border-radius: 6px; padding: 20px; margin: 24px 0; text-align: center;">
-      <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #2E7D32;">${code}</span>
-    </div>
-
-    <p style="color: #555555; font-size: 13px;">
-      Este código vence en 15 minutos.
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, por favor contáctanos.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
-
-export const passwordResetOtpTemplate = (code: string): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #333333; margin-top: 0;">Recupera tu contraseña</h2>
-
-    <p style="color: #555555;">
-      Recibimos una solicitud para restablecer tu contraseña. Usa el siguiente código para continuar:
-    </p>
-
-    <div style="background-color: #f4f4f4; border-radius: 6px; padding: 20px; margin: 24px 0; text-align: center;">
-      <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #2E7D32;">${code}</span>
-    </div>
-
-    <p style="color: #555555; font-size: 13px;">
-      Este código vence en 15 minutos.
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no solicitaste este cambio, ignora este correo — tu contraseña seguirá siendo la misma.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
-
-export const registrationOtpTemplate = (code: string): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #333333; margin-top: 0;">Verifica tu correo</h2>
-
-    <p style="color: #555555;">
-      Gracias por registrarte. Usa el siguiente código para verificar tu correo y activar tu cuenta:
-    </p>
-
-    <div style="background-color: #f4f4f4; border-radius: 6px; padding: 20px; margin: 24px 0; text-align: center;">
-      <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #2E7D32;">${code}</span>
-    </div>
-
-    <p style="color: #555555; font-size: 13px;">
-      Este código vence en 15 minutos.
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, por favor contáctanos.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+export const registrationOtpTemplate = (code: string): string =>
+  emailLayout({
+    title: 'Verifica tu correo',
+    body: `
+      ${paragraph('Gracias por registrarte. Usa el siguiente código para verificar tu correo y activar tu cuenta:')}
+      ${codeBox(code)}
+      ${paragraph('Este código vence en 15 minutos.')}
+      ${note('Si no esperabas este mensaje, por favor contáctanos.')}
+    `,
+  });
 
 export const documentInvitationTemplate = (
   signerName: string,
   documentName: string,
   accessUrl: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #333333; margin-top: 0;">Te invitaron a firmar un documento</h2>
-
-    <p style="color: #555555;">Hola <strong>${signerName}</strong>:</p>
-
-    <p style="color: #555555;">
-      Te invitaron a firmar el documento <strong>${documentName}</strong> con Firma Digital
-      Simple. Para continuar, inicia sesión o crea tu cuenta en Firmalo con este mismo correo.
-    </p>
-
-    <table role="presentation" style="margin: 32px 0;">
-      <tr>
-        <td>
-          <a href="${accessUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
-            Acceder para firmar
-          </a>
-        </td>
-      </tr>
-    </table>
-
-    <p style="color: #555555; font-size: 13px;">
-      O copia este enlace y pégalo en tu navegador:
-      <a href="${accessUrl}" style="color: #2E7D32;">${accessUrl}</a>
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, puedes ignorarlo.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Te invitaron a firmar un documento',
+    body: `
+      ${paragraph(`Hola <strong>${signerName}</strong>:`)}
+      ${paragraph(`Te invitaron a firmar el documento <strong>${documentName}</strong> con Firma Digital Simple. Para continuar, inicia sesión o crea tu cuenta en Firmalo con este mismo correo.`)}
+      ${buttons(primaryButton(accessUrl, 'Acceder para firmar'))}
+      ${linkFallback(accessUrl)}
+      ${note('Si no esperabas este mensaje, puedes ignorarlo.')}
+    `,
+  });
 
 /** Sin lenguaje de firma a propósito: un testigo sólo puede consultar el documento. */
 export const documentWitnessAddedTemplate = (
@@ -435,48 +348,17 @@ export const documentWitnessAddedTemplate = (
   documentName: string,
   creatorName: string,
   accessUrl: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #333333; margin-top: 0;">Te agregaron como testigo de un documento</h2>
-
-    <p style="color: #555555;">Hola <strong>${witnessName}</strong>:</p>
-
-    <p style="color: #555555;">
-      <strong>${creatorName}</strong> te agregó como testigo del documento
-      <strong>${documentName}</strong>. Podrás dar seguimiento a su estado desde Firmalo.
-    </p>
-
-    <table role="presentation" style="margin: 32px 0;">
-      <tr>
-        <td>
-          <a href="${accessUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
-            Ver documento
-          </a>
-        </td>
-      </tr>
-    </table>
-
-    <p style="color: #555555; font-size: 13px;">
-      O copia este enlace y pégalo en tu navegador:
-      <a href="${accessUrl}" style="color: #2E7D32;">${accessUrl}</a>
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, puedes ignorarlo.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Te agregaron como testigo de un documento',
+    body: `
+      ${paragraph(`Hola <strong>${witnessName}</strong>:`)}
+      ${paragraph(`<strong>${creatorName}</strong> te agregó como testigo del documento <strong>${documentName}</strong>. Podrás dar seguimiento a su estado desde Firmalo.`)}
+      ${buttons(primaryButton(accessUrl, 'Ver documento'))}
+      ${linkFallback(accessUrl)}
+      ${note('Si no esperabas este mensaje, puedes ignorarlo.')}
+    `,
+  });
 
 /**
  * Aviso al aprobador asignado de que un documento espera su decisión.
@@ -506,83 +388,32 @@ export const documentApprovalRequestedTemplate = (
   documentName: string,
   creatorName: string,
   accessUrl: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #333333; margin-top: 0;">Tienes un documento pendiente de aprobación</h2>
-
-    <p style="color: #555555;">Hola <strong>${reviewerName}</strong>:</p>
-
-    <p style="color: #555555;">
-      <strong>${creatorName}</strong> te asignó como aprobador del documento
-      <strong>${documentName}</strong>. El documento no se enviará a firma hasta que lo apruebes;
-      también puedes rechazarlo indicando el motivo.
-    </p>
-
-    <table role="presentation" style="margin: 32px 0;">
-      <tr>
-        <td>
-          <a href="${accessUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
-            Revisar documento
-          </a>
-        </td>
-      </tr>
-    </table>
-
-    <p style="color: #555555; font-size: 13px;">
-      O copia este enlace y pégalo en tu navegador:
-      <a href="${accessUrl}" style="color: #2E7D32;">${accessUrl}</a>
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, puedes ignorarlo.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Tienes un documento pendiente de aprobación',
+    body: `
+      ${paragraph(`Hola <strong>${reviewerName}</strong>:`)}
+      ${paragraph(`<strong>${creatorName}</strong> te asignó como aprobador del documento <strong>${documentName}</strong>. El documento no se enviará a firma hasta que lo apruebes; también puedes rechazarlo indicando el motivo.`)}
+      ${buttons(primaryButton(accessUrl, 'Revisar documento'))}
+      ${linkFallback(accessUrl)}
+      ${note('Si no esperabas este mensaje, puedes ignorarlo.')}
+    `,
+  });
 
 export const documentCancellationPendingTemplate = (
   documentName: string,
   signerName: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
-
-    <h2 style="color: #C62828;">Solicitud de cancelación de documento</h2>
-
-    <p style="color: #555555;">Hola <strong>${signerName}</strong>,</p>
-
-    <p style="color: #555555;">
-      Se ha solicitado la cancelación del siguiente documento que contiene tu firma:
-    </p>
-
-    <div style="background-color: #fff5f5; border-left: 4px solid #C62828; padding: 16px; margin: 24px 0;">
-      <p style="margin: 0; color: #333333;"><strong>${documentName}</strong></p>
-    </div>
-
-    <p style="color: #999999; font-size: 12px;">
-      Si no esperabas este mensaje, por favor contáctanos de inmediato.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+): string =>
+  emailLayout({
+    title: 'Solicitud de cancelación de documento',
+    tone: 'danger',
+    body: `
+      ${paragraph(`Hola <strong>${signerName}</strong>:`)}
+      ${paragraph('Se ha solicitado la cancelación del siguiente documento que contiene tu firma:')}
+      ${calloutBox(`<strong>${documentName}</strong>`, 'danger')}
+      ${note('Si no esperabas este mensaje, por favor contáctanos de inmediato.')}
+    `,
+  });
 
 /**
  * Aviso a propietarios y administradores de que alguien se incorporó a su organización.
@@ -598,58 +429,25 @@ export const organizationMemberJoinedTemplate = (
   organizationName: string,
   roleName: string,
   membersUrl: string,
-): string => `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 40px;">
+): string => {
+  const row = (label: string, value: string): string => `
+        <tr>
+          <td style="width: 35%; padding: 10px 12px; border-bottom: 1px solid ${colors.border}; background-color: ${colors.background}; color: ${colors.muted}; font-size: 13px;">${label}</td>
+          <td style="padding: 10px 12px; border-bottom: 1px solid ${colors.border}; color: ${colors.text}; font-size: 13px;">${value}</td>
+        </tr>`;
 
-    <h2 style="color: #2E7D32; margin-top: 0;">Nuevo miembro en ${organizationName}</h2>
-
-    <p style="color: #555555;">
-      Hola ${recipientName}, <strong>${memberFullName}</strong> se unió a
-      <strong>${organizationName}</strong> en Firmalo.
-    </p>
-
-    <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 24px 0;">
-      <tr>
-        <td style="color: #999999; font-size: 13px; padding: 6px 0;">Nombre</td>
-        <td style="color: #555555; font-size: 13px; padding: 6px 0;">${memberFullName}</td>
-      </tr>
-      <tr>
-        <td style="color: #999999; font-size: 13px; padding: 6px 0;">Correo</td>
-        <td style="color: #555555; font-size: 13px; padding: 6px 0;">${memberEmail}</td>
-      </tr>
-      <tr>
-        <td style="color: #999999; font-size: 13px; padding: 6px 0;">Rol asignado</td>
-        <td style="color: #555555; font-size: 13px; padding: 6px 0;">${roleName}</td>
-      </tr>
-    </table>
-
-    <table role="presentation" style="margin: 32px 0;">
-      <tr>
-        <td>
-          <a href="${membersUrl}" style="display: inline-block; background-color: #2E7D32; color: #ffffff; text-decoration: none; font-weight: bold; padding: 14px 24px; border-radius: 6px;">
-            Ver miembros de la organización
-          </a>
-        </td>
-      </tr>
-    </table>
-
-    <p style="color: #555555; font-size: 13px;">
-      O copia este enlace y pégalo en tu navegador:
-      <a href="${membersUrl}" style="color: #2E7D32;">${membersUrl}</a>
-    </p>
-
-    <p style="color: #999999; font-size: 12px;">
-      Recibes este aviso porque administras ${organizationName}.
-    </p>
-
-  </div>
-</body>
-</html>
-`;
+  return emailLayout({
+    title: `Nuevo miembro en ${organizationName}`,
+    body: `
+      ${paragraph(`Hola ${recipientName}, <strong>${memberFullName}</strong> se unió a <strong>${organizationName}</strong> en Firmalo.`)}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; border-top: 1px solid ${colors.border}; margin: 24px 0;">
+        ${row('Nombre', memberFullName)}
+        ${row('Correo', memberEmail)}
+        ${row('Rol asignado', roleName)}
+      </table>
+      ${buttons(primaryButton(membersUrl, 'Ver miembros de la organización'))}
+      ${linkFallback(membersUrl)}
+      ${note(`Recibes este aviso porque administras ${organizationName}.`)}
+    `,
+  });
+};
