@@ -45,9 +45,9 @@ export interface ArchivedDocumentData {
  * manera de recordárselo. Los estados terminales por la vía negativa (rechazado, cancelado,
  * expirado) quedan fuera de esta historia a propósito.
  *
- * Esta historia archiva y nada más: no hay endpoint de desarchivado ni pantalla que liste lo
- * archivado. La fecha se guarda igualmente —y no un booleano— porque es la que ordenará esa lista
- * cuando exista, y la que explica qué pasó cuando alguien no encuentra un documento.
+ * Lo archivado se lista con el filtro "Archivados" (`GET /document?archived=true`) y se recupera
+ * con `DELETE /document/:id/archive` (`RestoreArchivedDocumentUseCase`). Se guarda una fecha y no
+ * un booleano porque es la que explica qué pasó cuando alguien no encuentra un documento.
  */
 @Injectable()
 export class ArchiveCompletedDocumentUseCase {

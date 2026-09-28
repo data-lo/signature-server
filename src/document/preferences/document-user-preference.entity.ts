@@ -35,9 +35,10 @@ import { DocumentEntity } from '../entities/document.entity';
  * un documento —para "tenerla ya"— llenaría la tabla de filas vacías, una por cada documento que
  * alguien sólo miró.
  *
- * Hoy la escribe `ArchiveCompletedDocumentUseCase` (archivar un documento firmado) y la lee el
- * listado de documentos, que excluye del resultado los que el usuario en sesión archivó. No hay
- * todavía desarchivado ni pantalla que liste lo archivado.
+ * Hoy la escriben `ArchiveCompletedDocumentUseCase` (archivar un documento firmado) y
+ * `RestoreArchivedDocumentUseCase` (recuperarlo: vuelve `archived_at` a `NULL`), y la lee el
+ * listado de documentos, que excluye los que el usuario en sesión archivó o, con el filtro
+ * "Archivados", muestra sólo esos.
  */
 @Entity('document_user_preferences')
 /**

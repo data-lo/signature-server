@@ -46,6 +46,7 @@ import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
 import { GetDocumentApproversUseCase } from './applications/get-document-approvers.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
 import { WitnessNotificationService } from './services/witness-notification.service';
 import { NotificationEntity } from './entities/notification.entity';
@@ -92,6 +93,7 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
     CreateDocumentSignatureFlowUseCase,
     GetDocumentApproversUseCase,
     ArchiveCompletedDocumentUseCase,
+    RestoreArchivedDocumentUseCase,
     /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
     DocumentReviewerService,
     DocumentApprovalService,
