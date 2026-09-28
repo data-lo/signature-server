@@ -47,16 +47,7 @@ export class GetOrganizationUseCase {
     return {
       success: true,
       message: 'Organización obtenida correctamente',
-      data: {
-        id: organization.id,
-        name: organization.name,
-        displayName: organization.displayName,
-        taxId: organization.taxId,
-        phoneNumber: organization.phoneNumber,
-        address: organization.address,
-        domainAllowed: organization.domainAllowed,
-        isActive: organization.isActive,
-      },
+      data: this.accountService.toOrganizationProfile(organization),
     };
   }
 }
