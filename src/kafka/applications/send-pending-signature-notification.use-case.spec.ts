@@ -140,7 +140,6 @@ describe('NotificationEventsConsumer', () => {
       expect.stringContaining(
         '/access-document?docId=doc-1&collabId=collaborator-1',
       ),
-      expect.stringContaining('/dashboard/documents'),
     );
   });
 

@@ -7,8 +7,7 @@ import { frontendBaseUrl } from 'src/common/utils/frontend-url.util';
  *
  * Apunta ya bajo `/dashboard` y no a `/organizations/:id/members`: quien abre el enlace desde un
  * correo llega sin sesión, y la ruta corta pasa por el middleware del frontend, que redirige a
- * `/login` perdiendo por el camino a qué organización se quería entrar. Mismo criterio que
- * `buildAllDocumentsUrl`.
+ * `/login` perdiendo por el camino a qué organización se quería entrar.
  *
  * @param organizationId - Organización cuya lista de miembros se quiere abrir.
  * @returns La URL absoluta de la sección de miembros.

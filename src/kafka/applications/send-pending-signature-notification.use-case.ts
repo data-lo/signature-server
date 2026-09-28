@@ -20,10 +20,7 @@ import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from 'src/document/utils/collaborator-display.util';
-import {
-  buildAllDocumentsUrl,
-  buildDocumentAccessUrl,
-} from 'src/document/utils/document-access-url.util';
+import { buildDocumentAccessUrl } from 'src/document/utils/document-access-url.util';
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 
 import { NotificationEventPayload } from '../notification-events.topics';
@@ -296,7 +293,6 @@ export class SendPendingSignatureNotificationUseCase {
       creator.email,
       document.fileName,
       buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
-      buildAllDocumentsUrl(),
     );
 
     this.logger.log(

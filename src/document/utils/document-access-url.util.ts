@@ -29,11 +29,6 @@ export function buildDocumentAccessUrl(
   return `${frontendBaseUrl()}/access-document?${query.toString()}`;
 }
 
-/** Enlace al listado de documentos, ya bajo `/dashboard` para evitar el redirect 308 heredado. */
-export function buildAllDocumentsUrl(): string {
-  return `${frontendBaseUrl()}/dashboard/documents`;
-}
-
 /**
  * Enlace a la vista pública del documento firmado (sin sesión). Es lo que se codifica en el QR de
  * la hoja de información de firmas: quien reciba el PDF impreso o reenviado puede escanearlo y

@@ -37,9 +37,6 @@ const link = (href: string, label: string = href): string =>
 const primaryButton = (href: string, label: string): string => `
 <a href="${href}" style="display: inline-block; background-color: ${colors.primary}; color: ${colors.white}; text-decoration: none; font-weight: bold; font-size: 15px; padding: 14px 24px; border-radius: 6px;">${label}</a>`;
 
-const secondaryButton = (href: string, label: string): string => `
-<a href="${href}" style="display: inline-block; background-color: ${colors.white}; color: ${colors.primary}; text-decoration: none; font-weight: bold; font-size: 15px; padding: 13px 23px; border-radius: 6px; border: 1px solid ${colors.primary};">${label}</a>`;
-
 const buttons = (...items: string[]): string => `
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 28px 0;">
   <tr>
@@ -140,19 +137,46 @@ const emailLayout = ({
 </html>
 `;
 
+/**
+ * Correo de solicitud de firma: avisa al firmante en turno que un documento espera su firma.
+ *
+ * Lleva una sola acción, "Firmar documento", que abre el flujo de firma de ESE documento. Tuvo un
+ * segundo botón, "Ver todo a firmar", hacia el listado; se retiró porque competía con la acción
+ * que el correo pide y el listado queda a un clic desde la pantalla de firma. El botón único se arma
+ * igual que el de `documentInvitationTemplate` (`buttons(primaryButton(…))`, una tabla de una
+ * celda), que es la forma en que los clientes de correo respetan el ancho y el relleno del enlace.
+ *
+ * @param signerName - Nombre del firmante, para el saludo.
+ * @param creatorEmail - Correo de quien solicita la firma; se muestra como enlace `mailto:`.
+ * @param documentName - Nombre del documento a firmar.
+ * @param documentUrl - Entrada al flujo de firma (`/access-document?docId=…&collabId=…&email=…`,
+ *   ver `buildDocumentAccessUrl`). Es el destino del botón y del enlace de texto.
+ * @returns El HTML completo del correo.
+ *
+ * @throws Nada: sólo interpola texto.
+ *
+ * @example
+ * ```ts
+ * const html = documentPendingTemplate(
+ *   'Ana López',
+ *   'creador@correo.com',
+ *   'contrato.pdf',
+ *   buildDocumentAccessUrl('doc-1', 'collab-1', 'ana@correo.com'),
+ * );
+ * ```
+ */
 export const documentPendingTemplate = (
   signerName: string,
   creatorEmail: string,
   documentName: string,
   documentUrl: string,
-  allDocumentsUrl: string,
 ): string =>
   emailLayout({
     title: 'Firma de documentos',
     body: `
       ${paragraph(`Hola <strong>${signerName}</strong>:`)}
       ${paragraph(`${link(`mailto:${creatorEmail}`, creatorEmail)} ha solicitado que firmes el documento llamado <strong>${documentName}</strong>.`)}
-      ${buttons(primaryButton(documentUrl, 'Ver este documento'), secondaryButton(allDocumentsUrl, 'Ver todo a firmar'))}
+      ${buttons(primaryButton(documentUrl, 'Firmar documento'))}
       ${linkFallback(documentUrl)}
       ${note('Si no esperabas este mensaje, por favor contáctanos.')}
     `,
