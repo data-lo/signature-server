@@ -1,12 +1,19 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 
+import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { DocumentUserPreferenceEntity } from '../preferences/document-user-preference.entity';
 import { DocumentService } from '../document.service';
+import { DocumentReadAccessService } from '../services/document-read-access.service';
 
 /** Lo que el endpoint devuelve al archivar: el documento y desde cuándo quedó archivado. */
 export interface ArchivedDocumentData {
@@ -23,12 +30,20 @@ export interface ArchivedDocumentData {
  * preferencia del par documento-usuario (ver `DocumentUserPreferenceEntity`). Un contrato que su
  * creador archiva sigue apareciendo, intacto, en la bandeja de cada uno de sus firmantes.
  *
+ * **Se archiva lo que se puede ver.** La autorización es la misma que la del detalle y la del
+ * listado: `DOCUMENT + READ`, confrontado con ESTE documento por `DocumentReadAccessService`. Con
+ * `DOCUMENT.READ_ORGANIZATION` alcanza cualquier documento de la organización, lo haya creado
+ * quien lo haya creado; con `DOCUMENT.READ_OWN`, sólo los propios o aquéllos donde se participa.
+ * Antes se exigía ser creador o participante (`DocumentService.assertUserHasAccess`) sin mirar
+ * los permisos, así que un administrador veía en su listado un documento ajeno ya firmado, le
+ * ofrecían "Archivar" y recibía 403. Como archivar sólo esconde el documento de la bandeja de
+ * quien lo pide, no hace falta un permiso más fuerte que el que ya le deja verlo ahí.
+ *
  * **Sólo se archiva lo que ya terminó.** El estado final del dominio es `SIGNED` —firmado por
  * todos— y es el único desde el que tiene sentido: esconder un documento que todavía espera una
  * firma dejaría a su firmante sin la lista donde iba a encontrarlo, y el flujo no tiene otra
  * manera de recordárselo. Los estados terminales por la vía negativa (rechazado, cancelado,
- * expirado) quedan fuera de esta historia a propósito: no viven en la pantalla de Completados,
- * que es la única que ofrece la acción.
+ * expirado) quedan fuera de esta historia a propósito.
  *
  * Esta historia archiva y nada más: no hay endpoint de desarchivado ni pantalla que liste lo
  * archivado. La fecha se guarda igualmente —y no un booleano— porque es la que ordenará esa lista
@@ -39,23 +54,65 @@ export class ArchiveCompletedDocumentUseCase {
   constructor(
     @InjectRepository(DocumentUserPreferenceEntity)
     private readonly preferenceRepository: Repository<DocumentUserPreferenceEntity>,
+    @InjectRepository(DocumentEntity)
+    private readonly documentRepository: Repository<DocumentEntity>,
     private readonly documentService: DocumentService,
+    private readonly readAccess: DocumentReadAccessService,
   ) {}
 
-  async execute(
-    documentId: string,
-    authenticatedUserId: string,
-  ): Promise<BaseResponse<ArchivedDocumentData>> {
+  /**
+   * Archiva un documento firmado para el usuario autorizado, sin importar quién lo creó.
+   *
+   * Primero autoriza y después valida el estatus: a quien no puede ver el documento no se le
+   * cuenta en qué estado está.
+   *
+   * @param params.documentId - Documento pedido en la ruta.
+   * @param params.authorization - Contexto que dejó `PermissionsGuard` (usuario, organización
+   *   activa y alcances concedidos para `DOCUMENT + READ`).
+   * @returns El documento archivado y la fecha con la que quedó registrado.
+   *
+   * @throws {NotFoundException} (404) Si el documento no existe.
+   * @throws {ForbiddenException} (403) Si ningún alcance de lectura concedido cubre a este
+   *   documento — ni en la organización activa ni en la del documento.
+   * @throws {BadRequestException} (400) Si el documento no está en estatus `SIGNED`.
+   *
+   * @example
+   * ```ts
+   * await archiveCompletedDocument.execute({ documentId: 'doc-1', authorization });
+   * ```
+   */
+  async execute(params: {
+    documentId: string;
+    authorization: AuthorizationContext;
+  }): Promise<BaseResponse<ArchivedDocumentData>> {
+    const { documentId, authorization } = params;
+
+    const document = await this.documentRepository.findOne({
+      where: { id: documentId },
+      relations: { collaborators: { account: true } },
+    });
+
+    if (!document) {
+      throw new NotFoundException(
+        `El documento con id ${documentId} no se encuentra`,
+      );
+    }
+
     /**
-     * Mismo criterio de acceso que la descarga y el detalle: creador, colaborador vinculado, o
-     * invitado por correo que todavía no vinculó su cuenta. Lanza `NotFoundException` si el
-     * documento no existe y `ForbiddenException` si el usuario no participa en él — sin esto,
-     * cualquiera con un UUID podría sembrar filas en la bandeja de un documento ajeno.
+     * Se resuelve antes de autorizar por lo mismo que en `GetDocumentUseCase`: con sólo
+     * `READ_OWN`, un invitado por correo que todavía no vinculó su cuenta sólo se reconoce
+     * yendo a la base, y esa consulta es del caso de uso, no de la Policy.
      */
-    const document = await this.documentService.assertUserHasAccess(
-      documentId,
-      authenticatedUserId,
+    const participant = await this.documentService.resolveMyCollaborator(
+      document.collaborators,
+      authorization.userId,
     );
+
+    await this.readAccess.assertCanRead({
+      document,
+      authorization,
+      participant: participant ?? null,
+    });
 
     if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
       throw new BadRequestException(
@@ -77,7 +134,7 @@ export class ArchiveCompletedDocumentUseCase {
      * historia — archivar dos veces no falla ni duplica; sólo mueve la fecha.
      */
     await this.preferenceRepository.upsert(
-      { documentId, userId: authenticatedUserId, archivedAt },
+      { documentId, userId: authorization.userId, archivedAt },
       { conflictPaths: ['documentId', 'userId'] },
     );
 
