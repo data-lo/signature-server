@@ -245,7 +245,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, {
         ...dto,
         address: 'Av. Reforma 123, CDMX',
-        rfc: 'ACM010101AAA',
+        taxId: 'ACM010101AAA',
         domainAllowed: 'acme.com',
         phoneNumber: '5512345678',
         indexDocuments: true,
@@ -253,7 +253,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
 
       expect(queryRunner.manager.save.mock.calls[0][0]).toMatchObject({
         address: 'Av. Reforma 123, CDMX',
-        rfc: 'ACM010101AAA',
+        taxId: 'ACM010101AAA',
         domainAllowed: 'acme.com',
         phoneNumber: '5512345678',
         indexDocuments: true,
@@ -268,7 +268,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
 
       expect(queryRunner.manager.save.mock.calls[0][0]).toMatchObject({
         address: null,
-        rfc: null,
+        taxId: null,
         domainAllowed: null,
         phoneNumber: null,
         indexDocuments: false,
@@ -351,6 +351,22 @@ describe('casos de uso de cuentas y organizaciones', () => {
       expect(redisService.set).toHaveBeenCalled();
     });
 
+    /** Editar sólo el identificador fiscal también es un cambio de perfil: se escribe en `tax_id`. */
+    it('escribe taxId en organizations cuando es el unico campo que llega', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount)
+        .mockResolvedValueOnce(adminAccount);
+      accountRepository.find.mockResolvedValue([]);
+
+      await updateAccount.execute('owner-1', 'account-1', {
+        taxId: 'ACM010101AAA',
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        taxId: 'ACM010101AAA',
+      });
+    });
+
     it('no toca Redis si no se actualizo ningun campo de perfil', async () => {
       accountRepository.findOne
         .mockResolvedValueOnce(adminAccount)
@@ -428,7 +444,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       id: 'org-1',
       name: 'Acme Corp S.A. de C.V.',
       displayName: 'Acme',
-      rfc: 'ACM010101AAA',
+      taxId: 'ACM010101AAA',
       phoneNumber: '5512345678',
       address: 'Av. Reforma 123, CDMX',
       domainAllowed: 'acme.com',
@@ -448,7 +464,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
         id: 'org-1',
         name: 'Acme Corp S.A. de C.V.',
         displayName: 'Acme',
-        rfc: 'ACM010101AAA',
+        taxId: 'ACM010101AAA',
         phoneNumber: '5512345678',
         address: 'Av. Reforma 123, CDMX',
         domainAllowed: 'acme.com',
@@ -472,7 +488,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
     it('devuelve en null los campos que la organización todavía no tiene', async () => {
       organizationRepository.findOne.mockResolvedValue({
         ...ORGANIZATION,
-        rfc: null,
+        taxId: null,
         phoneNumber: null,
         address: null,
         domainAllowed: null,
@@ -481,7 +497,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
       const result = await getOrganization.execute('org-1');
 
       expect(result.data).toMatchObject({
-        rfc: null,
+        taxId: null,
         phoneNumber: null,
         address: null,
         domainAllowed: null,
