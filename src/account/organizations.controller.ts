@@ -25,6 +25,7 @@ import { CreateOrganizationUseCase } from './applications/create-organization.us
 import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
 import { AddOrganizationMemberUseCase } from './applications/add-organization-member.use-case';
 import { GetOrganizationUseCase } from './applications/get-organization.use-case';
+import { UpdateOrganizationUseCase } from './applications/update-organization.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
@@ -33,6 +34,7 @@ import { AssignMemberPermissionsUseCase } from 'src/organization-permissions/app
 
 // DTOs
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { UpdateOrganizationDto } from './dto/update-organization.dto';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { AddOrganizationMemberDto } from './dto/add-organization-member.dto';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
@@ -43,6 +45,7 @@ import { ApiCreateOrganization } from './docs/api-create-organization.docs';
 import { ApiInviteOrganizationMember } from './docs/api-invite-organization-member.docs';
 import { ApiAddOrganizationMember } from './docs/api-add-organization-member.docs';
 import { ApiGetOrganization } from './docs/api-get-organization.docs';
+import { ApiUpdateOrganization } from './docs/api-update-organization.docs';
 import { ApiGetOrganizationMemberList } from './docs/api-get-organization-member-list.docs';
 import { ApiUpdateOrganizationMemberRole } from './docs/api-update-organization-member-role.docs';
 import { ApiRemoveOrganizationMember } from './docs/api-remove-organization-member.docs';
@@ -58,6 +61,7 @@ export class OrganizationsController {
     private readonly inviteOrganizationMember: InviteOrganizationMemberUseCase,
     private readonly addOrganizationMember: AddOrganizationMemberUseCase,
     private readonly getOrganization: GetOrganizationUseCase,
+    private readonly updateOrganization: UpdateOrganizationUseCase,
     private readonly getOrganizationMemberList: GetOrganizationMemberListUseCase,
     private readonly updateAccountMember: UpdateAccountMemberUseCase,
     private readonly revokeAccountAccess: RevokeAccountAccessUseCase,
@@ -111,6 +115,21 @@ export class OrganizationsController {
   @RequirePermission(RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.READ)
   findOne(@Param('organizationId') organizationId: string) {
     return this.getOrganization.execute(organizationId);
+  }
+
+  /**
+   * La escritura hermana de `findOne`: misma ruta, mismo perfil en la respuesta. Como allá, la
+   * organización sale de la ruta y `PermissionsGuard` comprueba con ella que quien edita sea
+   * miembro activo con `ORGANIZATION.UPDATE`.
+   */
+  @Patch(':organizationId')
+  @ApiUpdateOrganization()
+  @RequirePermission(RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.UPDATE)
+  update(
+    @Param('organizationId') organizationId: string,
+    @Body() dto: UpdateOrganizationDto,
+  ) {
+    return this.updateOrganization.execute(organizationId, dto);
   }
 
   @Get(':organizationId/members')

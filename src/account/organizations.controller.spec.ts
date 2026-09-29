@@ -5,6 +5,7 @@ import { CreateOrganizationUseCase } from './applications/create-organization.us
 import { InviteOrganizationMemberUseCase } from './applications/invite-organization-member.use-case';
 import { AddOrganizationMemberUseCase } from './applications/add-organization-member.use-case';
 import { GetOrganizationUseCase } from './applications/get-organization.use-case';
+import { UpdateOrganizationUseCase } from './applications/update-organization.use-case';
 import { GetOrganizationMemberListUseCase } from './applications/get-organization-member-list.use-case';
 import { UpdateAccountMemberUseCase } from './applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './applications/revoke-account-access.use-case';
@@ -17,6 +18,7 @@ describe('OrganizationsController', () => {
   let inviteOrganizationMember: { execute: jest.Mock };
   let addOrganizationMember: { execute: jest.Mock };
   let getOrganization: { execute: jest.Mock };
+  let updateOrganization: { execute: jest.Mock };
   let getOrganizationMemberList: { execute: jest.Mock };
   let updateAccountMember: { execute: jest.Mock };
   let revokeAccountAccess: { execute: jest.Mock };
@@ -36,6 +38,7 @@ describe('OrganizationsController', () => {
     inviteOrganizationMember = { execute: jest.fn() };
     addOrganizationMember = { execute: jest.fn() };
     getOrganization = { execute: jest.fn() };
+    updateOrganization = { execute: jest.fn() };
     getOrganizationMemberList = { execute: jest.fn() };
     updateAccountMember = { execute: jest.fn() };
     revokeAccountAccess = { execute: jest.fn() };
@@ -55,6 +58,7 @@ describe('OrganizationsController', () => {
           useValue: addOrganizationMember,
         },
         { provide: GetOrganizationUseCase, useValue: getOrganization },
+        { provide: UpdateOrganizationUseCase, useValue: updateOrganization },
         {
           provide: GetOrganizationMemberListUseCase,
           useValue: getOrganizationMemberList,
@@ -120,6 +124,17 @@ describe('OrganizationsController', () => {
     controller.findOne('org-1');
 
     expect(getOrganization.execute).toHaveBeenCalledWith('org-1');
+  });
+
+  /**
+   * Como `findOne`: la organización sale de la ruta y el permiso `ORGANIZATION.UPDATE` ya lo
+   * comprobó `PermissionsGuard` con ella, así que el caso de uso no recibe al llamador.
+   */
+  it('update delega en UpdateOrganizationUseCase con el organizationId de la ruta y el body', () => {
+    const dto = { displayName: 'Acme', taxId: 'ACM010101AAA' };
+    controller.update('org-1', dto);
+
+    expect(updateOrganization.execute).toHaveBeenCalledWith('org-1', dto);
   });
 
   /**
