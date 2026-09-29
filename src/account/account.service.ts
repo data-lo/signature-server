@@ -11,6 +11,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 // DTOs
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { UpdateOrganizationDto } from './dto/update-organization.dto';
 
 // Entities
 import { AccountEntity } from './entities/account.entity';
@@ -37,6 +38,7 @@ import { toBillingOwner } from 'src/billing/profiles/billing-owner.util';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { RedisService } from 'src/common/redis/redis.service';
 import { AccountData } from './interfaces/response/account-response';
+import { OrganizationProfileData } from './interfaces/response/organization-response';
 
 const ACCOUNTS_CATALOG_KEY_PREFIX = 'accounts:';
 
@@ -200,6 +202,86 @@ export class AccountService {
     }
 
     return organization;
+  }
+
+  /**
+   * Escribe los datos de "Información de la organización" que vinieron en el DTO y devuelve la
+   * organización como quedó.
+   *
+   * Hermano de `updateOrganizationDetails`, que sirve a `PATCH /account/:id` con los nombres
+   * cruzados de `UpdateAccountDto` (`name` = visualización, `organizationName` = razón social).
+   * Éste recibe los nombres de la entidad, los mismos que publica el perfil. Un campo ausente no
+   * se toca; uno en `null` se borra.
+   *
+   * @param organizationId - Organización a editar.
+   * @param dto - Campos a escribir; los ausentes se dejan como estaban.
+   * @returns La organización releída después de escribir.
+   *
+   * @throws {NotFoundException} Si no existe ninguna organización con ese id.
+   *
+   * @example
+   * ```ts
+   * const organization = await accountService.updateOrganizationProfile('org-1', {
+   *   displayName: 'Acme',
+   *   phoneNumber: null,
+   * });
+   * ```
+   */
+  async updateOrganizationProfile(
+    organizationId: string,
+    dto: UpdateOrganizationDto,
+  ): Promise<OrganizationEntity> {
+    await this.findOrganizationByIdOrFail(organizationId);
+
+    const changes: Partial<OrganizationEntity> = {
+      ...(dto.displayName !== undefined && { displayName: dto.displayName }),
+      ...(dto.name !== undefined && { name: dto.name }),
+      ...(dto.taxId !== undefined && { taxId: dto.taxId }),
+      ...(dto.phoneNumber !== undefined && { phoneNumber: dto.phoneNumber }),
+      ...(dto.address !== undefined && { address: dto.address }),
+      ...(dto.domainAllowed !== undefined && {
+        domainAllowed: dto.domainAllowed,
+      }),
+    };
+
+    // `update` con un objeto vacío hace que TypeORM lance "UpdateValuesMissingError".
+    if (Object.keys(changes).length > 0) {
+      await this.organizationRepository.update(organizationId, changes);
+    }
+
+    return this.findOrganizationByIdOrFail(organizationId);
+  }
+
+  /**
+   * Convierte la fila de `organizations` en el perfil que publica la API.
+   *
+   * Lo comparten la lectura y la edición del perfil, para que las dos respuestas sean idénticas y
+   * la pantalla pueda pintar lo que devuelve el guardado sin volver a pedirlo. Deja fuera
+   * `indexDocuments`, que es una preferencia sobre los documentos y no información de la
+   * organización.
+   *
+   * @param organization - La fila de `organizations`.
+   * @returns El perfil, con los opcionales en `null` y no ausentes.
+   *
+   * @example
+   * ```ts
+   * const profile = accountService.toOrganizationProfile(organization);
+   * profile.taxId; // 'ACM010101AAA'
+   * ```
+   */
+  toOrganizationProfile(
+    organization: OrganizationEntity,
+  ): OrganizationProfileData {
+    return {
+      id: organization.id,
+      name: organization.name,
+      displayName: organization.displayName,
+      taxId: organization.taxId,
+      phoneNumber: organization.phoneNumber,
+      address: organization.address,
+      domainAllowed: organization.domainAllowed,
+      isActive: organization.isActive,
+    };
   }
 
   /** Escribe sólo los campos del perfil de organización que vinieron en el DTO. */

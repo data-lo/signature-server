@@ -22,6 +22,7 @@ import { CreateOrganizationUseCase } from './create-organization.use-case';
 import { UpdateAccountUseCase } from './update-account.use-case';
 import { GetAccountUseCase } from './get-account.use-case';
 import { GetOrganizationUseCase } from './get-organization.use-case';
+import { UpdateOrganizationUseCase } from './update-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './invite-organization-member.use-case';
 
 const OWNER_ROLE = { id: 'owner-role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER };
@@ -82,6 +83,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
   let updateAccount: UpdateAccountUseCase;
   let getAccount: GetAccountUseCase;
   let getOrganization: GetOrganizationUseCase;
+  let updateOrganization: UpdateOrganizationUseCase;
   let inviteOrganizationMember: InviteOrganizationMemberUseCase;
 
   beforeEach(async () => {
@@ -129,6 +131,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
         UpdateAccountUseCase,
         GetAccountUseCase,
         GetOrganizationUseCase,
+        UpdateOrganizationUseCase,
         InviteOrganizationMemberUseCase,
         {
           provide: getRepositoryToken(AccountEntity),
@@ -170,6 +173,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
     updateAccount = module.get(UpdateAccountUseCase);
     getAccount = module.get(GetAccountUseCase);
     getOrganization = module.get(GetOrganizationUseCase);
+    updateOrganization = module.get(UpdateOrganizationUseCase);
     inviteOrganizationMember = module.get(InviteOrganizationMemberUseCase);
   });
 
@@ -510,6 +514,123 @@ describe('casos de uso de cuentas y organizaciones', () => {
       await expect(getOrganization.execute('org-fantasma')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  /**
+   * La escritura de "Información de la organización". Responde con el mismo perfil que la
+   * lectura, para que la pantalla pinte lo guardado sin volver a pedirlo.
+   */
+  describe('UpdateOrganizationUseCase', () => {
+    const ORGANIZATION = {
+      id: 'org-1',
+      name: 'Acme Corp S.A. de C.V.',
+      displayName: 'Acme',
+      taxId: 'ACM010101AAA',
+      phoneNumber: '5512345678',
+      address: 'Av. Reforma 123, CDMX',
+      domainAllowed: 'acme.com',
+      isActive: true,
+      indexDocuments: true,
+    };
+
+    const MEMBER = {
+      id: 'account-1',
+      userId: 'user-1',
+      organizationId: 'org-1',
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      isActive: true,
+      organization: ORGANIZATION,
+    };
+
+    it('escribe sólo los campos que vinieron y devuelve el perfil releído', async () => {
+      const updated = { ...ORGANIZATION, phoneNumber: '5587654321' };
+      organizationRepository.findOne
+        .mockResolvedValueOnce(ORGANIZATION)
+        .mockResolvedValueOnce(updated);
+
+      const result = await updateOrganization.execute('org-1', {
+        phoneNumber: '5587654321',
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        phoneNumber: '5587654321',
+      });
+      expect(result.data).toEqual({
+        id: 'org-1',
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+        taxId: 'ACM010101AAA',
+        phoneNumber: '5587654321',
+        address: 'Av. Reforma 123, CDMX',
+        domainAllowed: 'acme.com',
+        isActive: true,
+      });
+    });
+
+    /** `null` es "bórralo", distinto de ausente, que es "no lo toques". */
+    it('borra los opcionales que llegan en null', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      await updateOrganization.execute('org-1', {
+        taxId: null,
+        domainAllowed: null,
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        taxId: null,
+        domainAllowed: null,
+      });
+    });
+
+    /**
+     * Los dos nombres rotulan la organización en el selector de cuentas de cada miembro: sin
+     * refrescar el catálogo cacheado, los demás seguirían viendo el nombre viejo.
+     */
+    it('refresca el catálogo de los miembros cuando cambia un nombre', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        displayName: 'Acme MX',
+      });
+      accountRepository.find.mockResolvedValue([MEMBER]);
+      redisService.get.mockResolvedValue(JSON.stringify([{ id: 'account-1' }]));
+
+      await updateOrganization.execute('org-1', { displayName: 'Acme MX' });
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+        relations: { organization: true },
+      });
+      expect(redisService.set).toHaveBeenCalledTimes(1);
+    });
+
+    it('no toca el catálogo si sólo cambian datos que el selector no muestra', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      await updateOrganization.execute('org-1', {
+        address: 'Insurgentes 456, CDMX',
+      });
+
+      expect(accountRepository.find).not.toHaveBeenCalled();
+      expect(redisService.set).not.toHaveBeenCalled();
+    });
+
+    it('no escribe nada si el body viene vacío', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      const result = await updateOrganization.execute('org-1', {});
+
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+      expect(result.data.displayName).toBe('Acme');
+    });
+
+    it('lanza NotFoundException si la organización no existe', async () => {
+      organizationRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        updateOrganization.execute('org-fantasma', { displayName: 'Acme' }),
+      ).rejects.toThrow(NotFoundException);
+      expect(organizationRepository.update).not.toHaveBeenCalled();
     });
   });
 
