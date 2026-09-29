@@ -435,16 +435,21 @@ export class DocumentController {
    * El inverso de `archive`: misma ruta, `DELETE` porque retira la marca de archivado de quien
    * llama. Mismo permiso y misma Policy que archivar y que el detalle (ver
    * `RestoreArchivedDocumentUseCase`).
+   *
+   * El usuario cuya preferencia se limpia sale del token (`user.sub`) y viaja explícito; el
+   * contexto autorizado sigue haciendo falta porque la Policy decide con sus alcances.
    */
   @Delete(':id/archive')
   @ApiRestoreArchivedDocument()
   @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
   restore(
+    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @CurrentAuthorization() authorization: AuthorizationContext,
   ) {
     return this.restoreArchivedDocument.execute({
       documentId: id,
+      userId: user.sub,
       authorization,
     });
   }

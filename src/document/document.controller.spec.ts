@@ -435,14 +435,18 @@ describe('DocumentController', () => {
    * incremental" en `authorization-permissions.e2e-spec.ts`): un rol sin `DOCUMENT.READ` podría
    * archivar.
    */
-  it('restore delega en RestoreArchivedDocumentUseCase con el contexto autorizado', () => {
+  it('restore delega en RestoreArchivedDocumentUseCase el usuario del token y el contexto autorizado', () => {
     const context = authorization(ACTION_KEY_ENUM.READ);
 
-    controller.restore('doc-1', context);
+    controller.restore(user, 'doc-1', context);
 
     expect(
       useCase(RestoreArchivedDocumentUseCase).execute,
-    ).toHaveBeenCalledWith({ documentId: 'doc-1', authorization: context });
+    ).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      userId: 'user-1',
+      authorization: context,
+    });
   });
 
   /** El mismo permiso que archivar: quien puede esconder un documento puede devolverlo. */

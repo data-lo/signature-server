@@ -47,13 +47,16 @@ export class RestoreArchivedDocumentUseCase {
   ) {}
 
   /**
-   * Saca un documento de los archivados del usuario autorizado.
+   * Saca un documento de los archivados del usuario que llama.
    *
    * Primero autoriza y después escribe: a quien no puede ver el documento no se le confirma que
    * exista una preferencia suya sobre él.
    *
    * @param params.documentId - Documento pedido en la ruta.
-   * @param params.authorization - Contexto que dejó `PermissionsGuard` para `DOCUMENT + READ`.
+   * @param params.userId - Usuario del token (`JwtPayload.sub`): dueño de la preferencia que se
+   *   limpia y participante que se busca entre los colaboradores.
+   * @param params.authorization - Contexto que dejó `PermissionsGuard` para `DOCUMENT + READ`;
+   *   sólo lo usa la Policy para decidir si los alcances concedidos cubren este documento.
    * @returns El documento y `archived: false`.
    *
    * @throws {NotFoundException} (404) Si el documento no existe.
@@ -62,14 +65,19 @@ export class RestoreArchivedDocumentUseCase {
    *
    * @example
    * ```ts
-   * await restoreArchivedDocument.execute({ documentId: 'doc-1', authorization });
+   * await restoreArchivedDocument.execute({
+   *   documentId: 'doc-1',
+   *   userId: user.sub,
+   *   authorization,
+   * });
    * ```
    */
   async execute(params: {
     documentId: string;
+    userId: string;
     authorization: AuthorizationContext;
   }): Promise<BaseResponse<RestoredDocumentData>> {
-    const { documentId, authorization } = params;
+    const { documentId, userId, authorization } = params;
 
     const document = await this.documentRepository.findOne({
       where: { id: documentId },
@@ -86,7 +94,7 @@ export class RestoreArchivedDocumentUseCase {
     // reconoce yendo a la base, y esa consulta es del caso de uso, no de la Policy.
     const participant = await this.documentService.resolveMyCollaborator(
       document.collaborators,
-      authorization.userId,
+      userId,
     );
 
     await this.readAccess.assertCanRead({
@@ -98,7 +106,7 @@ export class RestoreArchivedDocumentUseCase {
     // `update` sobre el par (documento, usuario): sin fila no afecta nada, que es justo el
     // resultado pedido. No hace falta leer antes, ni hay carrera que resolver.
     await this.preferenceRepository.update(
-      { documentId, userId: authorization.userId },
+      { documentId, userId },
       { archivedAt: null },
     );
 

@@ -162,6 +162,7 @@ describe('RestoreArchivedDocumentUseCase', () => {
 
     const response = await useCase.execute({
       documentId: DOCUMENT_ID,
+      userId: CREATOR_ID,
       authorization: authorizationFor(CREATOR_ID, OWN_ONLY),
     });
 
@@ -184,6 +185,7 @@ describe('RestoreArchivedDocumentUseCase', () => {
 
     await useCase.execute({
       documentId: DOCUMENT_ID,
+      userId: SIGNER_ID,
       authorization: authorizationFor(SIGNER_ID, OWN_ONLY),
     });
 
@@ -203,6 +205,7 @@ describe('RestoreArchivedDocumentUseCase', () => {
 
     await useCase.execute({
       documentId: DOCUMENT_ID,
+      userId: ADMIN_ID,
       authorization: authorizationFor(ADMIN_ID, OWN_AND_ORGANIZATION),
     });
 
@@ -219,6 +222,7 @@ describe('RestoreArchivedDocumentUseCase', () => {
     await expect(
       useCase.execute({
         documentId: DOCUMENT_ID,
+        userId: MEMBER_ID,
         authorization: authorizationFor(MEMBER_ID, OWN_ONLY),
       }),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -232,6 +236,7 @@ describe('RestoreArchivedDocumentUseCase', () => {
     await expect(
       useCase.execute({
         documentId: 'doc-inexistente',
+        userId: CREATOR_ID,
         authorization: authorizationFor(CREATOR_ID, OWN_ONLY),
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
@@ -245,12 +250,14 @@ describe('RestoreArchivedDocumentUseCase', () => {
     await expect(
       useCase.execute({
         documentId: DOCUMENT_ID,
+        userId: CREATOR_ID,
         authorization: authorizationFor(CREATOR_ID, OWN_ONLY),
       }),
     ).resolves.toMatchObject({ data: { archived: false } });
     await expect(
       useCase.execute({
         documentId: DOCUMENT_ID,
+        userId: CREATOR_ID,
         authorization: authorizationFor(CREATOR_ID, OWN_ONLY),
       }),
     ).resolves.toMatchObject({ data: { archived: false } });
@@ -269,6 +276,7 @@ describe('RestoreArchivedDocumentUseCase', () => {
     await expect(
       useCase.execute({
         documentId: DOCUMENT_ID,
+        userId: CREATOR_ID,
         authorization: authorizationFor(CREATOR_ID, OWN_ONLY),
       }),
     ).resolves.toMatchObject({ data: { archived: false } });
