@@ -41,7 +41,11 @@ export class CreateOrganizationDto {
   @IsString()
   phoneNumber?: string;
 
-  @ApiPropertyOptional({ default: false })
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Si los documentos de la organización pueden entrar a Búsqueda Inteligente',
+  })
   @IsOptional()
   @IsBoolean()
   indexDocuments?: boolean;

@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import { v4 as uuid4 } from 'uuid';
 
 import { DocumentEntity } from '../entities/document.entity';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { NotificationEntity } from '../entities/notification.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
@@ -308,8 +309,15 @@ export class CreateDocumentSignatureFlowUseCase {
      * de la entidad cuando la propiedad viene `undefined`, pero un `false` explícito y un campo
      * ausente se distinguen mal a simple vista más abajo. Resolverlo en una línea con nombre deja
      * la regla —"quien no opina, indexa"— escrita donde se lee, y no deducida del esquema.
+     *
+     * Por encima de la casilla del documento manda el interruptor de la organización
+     * (`organizations.index_documents`): apagado, nada entra a Búsqueda Inteligente aunque el
+     * cliente mande `isIndexable: true`. La pantalla ya esconde la opción en ese caso; esto cubre
+     * a un cliente que no la esconda o que tenga el catálogo de cuentas desactualizado.
      */
-    const isIndexable = dto.documentData.isIndexable ?? true;
+    const isIndexable =
+      (await this.organizationAllowsIndexing(activeAccount.organizationId)) &&
+      (dto.documentData.isIndexable ?? true);
 
     // Defensa en profundidad (ver signature-collision.util.ts): valida ANTES de tocar la base de
     // datos, agrupando por página todas las posiciones de todos los firmantes del payload.
@@ -712,5 +720,38 @@ export class CreateDocumentSignatureFlowUseCase {
         verificationCodesCount,
       },
     };
+  }
+
+  /**
+   * Dice si la organización de la cuenta activa permite que sus documentos entren a Búsqueda
+   * Inteligente.
+   *
+   * Una cuenta PERSONAL no tiene organización y no está sujeta a este interruptor: decide sólo la
+   * casilla de cada documento. Tampoco se bloquea si la organización no aparece —la membresía se
+   * acaba de validar contra ella, así que no debería pasar—: el error correcto para ese caso no es
+   * un documento sin indexar.
+   *
+   * @param organizationId - Organización de la cuenta activa, o `null` en cuentas PERSONAL.
+   * @returns `false` sólo si la organización existe y tiene `indexDocuments` apagado.
+   *
+   * @example
+   * ```ts
+   * await this.organizationAllowsIndexing('org-1'); // false si apagó Búsqueda Inteligente
+   * await this.organizationAllowsIndexing(null); // true
+   * ```
+   */
+  private async organizationAllowsIndexing(
+    organizationId: string | null,
+  ): Promise<boolean> {
+    if (!organizationId) return true;
+
+    const organization = await this.dataSource
+      .getRepository(OrganizationEntity)
+      .findOne({
+        where: { id: organizationId },
+        select: { id: true, indexDocuments: true },
+      });
+
+    return organization?.indexDocuments ?? true;
   }
 }

@@ -133,13 +133,19 @@ describe('UpdateOrganizationDto', () => {
     },
   );
 
-  it('descarta campos que no son del perfil, como indexDocuments', async () => {
-    const { dto, properties } = await parse({
-      displayName: 'Acme',
-      indexDocuments: true,
-    });
+  it.each([true, false])('acepta indexDocuments en %s', async (value) => {
+    const { dto, properties } = await parse({ indexDocuments: value });
 
     expect(properties).toEqual([]);
-    expect(dto).not.toHaveProperty('indexDocuments');
+    expect(dto.indexDocuments).toBe(value);
   });
+
+  /** A diferencia de los opcionales de texto, el interruptor no se "borra": es sí o no. */
+  it.each([null, 'false', 1])(
+    'rechaza indexDocuments que no es booleano (%p)',
+    async (value) => {
+      const { properties } = await parse({ indexDocuments: value });
+      expect(properties).toEqual(['indexDocuments']);
+    },
+  );
 });

@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -77,7 +78,8 @@ function emptyToNull(value: unknown): unknown {
  *
  * Todo es opcional: sólo se escribe lo que viene. La razón social y el nombre de visualización no
  * se pueden borrar —una organización sin nombre no tiene cómo presentarse—; RFC, teléfono,
- * domicilio y dominio sí, mandándolos en `null` o vacíos.
+ * domicilio y dominio sí, mandándolos en `null` o vacíos. `indexDocuments` es el interruptor de
+ * Búsqueda Inteligente y la pantalla lo manda solo, desde su propia tarjeta.
  */
 export class UpdateOrganizationDto {
   @ApiPropertyOptional({
@@ -174,4 +176,15 @@ export class UpdateOrganizationDto {
     message: 'El dominio no tiene un formato válido (por ejemplo, empresa.com)',
   })
   domainAllowed?: string | null;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'Si los documentos de la organización pueden entrar a Búsqueda Inteligente. No admite null',
+  })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsBoolean({
+    message: 'La indexación de documentos debe ser verdadero o falso',
+  })
+  indexDocuments?: boolean;
 }

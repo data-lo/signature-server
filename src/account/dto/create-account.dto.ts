@@ -62,7 +62,11 @@ export class CreateAccountDto {
   @IsString()
   phoneNumber?: string;
 
-  @ApiPropertyOptional({ default: false })
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Sólo en organizaciones: si sus documentos pueden entrar a Búsqueda Inteligente',
+  })
   @IsOptional()
   @IsBoolean()
   indexDocuments?: boolean;

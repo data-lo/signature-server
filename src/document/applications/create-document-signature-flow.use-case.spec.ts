@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { CreateDocumentSignatureFlowUseCase } from './create-document-signature-flow.use-case';
 import { DocumentEntity } from '../entities/document.entity';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { NotificationEntity } from '../entities/notification.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
@@ -50,7 +51,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let collaboratorRepo: ReturnType<typeof createMockRepository>;
   let notificationRepo: ReturnType<typeof createMockRepository>;
   let simpleSignatureRepo: ReturnType<typeof createMockRepository>;
-  let dataSource: { transaction: jest.Mock };
+  let dataSource: { transaction: jest.Mock; getRepository: jest.Mock };
+  let organizationRepo: { findOne: jest.Mock };
   let minioService: Record<string, jest.Mock>;
   let hashService: Record<string, jest.Mock>;
   let documentSigningService: Record<string, jest.Mock>;
@@ -155,10 +157,21 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       }),
     };
 
+    /** Por omisión la organización deja indexar, como toda organización nueva. */
+    organizationRepo = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'org-1', indexDocuments: true }),
+    };
+
     dataSource = {
       transaction: jest.fn(async (cb: (manager: unknown) => Promise<unknown>) =>
         cb(manager),
       ),
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === OrganizationEntity) return organizationRepo;
+        throw new Error('repositorio no mockeado');
+      }),
     };
 
     minioService = {
@@ -1181,6 +1194,84 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(
         eventosIndexable,
       );
+    });
+
+    describe('interruptor de la organización (indexDocuments)', () => {
+      beforeEach(() => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'org-1',
+        });
+      });
+
+      /**
+       * Apagado en la organización manda sobre la casilla: un cliente que no esconda la opción, o
+       * con el catálogo de cuentas viejo, no puede colar un documento a la búsqueda.
+       */
+      it('con la indexación apagada, el documento no es indexable aunque el payload lo pida', async () => {
+        organizationRepo.findOne.mockResolvedValue({
+          id: 'org-1',
+          indexDocuments: false,
+        });
+
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...baseDto,
+            documentData: { ...baseDto.documentData, isIndexable: true },
+          },
+          file,
+          '127.0.0.1',
+        );
+
+        expect(organizationRepo.findOne).toHaveBeenCalledWith({
+          where: { id: 'org-1' },
+          select: { id: true, indexDocuments: true },
+        });
+        expect(documentRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ isIndexable: false }),
+        );
+      });
+
+      it('con la indexación encendida, decide la casilla del documento', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...baseDto,
+            documentData: { ...baseDto.documentData, isIndexable: false },
+          },
+          file,
+          '127.0.0.1',
+        );
+
+        expect(documentRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ isIndexable: false }),
+        );
+      });
+
+      it('una cuenta PERSONAL no consulta ninguna organización', async () => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+          organizationId: null,
+        });
+
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(organizationRepo.findOne).not.toHaveBeenCalled();
+        expect(documentRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ isIndexable: true }),
+        );
+      });
     });
   });
 });

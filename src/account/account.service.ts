@@ -132,6 +132,9 @@ export class AccountService {
    * nombre legal y el de visualización es el corto con el que la organización aparece en el
    * selector de cuentas. Antes sólo se escribía el primero y el segundo se perdía, y por eso el
    * selector rotulaba cada organización con su nombre legal completo.
+   *
+   * `indexDocuments` nace encendido si el alta no opina: todo documento es encontrable salvo que
+   * la organización decida lo contrario.
    */
   async saveOrganization(profile: {
     name: string;
@@ -150,7 +153,7 @@ export class AccountService {
         taxId: profile.taxId ?? null,
         domainAllowed: profile.domainAllowed ?? null,
         phoneNumber: profile.phoneNumber ?? null,
-        indexDocuments: profile.indexDocuments ?? false,
+        indexDocuments: profile.indexDocuments ?? true,
       }),
     );
   }
@@ -211,7 +214,8 @@ export class AccountService {
    * Hermano de `updateOrganizationDetails`, que sirve a `PATCH /account/:id` con los nombres
    * cruzados de `UpdateAccountDto` (`name` = visualización, `organizationName` = razón social).
    * Éste recibe los nombres de la entidad, los mismos que publica el perfil. Un campo ausente no
-   * se toca; uno en `null` se borra.
+   * se toca; uno en `null` se borra. `indexDocuments` viaja solo cuando la pantalla cambia el
+   * interruptor de Búsqueda Inteligente, y entonces es lo único que se escribe.
    *
    * @param organizationId - Organización a editar.
    * @param dto - Campos a escribir; los ausentes se dejan como estaban.
@@ -222,9 +226,9 @@ export class AccountService {
    * @example
    * ```ts
    * const organization = await accountService.updateOrganizationProfile('org-1', {
-   *   displayName: 'Acme',
-   *   phoneNumber: null,
+   *   indexDocuments: false,
    * });
+   * organization.indexDocuments; // false
    * ```
    */
   async updateOrganizationProfile(
@@ -242,6 +246,9 @@ export class AccountService {
       ...(dto.domainAllowed !== undefined && {
         domainAllowed: dto.domainAllowed,
       }),
+      ...(dto.indexDocuments !== undefined && {
+        indexDocuments: dto.indexDocuments,
+      }),
     };
 
     // `update` con un objeto vacío hace que TypeORM lance "UpdateValuesMissingError".
@@ -256,9 +263,9 @@ export class AccountService {
    * Convierte la fila de `organizations` en el perfil que publica la API.
    *
    * Lo comparten la lectura y la edición del perfil, para que las dos respuestas sean idénticas y
-   * la pantalla pueda pintar lo que devuelve el guardado sin volver a pedirlo. Deja fuera
-   * `indexDocuments`, que es una preferencia sobre los documentos y no información de la
-   * organización.
+   * la pantalla pueda pintar lo que devuelve el guardado sin volver a pedirlo. Incluye
+   * `indexDocuments`, con el que la pantalla pinta el interruptor de Búsqueda Inteligente y decide
+   * si ofrecerla al crear un documento.
    *
    * @param organization - La fila de `organizations`.
    * @returns El perfil, con los opcionales en `null` y no ausentes.
@@ -267,6 +274,7 @@ export class AccountService {
    * ```ts
    * const profile = accountService.toOrganizationProfile(organization);
    * profile.taxId; // 'ACM010101AAA'
+   * profile.indexDocuments; // true
    * ```
    */
   toOrganizationProfile(
@@ -281,6 +289,7 @@ export class AccountService {
       address: organization.address,
       domainAllowed: organization.domainAllowed,
       isActive: organization.isActive,
+      indexDocuments: organization.indexDocuments,
     };
   }
 
@@ -532,7 +541,7 @@ export class AccountService {
           taxId: dto.taxId ?? null,
           domainAllowed: dto.domainAllowed ?? null,
           phoneNumber: dto.phoneNumber ?? null,
-          indexDocuments: dto.indexDocuments ?? false,
+          indexDocuments: dto.indexDocuments ?? true,
         }),
       );
 
@@ -755,6 +764,7 @@ export class AccountService {
         ? {
             name: account.organization.name,
             displayName: account.organization.displayName,
+            indexDocuments: account.organization.indexDocuments,
           }
         : null,
       roleId: account.roleId,

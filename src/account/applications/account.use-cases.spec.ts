@@ -252,7 +252,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
         taxId: 'ACM010101AAA',
         domainAllowed: 'acme.com',
         phoneNumber: '5512345678',
-        indexDocuments: true,
+        indexDocuments: false,
       });
 
       expect(queryRunner.manager.save.mock.calls[0][0]).toMatchObject({
@@ -260,11 +260,12 @@ describe('casos de uso de cuentas y organizaciones', () => {
         taxId: 'ACM010101AAA',
         domainAllowed: 'acme.com',
         phoneNumber: '5512345678',
-        indexDocuments: true,
+        indexDocuments: false,
       });
     });
 
-    it('defaultea los campos opcionales de perfil de organizacion a null/false cuando se omiten', async () => {
+    /** Búsqueda Inteligente nace encendida: quien no opina, indexa. */
+    it('defaultea los opcionales a null e indexDocuments a true cuando se omiten', async () => {
       mockFullAccountLookup();
       redisService.get.mockResolvedValue(null);
 
@@ -275,7 +276,7 @@ describe('casos de uso de cuentas y organizaciones', () => {
         taxId: null,
         domainAllowed: null,
         phoneNumber: null,
-        indexDocuments: false,
+        indexDocuments: true,
       });
     });
 
@@ -473,19 +474,23 @@ describe('casos de uso de cuentas y organizaciones', () => {
         address: 'Av. Reforma 123, CDMX',
         domainAllowed: 'acme.com',
         isActive: true,
+        indexDocuments: true,
       });
     });
 
     /**
-     * `indexDocuments` no es información de la organización sino una preferencia sobre sus
-     * documentos: se queda fuera del contrato aunque la entidad lo tenga al lado.
+     * La tarjeta "Búsqueda inteligente" pinta el interruptor con este valor: tiene que llegar
+     * también cuando está apagado, no sólo cuando es verdadero.
      */
-    it('no publica indexDocuments', async () => {
-      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+    it('publica indexDocuments apagado tal como está guardado', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        indexDocuments: false,
+      });
 
       const result = await getOrganization.execute('org-1');
 
-      expect(result.data).not.toHaveProperty('indexDocuments');
+      expect(result.data.indexDocuments).toBe(false);
     });
 
     /** Los opcionales viajan en `null`, no se omiten: la pantalla distingue vacío de ausente. */
@@ -565,6 +570,48 @@ describe('casos de uso de cuentas y organizaciones', () => {
         address: 'Av. Reforma 123, CDMX',
         domainAllowed: 'acme.com',
         isActive: true,
+        indexDocuments: true,
+      });
+    });
+
+    /** El interruptor de Búsqueda Inteligente viaja solo y es lo único que se escribe. */
+    it('escribe sólo indexDocuments cuando es lo único que viene', async () => {
+      organizationRepository.findOne
+        .mockResolvedValueOnce(ORGANIZATION)
+        .mockResolvedValueOnce({ ...ORGANIZATION, indexDocuments: false });
+      accountRepository.find.mockResolvedValue([]);
+
+      const result = await updateOrganization.execute('org-1', {
+        indexDocuments: false,
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        indexDocuments: false,
+      });
+      expect(result.data.indexDocuments).toBe(false);
+    });
+
+    /**
+     * La pantalla de crear documento lee el interruptor del catálogo de cuentas, no del perfil
+     * (un miembro sin `ORGANIZATION.READ` no puede pedirlo): sin refrescarlo, los demás seguirían
+     * viendo la opción de Búsqueda Inteligente.
+     */
+    it('refresca el catálogo de los miembros cuando cambia indexDocuments', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        indexDocuments: false,
+      });
+      accountRepository.find.mockResolvedValue([
+        { ...MEMBER, organization: { ...ORGANIZATION, indexDocuments: false } },
+      ]);
+      redisService.get.mockResolvedValue(JSON.stringify([{ id: 'account-1' }]));
+
+      await updateOrganization.execute('org-1', { indexDocuments: false });
+
+      expect(redisService.set).toHaveBeenCalledTimes(1);
+      const [, cached] = redisService.set.mock.calls[0];
+      expect(JSON.parse(cached)[0].organizationDetail).toMatchObject({
+        indexDocuments: false,
       });
     });
 
