@@ -23,6 +23,7 @@ import { ConfirmDocumentCancellationUseCase } from './applications/confirm-docum
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
@@ -55,6 +56,7 @@ const USE_CASES = [
   UpdateDocumentUseCase,
   DeleteDocumentUseCase,
   ArchiveCompletedDocumentUseCase,
+  RestoreArchivedDocumentUseCase,
 ];
 
 describe('DocumentController', () => {
@@ -433,6 +435,35 @@ describe('DocumentController', () => {
    * incremental" en `authorization-permissions.e2e-spec.ts`): un rol sin `DOCUMENT.READ` podría
    * archivar.
    */
+  it('restore delega en RestoreArchivedDocumentUseCase el usuario del token y el contexto autorizado', () => {
+    const context = authorization(ACTION_KEY_ENUM.READ);
+
+    controller.restore(user, 'doc-1', context);
+
+    expect(
+      useCase(RestoreArchivedDocumentUseCase).execute,
+    ).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      userId: 'user-1',
+      authorization: context,
+    });
+  });
+
+  /** El mismo permiso que archivar: quien puede esconder un documento puede devolverlo. */
+  it('restore exige DOCUMENT + READ, igual que archive', () => {
+    expect(
+      Reflect.getMetadata(
+        REQUIRED_PERMISSION_METADATA,
+        DocumentController.prototype.restore,
+      ),
+    ).toEqual(
+      Reflect.getMetadata(
+        REQUIRED_PERMISSION_METADATA,
+        DocumentController.prototype.archive,
+      ),
+    );
+  });
+
   it('archive exige DOCUMENT + READ, el mismo permiso que el detalle', () => {
     const required: unknown = Reflect.getMetadata(
       REQUIRED_PERMISSION_METADATA,

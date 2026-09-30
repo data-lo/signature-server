@@ -104,6 +104,46 @@ describe('GetDocumentsUseCase — filtro "Archivados"', () => {
     return { qb, response };
   }
 
+  /**
+   * Regresión: "Por firmar" usaba `:userId` sin ligarlo —lo ligaba otra condición que dejó de
+   * hacerlo— y TypeORM lo dejaba literal en el SQL: el listado respondía 500 con
+   * `syntax error at or near ":"`, con o sin el filtro de archivados. Cada `:param` de una
+   * condición tiene que venir ligado en esa misma llamada.
+   */
+  it.each([false, true])(
+    'la vista "Por firmar" liga todos sus parámetros (archived=%s)',
+    async (archived) => {
+      const { qb, response } = list({
+        view: DOCUMENT_VIEW_ENUM.REQUIRES_MY_SIGNATURE,
+        archived,
+      });
+      await response;
+
+      const call = qb.andWhere.mock.calls.find(
+        ([condition]: [unknown]) =>
+          typeof condition === 'string' &&
+          condition.includes('FROM collaborators c'),
+      );
+      expect(call).toBeDefined();
+
+      const [condition, parameters] = call as [string, Record<string, unknown>];
+      const placeholders = [
+        ...condition.matchAll(/:(?:\.\.\.)?([A-Za-z_]\w*)/g),
+      ].map(([, name]) => name);
+
+      expect(placeholders).toEqual(
+        expect.arrayContaining(['userId', 'callerEmail']),
+      );
+      for (const name of placeholders) {
+        expect(parameters).toHaveProperty(name);
+      }
+      expect(parameters).toMatchObject({
+        userId: 'user-1',
+        callerEmail: 'ana@correo.com',
+      });
+    },
+  );
+
   /** Sin el filtro, todo sigue como antes: lo archivado queda fuera. */
   it('sin el filtro excluye lo que el usuario archivó', async () => {
     const { qb, response } = list();

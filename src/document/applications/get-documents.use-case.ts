@@ -189,7 +189,7 @@ export class GetDocumentsUseCase {
       accountId,
       canReadOrganization: scopes.includes(PERMISSION_SCOPE_ENUM.ORGANIZATION),
     });
-    this.applyView(qb, view, userId);
+    this.applyView(qb, view, userId, callerEmail);
     this.applyArchiveFilter(qb, userId, archived);
 
     if (id) {
@@ -391,11 +391,25 @@ export class GetDocumentsUseCase {
     );
   }
 
-  /** Recorta lo visible al subconjunto que pide `view`. Nunca amplía: sólo agrega condiciones. */
+  /**
+   * Recorta lo visible al subconjunto que pide `view`. Nunca amplía: sólo agrega condiciones.
+   *
+   * @param qb - Consulta del listado, ya acotada por visibilidad.
+   * @param view - Subconjunto pedido.
+   * @param userId - Usuario en sesión.
+   * @param callerEmail - Su correo en minúsculas, para reconocerlo como invitado por correo.
+   * @returns Nada; agrega condiciones a `qb`.
+   *
+   * @example
+   * ```ts
+   * this.applyView(qb, DOCUMENT_VIEW_ENUM.REQUIRES_MY_SIGNATURE, 'user-1', 'ana@correo.com');
+   * ```
+   */
   private applyView(
     qb: SelectQueryBuilder<DocumentEntity>,
     view: DOCUMENT_VIEW_ENUM,
     userId: string,
+    callerEmail: string | null,
   ): void {
     switch (view) {
       case DOCUMENT_VIEW_ENUM.REQUIRES_MY_SIGNATURE:
@@ -416,7 +430,16 @@ export class GetDocumentsUseCase {
               AND c.colaborator_type IN (:...actingTypes)
               AND c.status = :pendingSigneeStatus
           )`,
+          /**
+           * Liga TODOS sus parámetros, incluidos `userId` y `callerEmail`. Bug corregido: los
+           * tomaba prestados de otras condiciones, y desde que `applyVisibility` pasó a ligar
+           * `ownerUserId` en vez de `userId` nadie ligaba `:userId` en esta vista. TypeORM lo
+           * dejaba literal en el SQL y Postgres respondía `syntax error at or near ":"`: el
+           * listado "Por firmar" —la vista por omisión del endpoint— respondía siempre 500.
+           */
           {
+            userId,
+            callerEmail,
             actingTypes: ACTING_COLLABORATOR_TYPES,
             pendingSigneeStatus: COLLABORATOR_STATUS_ENUM.PENDING,
           },
