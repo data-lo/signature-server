@@ -15,6 +15,14 @@ export class OrganizationDetailData {
       'Nombre de visualización: el corto con el que la organización se presenta en la interfaz. Es el que rotula el selector de cuentas; `name` es el legal y sirve para documentos y trámites. Las organizaciones anteriores a la columna lo tienen copiado de `name`.',
   })
   displayName: string;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Si los documentos de la organización pueden entrar a Búsqueda Inteligente. Viaja en el catálogo porque la pantalla de crear documento lo necesita y un miembro sin ORGANIZATION.READ no puede pedir el perfil. Una entrada cacheada antes de este campo puede llegar sin él.',
+    required: false,
+  })
+  indexDocuments?: boolean;
 }
 
 export class AccountData {

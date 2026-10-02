@@ -14,8 +14,9 @@ import { OrganizationProfileData } from '../interfaces/response/organization-res
  * multi-tenant los resuelve `PermissionsGuard` con el `organizationId` de la ruta: sólo un
  * miembro activo de ESA organización con `ORGANIZATION.UPDATE` llega hasta aquí.
  *
- * Si cambia alguno de los dos nombres se refresca el catálogo cacheado de todos los miembros
- * activos, porque el selector de cuentas de cada uno rotula la organización con ellos. RFC,
+ * Si cambia alguno de los dos nombres o `indexDocuments` se refresca el catálogo cacheado de
+ * todos los miembros activos: el selector de cuentas rotula la organización con los nombres, y la
+ * pantalla de crear documento decide con `indexDocuments` si ofrece Búsqueda Inteligente. RFC,
  * teléfono, domicilio y dominio no aparecen en el catálogo, así que no lo tocan.
  */
 @Injectable()
@@ -53,7 +54,11 @@ export class UpdateOrganizationUseCase {
       dto,
     );
 
-    if (dto.displayName !== undefined || dto.name !== undefined) {
+    if (
+      dto.displayName !== undefined ||
+      dto.name !== undefined ||
+      dto.indexDocuments !== undefined
+    ) {
       await this.accountService.refreshCatalogForOrganizationMembers(
         organizationId,
       );

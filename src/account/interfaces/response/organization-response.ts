@@ -4,10 +4,12 @@ import { BaseResponse } from '../../../interfaces/api-response.dto';
 
 /**
  * El perfil de una organización tal como lo publica `GET /organizations/:organizationId`: los
- * mismos campos que `PATCH /account/:id` sabe escribir, para que lo que se guarda se pueda leer.
+ * mismos campos que `PATCH /organizations/:organizationId` sabe escribir, para que lo que se
+ * guarda se pueda leer.
  *
- * `indexDocuments` no viaja: no es información de la organización sino una preferencia sobre qué
- * hacemos con sus documentos, y la pantalla que consume esto no la muestra.
+ * `indexDocuments` viaja desde que la pantalla tiene un interruptor para él ("Búsqueda
+ * inteligente"): la misma lectura surte esa tarjeta y decide si se ofrece indexar al crear un
+ * documento.
  */
 export class OrganizationProfileData {
   @ApiProperty({
@@ -64,6 +66,13 @@ export class OrganizationProfileData {
     description: 'Si la organización está vigente',
   })
   isActive: boolean;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Si los documentos de la organización pueden entrar a Búsqueda Inteligente',
+  })
+  indexDocuments: boolean;
 }
 
 export class OrganizationProfileResponse extends BaseResponse<OrganizationProfileData> {

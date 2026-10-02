@@ -58,6 +58,18 @@ export class OrganizationEntity {
   @Column({ nullable: true, name: 'phone_number' })
   phoneNumber: string | null;
 
-  @Column({ default: false, name: 'index_documents' })
+  /**
+   * Si los documentos de la organización pueden entrar a Búsqueda Inteligente.
+   *
+   * Es el interruptor general de la organización, por encima de la casilla `isIndexable` de cada
+   * documento: apagado, ningún documento nuevo se ofrece para indexar. Lo edita quien tiene
+   * `ORGANIZATION.UPDATE` desde "Información de la organización".
+   *
+   * Nace encendido desde `IndexDocumentsByDefault1784300000068`: la regla de producto es que todo
+   * sea encontrable salvo que alguien decida lo contrario, la misma que ya seguía `isIndexable`.
+   * Esa migración encendió también las que existían, porque su `false` era el default viejo y no
+   * una decisión de nadie.
+   */
+  @Column({ default: true, name: 'index_documents' })
   indexDocuments: boolean;
 }
