@@ -152,4 +152,103 @@ describe('DiditApiService', () => {
       ).rejects.toBeInstanceOf(DiditUnavailableException);
     });
   });
+
+  describe('firma biométrica (API V3)', () => {
+    it('crea la sesión en /v3/session/ con el retrato de referencia', async () => {
+      mockedAxios.post.mockResolvedValue({
+        data: {
+          session_id: 'ses_bio',
+          url: HOSTED_URL,
+          session_token: 'secreto',
+        },
+      });
+
+      const session = await service.createBiometricSession({
+        workflowId: 'wf-auth',
+        vendorData: 'biometric-signature-attempt:a-1',
+        callbackUrl: CALLBACK,
+        portraitImageBase64: 'BASE64',
+      });
+
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        'https://verification.didit.me/v3/session/',
+        {
+          workflow_id: 'wf-auth',
+          vendor_data: 'biometric-signature-attempt:a-1',
+          callback: CALLBACK,
+          portrait_image: 'BASE64',
+        },
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'x-api-key': 'api-key-de-prueba',
+          }),
+        }),
+      );
+      expect(session.sessionId).toBe('ses_bio');
+      expect(session.raw).not.toHaveProperty('session_token');
+    });
+
+    it('sin retrato no manda portrait_image (KYC de invitado)', async () => {
+      mockedAxios.post.mockResolvedValue({
+        data: { session_id: 'ses_kyc', url: HOSTED_URL },
+      });
+
+      await service.createBiometricSession({
+        workflowId: 'wf-kyc',
+        vendorData: 'biometric-signature-attempt:a-2',
+        callbackUrl: CALLBACK,
+      });
+
+      expect(mockedAxios.post.mock.calls[0][1]).not.toHaveProperty(
+        'portrait_image',
+      );
+    });
+
+    it('no exige DIDIT_WORKFLOW_ID del onboarding', async () => {
+      delete config.DIDIT_WORKFLOW_ID;
+      mockedAxios.post.mockResolvedValue({
+        data: { session_id: 'ses_bio', url: HOSTED_URL },
+      });
+
+      await expect(
+        service.createBiometricSession({
+          workflowId: 'wf-auth',
+          vendorData: 'v',
+          callbackUrl: CALLBACK,
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('lee el veredicto de una sesión en /v3/session/{id}/decision/', async () => {
+      mockedAxios.get.mockResolvedValue({ data: { status: 'Approved' } });
+
+      await expect(service.getSessionDecision('ses 1')).resolves.toEqual({
+        status: 'Approved',
+      });
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        'https://verification.didit.me/v3/session/ses%201/decision/',
+        expect.objectContaining({
+          headers: { 'x-api-key': 'api-key-de-prueba' },
+        }),
+      );
+    });
+
+    it('un veredicto que no es objeto es una respuesta inválida', async () => {
+      mockedAxios.get.mockResolvedValue({ data: 'texto' });
+      mockedAxios.isAxiosError.mockReturnValue(false);
+
+      await expect(service.getSessionDecision('ses_1')).rejects.toBeInstanceOf(
+        DiditResponseException,
+      );
+    });
+
+    it('sin API key no llama a Didit', async () => {
+      delete config.DIDIT_API_KEY;
+
+      await expect(service.getSessionDecision('ses_1')).rejects.toBeInstanceOf(
+        DiditConfigurationException,
+      );
+      expect(mockedAxios.get).not.toHaveBeenCalled();
+    });
+  });
 });

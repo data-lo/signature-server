@@ -53,6 +53,7 @@ import { NotificationEntity } from './entities/notification.entity';
 import { DocumentApprovalService } from './services/document-approval.service';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
+import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -119,6 +120,9 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
       // La lee `WitnessNotificationService` para re-publicar el aviso del testigo tras la
       // aprobación, con la notificación que se creó junto con el documento.
       NotificationEntity,
+      // La lee `SignDocumentUseCase.executeBiometric` para comprobar el intento aprobado. Sólo la
+      // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
+      BiometricSignatureAttemptEntity,
     ]),
     SharedModule,
     UserModule,
@@ -148,6 +152,16 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
      */
     forwardRef(() => BillingModule),
   ],
-  exports: [DocumentService],
+  /**
+   * Lo demás lo consume `BiometricSignatureModule`: la firma biométrica valida al firmante con las
+   * mismas piezas que la firma normal (`DocumentAuthorizationPolicy`, códigos de verificación) y la
+   * registra por el mismo `SignDocumentUseCase`, sin un camino paralelo que pueda divergir.
+   */
+  exports: [
+    DocumentService,
+    SignDocumentUseCase,
+    VerificationCodeService,
+    DocumentAuthorizationPolicy,
+  ],
 })
 export class DocumentModule {}

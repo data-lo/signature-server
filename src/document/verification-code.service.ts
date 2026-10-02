@@ -57,17 +57,35 @@ export class VerificationCodeService {
    * Verifica el código contra el último emitido para (documentId, signerId) sin usar, y lo
    * marca consumido de un solo uso. Lanza BadRequestException con mensajes distintos para
    * "no hay código pendiente", "expiró" y "no coincide", útil para la UI.
+   *
+   * @param documentId - Documento del código.
+   * @param signerId - Colaborador al que se emitió, o `null` para códigos sin firmante.
+   * @param submittedCode - Código que escribió el usuario.
+   * @param event - Si se indica, sólo considera códigos de ese evento. Opcional para no cambiar a
+   *   quienes ya lo llamaban.
+   * @returns Nada; el código queda consumido.
+   *
+   * @throws {BadRequestException} Si no hay código pendiente, expiró o no coincide.
+   *
+   * @example
+   * ```ts
+   * await service.verifyAndConsume('d-1', 'c-1', '123456', VERIFICATION_EVENT_ENUM.GUEST_BIOMETRIC_ACCESS);
+   * ```
    */
   async verifyAndConsume(
     documentId: string,
     signerId: string | null,
     submittedCode: string,
+    event?: VERIFICATION_EVENT_ENUM,
   ): Promise<void> {
     const record = await this.verificationCodeRepository.findOne({
       where: {
         documentId,
         signerId: signerId ?? IsNull(),
         isUsed: false,
+        // Sin evento busca el último código de cualquier tipo, como siempre. Con evento sólo ése:
+        // el acceso de invitado no puede consumir —ni ser consumido por— un código de firma.
+        ...(event ? { event } : {}),
       },
       order: { createdAt: 'DESC' },
     });

@@ -9,6 +9,7 @@ import { SignDocumentUseCase } from '../applications/sign-document.use-case';
 import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
 import { DocumentEntity } from '../entities/document.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
+import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
 import { VerificationCodeEntity } from '../entities/verification-code.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
@@ -247,6 +248,11 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         {
           provide: getRepositoryToken(CollaboratorEntity),
           useValue: collaboratorRepository,
+        },
+        // Este flujo firma con FIEL y simple: nunca consulta intentos biométricos.
+        {
+          provide: getRepositoryToken(BiometricSignatureAttemptEntity),
+          useValue: { findOne: jest.fn() },
         },
         { provide: getRepositoryToken(SealEntity), useValue: sealRepository },
         {

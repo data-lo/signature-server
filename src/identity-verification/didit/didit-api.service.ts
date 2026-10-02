@@ -70,6 +70,132 @@ export class DiditApiService {
   }
 
   /**
+   * Crea una sesión de firma biométrica con la API V3 de Didit.
+   *
+   * Va aparte de `createSession` (V2, onboarding) porque sólo la V3 documenta `portrait_image`:
+   * la cara de referencia contra la que el workflow de Biometric Authentication hace el face
+   * match. Para el KYC de invitados se omite y Didit compara contra la identificación capturada.
+   *
+   * @param params.workflowId Workflow de Didit (Biometric Authentication o KYC).
+   * @param params.vendorData Identificador no sensible que Didit devuelve en el webhook.
+   * @param params.callbackUrl A dónde regresa el firmante. Sólo navegación: no aprueba nada.
+   * @param params.portraitImageBase64 Cara de referencia en base64 (máx. 2 MB), o `undefined`.
+   * @returns La sesión normalizada: id, URL hospedada, workflow y vencimiento.
+   *
+   * @throws {DiditConfigurationException} Si falta la API key o el workflow.
+   * @throws {DiditResponseException} Si Didit responde con error o sin `session_id`/`url`.
+   * @throws {DiditTimeoutException} Si Didit no responde a tiempo.
+   * @throws {DiditUnavailableException} Si no se puede conectar con Didit.
+   *
+   * @example
+   * ```ts
+   * await diditApiService.createBiometricSession({
+   *   workflowId: 'wf-auth', vendorData: 'biometric-signature-attempt:a-1',
+   *   callbackUrl: 'https://app/dashboard/documents/d-1', portraitImageBase64: '/9j/4AAQ…',
+   * });
+   * ```
+   */
+  async createBiometricSession(params: {
+    workflowId: string;
+    vendorData: string;
+    callbackUrl: string;
+    portraitImageBase64?: string;
+  }): Promise<DiditSession> {
+    const { apiUrl, apiKey } = this.resolveApiAccess();
+
+    if (!params.workflowId) {
+      this.logger.error(
+        'Falta el workflow de firma biométrica de Didit: no es posible crear la sesión.',
+      );
+      throw new DiditConfigurationException();
+    }
+
+    try {
+      const response = await axios.post<Record<string, unknown>>(
+        `${apiUrl}/v3/session/`,
+        {
+          workflow_id: params.workflowId,
+          vendor_data: params.vendorData,
+          callback: params.callbackUrl,
+          ...(params.portraitImageBase64
+            ? { portrait_image: params.portraitImageBase64 }
+            : {}),
+        },
+        {
+          headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+          timeout: DIDIT_REQUEST_TIMEOUT_MS,
+        },
+      );
+
+      return this.toDiditSession(response.data, params.workflowId);
+    } catch (error) {
+      throw this.translate(error, params.vendorData);
+    }
+  }
+
+  /**
+   * Obtiene el veredicto actual de una sesión de Didit (API V3), con URLs de media recién firmadas.
+   *
+   * Lo usa la firma biométrica para recuperar el retrato de la identidad aprobada en el onboarding:
+   * las URLs guardadas en `identity_verifications.decision` vencen a las pocas horas, así que hay
+   * que pedirlas de nuevo en el momento de usarlas. El cuerpo NUNCA se registra en logs.
+   *
+   * @param sessionId `session_id` de Didit.
+   * @returns El veredicto crudo de Didit.
+   *
+   * @throws {DiditConfigurationException} Si falta la API key.
+   * @throws {DiditResponseException} Si Didit responde con error o un cuerpo que no es objeto.
+   * @throws {DiditTimeoutException} Si Didit no responde a tiempo.
+   * @throws {DiditUnavailableException} Si no se puede conectar con Didit.
+   *
+   * @example
+   * ```ts
+   * const decision = await diditApiService.getSessionDecision('didit-session-1');
+   * ```
+   */
+  async getSessionDecision(
+    sessionId: string,
+  ): Promise<Record<string, unknown>> {
+    const { apiUrl, apiKey } = this.resolveApiAccess();
+
+    try {
+      const response = await axios.get<unknown>(
+        `${apiUrl}/v3/session/${encodeURIComponent(sessionId)}/decision/`,
+        {
+          headers: { 'x-api-key': apiKey },
+          timeout: DIDIT_REQUEST_TIMEOUT_MS,
+        },
+      );
+
+      const body = response.data;
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new DiditResponseException();
+      }
+      return body as Record<string, unknown>;
+    } catch (error) {
+      throw this.translate(error, `sesión ${sessionId}`);
+    }
+  }
+
+  /** API key y URL base, sin exigir el workflow del onboarding. */
+  private resolveApiAccess(): { apiUrl: string; apiKey: string } {
+    const apiKey = this.configService.get<string>('DIDIT_API_KEY');
+
+    if (!apiKey) {
+      this.logger.error(
+        'Falta DIDIT_API_KEY: no es posible llamar a la API de Didit.',
+      );
+      throw new DiditConfigurationException();
+    }
+
+    const apiUrl = (
+      this.configService.get<string>('DIDIT_API_URL') || DIDIT_DEFAULT_API_URL
+    ).replace(/\/+$/, '');
+
+    return { apiUrl, apiKey };
+  }
+
+  /**
    * La configuración se resuelve al invocar y NO en el constructor: este provider vive en un
    * módulo que carga la aplicación entera, así que lanzar desde el constructor impediría
    * arrancar el servidor completo por una integración que la mayoría de los entornos de

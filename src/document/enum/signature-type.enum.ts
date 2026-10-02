@@ -11,4 +11,11 @@
 export enum SIGNATURE_TYPE_ENUM {
   SIMPLE = 'SIMPLE',
   FIEL = 'FIEL',
+  /**
+   * Firma biométrica: el firmante autoriza con prueba de vida + face match en Didit, y la firma se
+   * registra cuando el webhook trae la aprobación (ver `src/document/biometric/`). Postgres acepta
+   * el valor desde la migración `CreateBiometricSignatureAttempts`; el flujo de creación todavía no
+   * permite elegirlo.
+   */
+  BIOMETRIC = 'BIOMETRIC',
 }
