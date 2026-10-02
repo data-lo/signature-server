@@ -9,11 +9,9 @@ import {
 import { BiometricSignatureSession } from '../interfaces/biometric-signature-session.interface';
 
 /**
- * Lecturas y reglas de `biometric_signature_attempts` que comparten iniciar y consultar una firma
- * biométrica: cuál es el intento abierto de un colaborador, si su URL todavía sirve y cómo se
- * presenta al frontend.
- *
- * No escribe estados ni habla con Didit: eso lo hacen los casos de uso.
+ * Lecturas y reglas de `biometric_signature_attempts` que comparten iniciar, consultar y el
+ * webhook: cuál es el intento abierto de un colaborador, si su URL todavía sirve y cómo se presenta
+ * al frontend. No escribe estados ni habla con Didit.
  */
 @Injectable()
 export class BiometricSignatureAttemptService {
@@ -23,16 +21,15 @@ export class BiometricSignatureAttemptService {
   ) {}
 
   /**
-   * Busca el intento abierto (PENDING, IN_PROGRESS o IN_REVIEW) de un colaborador.
-   *
-   * Hay a lo sumo uno: lo garantiza el índice único parcial de la tabla.
+   * Busca el intento abierto (PENDING o IN_PROGRESS) de un colaborador, sobre cualquier versión del
+   * PDF. Con el índice único parcial hay a lo sumo uno por hash; se toma el más reciente.
    *
    * @param collaboratorId - Colaborador firmante.
-   * @returns El intento abierto, o `null` si no hay ninguno.
+   * @returns El intento abierto más reciente, o `null`.
    *
    * @example
    * ```ts
-   * const active = await attemptService.findActive('col-1');
+   * const active = await attempts.findActive('c-1');
    * ```
    */
   findActive(
@@ -43,6 +40,7 @@ export class BiometricSignatureAttemptService {
         collaboratorId,
         status: In([...ACTIVE_BIOMETRIC_SIGNATURE_ATTEMPT_STATUSES]),
       },
+      order: { createdAt: 'DESC' },
     });
   }
 
@@ -54,7 +52,7 @@ export class BiometricSignatureAttemptService {
    *
    * @example
    * ```ts
-   * const latest = await attemptService.findLatest('col-1');
+   * const latest = await attempts.findLatest('c-1');
    * ```
    */
   findLatest(
@@ -67,14 +65,15 @@ export class BiometricSignatureAttemptService {
   }
 
   /**
-   * Busca un intento por la sesión de Didit que lo identifica.
+   * Busca el intento de una sesión de Didit. Es lo que usa el dispatcher del webhook para decidir
+   * si la entrega es de una firma biométrica o de una verificación de identidad.
    *
-   * @param providerSessionId - `session_id` que trae el webhook.
-   * @returns El intento de esa sesión, o `null` si la sesión no es de una firma biométrica.
+   * @param providerSessionId - `session_id` del webhook.
+   * @returns El intento de esa sesión, o `null` si no es de una firma biométrica.
    *
    * @example
    * ```ts
-   * const attempt = await attemptService.findBySession('didit-session-1');
+   * const attempt = await attempts.findBySession('didit-session-1');
    * ```
    */
   findBySession(
@@ -84,10 +83,8 @@ export class BiometricSignatureAttemptService {
   }
 
   /**
-   * Indica si un intento sigue abierto en el tiempo: no venció según el `expires_at` de Didit.
-   *
-   * Sin vencimiento informado se considera vigente, igual que en la verificación de identidad: la
-   * sesión se cierra por webhook (`Expired`) cuando Didit la da por vencida.
+   * Indica si un intento no ha vencido según el `expires_at` de Didit. Sin vencimiento informado
+   * se considera vigente: Didit cierra la sesión por webhook cuando la da por vencida.
    *
    * @param attempt - Intento a evaluar.
    * @param now - Instante de referencia; por defecto, el actual.
@@ -95,7 +92,7 @@ export class BiometricSignatureAttemptService {
    *
    * @example
    * ```ts
-   * attemptService.isUnexpired(attempt); // true
+   * attempts.isUnexpired(attempt); // true
    * ```
    */
   isUnexpired(
@@ -106,11 +103,8 @@ export class BiometricSignatureAttemptService {
   }
 
   /**
-   * Indica si la sesión de un intento se le puede devolver al firmante para continuar.
-   *
-   * Exige que esté abierto, que tenga URL hospedada, que no haya vencido y que el PDF siga siendo
-   * el mismo que se aceptó al iniciarla. IN_REVIEW cuenta como abierto pero no se reabre: el
-   * firmante ya terminó la prueba y sólo falta el veredicto.
+   * Indica si la sesión de un intento abierto se le puede devolver al firmante para continuar:
+   * mismo PDF, vigente y con URL hospedada.
    *
    * @param attempt - Intento abierto del colaborador.
    * @param currentDocumentHash - `original_hash` vigente del documento.
@@ -118,7 +112,7 @@ export class BiometricSignatureAttemptService {
    *
    * @example
    * ```ts
-   * attemptService.isResumable(active, document.originalHash);
+   * attempts.isResumable(active, document.originalHash);
    * ```
    */
   isResumable(
@@ -129,27 +123,23 @@ export class BiometricSignatureAttemptService {
       ACTIVE_BIOMETRIC_SIGNATURE_ATTEMPT_STATUSES.includes(attempt.status) &&
       attempt.documentHash === currentDocumentHash &&
       this.isUnexpired(attempt) &&
-      (attempt.status === BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.IN_REVIEW ||
-        this.hostedUrl(attempt) !== null)
+      this.hostedUrl(attempt) !== null
     );
   }
 
   /**
-   * Arma la respuesta para el frontend a partir de un intento.
-   *
-   * La URL sólo se entrega mientras el intento esté abierto, no haya pasado a revisión y no haya
-   * vencido.
+   * Arma la respuesta para el frontend. La URL sólo se entrega mientras el intento está abierto y
+   * vigente; el veredicto nunca.
    *
    * @param attempt - Intento a presentar.
    * @param options.reused - Si se devolvió una sesión existente en vez de crear otra.
    * @param options.signatureCompleted - Si el colaborador ya quedó firmado.
-   * @param options.documentCompleted - Si el documento ya quedó firmado por todos; por defecto
-   *   `false`.
+   * @param options.documentCompleted - Si el documento quedó firmado por todos; por defecto `false`.
    * @returns La sesión lista para serializar.
    *
    * @example
    * ```ts
-   * attemptService.toSession(attempt, { reused: false, signatureCompleted: false });
+   * attempts.toSession(attempt, { reused: false, signatureCompleted: false });
    * ```
    */
   toSession(
@@ -161,9 +151,7 @@ export class BiometricSignatureAttemptService {
     },
   ): BiometricSignatureSession {
     const canOpen =
-      (attempt.status === BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.PENDING ||
-        attempt.status ===
-          BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.IN_PROGRESS) &&
+      ACTIVE_BIOMETRIC_SIGNATURE_ATTEMPT_STATUSES.includes(attempt.status) &&
       this.isUnexpired(attempt);
 
     return {
@@ -177,6 +165,32 @@ export class BiometricSignatureAttemptService {
     };
   }
 
+  /**
+   * Indica si un estado es terminal: el intento ya no cambia por sí solo.
+   *
+   * @param status - Estado del intento.
+   * @returns `true` para APPROVED, DECLINED, EXPIRED y FAILED.
+   *
+   * @example
+   * ```ts
+   * attempts.isTerminal(BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.DECLINED); // true
+   * ```
+   */
+  isTerminal(status: BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM): boolean {
+    return !ACTIVE_BIOMETRIC_SIGNATURE_ATTEMPT_STATUSES.includes(status);
+  }
+
+  /**
+   * URL hospedada de Didit guardada en el intento.
+   *
+   * @param attempt - Intento.
+   * @returns La URL, o `null` si no hay.
+   *
+   * @example
+   * ```ts
+   * this.hostedUrl(attempt); // 'https://verify.didit.me/…'
+   * ```
+   */
   private hostedUrl(attempt: BiometricSignatureAttemptEntity): string | null {
     const url = attempt.providerMetadata?.hostedUrl;
     return typeof url === 'string' && url.length > 0 ? url : null;

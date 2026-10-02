@@ -6,62 +6,60 @@ import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { RequirePermission } from 'src/authorization/decorators/require-permission.decorator';
 import { CurrentAuthorization } from 'src/authorization/decorators/current-authorization.decorator';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
+import { ClientIp } from 'src/common/interceptors/request-ip.decorator';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 import { StartBiometricSignatureDto } from './dto/start-biometric-signature.dto';
-import { StartBiometricSignatureUseCase } from './applications/start-biometric-signature.use-case';
+import { StartAccountBiometricSignatureUseCase } from './applications/start-account-biometric-signature.use-case';
 import { GetBiometricSignatureStatusUseCase } from './applications/get-biometric-signature-status.use-case';
 import {
-  ApiGetBiometricSignatureStatus,
-  ApiStartBiometricSignature,
+  ApiGetAccountBiometricSession,
+  ApiStartAccountBiometricSession,
 } from './docs/api-biometric-signature.docs';
 
 /**
- * Firma biométrica de un documento. Mismo permiso que `PATCH /document/:id/sign`
- * (`DOCUMENT + SIGN`): iniciar la biometría es el primer paso de firmar, y consultar su estado
- * sólo tiene sentido para quien puede firmar.
+ * Firma biométrica del firmante CON cuenta. Mismo permiso que `PATCH /document/:id/sign`
+ * (`DOCUMENT + SIGN`): iniciar la biometría es el primer paso de firmar.
  *
- * El resultado NO entra por aquí: lo decide el webhook firmado de Didit (`POST /webhooks/didit`).
+ * El resultado no entra por aquí: lo decide el webhook firmado de Didit (`POST /webhooks/didit`).
  */
-@ApiTags('Document')
+@ApiTags('Biometric signature')
 @ApiBearerAuth('access-token')
-@Controller('document')
-export class DocumentBiometricSignatureController {
+@Controller('documents/:documentId/biometric-signature')
+export class BiometricSignatureController {
   constructor(
-    private readonly startBiometricSignature: StartBiometricSignatureUseCase,
-    private readonly getBiometricSignatureStatus: GetBiometricSignatureStatusUseCase,
+    private readonly startAccountSignature: StartAccountBiometricSignatureUseCase,
+    private readonly getStatus: GetBiometricSignatureStatusUseCase,
   ) {}
 
-  @Post(':id/biometric-signature')
-  @ApiStartBiometricSignature()
+  @Post('session')
+  @ApiStartAccountBiometricSession()
   @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.SIGN)
   start(
     @CurrentUser() user: JwtPayload,
-    @Param('id') id: string,
+    @Param('documentId') documentId: string,
     @Body() dto: StartBiometricSignatureDto,
     @CurrentAuthorization() authorization: AuthorizationContext,
+    @ClientIp() ipAddress: string,
   ) {
-    return this.startBiometricSignature.execute(
-      id,
+    return this.startAccountSignature.execute(
+      documentId,
       user.sub,
-      dto.geolocation,
+      dto,
       authorization,
+      ipAddress ?? null,
     );
   }
 
-  @Get(':id/biometric-signature')
-  @ApiGetBiometricSignatureStatus()
+  @Get('session')
+  @ApiGetAccountBiometricSession()
   @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.SIGN)
   status(
     @CurrentUser() user: JwtPayload,
-    @Param('id') id: string,
+    @Param('documentId') documentId: string,
     @CurrentAuthorization() authorization: AuthorizationContext,
   ) {
-    return this.getBiometricSignatureStatus.execute(
-      id,
-      user.sub,
-      authorization,
-    );
+    return this.getStatus.forAccount(documentId, user.sub, authorization);
   }
 }

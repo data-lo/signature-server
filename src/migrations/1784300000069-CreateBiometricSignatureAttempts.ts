@@ -1,36 +1,40 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /**
- * Firma biométrica con Didit (historia "Iniciar flujo de firma biométrica con Didit para usuarios
- * autenticados"): la tabla de intentos y el valor `BIOMETRIC` en los dos enums de tipo de firma.
+ * Firma biométrica con Didit para firmantes con y sin cuenta (historia "Implementar firma
+ * biométrica con Didit para firmantes con y sin cuenta").
  *
- * `biometric_signature_attempts` es deliberadamente una tabla aparte de `identity_verifications`:
- * aquélla es la identidad del onboarding; ésta, la autorización de UNA firma concreta, atada a un
- * documento, a un colaborador, a un usuario y al hash del PDF que aceptó firmar.
+ * 1. `BIOMETRIC` en los dos enums de tipo de firma (`collaborators` y `documents`: TypeORM crea un
+ *    enum por columna).
+ * 2. `guest_biometric_access` en `verification_codes_event_enum`: el código con el que un invitado
+ *    sin cuenta acredita el correo de su invitación.
+ * 3. La tabla `biometric_signature_attempts`, aparte de `identity_verifications`: aquélla es la
+ *    identidad del onboarding; ésta, la autorización de UNA firma concreta, atada a documento,
+ *    colaborador, hash del PDF y sesión de Didit. `user_id` e `identity_verification_id` son
+ *    nulables porque un invitado no tiene ni una ni otra.
  *
- * Dos restricciones únicas, con propósitos distintos:
- * - `UQ_..._provider_session` (proveedor + sesión): una sesión de Didit nunca puede aplicarse a dos
- *   intentos, que es lo que haría ambiguo a quién le corresponde el webhook.
- * - `UQ_..._active_collaborator` (parcial): un colaborador no puede tener dos intentos abiertos a la
- *   vez. Es lo que cierra la carrera de dos "Firmar con biometría" casi simultáneos (doble clic, dos
- *   pestañas): el segundo `INSERT` choca y el caso de uso devuelve la sesión del primero en vez de
- *   abrir —y pagar— otra en Didit. La lista de estados tiene que coincidir con
+ * Restricciones:
+ * - `UQ_..._provider_session`: una sesión de Didit nunca puede aplicarse a dos intentos.
+ * - `UQ_..._active` (parcial): un solo intento abierto por colaborador y hash. Cierra la carrera de
+ *   dos "Firmar con biometría" simultáneos. Sus estados tienen que coincidir con
  *   `ACTIVE_BIOMETRIC_SIGNATURE_ATTEMPT_STATUSES`.
+ * - `user_id` e `identity_verification_id` van con `ON DELETE SET NULL`: borrar al usuario no puede
+ *   borrar la evidencia de una firma que ya produjo efectos.
  *
- * Sin `transaction = false`: los `ADD VALUE` sólo DECLARAN `BIOMETRIC` y ninguna sentencia de esta
- * migración escribe una fila con él, así que no aplica la restricción 55P04 de Postgres (mismo
- * criterio que `AddApprovalEventTypes`).
+ * Sin `transaction = false`: los `ADD VALUE` sólo DECLARAN valores y ninguna sentencia escribe una
+ * fila con ellos, así que no aplica la restricción 55P04 de Postgres (mismo criterio que
+ * `AddApprovalEventTypes`).
  */
 export class CreateBiometricSignatureAttempts1784300000069 implements MigrationInterface {
   name = 'CreateBiometricSignatureAttempts1784300000069';
 
   /**
-   * Declara `BIOMETRIC` en los enums de tipo de firma y crea la tabla de intentos con sus índices.
+   * Declara los valores de enum nuevos y crea la tabla de intentos con sus índices.
    *
    * @param queryRunner - Conexión de la migración.
    * @returns Nada.
    *
-   * @throws {QueryFailedError} Si no existen los enums de tipo de firma o las tablas referenciadas.
+   * @throws {QueryFailedError} Si no existen los enums o las tablas referenciadas.
    *
    * @example
    * ```ts
@@ -38,12 +42,14 @@ export class CreateBiometricSignatureAttempts1784300000069 implements MigrationI
    * ```
    */
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // Dos tipos distintos aunque las columnas se llamen igual: TypeORM crea un enum por columna.
     await queryRunner.query(
       `ALTER TYPE "public"."collaborators_signature_type_enum" ADD VALUE IF NOT EXISTS 'BIOMETRIC'`,
     );
     await queryRunner.query(
       `ALTER TYPE "public"."documents_signature_type_enum" ADD VALUE IF NOT EXISTS 'BIOMETRIC'`,
+    );
+    await queryRunner.query(
+      `ALTER TYPE "public"."verification_codes_event_enum" ADD VALUE IF NOT EXISTS 'guest_biometric_access'`,
     );
 
     await queryRunner.query(
@@ -53,10 +59,8 @@ export class CreateBiometricSignatureAttempts1784300000069 implements MigrationI
       `CREATE TYPE "public"."biometric_signature_attempts_status_enum" AS ENUM(
         'PENDING',
         'IN_PROGRESS',
-        'IN_REVIEW',
         'APPROVED',
         'DECLINED',
-        'ABANDONED',
         'EXPIRED',
         'FAILED'
       )`,
@@ -67,18 +71,22 @@ export class CreateBiometricSignatureAttempts1784300000069 implements MigrationI
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "document_id" uuid NOT NULL,
         "collaborator_id" uuid NOT NULL,
-        "user_id" uuid NOT NULL,
+        "user_id" uuid,
+        "email_snapshot" character varying NOT NULL,
+        "identity_verification_id" uuid,
         "provider" "public"."biometric_signature_attempts_provider_enum" NOT NULL,
         "provider_session_id" character varying,
-        "provider_workflow_id" character varying,
-        "document_hash" character varying NOT NULL,
+        "provider_workflow_id" character varying NOT NULL,
         "status" "public"."biometric_signature_attempts_status_enum" NOT NULL DEFAULT 'PENDING',
+        "document_hash" character varying NOT NULL,
         "geolocation" jsonb NOT NULL,
+        "ip_address" character varying,
+        "consented_at" TIMESTAMP WITH TIME ZONE NOT NULL,
         "provider_metadata" jsonb,
         "decision" jsonb,
         "failure_reason" text,
+        "started_at" TIMESTAMP WITH TIME ZONE,
         "expires_at" TIMESTAMP WITH TIME ZONE,
-        "approved_at" TIMESTAMP WITH TIME ZONE,
         "completed_at" TIMESTAMP WITH TIME ZONE,
         "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
@@ -89,7 +97,9 @@ export class CreateBiometricSignatureAttempts1784300000069 implements MigrationI
         CONSTRAINT "FK_biometric_signature_attempts_collaborator_id"
           FOREIGN KEY ("collaborator_id") REFERENCES "collaborators"("id") ON DELETE CASCADE,
         CONSTRAINT "FK_biometric_signature_attempts_user_id"
-          FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE
+          FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL,
+        CONSTRAINT "FK_biometric_signature_attempts_identity_verification_id"
+          FOREIGN KEY ("identity_verification_id") REFERENCES "identity_verifications"("id") ON DELETE SET NULL
       )
     `);
 
@@ -99,16 +109,16 @@ export class CreateBiometricSignatureAttempts1784300000069 implements MigrationI
     );
 
     await queryRunner.query(
-      `CREATE UNIQUE INDEX "UQ_biometric_signature_attempts_active_collaborator" ON "biometric_signature_attempts" ("collaborator_id") WHERE "status" IN ('PENDING', 'IN_PROGRESS', 'IN_REVIEW')`,
+      `CREATE UNIQUE INDEX "UQ_biometric_signature_attempts_active" ON "biometric_signature_attempts" ("collaborator_id", "document_hash") WHERE "status" IN ('PENDING', 'IN_PROGRESS')`,
     );
   }
 
   /**
    * Borra la tabla y sus tipos.
    *
-   * `BIOMETRIC` se queda en los enums de tipo de firma: Postgres no elimina un valor sin recrear el
-   * tipo entero, y para entonces podría haber colaboradores o documentos que lo usan. Una etiqueta
-   * de más no afecta a ningún consumidor.
+   * Los valores agregados a enums existentes (`BIOMETRIC`, `guest_biometric_access`) se quedan:
+   * Postgres no elimina un valor sin recrear el tipo entero, y podría haber filas usándolos. Una
+   * etiqueta de más no afecta a ningún consumidor.
    *
    * @param queryRunner - Conexión de la migración.
    * @returns Nada.

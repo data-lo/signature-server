@@ -18,8 +18,9 @@ import { CheckoutOrderEntity } from 'src/billing/checkout/checkout-order.entity'
 import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from 'src/billing/credits/document-credit-consumption.entity';
 import { SubscriptionBillingHistoryEntity } from 'src/billing/subscriptions/subscription-billing-history.entity';
-import { DocumentModule } from 'src/document/document.module';
-import { ProcessBiometricSignatureResultUseCase } from 'src/document/biometric/applications/process-biometric-signature-result.use-case';
+import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
+import { ProcessBiometricSignatureResultUseCase } from 'src/biometric-signature/applications/process-biometric-signature-result.use-case';
+import { BiometricSignatureAttemptService } from 'src/biometric-signature/services/biometric-signature-attempt.service';
 import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
@@ -53,19 +54,23 @@ beforeAll(() => {
 class StubDataSourceModule {}
 
 /**
- * Sustituto de `DocumentModule`, que trae Mongo, Kafka, MinIO y el sellado: montarlo de verdad
- * aquí obligaría a falsear media aplicación para probar el cableado de los webhooks. Lo que esta
- * prueba fija es que `WebhooksModule` IMPORTA el módulo que exporta el procesador de la firma
- * biométrica y que la recepción de Didit lo resuelve; el grafo real de `DocumentModule` lo prueba
- * el arranque del servidor.
+ * Sustituto de `BiometricSignatureModule`, que arrastra `DocumentModule` (Mongo, Kafka, MinIO, el
+ * sellado): montarlo de verdad aquí obligaría a falsear media aplicación para probar el cableado de
+ * los webhooks. Lo que esta prueba fija es que `WebhooksModule` IMPORTA el módulo que exporta el
+ * procesador de la firma biométrica y la búsqueda de intentos, y que el dispatcher los resuelve; el
+ * grafo real lo prueba el arranque del servidor.
  */
 @Module({
   providers: [
     { provide: ProcessBiometricSignatureResultUseCase, useValue: {} },
+    { provide: BiometricSignatureAttemptService, useValue: {} },
   ],
-  exports: [ProcessBiometricSignatureResultUseCase],
+  exports: [
+    ProcessBiometricSignatureResultUseCase,
+    BiometricSignatureAttemptService,
+  ],
 })
-class StubDocumentModule {}
+class StubBiometricSignatureModule {}
 
 describe('WebhooksModule', () => {
   it('resuelve el grafo de dependencias, incluidos los procesadores de Didit', async () => {
@@ -78,8 +83,8 @@ describe('WebhooksModule', () => {
         WebhooksModule,
       ],
     })
-      .overrideModule(DocumentModule)
-      .useModule(StubDocumentModule)
+      .overrideModule(BiometricSignatureModule)
+      .useModule(StubBiometricSignatureModule)
       .overrideProvider(getRepositoryToken(WebhookEventEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(AccountEntity))

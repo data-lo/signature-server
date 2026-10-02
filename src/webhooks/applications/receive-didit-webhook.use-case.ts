@@ -4,11 +4,10 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ProcessDiditVerificationResultUseCase } from 'src/identity-verification/applications/process-didit-verification-result.use-case';
-import { ProcessBiometricSignatureResultUseCase } from 'src/document/biometric/applications/process-biometric-signature-result.use-case';
 import { DiditWebhookSignatureVerifierService } from '../didit/didit-webhook-signature-verifier.service';
 import { validateDiditWebhookPayload } from '../didit/didit-webhook-payload.schema';
 import { RegisterWebhookEventUseCase } from './register-webhook-event.use-case';
+import { DiditWebhookDispatcherService } from '../didit/didit-webhook-dispatcher.service';
 import { WEBHOOK_PROVIDER_ENUM } from '../enums/webhook-provider.enum';
 import { WebhookReceptionResult } from '../interfaces/webhook-reception-result.interface';
 
@@ -24,7 +23,8 @@ interface ReceiveDiditWebhookInput {
  *
  * No decide nada sobre la identidad de nadie. Las únicas preguntas que responde son si el evento
  * viene realmente de Didit, si tiene la forma que el proveedor documenta y si ya lo habíamos
- * procesado. El significado del resultado vive en `ProcessDiditVerificationResultUseCase`.
+ * procesado. El significado del resultado vive en cada dominio: `DiditWebhookDispatcherService`
+ * lo entrega a `ProcessDiditVerificationResultUseCase` o a `ProcessBiometricSignatureResultUseCase`.
  */
 @Injectable()
 export class ReceiveDiditWebhookUseCase {
@@ -34,17 +34,10 @@ export class ReceiveDiditWebhookUseCase {
     private readonly signatureVerifier: DiditWebhookSignatureVerifierService,
     private readonly registerWebhookEvent: RegisterWebhookEventUseCase,
     /**
-     * Dependencia directa y obligatoria: todo webhook válido de Didit tiene que llegar al
-     * dominio. La dependencia va en un solo sentido —`webhooks` importa
-     * `IdentityVerificationModule`, nunca al revés—, así que no hace falta un puerto intermedio.
+     * Decide si la entrega es de una firma biométrica o de una verificación de identidad (por el
+     * `session_id`) y la entrega a ese dominio. Este caso de uso sólo autentica y registra.
      */
-    private readonly processDiditVerificationResult: ProcessDiditVerificationResultUseCase,
-    /**
-     * Resultados de las sesiones de firma biométrica. Se consulta PRIMERO: si el `session_id` es
-     * de un intento de firma, la entrega es suya y la verificación de identidad no la ve. Así una
-     * aprobación de firma nunca puede mover la credencial del onboarding, ni al revés.
-     */
-    private readonly processBiometricSignatureResult: ProcessBiometricSignatureResultUseCase,
+    private readonly dispatcher: DiditWebhookDispatcherService,
   ) {}
 
   async execute(
@@ -104,12 +97,7 @@ export class ReceiveDiditWebhookUseCase {
     }
 
     try {
-      const handledAsSignature =
-        await this.processBiometricSignatureResult.execute(validation.payload);
-
-      if (!handledAsSignature) {
-        await this.processDiditVerificationResult.execute(validation.payload);
-      }
+      await this.dispatcher.dispatch(validation.payload);
     } catch (error) {
       await this.registerWebhookEvent.markFailed(event.id, error);
       this.logger.error(

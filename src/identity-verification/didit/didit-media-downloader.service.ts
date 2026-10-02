@@ -39,8 +39,11 @@ const EXTENSION_BY_CONTENT_TYPE: Record<SupportedImageContentType, string> = {
   'image/webp': 'webp',
 };
 
-/** Cara de la INE, sólo para los mensajes de error. */
-export type IdentityImageSide = 'frontal' | 'trasera';
+/**
+ * Qué imagen se descarga; sólo aparece en los mensajes de error. `retrato` es la cara de referencia
+ * que usa la firma biométrica para el face match.
+ */
+export type IdentityImageSide = 'frontal' | 'trasera' | 'retrato';
 
 /** Imagen descargada y validada. Quien la recibe debe borrar `content` en cuanto no lo necesite. */
 export interface DownloadedIdentityImage {

@@ -1,10 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UnauthorizedException, BadRequestException } from '@nestjs/common';
-import { ProcessDiditVerificationResultUseCase } from 'src/identity-verification/applications/process-didit-verification-result.use-case';
-import { ProcessBiometricSignatureResultUseCase } from 'src/document/biometric/applications/process-biometric-signature-result.use-case';
 import { ReceiveDiditWebhookUseCase } from './receive-didit-webhook.use-case';
 import { RegisterWebhookEventUseCase } from './register-webhook-event.use-case';
 import { DiditWebhookSignatureVerifierService } from '../didit/didit-webhook-signature-verifier.service';
+import { DiditWebhookDispatcherService } from '../didit/didit-webhook-dispatcher.service';
 import { WEBHOOK_PROVIDER_ENUM } from '../enums/webhook-provider.enum';
 
 /** Una entrega real de Didit: el evento final aprobado. */
@@ -34,9 +33,8 @@ describe('ReceiveDiditWebhookUseCase', () => {
     markProcessed: jest.Mock;
     markFailed: jest.Mock;
   };
-  let processor: { execute: jest.Mock };
-  /** Por defecto la sesión NO es de una firma biométrica: el flujo de siempre. */
-  let biometricProcessor: { execute: jest.Mock };
+  /** Quien entrega al dominio: este caso de uso sólo autentica, valida y registra. */
+  let dispatcher: { dispatch: jest.Mock };
 
   beforeEach(async () => {
     verifier = { verify: jest.fn().mockReturnValue(true) };
@@ -49,35 +47,29 @@ describe('ReceiveDiditWebhookUseCase', () => {
       markProcessed: jest.fn().mockResolvedValue(undefined),
       markFailed: jest.fn().mockResolvedValue(undefined),
     };
-    processor = { execute: jest.fn().mockResolvedValue(undefined) };
-    biometricProcessor = { execute: jest.fn().mockResolvedValue(false) };
+    dispatcher = {
+      dispatch: jest.fn().mockResolvedValue('identity-verification'),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ReceiveDiditWebhookUseCase,
         { provide: DiditWebhookSignatureVerifierService, useValue: verifier },
         { provide: RegisterWebhookEventUseCase, useValue: register },
-        {
-          provide: ProcessDiditVerificationResultUseCase,
-          useValue: processor,
-        },
-        {
-          provide: ProcessBiometricSignatureResultUseCase,
-          useValue: biometricProcessor,
-        },
+        { provide: DiditWebhookDispatcherService, useValue: dispatcher },
       ],
     }).compile();
 
     useCase = module.get(ReceiveDiditWebhookUseCase);
   });
 
-  it('delega al procesamiento del resultado de verificación y marca el evento PROCESSED', async () => {
+  it('entrega el payload al dispatcher y marca el evento PROCESSED', async () => {
     const result = await useCase.execute({
       rawBody: bodyOf(PAYLOAD),
       ...HEADERS,
     });
 
-    expect(processor.execute).toHaveBeenCalledWith(PAYLOAD);
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(PAYLOAD);
     expect(register.markProcessed).toHaveBeenCalledWith('evt-row-1');
     expect(result).toEqual({ received: true, duplicate: false });
   });
@@ -127,7 +119,7 @@ describe('ReceiveDiditWebhookUseCase', () => {
         useCase.execute({ rawBody: bodyOf(PAYLOAD), ...HEADERS }),
       ).rejects.toBeInstanceOf(UnauthorizedException);
 
-      expect(processor.execute).not.toHaveBeenCalled();
+      expect(dispatcher.dispatch).not.toHaveBeenCalled();
       expect(register.register).not.toHaveBeenCalled();
     });
 
@@ -153,7 +145,7 @@ describe('ReceiveDiditWebhookUseCase', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
 
       expect(register.register).not.toHaveBeenCalled();
-      expect(processor.execute).not.toHaveBeenCalled();
+      expect(dispatcher.dispatch).not.toHaveBeenCalled();
     });
 
     it('lo audita como firma válida: no es un impostor, es un contrato roto', async () => {
@@ -176,7 +168,7 @@ describe('ReceiveDiditWebhookUseCase', () => {
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
 
-      expect(processor.execute).not.toHaveBeenCalled();
+      expect(dispatcher.dispatch).not.toHaveBeenCalled();
     });
   });
 
@@ -191,13 +183,13 @@ describe('ReceiveDiditWebhookUseCase', () => {
       ...HEADERS,
     });
 
-    expect(processor.execute).not.toHaveBeenCalled();
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
     expect(register.markProcessed).not.toHaveBeenCalled();
     expect(result).toEqual({ received: true, duplicate: true });
   });
 
   it('marca FAILED con el detalle y propaga el error cuando el dominio falla', async () => {
-    processor.execute.mockRejectedValue(
+    dispatcher.dispatch.mockRejectedValue(
       new Error('base de datos no disponible'),
     );
 
@@ -217,54 +209,6 @@ describe('ReceiveDiditWebhookUseCase', () => {
       useCase.execute({ rawBody: Buffer.from('no-es-json'), ...HEADERS }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
-    expect(processor.execute).not.toHaveBeenCalled();
-  });
-
-  describe('firma biométrica', () => {
-    it('si la sesión es de una firma biométrica, la verificación de identidad no la ve', async () => {
-      biometricProcessor.execute.mockResolvedValue(true);
-
-      const result = await useCase.execute({
-        rawBody: bodyOf(PAYLOAD),
-        ...HEADERS,
-      });
-
-      expect(biometricProcessor.execute).toHaveBeenCalledWith(PAYLOAD);
-      expect(processor.execute).not.toHaveBeenCalled();
-      expect(register.markProcessed).toHaveBeenCalledWith('evt-row-1');
-      expect(result).toEqual({ received: true, duplicate: false });
-    });
-
-    it('si no es de una firma biométrica, la entrega sigue a la verificación de identidad', async () => {
-      await useCase.execute({ rawBody: bodyOf(PAYLOAD), ...HEADERS });
-
-      expect(biometricProcessor.execute).toHaveBeenCalledWith(PAYLOAD);
-      expect(processor.execute).toHaveBeenCalledWith(PAYLOAD);
-    });
-
-    it('una entrega ya procesada no vuelve a firmar', async () => {
-      register.register.mockResolvedValue({
-        event: { id: 'evt-row-1' },
-        alreadyProcessed: true,
-      });
-
-      await useCase.execute({ rawBody: bodyOf(PAYLOAD), ...HEADERS });
-
-      expect(biometricProcessor.execute).not.toHaveBeenCalled();
-    });
-
-    it('si la firma falla, marca FAILED y propaga el error para que Didit reintente', async () => {
-      biometricProcessor.execute.mockRejectedValue(new Error('MinIO caído'));
-
-      await expect(
-        useCase.execute({ rawBody: bodyOf(PAYLOAD), ...HEADERS }),
-      ).rejects.toThrow('MinIO caído');
-
-      expect(register.markFailed).toHaveBeenCalledWith(
-        'evt-row-1',
-        expect.any(Error),
-      );
-      expect(processor.execute).not.toHaveBeenCalled();
-    });
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
   });
 });

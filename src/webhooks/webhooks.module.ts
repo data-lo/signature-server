@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsModule } from 'src/payments/payments.module';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
-import { DocumentModule } from 'src/document/document.module';
+import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { DiditWebhookSignatureVerifierService } from './didit/didit-webhook-signature-verifier.service';
+import { DiditWebhookDispatcherService } from './didit/didit-webhook-dispatcher.service';
 import { StripeWebhookSignatureVerifierService } from './stripe/stripe-webhook-signature-verifier.service';
 import { RegisterWebhookEventUseCase } from './applications/register-webhook-event.use-case';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
@@ -30,21 +31,22 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * dependencia va también en un solo sentido: `identity-verification` no conoce a `webhooks` — no
  * tiene controller de webhooks ni verificación de firma, por diseño.
  *
- * `DocumentModule` se importa por `ProcessBiometricSignatureResultUseCase`: Didit manda al mismo
- * endpoint los resultados de la verificación de identidad y los de la firma biométrica, y es el
- * `session_id` el que dice a cuál de los dos dominios pertenece cada entrega. Mismo sentido único:
- * `document` no conoce a `webhooks`.
+ * `BiometricSignatureModule` se importa por `ProcessBiometricSignatureResultUseCase` y por la
+ * búsqueda del intento por `session_id`: Didit manda al mismo endpoint los resultados de identidad
+ * y de firma biométrica, y `DiditWebhookDispatcherService` decide a cuál pertenece cada entrega.
+ * Mismo sentido único: `biometric-signature` no conoce a `webhooks`.
  */
 @Module({
   imports: [
     TypeOrmModule.forFeature([WebhookEventEntity]),
     PaymentsModule,
     IdentityVerificationModule,
-    DocumentModule,
+    BiometricSignatureModule,
   ],
   controllers: [DiditWebhookController, StripeWebhookController],
   providers: [
     DiditWebhookSignatureVerifierService,
+    DiditWebhookDispatcherService,
     StripeWebhookSignatureVerifierService,
     RegisterWebhookEventUseCase,
     ReceiveDiditWebhookUseCase,
