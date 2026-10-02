@@ -23,6 +23,8 @@ import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { isSignerTurn } from '../utils/next-signer.util';
+import { BiometricSignatureAttemptEntity } from '../biometric/entities/biometric-signature-attempt.entity';
+import { BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM } from '../biometric/enums/biometric-signature-attempt-status.enum';
 import { VerificationCodeService } from '../verification-code.service';
 import { AdvancedSignatureInput, DocumentService } from '../document.service';
 import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
@@ -56,7 +58,7 @@ export interface SignedDocumentData {
  * 3. Resuelve —o vincula— al colaborador firmante y valida permisos: que sea firmante, que no
  *    haya respondido ya, y que sea su turno si el documento es secuencial.
  * 4. Valida la credencial de firma: e.firma completa en firma avanzada, firma registrada en
- *    simple.
+ *    simple, e intento aprobado por Didit en biométrica.
  * 5. Exige el código de verificación si el documento lo pide.
  * 6. Reclama el turno con un `UPDATE` condicionado a `PENDING` — el punto sin retorno.
  * 7. Guarda la evidencia de la firma: geolocalización, y el resultado de e.firma o el snapshot
@@ -84,6 +86,8 @@ export class SignDocumentUseCase {
     private readonly documentRepository: Repository<DocumentEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    @InjectRepository(BiometricSignatureAttemptEntity)
+    private readonly biometricAttemptRepository: Repository<BiometricSignatureAttemptEntity>,
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly verificationCodeService: VerificationCodeService,
@@ -106,10 +110,14 @@ export class SignDocumentUseCase {
    *   autorización. Cuando llega, `DocumentAuthorizationPolicy` comprueba además el alcance
    *   `SELF` del catálogo; cuando no, siguen rigiendo las validaciones de firmante y de turno
    *   que este método ya hacía, que son las que de verdad protegen la firma.
+   * @param biometricAttemptId Intento de `biometric_signature_attempts` que Didit aprobó. Sólo lo
+   *   pasa `ProcessBiometricSignatureResultUseCase`, al recibir el webhook: `PATCH /document/:id/sign`
+   *   no lo recibe nunca, así que un firmante BIOMETRIC no puede firmar por esa ruta.
    * @returns El documento firmado y si esta firma lo dejó completo.
    * @throws {BadRequestException} Cuando falta la geolocalización, el documento no está en
    *   `PENDING`, el firmante ya respondió, el documento exige un código de verificación que no se
-   *   validó, o otra petición reclamó el turno primero.
+   *   validó, otra petición reclamó el turno primero, o el firmante es biométrico y no trae un
+   *   intento aprobado de Didit para este colaborador y este PDF.
    * @throws {ForbiddenException} Cuando el usuario no es firmante del documento, todavía no es
    *   su turno, o su rol no tiene concedido `DOCUMENT.SIGN_SELF`.
    */
@@ -119,6 +127,7 @@ export class SignDocumentUseCase {
     advancedSignatureInput?: AdvancedSignatureInput,
     geolocation?: GeolocationDto,
     authorization?: AuthorizationContext,
+    biometricAttemptId?: string,
   ): Promise<BaseResponse<SignedDocumentData>> {
     // Se revalida aunque el DTO ya la exija: este método también se invoca desde otros puntos.
     if (!geolocation) {
@@ -181,6 +190,13 @@ export class SignDocumentUseCase {
           document,
           advancedSignatureInput,
         );
+    } else if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+      await this.assertApprovedBiometricAttempt(
+        document,
+        myParticipant,
+        currentUserId,
+        biometricAttemptId,
+      );
     } else {
       this.documentService.assertCanSignWithSimpleSignature(
         myParticipant.account!.user,
@@ -217,7 +233,9 @@ export class SignDocumentUseCase {
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       // Ya validado antes del claim; nunca contiene la llave privada ni la contraseña.
       myParticipant.advancedSignature = advancedSignatureResult;
-    } else {
+    } else if (myParticipant.signatureType !== SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+      // Firma biométrica: no hay rúbrica que copiar. Su evidencia es el intento aprobado en
+      // `biometric_signature_attempts` (veredicto de Didit, hash del PDF y ubicación).
       /**
        * Copia inmutable de la imagen de firma, tomada en el momento real de la firma.
        *
@@ -331,5 +349,60 @@ export class SignDocumentUseCase {
       message: 'Documento firmado exitosamente por todos los firmantes',
       data: { id: documentId, documentCompleted: true },
     };
+  }
+
+  /**
+   * Comprueba que una firma biométrica esté respaldada por un intento que Didit aprobó.
+   *
+   * El intento tiene que ser de ESTE colaborador y de ESTE usuario, estar en APPROVED y haberse
+   * iniciado sobre el mismo PDF que hay ahora: si el documento cambió después de la prueba, la
+   * aprobación ya no corresponde a lo que se firmaría.
+   *
+   * @param document - Documento que se firma.
+   * @param participant - Colaborador firmante ya resuelto.
+   * @param currentUserId - Usuario que firma.
+   * @param biometricAttemptId - Intento aprobado; `undefined` cuando la firma entra por HTTP.
+   * @returns Nada.
+   *
+   * @throws {BadRequestException} Si no hay intento, no es de este firmante, no está aprobado o el
+   *   PDF cambió desde que se inició.
+   *
+   * @example
+   * ```ts
+   * await this.assertApprovedBiometricAttempt(document, participant, 'user-1', 'attempt-1');
+   * ```
+   */
+  private async assertApprovedBiometricAttempt(
+    document: DocumentEntity,
+    participant: CollaboratorEntity,
+    currentUserId: string,
+    biometricAttemptId?: string,
+  ): Promise<void> {
+    if (!biometricAttemptId) {
+      throw new BadRequestException(
+        'Este documento se firma con biometría. Inicia la firma con "Firmar con biometría".',
+      );
+    }
+
+    const attempt = await this.biometricAttemptRepository.findOne({
+      where: { id: biometricAttemptId },
+    });
+
+    if (
+      !attempt ||
+      attempt.collaboratorId !== participant.id ||
+      attempt.userId !== currentUserId ||
+      attempt.status !== BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.APPROVED
+    ) {
+      throw new BadRequestException(
+        'La firma biométrica no está aprobada para este firmante',
+      );
+    }
+
+    if (attempt.documentHash !== document.originalHash) {
+      throw new BadRequestException(
+        'El documento cambió después de la verificación biométrica',
+      );
+    }
   }
 }

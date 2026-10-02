@@ -33,18 +33,37 @@ export class DiditApiService {
   constructor(private readonly configService: ConfigService) {}
 
   /**
-   * Crea una sesión de verificación con el workflow ya configurado en el panel de Didit.
+   * Crea una sesión de verificación con un workflow ya configurado en el panel de Didit.
+   *
+   * Por defecto usa `DIDIT_WORKFLOW_ID`, el de la verificación de identidad del onboarding. La
+   * firma biométrica pasa el suyo (`DIDIT_BIOMETRIC_WORKFLOW_ID`): son pruebas distintas —leer la
+   * INE contra comprobar en vivo que es la misma persona— configuradas como workflows distintos.
    *
    * @param vendorData Identificador nuestro que Didit devuelve intacto en el webhook. Se manda
    *   el `userId`, de modo que el resultado sea atribuible aunque el `session_id` se pierda.
    * @param callbackUrl A dónde regresa el usuario al terminar. Es sólo navegación: el veredicto
    *   llega por webhook firmado, nunca por este retorno.
+   * @param options.workflowId Workflow a usar en lugar de `DIDIT_WORKFLOW_ID`.
+   * @returns La sesión normalizada: id, URL hospedada, workflow y vencimiento.
+   *
+   * @throws {DiditConfigurationException} Si falta la API key o no hay workflow que usar.
+   * @throws {DiditResponseException} Si Didit responde con error o sin `session_id`/`url`.
+   * @throws {DiditTimeoutException} Si Didit no responde a tiempo.
+   * @throws {DiditUnavailableException} Si no se puede conectar con Didit.
+   *
+   * @example
+   * ```ts
+   * await diditApiService.createSession(userId, 'https://app/dashboard', { workflowId: 'wf-bio' });
+   * ```
    */
   async createSession(
     vendorData: string,
     callbackUrl: string,
+    options: { workflowId?: string } = {},
   ): Promise<DiditSession> {
-    const { apiUrl, apiKey, workflowId } = this.resolveConfiguration();
+    const { apiUrl, apiKey, workflowId } = this.resolveConfiguration(
+      options.workflowId,
+    );
 
     try {
       const response = await axios.post<Record<string, unknown>>(
@@ -75,17 +94,18 @@ export class DiditApiService {
    * arrancar el servidor completo por una integración que la mayoría de los entornos de
    * desarrollo no usa. Mismo criterio que `SealApiService`.
    */
-  private resolveConfiguration(): {
+  private resolveConfiguration(workflowOverride?: string): {
     apiUrl: string;
     apiKey: string;
     workflowId: string;
   } {
     const apiKey = this.configService.get<string>('DIDIT_API_KEY');
-    const workflowId = this.configService.get<string>('DIDIT_WORKFLOW_ID');
+    const workflowId =
+      workflowOverride || this.configService.get<string>('DIDIT_WORKFLOW_ID');
 
     if (!apiKey || !workflowId) {
       this.logger.error(
-        'Faltan DIDIT_API_KEY o DIDIT_WORKFLOW_ID: no es posible crear sesiones de verificación.',
+        'Faltan DIDIT_API_KEY o el workflow de Didit: no es posible crear sesiones de verificación.',
       );
       throw new DiditConfigurationException();
     }

@@ -59,6 +59,9 @@ import { IdentityVerificationsController } from './identity-verifications.contro
   exports: [
     ProcessDiditVerificationResultUseCase,
     UpdateSigningCredentialStatusUseCase,
+    // Lo usa la firma biométrica (`DocumentModule`) para abrir sus propias sesiones de Didit.
+    // Sólo el adaptador HTTP: nada de la identidad del onboarding sale de este módulo.
+    DiditApiService,
   ],
 })
 export class IdentityVerificationModule {}

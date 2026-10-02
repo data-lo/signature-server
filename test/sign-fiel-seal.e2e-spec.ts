@@ -16,6 +16,7 @@ import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.const
 import { DocumentController } from './../src/document/document.controller';
 import { DocumentService } from './../src/document/document.service';
 import { SignDocumentUseCase } from './../src/document/applications/sign-document.use-case';
+import { BiometricSignatureAttemptEntity } from './../src/document/biometric/entities/biometric-signature-attempt.entity';
 import { DocumentAuthorizationPolicy } from './../src/document/policies/document-authorization.policy';
 import { SendCompletedSimpleSignatureToSealUseCase } from './../src/document/seal/use-cases/send-completed-simple-signature-to-seal.use-case';
 import { AdvancedSummaryDocumentService } from './../src/document/summary-document/advanced-summary-document.service';
@@ -255,6 +256,11 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         {
           provide: getRepositoryToken(CollaboratorEntity),
           useValue: collaboratorRepository,
+        },
+        // Firma FIEL: nunca consulta intentos biométricos.
+        {
+          provide: getRepositoryToken(BiometricSignatureAttemptEntity),
+          useValue: { findOne: jest.fn() },
         },
         { provide: getRepositoryToken(SealEntity), useValue: sealRepository },
         {

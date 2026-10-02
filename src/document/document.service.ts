@@ -1086,6 +1086,17 @@ export class DocumentService {
       );
     }
 
+    /**
+     * La firma biométrica no tiene rúbrica que estampar: el firmante no subió imagen de firma y no
+     * se le pide. Sin esta salida, el camino de firma simple de abajo buscaba la rúbrica del perfil
+     * (`signatureId` nulo) y tumbaba la finalización del documento entero. Qué marca visual debe
+     * llevar —si alguna— está por definirse; hasta entonces su evidencia vive en
+     * `biometric_signature_attempts` y en la hoja de firmas.
+     */
+    if (collaborator.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+      return null;
+    }
+
     // Los firmantes siempre tienen cuenta de plataforma (accountId no-nulo): solo watchers
     // y reviewers pueden invitarse por email únicamente (ver create()). Fallback defensivo
     // por si la relación account.user no vino cargada (no debería pasar: signerCollaborators

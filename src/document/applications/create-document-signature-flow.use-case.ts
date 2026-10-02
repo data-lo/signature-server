@@ -67,13 +67,18 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
  * Vocabulario de documentos -> vocabulario comercial. `FIEL` y `ADVANCED` son el mismo tipo de
  * firma con el nombre que le da cada módulo: el dominio de documentos habla de la FIEL del SAT y
  * facturación habla de firma avanzada.
+ *
+ * `BIOMETRIC` todavía no tiene categoría comercial: se traduce a `null` en vez de cobrarla como
+ * simple o avanzada sin que nadie lo haya decidido. Hoy es inalcanzable —el payload de creación no
+ * acepta ese valor— y debe definirse antes de permitir elegir la firma biométrica al crear.
  */
 const SIGNATURE_TYPE_DOMAIN_TO_BILLING: Record<
   SIGNATURE_TYPE_ENUM,
-  BILLING_SIGNATURE_TYPE_ENUM
+  BILLING_SIGNATURE_TYPE_ENUM | null
 > = {
   [SIGNATURE_TYPE_ENUM.SIMPLE]: BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
   [SIGNATURE_TYPE_ENUM.FIEL]: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+  [SIGNATURE_TYPE_ENUM.BIOMETRIC]: null,
 };
 
 /**
@@ -82,10 +87,12 @@ const SIGNATURE_TYPE_DOMAIN_TO_BILLING: Record<
  * Es el único punto que cruza esa frontera: el resto del módulo de documentos usa
  * `SIGNATURE_TYPE_ENUM` y facturación no conoce ese enum. Un documento sin tipo de firma se
  * traduce a `null` en vez de a un valor por defecto — el recibo debe decir "no se decidió" y no
- * inventar una firma simple que nadie eligió.
+ * inventar una firma simple que nadie eligió. Lo mismo para `BIOMETRIC`, que aún no tiene
+ * categoría comercial.
  *
  * @param signatureType - Tipo de firma tal como está guardado en `documents.signature_type`.
- * @returns El tipo equivalente para el recibo de crédito, o `null` si el documento no tiene uno.
+ * @returns El tipo equivalente para el recibo de crédito, o `null` si el documento no tiene uno o
+ *   es `BIOMETRIC`.
  *
  * @example
  * ```ts

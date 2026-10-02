@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ProcessDiditVerificationResultUseCase } from 'src/identity-verification/applications/process-didit-verification-result.use-case';
+import { ProcessBiometricSignatureResultUseCase } from 'src/document/biometric/applications/process-biometric-signature-result.use-case';
 import { DiditWebhookSignatureVerifierService } from '../didit/didit-webhook-signature-verifier.service';
 import { validateDiditWebhookPayload } from '../didit/didit-webhook-payload.schema';
 import { RegisterWebhookEventUseCase } from './register-webhook-event.use-case';
@@ -38,6 +39,12 @@ export class ReceiveDiditWebhookUseCase {
      * `IdentityVerificationModule`, nunca al revés—, así que no hace falta un puerto intermedio.
      */
     private readonly processDiditVerificationResult: ProcessDiditVerificationResultUseCase,
+    /**
+     * Resultados de las sesiones de firma biométrica. Se consulta PRIMERO: si el `session_id` es
+     * de un intento de firma, la entrega es suya y la verificación de identidad no la ve. Así una
+     * aprobación de firma nunca puede mover la credencial del onboarding, ni al revés.
+     */
+    private readonly processBiometricSignatureResult: ProcessBiometricSignatureResultUseCase,
   ) {}
 
   async execute(
@@ -97,7 +104,12 @@ export class ReceiveDiditWebhookUseCase {
     }
 
     try {
-      await this.processDiditVerificationResult.execute(validation.payload);
+      const handledAsSignature =
+        await this.processBiometricSignatureResult.execute(validation.payload);
+
+      if (!handledAsSignature) {
+        await this.processDiditVerificationResult.execute(validation.payload);
+      }
     } catch (error) {
       await this.registerWebhookEvent.markFailed(event.id, error);
       this.logger.error(

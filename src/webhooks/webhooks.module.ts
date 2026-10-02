@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsModule } from 'src/payments/payments.module';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
+import { DocumentModule } from 'src/document/document.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { DiditWebhookSignatureVerifierService } from './didit/didit-webhook-signature-verifier.service';
 import { StripeWebhookSignatureVerifierService } from './stripe/stripe-webhook-signature-verifier.service';
@@ -28,12 +29,18 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * quien interpreta el resultado de una sesión de Didit y mueve el estado del usuario. La
  * dependencia va también en un solo sentido: `identity-verification` no conoce a `webhooks` — no
  * tiene controller de webhooks ni verificación de firma, por diseño.
+ *
+ * `DocumentModule` se importa por `ProcessBiometricSignatureResultUseCase`: Didit manda al mismo
+ * endpoint los resultados de la verificación de identidad y los de la firma biométrica, y es el
+ * `session_id` el que dice a cuál de los dos dominios pertenece cada entrega. Mismo sentido único:
+ * `document` no conoce a `webhooks`.
  */
 @Module({
   imports: [
     TypeOrmModule.forFeature([WebhookEventEntity]),
     PaymentsModule,
     IdentityVerificationModule,
+    DocumentModule,
   ],
   controllers: [DiditWebhookController, StripeWebhookController],
   providers: [

@@ -53,9 +53,20 @@ import { NotificationEntity } from './entities/notification.entity';
 import { DocumentApprovalService } from './services/document-approval.service';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
+import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
+import { BiometricSignatureAttemptEntity } from './biometric/entities/biometric-signature-attempt.entity';
+import { BiometricSignatureAttemptService } from './biometric/services/biometric-signature-attempt.service';
+import { StartBiometricSignatureUseCase } from './biometric/applications/start-biometric-signature.use-case';
+import { GetBiometricSignatureStatusUseCase } from './biometric/applications/get-biometric-signature-status.use-case';
+import { ProcessBiometricSignatureResultUseCase } from './biometric/applications/process-biometric-signature-result.use-case';
+import { DocumentBiometricSignatureController } from './biometric/document-biometric-signature.controller';
 
 @Module({
-  controllers: [DocumentController, DocumentSignaturesController],
+  controllers: [
+    DocumentController,
+    DocumentSignaturesController,
+    DocumentBiometricSignatureController,
+  ],
   providers: [
     DocumentService,
     VerificationCodeService,
@@ -101,6 +112,10 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
     WitnessNotificationService,
     ApproveDocumentUseCase,
     RejectDocumentApprovalUseCase,
+    BiometricSignatureAttemptService,
+    StartBiometricSignatureUseCase,
+    GetBiometricSignatureStatusUseCase,
+    ProcessBiometricSignatureResultUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -119,6 +134,7 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
       // La lee `WitnessNotificationService` para re-publicar el aviso del testigo tras la
       // aprobación, con la notificación que se creó junto con el documento.
       NotificationEntity,
+      BiometricSignatureAttemptEntity,
     ]),
     SharedModule,
     UserModule,
@@ -147,7 +163,14 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
      * pasan.
      */
     forwardRef(() => BillingModule),
+    // Por `DiditApiService`, con el que la firma biométrica abre sus sesiones de Didit. La
+    // dependencia va en un solo sentido: `identity-verification` no conoce a `document`.
+    IdentityVerificationModule,
   ],
-  exports: [DocumentService],
+  /**
+   * `ProcessBiometricSignatureResultUseCase` lo consume `WebhooksModule`, que es quien recibe y
+   * autentica el webhook de Didit y le delega las sesiones de firma biométrica.
+   */
+  exports: [DocumentService, ProcessBiometricSignatureResultUseCase],
 })
 export class DocumentModule {}
