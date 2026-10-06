@@ -27,6 +27,11 @@ import {
 export enum PAYLOAD_SIGNATURE_TYPE_ENUM {
   SIMPLE = 'SIMPLE',
   ADVANCED = 'ADVANCED',
+  /**
+   * Cada firmante se identifica con Didit al firmar (historia "Mostrar firma biométrica en las
+   * opciones de tipo de firma"). Exige `graphSignatureBiometrics` en el plan de la cuenta activa.
+   */
+  BIOMETRIC = 'BIOMETRIC',
 }
 
 export enum PAYLOAD_COLABORATOR_TYPE_ENUM {
@@ -53,6 +58,7 @@ const LEGACY_WITNESS_PAYLOAD_VALUE = 'VIEWER';
 export enum REQUIRES_DIFFERENT_SIGNATURES_ENUM {
   SIMPLE = 'SIMPLE',
   FIEL = 'FIEL',
+  BIOMETRIC = 'BIOMETRIC',
 }
 
 /**

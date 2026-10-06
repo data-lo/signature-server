@@ -30,6 +30,9 @@ import {
   REQUIRES_DIFFERENT_SIGNATURES_ENUM,
 } from '../dto/create-document-signatures.dto';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
+import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
+import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
+import { PlanActionNotIncludedException } from 'src/billing/exceptions/billing.exceptions';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 
@@ -64,6 +67,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let documentTransactionService: Record<string, jest.Mock>;
   let consumeDocumentCredit: Record<string, jest.Mock>;
   let documentReviewerService: Record<string, jest.Mock>;
+  let assertPlanAction: Record<string, jest.Mock>;
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -141,6 +145,15 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     },
   };
 
+  /** El mismo documento con firma biométrica (Didit). */
+  const biometricDto: CreateDocumentSignaturesDto = {
+    ...baseDto,
+    documentData: {
+      ...baseDto.documentData,
+      signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.BIOMETRIC,
+    },
+  };
+
   beforeEach(async () => {
     documentRepo = createMockRepository();
     collaboratorRepo = createMockRepository();
@@ -215,6 +228,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     documentReviewerService = {
       resolveReviewerAccountId: jest.fn().mockResolvedValue('account-reviewer'),
     };
+    /** Por omisión el plan incluye la acción, como todos los planes contratables hoy. */
+    assertPlanAction = { execute: jest.fn().mockResolvedValue({}) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -246,6 +261,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           provide: DocumentReviewerService,
           useValue: documentReviewerService,
         },
+        { provide: AssertPlanActionUseCase, useValue: assertPlanAction },
       ],
     }).compile();
 
@@ -370,6 +386,148 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         (call) => call[0].signatureType === SIGNATURE_TYPE_ENUM.FIEL,
       ),
     ).toBe(true);
+  });
+
+  describe('firma biométrica', () => {
+    it('guarda BIOMETRIC en el documento y en todos sus firmantes', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signatureType: SIGNATURE_TYPE_ENUM.BIOMETRIC,
+        }),
+      );
+      const signerCalls = collaboratorRepo.create.mock.calls.filter(
+        (call) => call[0].colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER,
+      );
+      expect(signerCalls).toHaveLength(2);
+      expect(
+        signerCalls.every(
+          (call) => call[0].signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC,
+        ),
+      ).toBe(true);
+    });
+
+    it('anota el consumo de crédito como BIOMETRIC', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signatureType: BILLING_SIGNATURE_TYPE_ENUM.BIOMETRIC,
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('respeta el requiresTwoFactorAuth de cada firmante, como en ADVANCED', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+    });
+
+    it('exige graphSignatureBiometrics en el plan de la cuenta activa', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(assertPlanAction.execute).toHaveBeenCalledWith({
+        userId: 'creator-1',
+        accountId: 'account-1',
+        action: PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS,
+      });
+    });
+
+    it('sin la acción en el plan, rechaza antes de subir el archivo o cobrar', async () => {
+      assertPlanAction.execute.mockRejectedValue(
+        new PlanActionNotIncludedException(
+          PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS,
+          null,
+        ),
+      );
+
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          biometricDto,
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(PlanActionNotIncludedException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+      expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+    });
+
+    it('acepta requiresDifferentSignatures=BIOMETRIC y rechaza uno que lo contradiga', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...biometricDto,
+            requiresDifferentSignatures:
+              REQUIRES_DIFFERENT_SIGNATURES_ENUM.BIOMETRIC,
+          },
+          file,
+          '127.0.0.1',
+        ),
+      ).resolves.toBeDefined();
+
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...biometricDto,
+            requiresDifferentSignatures:
+              REQUIRES_DIFFERENT_SIGNATURES_ENUM.SIMPLE,
+          },
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('no consulta el plan para SIMPLE ni ADVANCED', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        advancedDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(assertPlanAction.execute).not.toHaveBeenCalled();
+    });
   });
 
   it('guarda el tipo de firma EN el documento, no sólo copiado en los firmantes', async () => {
