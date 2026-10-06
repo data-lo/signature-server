@@ -292,13 +292,21 @@ describe('syncStaticPermissionCatalog', () => {
 
     expect(
       repositories.resources.rows.map((resource) => resource.key).sort(),
-    ).toEqual(['BILLING', 'DOCUMENT', 'MEMBER', 'ORGANIZATION', 'ROLE']);
+    ).toEqual([
+      'BILLING',
+      'DIRECTORY',
+      'DOCUMENT',
+      'MEMBER',
+      'ORGANIZATION',
+      'ROLE',
+    ]);
     expect(
       repositories.actions.rows.map((action) => action.key).sort(),
     ).toEqual([
       'APPROVE',
       'CANCEL',
       'CREATE',
+      'DELETE',
       'INVITE',
       'MANAGE',
       'READ',
@@ -518,9 +526,9 @@ describe('syncStaticPermissionCatalog', () => {
     );
 
     // DOCUMENT y ORGANIZATION ya estaban, con la descripción en minúsculas de `seed:roles`.
-    expect(summary.resources.created).toBe(3); // BILLING, MEMBER, ROLE
+    expect(summary.resources.created).toBe(4); // BILLING, MEMBER, ROLE, DIRECTORY
     expect(summary.resources.updated).toBe(2); // DOCUMENT y ORGANIZATION, pasadas a MAYÚSCULAS
-    expect(summary.actions.created).toBe(7);
+    expect(summary.actions.created).toBe(8);
     expect(summary.actions.updated).toBe(3); // CREATE, READ y UPDATE ya estaban
     expect(
       repositories.resources.rows.filter(

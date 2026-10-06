@@ -22,7 +22,7 @@ describe('permisos de una cuenta PERSONAL', () => {
    * catálogo deja de coincidir con ella, esta prueba tiene que fallar. Derivarla del mismo
    * `organizationOnly` que usa el código no probaría nada.
    */
-  it('son facturación y los documentos propios, y nada más', () => {
+  it('son facturación, los documentos propios y su directorio, y nada más', () => {
     expect([...PERSONAL_ACCOUNT_PERMISSION_KEYS]).toEqual([
       STATIC_PERMISSION_KEY_ENUM.BILLING_READ,
       STATIC_PERMISSION_KEY_ENUM.BILLING_MANAGE,
@@ -31,6 +31,10 @@ describe('permisos de una cuenta PERSONAL', () => {
       STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST,
       STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF,
       STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CANCEL,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
     ]);
   });
 

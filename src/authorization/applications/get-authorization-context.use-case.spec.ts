@@ -157,7 +157,7 @@ describe('GetAuthorizationContextUseCase', () => {
       });
     }
 
-    it('publica facturación y sus documentos, sin consultar el rol', async () => {
+    it('publica facturación, sus documentos y su directorio, sin consultar el rol', async () => {
       accountRepository.findOne.mockResolvedValue(personalAccount());
 
       const response = await useCase.execute('user-1', 'account-1');
@@ -170,6 +170,10 @@ describe('GetAuthorizationContextUseCase', () => {
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST,
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF,
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CANCEL,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
       ]);
       expect(rolesService.listPermissionsByRoleIds).not.toHaveBeenCalled();
     });
@@ -213,7 +217,7 @@ describe('GetAuthorizationContextUseCase', () => {
       expect(response.data.permissions).toContain(
         STATIC_PERMISSION_KEY_ENUM.BILLING_READ,
       );
-      expect(response.data.permissions).toHaveLength(7);
+      expect(response.data.permissions).toHaveLength(11);
     });
   });
 
