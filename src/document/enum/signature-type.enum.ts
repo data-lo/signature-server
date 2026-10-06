@@ -11,10 +11,5 @@
 export enum SIGNATURE_TYPE_ENUM {
   SIMPLE = 'SIMPLE',
   FIEL = 'FIEL',
-  /**
-   * Firma biométrica. Por ahora sólo se reconoce el valor: no hay migración que lo agregue al tipo
-   * enum de Postgres de `documents.signature_type` / `collaborators.signature_type`, ni lógica de
-   * firma ni integración con Didit, así que todavía no puede persistirse ni elegirse.
-   */
   BIOMETRIC = 'BIOMETRIC',
 }

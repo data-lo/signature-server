@@ -14,6 +14,8 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
+import { BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM } from 'src/biometric-signature/enums/biometric-signature-attempt-status.enum';
 
 import { GeolocationDto } from '../dto/sign-document.dto';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
@@ -21,6 +23,7 @@ import { DocumentEntity } from '../entities/document.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { isSignerTurn } from '../utils/next-signer.util';
 import { VerificationCodeService } from '../verification-code.service';
@@ -45,18 +48,41 @@ export interface SignedDocumentData {
   documentCompleted: boolean;
 }
 
+/** Quién firma y con qué evidencia, una vez validado todo lo previo al claim. */
+interface SignatureCompletion {
+  document: DocumentEntity;
+  participant: CollaboratorEntity;
+  signerCollaborators: CollaboratorEntity[];
+  /**
+   * Actor de los eventos y de la auditoría: el `userId` del firmante, o
+   * `guest-collaborator:{collaboratorId}` para un invitado sin cuenta. Ninguno de los dos destinos
+   * lo usa como llave foránea.
+   */
+  actor: string;
+  geolocation: GeolocationDto;
+  advancedSignatureResult: SignatureResult | null;
+  /** IP desde la que se autorizó la firma, cuando se conoce (firma biométrica). */
+  ipAddress: string | null;
+}
+
 /**
- * Registra la firma del usuario autenticado sobre un documento pendiente.
+ * Registra la firma de un colaborador sobre un documento pendiente.
  *
  * @remarks
+ * Dos entradas, un mismo final:
+ * - `execute`: la firma que entra por `PATCH /document/:id/sign` (simple y FIEL), del usuario
+ *   autenticado. Nunca firma a un colaborador BIOMETRIC.
+ * - `executeBiometric`: la firma biométrica, desde el webhook de Didit. Resuelve al firmante por el
+ *   colaborador del intento aprobado, así que sirve también a invitados sin cuenta.
+ *
  * Flujo:
  *
  * 1. Exige la geolocalización: una firma sin esa evidencia no debe registrarse por ninguna vía.
  * 2. Comprueba que el documento esté en `PENDING`.
- * 3. Resuelve —o vincula— al colaborador firmante y valida permisos: que sea firmante, que no
- *    haya respondido ya, y que sea su turno si el documento es secuencial.
+ * 3. Resuelve al colaborador firmante y valida que no haya respondido ya y que sea su turno si el
+ *    documento es secuencial.
  * 4. Valida la credencial de firma: e.firma completa en firma avanzada, firma registrada en
- *    simple.
+ *    simple, e intento aprobado por Didit —sobre el mismo PDF— en biométrica.
  * 5. Exige el código de verificación si el documento lo pide.
  * 6. Reclama el turno con un `UPDATE` condicionado a `PENDING` — el punto sin retorno.
  * 7. Guarda la evidencia de la firma: geolocalización, y el resultado de e.firma o el snapshot
@@ -71,9 +97,9 @@ export interface SignedDocumentData {
  *
  * **Doble firma.** La comprobación en memoria del paso 3 no cierra la carrera entre dos
  * peticiones casi simultáneas del mismo firmante (doble clic, dos pestañas, reintento por
- * timeout): las dos pueden pasarla antes de que cualquiera escriba. Lo que la cierra es el
- * `UPDATE` condicionado del paso 6, y va antes de tocar MinIO para que la petición perdedora no
- * deje estampado, correos ni auditoría duplicados.
+ * timeout, webhook duplicado): las dos pueden pasarla antes de que cualquiera escriba. Lo que la
+ * cierra es el `UPDATE` condicionado del paso 6, y va antes de tocar MinIO para que la petición
+ * perdedora no deje estampado, correos ni auditoría duplicados.
  */
 @Injectable()
 export class SignDocumentUseCase {
@@ -84,6 +110,8 @@ export class SignDocumentUseCase {
     private readonly documentRepository: Repository<DocumentEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    @InjectRepository(BiometricSignatureAttemptEntity)
+    private readonly biometricAttemptRepository: Repository<BiometricSignatureAttemptEntity>,
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly verificationCodeService: VerificationCodeService,
@@ -92,7 +120,7 @@ export class SignDocumentUseCase {
   ) {}
 
   /**
-   * Ejecuta el caso de uso.
+   * Registra la firma simple o FIEL del usuario autenticado (`PATCH /document/:id/sign`).
    *
    * @param documentId Documento que se firma.
    * @param currentUserId Usuario autenticado que firma.
@@ -109,9 +137,15 @@ export class SignDocumentUseCase {
    * @returns El documento firmado y si esta firma lo dejó completo.
    * @throws {BadRequestException} Cuando falta la geolocalización, el documento no está en
    *   `PENDING`, el firmante ya respondió, el documento exige un código de verificación que no se
-   *   validó, o otra petición reclamó el turno primero.
+   *   validó, otra petición reclamó el turno primero, o el firmante es BIOMETRIC (su firma sólo se
+   *   registra con la aprobación de Didit, ver `executeBiometric`).
    * @throws {ForbiddenException} Cuando el usuario no es firmante del documento, todavía no es
    *   su turno, o su rol no tiene concedido `DOCUMENT.SIGN_SELF`.
+   *
+   * @example
+   * ```ts
+   * await signDocument.execute('d-1', 'u-1', undefined, { latitude: 19.4, longitude: -99.1 }, auth);
+   * ```
    */
   async execute(
     documentId: string,
@@ -128,12 +162,7 @@ export class SignDocumentUseCase {
     }
 
     const document = await this.documentService.findOne(documentId);
-
-    if (document.status !== DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE) {
-      throw new BadRequestException(
-        `El documento no puede firmarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE}', el estatus actual es '${document.status}'`,
-      );
-    }
+    this.assertPendingSignature(document);
 
     const { signerCollaborators, myParticipant } =
       await this.documentService.findOrLinkMySignerCollaborator(
@@ -162,15 +191,15 @@ export class SignDocumentUseCase {
       });
     }
 
-    if (myParticipant.status !== COLLABORATOR_STATUS_ENUM.PENDING) {
-      throw new BadRequestException('Ya respondiste a esta solicitud de firma');
-    }
+    this.assertCanRespond(document, myParticipant, signerCollaborators);
 
-    if (
-      !isSignerTurn(myParticipant, signerCollaborators, document.isSequential)
-    ) {
-      throw new ForbiddenException(
-        'Aún no es tu turno para firmar este documento',
+    /**
+     * Un firmante BIOMETRIC nunca firma por esta ruta: sin esta salida caería en la rama de firma
+     * simple de abajo y firmaría sin pasar por Didit.
+     */
+    if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+      throw new BadRequestException(
+        'Este documento se firma con biometría. Inicia la firma con "Firmar con biometría".',
       );
     }
 
@@ -187,19 +216,243 @@ export class SignDocumentUseCase {
       );
     }
 
-    // Opt-in por documento: apagado, el flujo de firma sigue igual que siempre.
-    if (document.requiresVerification) {
-      const hasVerified = await this.verificationCodeService.hasConsumedCode(
-        documentId,
-        myParticipant.id,
-        VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+    await this.assertVerificationCode(
+      document,
+      myParticipant,
+      VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+    );
+
+    return this.completeSignature({
+      document,
+      participant: myParticipant,
+      signerCollaborators,
+      actor: currentUserId,
+      geolocation,
+      advancedSignatureResult,
+      ipAddress: null,
+    });
+  }
+
+  /**
+   * Registra la firma biométrica respaldada por un intento que Didit aprobó.
+   *
+   * La invoca `ProcessBiometricSignatureResultUseCase` al recibir el webhook. Resuelve al firmante
+   * por el `collaboratorId` del intento —no por un usuario—, así que sirve a firmantes con cuenta y
+   * a invitados sin cuenta. Revalida todo lo que pudo cambiar desde que se abrió la sesión: estado
+   * del documento, que el colaborador siga pendiente y en turno, y que el PDF sea el mismo.
+   *
+   * La ubicación y la IP son las que el firmante dio al iniciar; el veredicto biométrico queda en
+   * el intento, que es la evidencia de esta firma.
+   *
+   * @param attemptId - Intento de `biometric_signature_attempts`, ya en APPROVED.
+   * @returns El documento firmado y si esta firma lo dejó completo.
+   *
+   * @throws {NotFoundException} Si el documento no existe.
+   * @throws {BadRequestException} Si el intento no existe o no está aprobado, el PDF cambió, el
+   *   colaborador ya no es firmante biométrico o ya respondió, el documento no está pendiente,
+   *   falta el código que el documento exige, u otra entrega reclamó la firma primero.
+   * @throws {ForbiddenException} Si ya no es su turno.
+   *
+   * @example
+   * ```ts
+   * await signDocument.executeBiometric('attempt-1');
+   * ```
+   */
+  async executeBiometric(
+    attemptId: string,
+  ): Promise<BaseResponse<SignedDocumentData>> {
+    const attempt = await this.biometricAttemptRepository.findOne({
+      where: { id: attemptId },
+    });
+
+    if (
+      !attempt ||
+      attempt.status !== BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.APPROVED
+    ) {
+      throw new BadRequestException(
+        'La firma biométrica no está aprobada para este firmante',
       );
-      if (!hasVerified) {
-        throw new BadRequestException(
-          'Este documento requiere verificación. Solicita y valida tu código antes de firmar.',
-        );
-      }
     }
+
+    const document = await this.documentService.findOne(attempt.documentId);
+    this.assertPendingSignature(document);
+
+    if (attempt.documentHash !== document.originalHash) {
+      throw new BadRequestException(
+        'El documento cambió después de la verificación biométrica',
+      );
+    }
+
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: {
+        documentId: document.id,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { account: { user: true }, simpleSignature: true },
+      order: { signingOrder: 'ASC' },
+    });
+    const participant = signerCollaborators.find(
+      (collaborator) => collaborator.id === attempt.collaboratorId,
+    );
+
+    /**
+     * Firmante con cuenta: tiene que seguir siendo el mismo usuario. Invitado: el colaborador no
+     * puede haber vinculado una cuenta entre medias (entonces firma como usuario, con su identidad).
+     */
+    const sameSigner = attempt.userId
+      ? participant?.account?.userId === attempt.userId
+      : !participant?.accountId;
+
+    if (
+      !participant ||
+      participant.signatureType !== SIGNATURE_TYPE_ENUM.BIOMETRIC ||
+      !sameSigner
+    ) {
+      throw new BadRequestException(
+        'La firma biométrica no está aprobada para este firmante',
+      );
+    }
+
+    this.assertCanRespond(document, participant, signerCollaborators);
+
+    // El invitado acreditó su correo con el código de acceso; el usuario, con el código de firma.
+    await this.assertVerificationCode(
+      document,
+      participant,
+      attempt.userId
+        ? VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT
+        : VERIFICATION_EVENT_ENUM.GUEST_BIOMETRIC_ACCESS,
+    );
+
+    return this.completeSignature({
+      document,
+      participant,
+      signerCollaborators,
+      actor: attempt.userId ?? `guest-collaborator:${participant.id}`,
+      geolocation: attempt.geolocation,
+      advancedSignatureResult: null,
+      ipAddress: attempt.ipAddress,
+    });
+  }
+
+  /**
+   * Exige que el documento esté pendiente de firma.
+   *
+   * @param document - Documento que se firmaría.
+   * @returns Nada.
+   *
+   * @throws {BadRequestException} Si el documento no está en `PENDING_SIGNATURE`.
+   *
+   * @example
+   * ```ts
+   * this.assertPendingSignature(document);
+   * ```
+   */
+  private assertPendingSignature(document: DocumentEntity): void {
+    if (document.status !== DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE) {
+      throw new BadRequestException(
+        `El documento no puede firmarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE}', el estatus actual es '${document.status}'`,
+      );
+    }
+  }
+
+  /**
+   * Exige que el colaborador siga pendiente y, si el documento es secuencial, que sea su turno.
+   *
+   * @param document - Documento que se firma.
+   * @param participant - Colaborador que firmaría.
+   * @param signerCollaborators - Todos los firmantes del documento, para calcular el turno.
+   * @returns Nada.
+   *
+   * @throws {BadRequestException} Si el colaborador ya respondió.
+   * @throws {ForbiddenException} Si todavía no es su turno.
+   *
+   * @example
+   * ```ts
+   * this.assertCanRespond(document, participant, signers);
+   * ```
+   */
+  private assertCanRespond(
+    document: DocumentEntity,
+    participant: CollaboratorEntity,
+    signerCollaborators: CollaboratorEntity[],
+  ): void {
+    if (participant.status !== COLLABORATOR_STATUS_ENUM.PENDING) {
+      throw new BadRequestException('Ya respondiste a esta solicitud de firma');
+    }
+
+    if (
+      !isSignerTurn(participant, signerCollaborators, document.isSequential)
+    ) {
+      throw new ForbiddenException(
+        'Aún no es tu turno para firmar este documento',
+      );
+    }
+  }
+
+  /**
+   * Exige el código de verificación consumido cuando el documento lo pide (opt-in por documento:
+   * apagado, el flujo de firma sigue igual que siempre).
+   *
+   * @param document - Documento que se firma.
+   * @param participant - Colaborador que firmaría.
+   * @param event - Qué código cuenta: el de firma, o el de acceso de un invitado biométrico.
+   * @returns Nada.
+   *
+   * @throws {BadRequestException} Si el documento exige código y no hay uno consumido.
+   *
+   * @example
+   * ```ts
+   * await this.assertVerificationCode(document, participant, VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT);
+   * ```
+   */
+  private async assertVerificationCode(
+    document: DocumentEntity,
+    participant: CollaboratorEntity,
+    event: VERIFICATION_EVENT_ENUM,
+  ): Promise<void> {
+    if (!document.requiresVerification) {
+      return;
+    }
+
+    const hasVerified = await this.verificationCodeService.hasConsumedCode(
+      document.id,
+      participant.id,
+      event,
+    );
+    if (!hasVerified) {
+      throw new BadRequestException(
+        'Este documento requiere verificación. Solicita y valida tu código antes de firmar.',
+      );
+    }
+  }
+
+  /**
+   * Del claim en adelante: reclama el turno, guarda la evidencia, finaliza o avisa al siguiente, y
+   * publica eventos y auditoría. Común a las dos entradas.
+   *
+   * @param completion - Documento, colaborador, firmantes, actor y evidencia ya validados.
+   * @returns El documento firmado y si esta firma lo dejó completo.
+   *
+   * @throws {BadRequestException} Si otra petición reclamó el turno primero.
+   * @throws {Error} Lo que lancen el estampado, el sellado o MinIO al finalizar.
+   *
+   * @example
+   * ```ts
+   * return this.completeSignature({ document, participant, signerCollaborators, actor, geolocation,
+   *   advancedSignatureResult: null, ipAddress: null });
+   * ```
+   */
+  private async completeSignature({
+    document,
+    participant: myParticipant,
+    signerCollaborators,
+    actor,
+    geolocation,
+    advancedSignatureResult,
+    ipAddress,
+  }: SignatureCompletion): Promise<BaseResponse<SignedDocumentData>> {
+    const documentId = document.id;
 
     // `affected !== 1` significa que otra petición ya reclamó el turno.
     const claim = await this.collaboratorRepository.update(
@@ -213,11 +466,16 @@ export class SignDocumentUseCase {
     myParticipant.resolvedAt = new Date();
     // Evidencia declarada por el dispositivo, no verificada por el servidor.
     myParticipant.geolocation = geolocation;
+    if (ipAddress) {
+      myParticipant.ipAddress = ipAddress;
+    }
 
     if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       // Ya validado antes del claim; nunca contiene la llave privada ni la contraseña.
       myParticipant.advancedSignature = advancedSignatureResult;
-    } else {
+    } else if (myParticipant.signatureType !== SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+      // Firma biométrica: no hay rúbrica que copiar. Su evidencia es el intento aprobado en
+      // `biometric_signature_attempts` (veredicto mínimo de Didit, hash del PDF y ubicación).
       /**
        * Copia inmutable de la imagen de firma, tomada en el momento real de la firma.
        *
@@ -262,7 +520,7 @@ export class SignDocumentUseCase {
       this.documentEventsProducer.emitSigned({
         documentId,
         fileName: document.fileName,
-        actorUserId: currentUserId,
+        actorUserId: actor,
       });
     } else {
       await this.documentRepository.update(documentId, {
@@ -279,10 +537,10 @@ export class SignDocumentUseCase {
       );
     }
 
-    // Lo que este save persiste, a esta altura, es la geolocalización y —en firma avanzada— la
-    // firma electrónica. El claim atómico ya escribió status/signedAt y el snapshot de la rúbrica
-    // se escribió apenas se tomó (ver arriba, lo necesita el sellado); re-escribirlos con el mismo
-    // valor no tiene efecto.
+    // Lo que este save persiste, a esta altura, es la geolocalización —y la IP en biométrica— y en
+    // firma avanzada la firma electrónica. El claim atómico ya escribió status/signedAt y el
+    // snapshot de la rúbrica se escribió apenas se tomó (ver arriba, lo necesita el sellado);
+    // re-escribirlos con el mismo valor no tiene efecto.
     await this.collaboratorRepository.save(myParticipant);
 
     // Bug corregido: este evento alimenta el encadenamiento de DocumentTransaction y del ledger
@@ -296,7 +554,7 @@ export class SignDocumentUseCase {
     this.documentEventsProducer.emitCollaboratorSigned({
       documentId,
       fileName: document.fileName,
-      actorUserId: currentUserId,
+      actorUserId: actor,
       collaboratorId: myParticipant.id,
       signedAt: myParticipant.resolvedAt.toISOString(),
     });
@@ -304,8 +562,8 @@ export class SignDocumentUseCase {
     void this.auditService.create({
       documentId,
       operation: AuditAction.DOCUMENT_SIGNED,
-      ipAddress: document.ipAddress ?? '0.0.0.0',
-      users: [{ userId: currentUserId, action: AuditAction.DOCUMENT_SIGNED }],
+      ipAddress: ipAddress ?? document.ipAddress ?? '0.0.0.0',
+      users: [{ userId: actor, action: AuditAction.DOCUMENT_SIGNED }],
       signedAt: myParticipant.resolvedAt,
       geolocation,
     });

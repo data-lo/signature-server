@@ -5,6 +5,8 @@ import { DocumentService } from './document.service';
 import { DocumentEntity } from './entities/document.entity';
 import { CollaboratorEntity } from './entities/collaborator.entity';
 import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
+import { SIGNATURE_TYPE_ENUM } from './enum/signature-type.enum';
+import { COLLABORATOR_STATUS_ENUM } from './enum/collaborator-status.enum';
 import { FILE_STATUS_ENUM } from 'src/common/minio/enums/file-status-enum';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { MinioService } from 'src/common/minio/minio.service';
@@ -265,6 +267,28 @@ describe('DocumentService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('resolveStampImage: firmante biométrico', () => {
+    /**
+     * Un firmante biométrico no sube rúbrica. Antes de esta salida caía en el camino de firma
+     * simple, que busca la rúbrica del perfil por `signatureId` y tumbaba la finalización.
+     */
+    it('no tiene nada que estampar y no busca ninguna rúbrica', async () => {
+      const image = await service.resolveStampImage(
+        { id: 'doc-1' } as never,
+        {
+          id: 'col-1',
+          signatureType: SIGNATURE_TYPE_ENUM.BIOMETRIC,
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
+          account: { user: { id: 'user-1', signatureId: null } },
+        } as never,
+      );
+
+      expect(image).toBeNull();
+      expect(signatureService.findOne).not.toHaveBeenCalled();
+      expect(minioService.getFileInBytesFormat).not.toHaveBeenCalled();
+    });
   });
 
   describe('findOne', () => {

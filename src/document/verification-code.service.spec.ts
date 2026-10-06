@@ -125,6 +125,31 @@ describe('VerificationCodeService', () => {
         service.verifyAndConsume('doc-B', 'collaborator-1', '482913'),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('con evento, sólo busca códigos de ese evento; sin él, cualquiera (como siempre)', async () => {
+      repository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.verifyAndConsume(
+          'doc-1',
+          'collaborator-1',
+          '482913',
+          VERIFICATION_EVENT_ENUM.GUEST_BIOMETRIC_ACCESS,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(repository.findOne.mock.calls[0][0].where).toEqual(
+        expect.objectContaining({
+          event: VERIFICATION_EVENT_ENUM.GUEST_BIOMETRIC_ACCESS,
+        }),
+      );
+
+      await expect(
+        service.verifyAndConsume('doc-1', 'collaborator-1', '482913'),
+      ).rejects.toThrow(BadRequestException);
+      expect(repository.findOne.mock.calls[1][0].where).not.toHaveProperty(
+        'event',
+      );
+    });
   });
 
   describe('hasConsumedCode', () => {

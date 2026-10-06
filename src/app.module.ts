@@ -32,6 +32,7 @@ import { EventModule } from './event/event.module';
 import { SealModule } from './document/seal/seal.module';
 import { IdentityVerificationModule } from './identity-verification/identity-verification.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { BiometricSignatureModule } from './biometric-signature/biometric-signature.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 
 @Module({
@@ -106,6 +107,7 @@ import { AuthorizationModule } from './authorization/authorization.module';
     SealModule,
     IdentityVerificationModule,
     WebhooksModule,
+    BiometricSignatureModule,
     AuthorizationModule,
   ],
   controllers: [AppController],

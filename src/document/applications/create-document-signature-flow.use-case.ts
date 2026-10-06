@@ -69,8 +69,8 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
  * facturación habla de firma avanzada.
  *
  * `BIOMETRIC` todavía no tiene categoría comercial: se traduce a `null` en vez de cobrarla como
- * simple o avanzada sin que nadie lo haya decidido. Hoy es inalcanzable —ni el payload de creación
- * ni el enum de Postgres aceptan ese valor— y debe definirse antes de habilitar la firma biométrica.
+ * simple o avanzada sin que nadie lo haya decidido. Hoy es inalcanzable —el payload de creación no
+ * acepta ese valor— y debe definirse antes de permitir elegir la firma biométrica al crear.
  */
 const SIGNATURE_TYPE_DOMAIN_TO_BILLING: Record<
   SIGNATURE_TYPE_ENUM,

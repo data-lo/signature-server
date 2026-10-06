@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsModule } from 'src/payments/payments.module';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
+import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { DiditWebhookSignatureVerifierService } from './didit/didit-webhook-signature-verifier.service';
+import { DiditWebhookDispatcherService } from './didit/didit-webhook-dispatcher.service';
 import { StripeWebhookSignatureVerifierService } from './stripe/stripe-webhook-signature-verifier.service';
 import { RegisterWebhookEventUseCase } from './applications/register-webhook-event.use-case';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
@@ -28,16 +30,23 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * quien interpreta el resultado de una sesión de Didit y mueve el estado del usuario. La
  * dependencia va también en un solo sentido: `identity-verification` no conoce a `webhooks` — no
  * tiene controller de webhooks ni verificación de firma, por diseño.
+ *
+ * `BiometricSignatureModule` se importa por `ProcessBiometricSignatureResultUseCase` y por la
+ * búsqueda del intento por `session_id`: Didit manda al mismo endpoint los resultados de identidad
+ * y de firma biométrica, y `DiditWebhookDispatcherService` decide a cuál pertenece cada entrega.
+ * Mismo sentido único: `biometric-signature` no conoce a `webhooks`.
  */
 @Module({
   imports: [
     TypeOrmModule.forFeature([WebhookEventEntity]),
     PaymentsModule,
     IdentityVerificationModule,
+    BiometricSignatureModule,
   ],
   controllers: [DiditWebhookController, StripeWebhookController],
   providers: [
     DiditWebhookSignatureVerifierService,
+    DiditWebhookDispatcherService,
     StripeWebhookSignatureVerifierService,
     RegisterWebhookEventUseCase,
     ReceiveDiditWebhookUseCase,
