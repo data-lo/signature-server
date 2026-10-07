@@ -1,19 +1,33 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
+
+import { DirectoryContactsController } from './directory-contacts.controller';
+import { DirectoryContactsService } from './directory-contacts.service';
 import { DirectoryEntity } from './entities/directory.entity';
 import { DirectoryContactEntity } from './entities/directory-contact.entity';
 
 /**
  * Directorio de contactos por cuenta activa (personal u organización).
  *
- * Por ahora sólo registra la persistencia; los casos de uso, los endpoints y el RBAC llegan en
- * tareas posteriores. Exporta `TypeOrmModule` para que esos consumidores reciban los repositorios.
+ * Expone `/directory-contacts` (alta, edición, detalle y búsqueda por correo). `AccountEntity`
+ * valida la cuenta activa y resuelve el vínculo con la cuenta personal de un usuario;
+ * `UserEntity` encuentra a ese usuario por su correo. Exporta `TypeOrmModule` para que otros
+ * consumidores reciban los repositorios del directorio.
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DirectoryEntity, DirectoryContactEntity]),
+    TypeOrmModule.forFeature([
+      DirectoryEntity,
+      DirectoryContactEntity,
+      AccountEntity,
+      UserEntity,
+    ]),
   ],
+  controllers: [DirectoryContactsController],
+  providers: [DirectoryContactsService],
   exports: [TypeOrmModule],
 })
 export class DirectoryModule {}
