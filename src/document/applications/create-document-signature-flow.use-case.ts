@@ -5,12 +5,15 @@ import { v4 as uuid4 } from 'uuid';
 
 import { DocumentEntity } from '../entities/document.entity';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { NotificationEntity } from '../entities/notification.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
 
 import {
+  CollaboratorPayloadDto,
   CreateDocumentSignaturesDto,
+  isDirectoryCollaborator,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   REQUIRES_DIFFERENT_SIGNATURES_ENUM,
@@ -48,6 +51,10 @@ import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
 import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
 import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
+import {
+  CollaboratorIdentity,
+  DirectoryCollaboratorsService,
+} from 'src/directory/directory-collaborators.service';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -121,6 +128,26 @@ const EXPECTED_REQUIRES_DIFFERENT_SIGNATURES: Record<
     REQUIRES_DIFFERENT_SIGNATURES_ENUM.BIOMETRIC,
 };
 
+/**
+ * Cómo nombrar a un colaborador en un mensaje de error, antes de haber resuelto su identidad.
+ *
+ * @param collaborator - Colaborador del payload.
+ * @returns Su correo si es manual; "un firmante del Directorio" si viene del Directorio, que no
+ *   trae correo en el payload.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * describeCollaborator({ email: 'ana@example.com' } as CollaboratorPayloadDto); // 'ana@example.com'
+ * ```
+ */
+function describeCollaborator(collaborator: CollaboratorPayloadDto): string {
+  return isDirectoryCollaborator(collaborator)
+    ? 'un firmante del Directorio'
+    : (collaborator.email ?? 'un firmante');
+}
+
 export interface CreateDocumentSignaturesResult {
   id: string;
   status: DOCUMENT_STATUS_ENUM;
@@ -138,6 +165,13 @@ export interface CreateDocumentSignaturesResult {
  *
  * Trata a todos los colaboradores como invitación por email (accountId siempre null) — no
  * intenta resolver si ese correo ya tiene cuenta en la plataforma.
+ *
+ * La identidad de cada colaborador sale de uno de dos orígenes (historia "Enviar colaboradores
+ * desde Directorio mediante usuario vinculado al crear un documento"): `MANUAL`, con nombre,
+ * apellido y correo tal como llegan, o `DIRECTORY`, donde el payload sólo trae `linkedUserId` y
+ * la identidad se resuelve desde ese usuario (`DirectoryCollaboratorsService`), ANTES de crear el
+ * colaborador y, por tanto, de notificarlo. Los manuales con `addToDirectory` quedan además en el
+ * Directorio activo, dentro de la misma transacción.
  *
  * El tipo de firma es del documento, no de cada firmante (historia "Selección de tipo de firma al
  * crear documentos"): llega en `documentData.signatureType`, admite SIMPLE, ADVANCED o
@@ -168,6 +202,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
     private readonly documentReviewerService: DocumentReviewerService,
     private readonly assertPlanAction: AssertPlanActionUseCase,
+    private readonly directoryCollaborators: DirectoryCollaboratorsService,
   ) {}
 
   async execute(
@@ -237,7 +272,7 @@ export class CreateDocumentSignatureFlowUseCase {
     );
     if (signerWithoutPosition) {
       throw new BadRequestException(
-        `Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de ${signerWithoutPosition.email}`,
+        `Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de ${describeCollaborator(signerWithoutPosition)}`,
       );
     }
 
@@ -301,6 +336,16 @@ export class CreateDocumentSignatureFlowUseCase {
           activeAccount.organizationId,
         )
       : null;
+
+    /**
+     * Se resuelve aquí, antes de subir el archivo y de abrir la transacción: un `linkedUserId` que
+     * no está en el Directorio activo es un error del payload, y lo barato es enterarse antes de
+     * escribir el PDF en Minio y de cobrar el crédito.
+     */
+    const identities = await this.resolveCollaboratorIdentities(
+      activeAccount,
+      dto.collaborators,
+    );
 
     const totalPages = await this.documentSigningService.getPdfPages(file);
 
@@ -475,6 +520,8 @@ export class CreateDocumentSignatureFlowUseCase {
       for (const participant of orderedCollaborators) {
         const isSigner =
           participant.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;
+        // Ya resuelta: la del payload para MANUAL, la del usuario vinculado para DIRECTORY.
+        const identity = identities.get(participant)!;
 
         // Se crea para todo SIGNER de este flujo — `simpleSignatureId` asignado distingue a estos
         // colaboradores de los creados por el endpoint POST /document más antiguo (que nunca lo
@@ -510,9 +557,9 @@ export class CreateDocumentSignatureFlowUseCase {
             // lo compara contra el correo ya normalizado del usuario. Guardarlo tal cual se
             // tecleó dejaba invisibles en "Por firmar" a los firmantes invitados con
             // mayúsculas (ver el bug corregido en DocumentService.findWithFilters).
-            email: participant.email.toLowerCase(),
-            firstName: participant.firstName,
-            lastName: participant.lastName,
+            email: identity.email.toLowerCase(),
+            firstName: identity.firstName,
+            lastName: identity.lastName,
             // Solo el WITNESS guarda identificador fiscal: para un firmante el dato ya no se
             // pide al crear el documento, y el del flujo avanzado sale del certificado de
             // e.firma al firmar (ver `CollaboratorPayloadDto.taxId`). Se descarta explícitamente
@@ -598,6 +645,23 @@ export class CreateDocumentSignatureFlowUseCase {
           requiresVerification: true,
         });
       }
+
+      /**
+       * Dentro de la transacción: si el documento no llega a crearse, tampoco quedan contactos
+       * nuevos en el Directorio. `addToDirectory` sólo cuenta para los capturados a mano; los del
+       * Directorio ya están en él.
+       */
+      await this.directoryCollaborators.addManualCollaboratorsToDirectory(
+        manager,
+        activeAccount,
+        dto.collaborators
+          .filter(
+            (participant) =>
+              !isDirectoryCollaborator(participant) &&
+              participant.addToDirectory === true,
+          )
+          .map((participant) => identities.get(participant)!),
+      );
 
       /**
        * El reviewer es un colaborador más —misma tabla, misma transacción— y no una columna del
@@ -743,6 +807,74 @@ export class CreateDocumentSignatureFlowUseCase {
         verificationCodesCount,
       },
     };
+  }
+
+  /**
+   * Resuelve la identidad (nombre, apellido y correo) de cada colaborador del payload.
+   *
+   * - `MANUAL`: la del payload. Se exige aquí también —no sólo en el DTO— porque el caso de uso no
+   *   debe depender de que lo hayan llamado a través del `ValidationPipe`.
+   * - `DIRECTORY`: la del usuario vinculado, resuelta en una sola consulta para todos. Lo que el
+   *   cliente haya mandado como nombre, apellido o correo junto con este origen se ignora.
+   *
+   * @param activeAccount - Cuenta activa ya validada; define el Directorio.
+   * @param collaborators - Colaboradores del payload.
+   * @returns Un mapa del colaborador del payload (por referencia) a su identidad.
+   *
+   * @throws {BadRequestException} (400) Si a un colaborador manual le falta nombre, apellido o
+   *   correo, si uno del Directorio no trae `linkedUserId`, o si ese usuario no existe o no está
+   *   vinculado a un contacto vigente del Directorio activo.
+   *
+   * @example
+   * ```ts
+   * const identities = await this.resolveCollaboratorIdentities(activeAccount, dto.collaborators);
+   * identities.get(dto.collaborators[0])!.email; // 'ana@example.com'
+   * ```
+   */
+  private async resolveCollaboratorIdentities(
+    activeAccount: Pick<AccountEntity, 'id' | 'accountType' | 'organizationId'>,
+    collaborators: readonly CollaboratorPayloadDto[],
+  ): Promise<Map<CollaboratorPayloadDto, CollaboratorIdentity>> {
+    const fromDirectory = collaborators.filter(isDirectoryCollaborator);
+    if (fromDirectory.some((participant) => !participant.linkedUserId)) {
+      throw new BadRequestException(
+        'Un colaborador del Directorio debe traer linkedUserId; un contacto sin usuario vinculado se envía como MANUAL',
+      );
+    }
+
+    const linkedIdentities =
+      await this.directoryCollaborators.resolveLinkedCollaborators(
+        activeAccount,
+        fromDirectory.map((participant) => participant.linkedUserId!),
+      );
+
+    return new Map(
+      collaborators.map((participant) => {
+        if (isDirectoryCollaborator(participant)) {
+          return [
+            participant,
+            linkedIdentities.get(participant.linkedUserId!)!,
+          ];
+        }
+        if (
+          !participant.firstName ||
+          !participant.lastName ||
+          !participant.email
+        ) {
+          throw new BadRequestException(
+            'Un colaborador capturado a mano debe traer nombre, apellido y correo',
+          );
+        }
+        return [
+          participant,
+          {
+            firstName: participant.firstName,
+            lastName: participant.lastName,
+            email: participant.email,
+          },
+        ];
+      }),
+    );
   }
 
   /**
