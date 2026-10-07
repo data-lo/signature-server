@@ -46,6 +46,8 @@ import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature
 import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
+import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
+import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -61,16 +63,14 @@ const SIGNATURE_TYPE_PAYLOAD_TO_DOMAIN: Record<
 > = {
   [PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE]: SIGNATURE_TYPE_ENUM.SIMPLE,
   [PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED]: SIGNATURE_TYPE_ENUM.FIEL,
+  [PAYLOAD_SIGNATURE_TYPE_ENUM.BIOMETRIC]: SIGNATURE_TYPE_ENUM.BIOMETRIC,
 };
 
 /**
  * Vocabulario de documentos -> vocabulario comercial. `FIEL` y `ADVANCED` son el mismo tipo de
  * firma con el nombre que le da cada módulo: el dominio de documentos habla de la FIEL del SAT y
- * facturación habla de firma avanzada.
- *
- * `BIOMETRIC` todavía no tiene categoría comercial: se traduce a `null` en vez de cobrarla como
- * simple o avanzada sin que nadie lo haya decidido. Hoy es inalcanzable —el payload de creación no
- * acepta ese valor— y debe definirse antes de permitir elegir la firma biométrica al crear.
+ * facturación habla de firma avanzada. `BIOMETRIC` se llama igual en los dos: el recibo dice con
+ * qué se firma el documento, y el crédito que consume es el mismo que el de los demás tipos.
  */
 const SIGNATURE_TYPE_DOMAIN_TO_BILLING: Record<
   SIGNATURE_TYPE_ENUM,
@@ -78,7 +78,7 @@ const SIGNATURE_TYPE_DOMAIN_TO_BILLING: Record<
 > = {
   [SIGNATURE_TYPE_ENUM.SIMPLE]: BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
   [SIGNATURE_TYPE_ENUM.FIEL]: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
-  [SIGNATURE_TYPE_ENUM.BIOMETRIC]: null,
+  [SIGNATURE_TYPE_ENUM.BIOMETRIC]: BILLING_SIGNATURE_TYPE_ENUM.BIOMETRIC,
 };
 
 /**
@@ -87,12 +87,10 @@ const SIGNATURE_TYPE_DOMAIN_TO_BILLING: Record<
  * Es el único punto que cruza esa frontera: el resto del módulo de documentos usa
  * `SIGNATURE_TYPE_ENUM` y facturación no conoce ese enum. Un documento sin tipo de firma se
  * traduce a `null` en vez de a un valor por defecto — el recibo debe decir "no se decidió" y no
- * inventar una firma simple que nadie eligió. Lo mismo para `BIOMETRIC`, que aún no tiene
- * categoría comercial.
+ * inventar una firma simple que nadie eligió.
  *
  * @param signatureType - Tipo de firma tal como está guardado en `documents.signature_type`.
- * @returns El tipo equivalente para el recibo de crédito, o `null` si el documento no tiene uno o
- *   es `BIOMETRIC`.
+ * @returns El tipo equivalente para el recibo de crédito, o `null` si el documento no tiene uno.
  *
  * @example
  * ```ts
@@ -119,6 +117,8 @@ const EXPECTED_REQUIRES_DIFFERENT_SIGNATURES: Record<
     REQUIRES_DIFFERENT_SIGNATURES_ENUM.SIMPLE,
   [PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED]:
     REQUIRES_DIFFERENT_SIGNATURES_ENUM.FIEL,
+  [PAYLOAD_SIGNATURE_TYPE_ENUM.BIOMETRIC]:
+    REQUIRES_DIFFERENT_SIGNATURES_ENUM.BIOMETRIC,
 };
 
 export interface CreateDocumentSignaturesResult {
@@ -140,8 +140,8 @@ export interface CreateDocumentSignaturesResult {
  * intenta resolver si ese correo ya tiene cuenta en la plataforma.
  *
  * El tipo de firma es del documento, no de cada firmante (historia "Selección de tipo de firma al
- * crear documentos"): llega en `documentData.signatureType`, admite solo SIMPLE o ADVANCED, y se
- * copia igual a todos los SIGNER — no existe el documento con firmas de tipos distintos. Desde
+ * crear documentos"): llega en `documentData.signatureType`, admite SIMPLE, ADVANCED o
+ * BIOMETRIC, y se copia igual a todos los SIGNER — no existe el documento con firmas de tipos distintos. Desde
  * `AddSignatureTypeToDocuments1784300000049` se guarda además en el propio documento, que es de
  * donde lo lee el recibo de crédito.
  *
@@ -167,6 +167,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
     private readonly documentReviewerService: DocumentReviewerService,
+    private readonly assertPlanAction: AssertPlanActionUseCase,
   ) {}
 
   async execute(
@@ -191,7 +192,7 @@ export class CreateDocumentSignatureFlowUseCase {
     }
 
     // Historia "Selección de tipo de firma al crear documentos": el tipo de firma es UNA decisión
-    // del documento (SIMPLE o ADVANCED, nada más) y se aplica igual a todos sus firmantes. Se
+    // del documento (SIMPLE, ADVANCED o BIOMETRIC) y se aplica igual a todos sus firmantes. Se
     // resuelve acá arriba, una sola vez, para que ningún punto del flujo pueda derivar un tipo
     // distinto por colaborador.
     const payloadSignatureType = dto.documentData.signatureType;
@@ -260,6 +261,21 @@ export class CreateDocumentSignatureFlowUseCase {
     }
 
     const requiresApproval = dto.documentData.requiresApproval === true;
+
+    /**
+     * La firma biométrica es una capacidad del plan (`graphSignatureBiometrics`), y la pantalla
+     * esconde la opción cuando falta; esto la rechaza para el cliente que no la esconda. Va antes
+     * de subir el archivo, como el resto de las validaciones baratas. Sin `requiredCredits`: el
+     * saldo lo decide `consumeDocumentCredit` dentro de la transacción, igual que en los otros
+     * tipos.
+     */
+    if (documentSignatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+      await this.assertPlanAction.execute({
+        userId: createdBy,
+        accountId,
+        action: PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS,
+      });
+    }
 
     /**
      * Mandar aprobador y a la vez decir que no hace falta aprobación es una contradicción, y se
@@ -556,8 +572,8 @@ export class CreateDocumentSignatureFlowUseCase {
         if (isSigner) {
           // Regla de negocio reforzada en el backend, no solo confiada del payload (ver
           // historia): un documento de firma SIMPLE siempre requiere 2FA sin importar lo que
-          // mande el cliente; en ADVANCED se respeta la elección explícita del usuario en el
-          // checkbox, firmante por firmante.
+          // mande el cliente; en ADVANCED y BIOMETRIC se respeta la elección explícita del
+          // usuario en el checkbox, firmante por firmante.
           const needsVerification =
             documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE
               ? true
