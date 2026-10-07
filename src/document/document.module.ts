@@ -20,6 +20,7 @@ import { EfirmaModule } from 'src/efirma/efirma.module';
 import { SealModule } from './seal/seal.module';
 import { SummaryDocumentModule } from './summary-document/summary-document.module';
 import { BillingModule } from 'src/billing/billing.module';
+import { DirectoryModule } from 'src/directory/directory.module';
 import { SignatureQrService } from './services/signature-qr.service';
 import { DocumentAuthorizationPolicy } from './policies/document-authorization.policy';
 import { DocumentReadAccessService } from './services/document-read-access.service';
@@ -136,6 +137,12 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
     EfirmaModule,
     SealModule,
     SummaryDocumentModule,
+    /**
+     * `DirectoryCollaboratorsService`: al crear un documento, resuelve a los colaboradores elegidos
+     * del Directorio y da de alta a los manuales con `addToDirectory`. No crea ciclo: el
+     * Directorio no importa nada de documentos.
+     */
+    DirectoryModule,
     /**
      * De aquí sale `ConsumeDocumentCreditUseCase`: crear un documento cuesta un crédito.
      *
