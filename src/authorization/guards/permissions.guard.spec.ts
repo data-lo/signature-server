@@ -154,6 +154,54 @@ describe('PermissionsGuard', () => {
     );
   });
 
+  /**
+   * Los endpoints del Directorio declaran un permiso por acción. El guard le pasa a
+   * `AuthorizationService` el recurso y la acción exactos con la cuenta de `X-Account-Id`, y un
+   * permiso faltante termina en 403.
+   */
+  describe('DIRECTORY', () => {
+    it.each([
+      ACTION_KEY_ENUM.READ,
+      ACTION_KEY_ENUM.CREATE,
+      ACTION_KEY_ENUM.UPDATE,
+      ACTION_KEY_ENUM.DELETE,
+    ])(
+      'delega DIRECTORY + %s con la cuenta activa del header',
+      async (action) => {
+        reflector.getAllAndOverride.mockReturnValue({
+          resource: RESOURCE_KEY_ENUM.DIRECTORY,
+          action,
+        });
+
+        await guard.canActivate(buildContext(buildRequest()));
+
+        expect(authorizationService.authorize).toHaveBeenCalledWith({
+          userId: 'user-1',
+          organizationId: undefined,
+          accountId: 'account-1',
+          resource: RESOURCE_KEY_ENUM.DIRECTORY,
+          action,
+        });
+      },
+    );
+
+    it('responde 403 si falta el permiso específico del directorio', async () => {
+      reflector.getAllAndOverride.mockReturnValue({
+        resource: RESOURCE_KEY_ENUM.DIRECTORY,
+        action: ACTION_KEY_ENUM.DELETE,
+      });
+      authorizationService.authorize.mockRejectedValue(
+        new ForbiddenException(
+          'No tienes permisos suficientes para realizar esta acción',
+        ),
+      );
+
+      await expect(
+        guard.canActivate(buildContext(buildRequest())),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
   describe('resolución de la cuenta activa', () => {
     it('prefiere el :organizationId de la ruta sobre los headers', async () => {
       const request = buildRequest({

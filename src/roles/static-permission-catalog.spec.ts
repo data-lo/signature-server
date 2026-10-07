@@ -8,6 +8,9 @@ import {
   STATIC_ROLE_PERMISSION_MATRIX,
 } from './static-permission-catalog';
 import { buildPermissionKey } from './permission-catalog.util';
+import { ACTION_KEY_ENUM } from './enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from './enums/permission-scope.enum';
+import { RESOURCE_KEY_ENUM } from './enums/resource-key.enum';
 import { SYSTEM_ROLE_NAME_ENUM } from './enums/system-role-name.enum';
 
 /**
@@ -68,6 +71,26 @@ const CATALOG_TABLE: ReadonlyArray<[STATIC_PERMISSION_KEY_ENUM, string]> = [
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CANCEL,
     'SOLICITAR O CONFIRMAR CANCELACIONES, SEGÚN EL FLUJO',
   ],
+  [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ, 'VER CONTACTOS DEL DIRECTORIO'],
+  [
+    STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
+    'AGREGAR CONTACTOS AL DIRECTORIO',
+  ],
+  [
+    STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
+    'EDITAR CONTACTOS DEL DIRECTORIO',
+  ],
+  [
+    STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
+    'ARCHIVAR CONTACTOS DEL DIRECTORIO',
+  ],
+];
+
+const DIRECTORY_KEYS = [
+  STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
+  STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
+  STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
+  STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
 ];
 
 describe('static-permission-catalog', () => {
@@ -147,12 +170,55 @@ describe('static-permission-catalog', () => {
       ]);
     });
 
+    it('OWNER y ADMIN traen los cuatro DIRECTORY.*; MEMBER, ninguno', () => {
+      for (const role of [
+        SYSTEM_ROLE_NAME_ENUM.OWNER,
+        SYSTEM_ROLE_NAME_ENUM.ADMIN,
+      ]) {
+        expect(STATIC_ROLE_PERMISSION_MATRIX[role]).toEqual(
+          expect.arrayContaining(DIRECTORY_KEYS),
+        );
+      }
+      for (const key of DIRECTORY_KEYS) {
+        expect(
+          STATIC_ROLE_PERMISSION_MATRIX[SYSTEM_ROLE_NAME_ENUM.MEMBER],
+        ).not.toContain(key);
+      }
+    });
+
     it('ningún rol recibe una clave que no exista en el catálogo', () => {
       for (const keys of Object.values(STATIC_ROLE_PERMISSION_MATRIX)) {
         for (const key of keys) {
           expect(STATIC_PERMISSION_CATALOG[key]).toBeDefined();
         }
       }
+    });
+  });
+
+  describe('DIRECTORY', () => {
+    it.each([
+      [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ, ACTION_KEY_ENUM.READ],
+      [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE, ACTION_KEY_ENUM.CREATE],
+      [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE, ACTION_KEY_ENUM.UPDATE],
+      [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE, ACTION_KEY_ENUM.DELETE],
+    ])(
+      '%s es DIRECTORY + %s, alcance ANY y no exclusivo de organizaciones',
+      (key, action) => {
+        expect(STATIC_PERMISSION_CATALOG[key]).toMatchObject({
+          resource: RESOURCE_KEY_ENUM.DIRECTORY,
+          action,
+          scope: PERMISSION_SCOPE_ENUM.ANY,
+          organizationOnly: false,
+        });
+      },
+    );
+
+    /** `DELETE` ya existía en `ACTION_KEY_ENUM`; el catálogo sólo empieza a sembrarla. */
+    it('el seed materializa el recurso DIRECTORY y la acción DELETE', () => {
+      expect(
+        STATIC_CATALOG_RESOURCES[RESOURCE_KEY_ENUM.DIRECTORY],
+      ).toBeDefined();
+      expect(STATIC_CATALOG_ACTIONS[ACTION_KEY_ENUM.DELETE]).toBeDefined();
     });
   });
 

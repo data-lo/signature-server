@@ -292,13 +292,21 @@ describe('syncStaticPermissionCatalog', () => {
 
     expect(
       repositories.resources.rows.map((resource) => resource.key).sort(),
-    ).toEqual(['BILLING', 'DOCUMENT', 'MEMBER', 'ORGANIZATION', 'ROLE']);
+    ).toEqual([
+      'BILLING',
+      'DIRECTORY',
+      'DOCUMENT',
+      'MEMBER',
+      'ORGANIZATION',
+      'ROLE',
+    ]);
     expect(
       repositories.actions.rows.map((action) => action.key).sort(),
     ).toEqual([
       'APPROVE',
       'CANCEL',
       'CREATE',
+      'DELETE',
       'INVITE',
       'MANAGE',
       'READ',
@@ -388,9 +396,39 @@ describe('syncStaticPermissionCatalog', () => {
       'BILLING.MANAGE.ANY',
       'ROLE.READ.ANY',
       'ROLE.MANAGE.ANY',
+      'DIRECTORY.READ.ANY',
+      'DIRECTORY.CREATE.ANY',
+      'DIRECTORY.UPDATE.ANY',
+      'DIRECTORY.DELETE.ANY',
     ]) {
       expect(memberPermissions).not.toContain(denied);
     }
+  });
+
+  /** El directorio lo administran OWNER y ADMIN; un MEMBER sólo lo ve si un rol propio se lo da. */
+  it('OWNER y ADMIN reciben los cuatro DIRECTORY.*, MEMBER ninguno', async () => {
+    const repositories = createRepositories();
+
+    await syncStaticPermissionCatalog(repositories, silentLogger);
+
+    const directory = [
+      'DIRECTORY.CREATE.ANY',
+      'DIRECTORY.DELETE.ANY',
+      'DIRECTORY.READ.ANY',
+      'DIRECTORY.UPDATE.ANY',
+    ];
+    const onlyDirectory = (keys: string[]) =>
+      keys.filter((key) => key.startsWith('DIRECTORY.')).sort();
+
+    expect(onlyDirectory(grantedPermissionsOf(repositories, 'OWNER'))).toEqual(
+      directory,
+    );
+    expect(onlyDirectory(grantedPermissionsOf(repositories, 'ADMIN'))).toEqual(
+      directory,
+    );
+    expect(onlyDirectory(grantedPermissionsOf(repositories, 'MEMBER'))).toEqual(
+      [],
+    );
   });
 
   it('persiste en MAYÚSCULAS las descripciones de recursos y acciones', async () => {
@@ -518,9 +556,9 @@ describe('syncStaticPermissionCatalog', () => {
     );
 
     // DOCUMENT y ORGANIZATION ya estaban, con la descripción en minúsculas de `seed:roles`.
-    expect(summary.resources.created).toBe(3); // BILLING, MEMBER, ROLE
+    expect(summary.resources.created).toBe(4); // BILLING, MEMBER, ROLE, DIRECTORY
     expect(summary.resources.updated).toBe(2); // DOCUMENT y ORGANIZATION, pasadas a MAYÚSCULAS
-    expect(summary.actions.created).toBe(7);
+    expect(summary.actions.created).toBe(8);
     expect(summary.actions.updated).toBe(3); // CREATE, READ y UPDATE ya estaban
     expect(
       repositories.resources.rows.filter(
@@ -630,6 +668,29 @@ describe('syncStaticPermissionCatalog', () => {
       } as RolePermissionEntity);
     }
 
+    /**
+     * La acción `DELETE` ya existe en las bases que pasaron por `AddMemberDeletePermission`.
+     * `DIRECTORY.DELETE` la reutiliza —sin duplicarla— y el seed sólo le corrige la descripción.
+     */
+    it('reutiliza la acción DELETE existente para DIRECTORY.DELETE', async () => {
+      const repositories = createRepositories();
+      seedRetiredMemberDelete(repositories);
+
+      await syncStaticPermissionCatalog(repositories, silentLogger);
+
+      const deleteActions = repositories.actions.rows.filter(
+        (action) => action.key === 'DELETE',
+      );
+      expect(deleteActions).toHaveLength(1);
+      expect(deleteActions[0].id).toBe('action-delete');
+      expect(deleteActions[0].description).toBe(
+        'ELIMINAR O ARCHIVAR UN RECURSO EXISTENTE',
+      );
+      expect(grantedPermissionsOf(repositories, 'OWNER')).toContain(
+        'DIRECTORY.DELETE.ANY',
+      );
+    });
+
     it('reporta la asignación retirada sin borrarla por defecto', async () => {
       const repositories = createRepositories();
       seedRetiredMemberDelete(repositories);
@@ -657,6 +718,7 @@ describe('syncStaticPermissionCatalog', () => {
       const ownerPermissions = grantedPermissionsOf(repositories, 'OWNER');
       expect(ownerPermissions).not.toContain('MEMBER.DELETE.ANY');
       expect(ownerPermissions).toContain('MEMBER.REMOVE.ANY');
+      expect(ownerPermissions).toContain('DIRECTORY.DELETE.ANY');
       // La fila de `permissions` no se borra: puede seguir referenciada por un rol custom.
       expect(
         repositories.permissions.rows.some(
