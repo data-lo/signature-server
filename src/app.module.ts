@@ -34,6 +34,7 @@ import { IdentityVerificationModule } from './identity-verification/identity-ver
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { BiometricSignatureModule } from './biometric-signature/biometric-signature.module';
 import { AuthorizationModule } from './authorization/authorization.module';
+import { DirectoryModule } from './directory/directory.module';
 
 @Module({
   imports: [
@@ -109,6 +110,7 @@ import { AuthorizationModule } from './authorization/authorization.module';
     WebhooksModule,
     BiometricSignatureModule,
     AuthorizationModule,
+    DirectoryModule,
   ],
   controllers: [AppController],
   providers: [
