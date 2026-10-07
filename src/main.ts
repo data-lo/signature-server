@@ -9,6 +9,7 @@ import { UserModule } from './user/user.module';
 import { DocumentModule } from './document/document.module';
 import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
+import { DirectoryModule } from './directory/directory.module';
 import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
 import { frontendBaseUrl } from './common/utils/frontend-url.util';
 import {
@@ -79,7 +80,13 @@ async function bootstrap() {
     app,
     publicSwaggerConfig,
     {
-      include: [UserModule, DocumentModule, SignatureModule, AuthModule],
+      include: [
+        UserModule,
+        DocumentModule,
+        SignatureModule,
+        AuthModule,
+        DirectoryModule,
+      ],
     },
   );
 
