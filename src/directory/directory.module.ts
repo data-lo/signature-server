@@ -8,11 +8,6 @@ import { DirectoryService } from './directory.service';
 
 /**
  * Directorio de contactos por cuenta activa (personal u organización).
- *
- * Publica `GET/POST/PATCH/DELETE /directory/contacts`. La autorización la hace el
- * `PermissionsGuard` global (registrado por `AuthorizationModule`), así que este módulo no lo
- * importa. Exporta `TypeOrmModule` y `DirectoryService` para futuros consumidores (por ejemplo, el
- * selector de contactos al crear documentos).
  */
 @Module({
   imports: [
