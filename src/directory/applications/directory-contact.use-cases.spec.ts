@@ -13,13 +13,19 @@ import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
+import { DirectoryService } from '../directory.service';
+import { DirectoryEntity } from '../entities/directory.entity';
+import { DirectoryContactEntity } from '../entities/directory-contact.entity';
+import { DirectoryActor } from '../interfaces/request/directory-contact-request';
 import {
-  DirectoryService,
   escapeLikePattern,
   normalizeContactEmail,
-} from './directory.service';
-import { DirectoryEntity } from './entities/directory.entity';
-import { DirectoryContactEntity } from './entities/directory-contact.entity';
+  normalizeContactTaxId,
+} from '../utils/directory-contact.utils';
+import { ArchiveDirectoryContactUseCase } from './archive-directory-contact.use-case';
+import { CreateDirectoryContactUseCase } from './create-directory-contact.use-case';
+import { ListDirectoryContactsUseCase } from './list-directory-contacts.use-case';
+import { UpdateDirectoryContactUseCase } from './update-directory-contact.use-case';
 
 /** Contexto que deja `PermissionsGuard` para una cuenta personal. */
 function personalAuthorization(
@@ -50,6 +56,17 @@ function organizationAuthorization(
   });
 }
 
+/**
+ * Actor de una petición; por omisión, la cuenta personal con su propio `X-Account-Id`. Para un
+ * header ausente hay que armarlo a mano: un `undefined` explícito toma el valor por omisión.
+ */
+function actor(
+  authorization: AuthorizationContext = personalAuthorization(),
+  activeAccountId: string | undefined = authorization.accountId,
+): DirectoryActor {
+  return { authorization, activeAccountId };
+}
+
 function contact(
   overrides: Partial<DirectoryContactEntity> = {},
 ): DirectoryContactEntity {
@@ -77,8 +94,15 @@ function uniqueViolation(constraint: string): QueryFailedError {
   return error;
 }
 
-describe('DirectoryService', () => {
-  let service: DirectoryService;
+/**
+ * Los casos de uso corren contra el `DirectoryService` real con los repositorios simulados: así
+ * se comprueban a la vez las reglas de negocio y las consultas que terminan en la base.
+ */
+describe('Casos de uso del directorio', () => {
+  let listContacts: ListDirectoryContactsUseCase;
+  let createContact: CreateDirectoryContactUseCase;
+  let updateContact: UpdateDirectoryContactUseCase;
+  let archiveContact: ArchiveDirectoryContactUseCase;
   let directoryRepository: Record<string, jest.Mock>;
   let contactRepository: Record<string, jest.Mock>;
   let insertBuilder: Record<string, jest.Mock>;
@@ -112,7 +136,6 @@ describe('DirectoryService', () => {
       findOne: jest.fn().mockResolvedValue(null),
       exists: jest.fn().mockResolvedValue(false),
       create: jest.fn((data) => ({ ...data })),
-      merge: jest.fn((entity, data) => Object.assign(entity, data)),
       save: jest.fn(async (entity) => ({
         id: 'contact-new',
         createdAt: new Date(),
@@ -125,6 +148,10 @@ describe('DirectoryService', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         DirectoryService,
+        ListDirectoryContactsUseCase,
+        CreateDirectoryContactUseCase,
+        UpdateDirectoryContactUseCase,
+        ArchiveDirectoryContactUseCase,
         {
           provide: getRepositoryToken(DirectoryEntity),
           useValue: directoryRepository,
@@ -136,13 +163,23 @@ describe('DirectoryService', () => {
       ],
     }).compile();
 
-    service = moduleRef.get(DirectoryService);
+    listContacts = moduleRef.get(ListDirectoryContactsUseCase);
+    createContact = moduleRef.get(CreateDirectoryContactUseCase);
+    updateContact = moduleRef.get(UpdateDirectoryContactUseCase);
+    archiveContact = moduleRef.get(ArchiveDirectoryContactUseCase);
   });
 
   describe('cuenta activa', () => {
     it('sin X-Account-Id responde 400 y no consulta nada', async () => {
       await expect(
-        service.listContacts(personalAuthorization(), undefined, {}),
+        listContacts.execute({
+          actor: {
+            authorization: personalAuthorization(),
+            activeAccountId: undefined,
+          },
+          page: 1,
+          limit: 25,
+        }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(directoryRepository.findOne).not.toHaveBeenCalled();
     });
@@ -153,10 +190,13 @@ describe('DirectoryService', () => {
      */
     it('con X-Account-Id distinto de la cuenta autorizada responde 403', async () => {
       await expect(
-        service.createContact(personalAuthorization(), 'account-otra', {
-          firstName: 'Ana',
-          lastName: 'García',
-          email: 'ana@example.com',
+        createContact.execute({
+          actor: actor(personalAuthorization(), 'account-otra'),
+          contact: {
+            firstName: 'Ana',
+            lastName: 'García',
+            email: 'ana@example.com',
+          },
         }),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(insertBuilder.execute).not.toHaveBeenCalled();
@@ -165,11 +205,7 @@ describe('DirectoryService', () => {
 
   describe('aislamiento', () => {
     it('una cuenta personal usa el directorio de su propia cuenta', async () => {
-      await service.listContacts(
-        personalAuthorization(),
-        'account-personal',
-        {},
-      );
+      await listContacts.execute({ actor: actor(), page: 1, limit: 25 });
 
       expect(directoryRepository.findOne).toHaveBeenCalledWith({
         where: { personalAccountId: 'account-personal' },
@@ -177,16 +213,16 @@ describe('DirectoryService', () => {
     });
 
     it('dos miembros de la misma organización resuelven el mismo directorio', async () => {
-      await service.listContacts(
-        organizationAuthorization('account-a'),
-        'account-a',
-        {},
-      );
-      await service.listContacts(
-        organizationAuthorization('account-b'),
-        'account-b',
-        {},
-      );
+      await listContacts.execute({
+        actor: actor(organizationAuthorization('account-a')),
+        page: 1,
+        limit: 25,
+      });
+      await listContacts.execute({
+        actor: actor(organizationAuthorization('account-b')),
+        page: 1,
+        limit: 25,
+      });
 
       expect(directoryRepository.findOne).toHaveBeenNthCalledWith(1, {
         where: { organizationId: 'org-1' },
@@ -199,12 +235,11 @@ describe('DirectoryService', () => {
     it('el contacto se busca acotado al directorio activo y vigente', async () => {
       contactRepository.findOne.mockResolvedValue(contact());
 
-      await service.updateContact(
-        personalAuthorization(),
-        'account-personal',
-        'contact-1',
-        { phone: '+52 1' },
-      );
+      await updateContact.execute({
+        actor: actor(),
+        contactId: 'contact-1',
+        changes: { phone: '+52 1' },
+      });
 
       expect(contactRepository.findOne).toHaveBeenCalledWith({
         where: {
@@ -217,21 +252,17 @@ describe('DirectoryService', () => {
 
     it('el contacto de otro directorio responde 404 al editar y al archivar', async () => {
       contactRepository.findOne.mockResolvedValue(null);
+      const intruder = actor(organizationAuthorization('account-b', 'org-2'));
 
       await expect(
-        service.updateContact(
-          organizationAuthorization('account-b', 'org-2'),
-          'account-b',
-          'contact-1',
-          { firstName: 'Intruso' },
-        ),
+        updateContact.execute({
+          actor: intruder,
+          contactId: 'contact-1',
+          changes: { firstName: 'Intruso' },
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
       await expect(
-        service.archiveContact(
-          organizationAuthorization('account-b', 'org-2'),
-          'account-b',
-          'contact-1',
-        ),
+        archiveContact.execute({ actor: intruder, contactId: 'contact-1' }),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(contactRepository.save).not.toHaveBeenCalled();
     });
@@ -240,26 +271,25 @@ describe('DirectoryService', () => {
       directoryRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.updateContact(
-          personalAuthorization(),
-          'account-personal',
-          'contact-1',
-          {},
-        ),
+        updateContact.execute({
+          actor: actor(),
+          contactId: 'contact-1',
+          changes: {},
+        }),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(insertBuilder.execute).not.toHaveBeenCalled();
     });
   });
 
-  describe('listContacts', () => {
+  describe('ListDirectoryContactsUseCase', () => {
     it('sin directorio responde la página vacía sin crearlo', async () => {
       directoryRepository.findOne.mockResolvedValue(null);
 
-      const result = await service.listContacts(
-        personalAuthorization(),
-        'account-personal',
-        { page: 2, limit: 10 },
-      );
+      const result = await listContacts.execute({
+        actor: actor(),
+        page: 2,
+        limit: 10,
+      });
 
       expect(result).toEqual({
         items: [],
@@ -271,11 +301,11 @@ describe('DirectoryService', () => {
     it('excluye archivados, pagina y publica el correo normalizado', async () => {
       listBuilder.getManyAndCount.mockResolvedValue([[contact()], 26]);
 
-      const result = await service.listContacts(
-        personalAuthorization(),
-        'account-personal',
-        { page: 2, limit: 25 },
-      );
+      const result = await listContacts.execute({
+        actor: actor(),
+        page: 2,
+        limit: 25,
+      });
 
       expect(listBuilder.where).toHaveBeenCalledWith(
         'contact.directoryId = :directoryId',
@@ -296,8 +326,11 @@ describe('DirectoryService', () => {
     });
 
     it('busca por nombre, apellido, nombre completo, correo y RFC, con los comodines escapados', async () => {
-      await service.listContacts(personalAuthorization(), 'account-personal', {
+      await listContacts.execute({
+        actor: actor(),
         search: '50%_x',
+        page: 1,
+        limit: 25,
       });
 
       const [clause, params] = listBuilder.andWhere.mock.calls[1];
@@ -308,10 +341,33 @@ describe('DirectoryService', () => {
       expect(clause).toContain('contact.taxId ILIKE :search');
       expect(params).toEqual({ search: '%50\\%\\_x%' });
     });
+
+    it('no publica columnas internas del contacto', async () => {
+      const result = await listContacts.execute({
+        actor: actor(),
+        page: 1,
+        limit: 25,
+      });
+
+      expect(Object.keys(result.items[0]).sort()).toEqual(
+        [
+          'archivedAt',
+          'createdAt',
+          'email',
+          'firstName',
+          'id',
+          'lastName',
+          'linkedPersonalAccountId',
+          'phone',
+          'taxId',
+          'updatedAt',
+        ].sort(),
+      );
+    });
   });
 
-  describe('createContact', () => {
-    const dto = {
+  describe('CreateDirectoryContactUseCase', () => {
+    const newContact = {
       firstName: 'Ana',
       lastName: 'García',
       email: '  Ana@Example.COM ',
@@ -320,11 +376,10 @@ describe('DirectoryService', () => {
     };
 
     it('crea el directorio sin carreras (ON CONFLICT DO NOTHING) y luego lo lee', async () => {
-      await service.createContact(
-        organizationAuthorization('account-a'),
-        'account-a',
-        dto,
-      );
+      await createContact.execute({
+        actor: actor(organizationAuthorization('account-a')),
+        contact: newContact,
+      });
 
       expect(insertBuilder.values).toHaveBeenCalledWith({
         personalAccountId: null,
@@ -337,11 +392,10 @@ describe('DirectoryService', () => {
     });
 
     it('normaliza correo y RFC, y toma la autoría de la membresía autorizada', async () => {
-      const result = await service.createContact(
-        organizationAuthorization('account-a'),
-        'account-a',
-        dto,
-      );
+      const result = await createContact.execute({
+        actor: actor(organizationAuthorization('account-a')),
+        contact: newContact,
+      });
 
       expect(contactRepository.create).toHaveBeenCalledWith({
         firstName: 'Ana',
@@ -356,20 +410,14 @@ describe('DirectoryService', () => {
       expect(result.email).toBe('ana@example.com');
     });
 
-    /** El `ValidationPipe` global ya los descarta; esto comprueba que el servicio tampoco los lee. */
-    it('ignora directoryId y autoría aunque lleguen en el cuerpo', async () => {
-      await service.createContact(personalAuthorization(), 'account-personal', {
-        ...dto,
-        directoryId: 'directory-ajeno',
-        createdByAccountId: 'account-ajena',
-      } as never);
+    it('sin RFC ni teléfono los guarda como null', async () => {
+      await createContact.execute({
+        actor: actor(),
+        contact: { firstName: 'Ana', lastName: 'García', email: 'a@b.mx' },
+      });
 
       expect(contactRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          directoryId: 'directory-1',
-          createdByAccountId: 'account-personal',
-          updatedByAccountId: 'account-personal',
-        }),
+        expect.objectContaining({ taxId: null, phone: null }),
       );
     });
 
@@ -377,7 +425,7 @@ describe('DirectoryService', () => {
       contactRepository.findOne.mockResolvedValue(contact());
 
       await expect(
-        service.createContact(personalAuthorization(), 'account-personal', dto),
+        createContact.execute({ actor: actor(), contact: newContact }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(contactRepository.findOne).toHaveBeenCalledWith({
         where: {
@@ -396,11 +444,10 @@ describe('DirectoryService', () => {
       });
       contactRepository.findOne.mockResolvedValue(archived);
 
-      const result = await service.createContact(
-        personalAuthorization(),
-        'account-personal',
-        dto,
-      );
+      const result = await createContact.execute({
+        actor: actor(),
+        contact: newContact,
+      });
 
       expect(contactRepository.create).not.toHaveBeenCalled();
       expect(result.archivedAt).toBeNull();
@@ -420,7 +467,7 @@ describe('DirectoryService', () => {
       );
 
       await expect(
-        service.createContact(personalAuthorization(), 'account-personal', dto),
+        createContact.execute({ actor: actor(), contact: newContact }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -429,23 +476,22 @@ describe('DirectoryService', () => {
       contactRepository.save.mockRejectedValue(error);
 
       await expect(
-        service.createContact(personalAuthorization(), 'account-personal', dto),
+        createContact.execute({ actor: actor(), contact: newContact }),
       ).rejects.toBe(error);
     });
   });
 
-  describe('updateContact', () => {
+  describe('UpdateDirectoryContactUseCase', () => {
     beforeEach(() => {
       contactRepository.findOne.mockResolvedValue(contact());
     });
 
     it('cambia sólo lo enviado y registra quién lo cambió', async () => {
-      const result = await service.updateContact(
-        organizationAuthorization('account-b'),
-        'account-b',
-        'contact-1',
-        { lastName: 'García López', taxId: null },
-      );
+      const result = await updateContact.execute({
+        actor: actor(organizationAuthorization('account-b')),
+        contactId: 'contact-1',
+        changes: { lastName: 'García López', taxId: null },
+      });
 
       expect(result).toEqual(
         expect.objectContaining({
@@ -461,12 +507,11 @@ describe('DirectoryService', () => {
     });
 
     it('normaliza el correo nuevo y comprueba que esté libre en el directorio', async () => {
-      const result = await service.updateContact(
-        personalAuthorization(),
-        'account-personal',
-        'contact-1',
-        { email: ' Ana.Garcia@Example.com ' },
-      );
+      const result = await updateContact.execute({
+        actor: actor(),
+        contactId: 'contact-1',
+        changes: { email: ' Ana.Garcia@Example.com ' },
+      });
 
       expect(contactRepository.exists).toHaveBeenCalledWith({
         where: {
@@ -481,37 +526,34 @@ describe('DirectoryService', () => {
       contactRepository.exists.mockResolvedValue(true);
 
       await expect(
-        service.updateContact(
-          personalAuthorization(),
-          'account-personal',
-          'contact-1',
-          { email: 'otro@example.com' },
-        ),
+        updateContact.execute({
+          actor: actor(),
+          contactId: 'contact-1',
+          changes: { email: 'otro@example.com' },
+        }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(contactRepository.save).not.toHaveBeenCalled();
     });
 
     it('con el mismo correo (en otras mayúsculas) no busca duplicados', async () => {
-      await service.updateContact(
-        personalAuthorization(),
-        'account-personal',
-        'contact-1',
-        { email: 'ANA@example.com' },
-      );
+      await updateContact.execute({
+        actor: actor(),
+        contactId: 'contact-1',
+        changes: { email: 'ANA@example.com' },
+      });
 
       expect(contactRepository.exists).not.toHaveBeenCalled();
     });
   });
 
-  describe('archiveContact', () => {
+  describe('ArchiveDirectoryContactUseCase', () => {
     it('fija archivedAt y la autoría, sin borrar la fila', async () => {
       contactRepository.findOne.mockResolvedValue(contact());
 
-      const result = await service.archiveContact(
-        organizationAuthorization('account-a'),
-        'account-a',
-        'contact-1',
-      );
+      const result = await archiveContact.execute({
+        actor: actor(organizationAuthorization('account-a')),
+        contactId: 'contact-1',
+      });
 
       expect(result.archivedAt).toBeInstanceOf(Date);
       expect(contactRepository.save).toHaveBeenCalledWith(
@@ -526,11 +568,7 @@ describe('DirectoryService', () => {
       contactRepository.findOne.mockResolvedValue(null);
 
       await expect(
-        service.archiveContact(
-          personalAuthorization(),
-          'account-personal',
-          'contact-1',
-        ),
+        archiveContact.execute({ actor: actor(), contactId: 'contact-1' }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
@@ -540,6 +578,12 @@ describe('DirectoryService', () => {
       expect(normalizeContactEmail('  Ana@Example.COM ')).toBe(
         'ana@example.com',
       );
+    });
+
+    it('normalizeContactTaxId pasa a mayúsculas y respeta null/undefined', () => {
+      expect(normalizeContactTaxId('gaaa900101xxx')).toBe('GAAA900101XXX');
+      expect(normalizeContactTaxId(null)).toBeNull();
+      expect(normalizeContactTaxId(undefined)).toBeUndefined();
     });
 
     it('escapeLikePattern escapa %, _ y \\', () => {

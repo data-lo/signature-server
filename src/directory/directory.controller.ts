@@ -4,7 +4,6 @@ import {
   Delete,
   Get,
   Param,
-  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -18,10 +17,18 @@ import { AuthorizationContext } from 'src/authorization/interfaces/authorization
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
-import { DirectoryService } from './directory.service';
+// Casos de uso
+import { ArchiveDirectoryContactUseCase } from './applications/archive-directory-contact.use-case';
+import { CreateDirectoryContactUseCase } from './applications/create-directory-contact.use-case';
+import { ListDirectoryContactsUseCase } from './applications/list-directory-contacts.use-case';
+import { UpdateDirectoryContactUseCase } from './applications/update-directory-contact.use-case';
+
+// DTOs
 import { CreateDirectoryContactDto } from './dto/create-directory-contact.dto';
+import { DirectoryContactParamsDto } from './dto/directory-contact-params.dto';
 import { ListDirectoryContactsDto } from './dto/list-directory-contacts.dto';
 import { UpdateDirectoryContactDto } from './dto/update-directory-contact.dto';
+
 import {
   ApiArchiveDirectoryContact,
   ApiCreateDirectoryContact,
@@ -33,19 +40,28 @@ import {
   DirectoryContactResponse,
 } from './interfaces/response/directory-contact-response';
 
+/** Valores por omisión de la paginación; los mismos que declara `ListDirectoryContactsDto`. */
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 25;
+
 /**
  * Contactos del directorio de la cuenta activa.
  *
  * El controller no decide nada: `PermissionsGuard` comprueba la membresía y el permiso
  * `DIRECTORY.*` (una cuenta personal lo tiene siempre sobre lo suyo; una de organización, según su
- * rol), y `DirectoryService` resuelve el directorio desde ese contexto. Ningún endpoint recibe el
- * directorio como parámetro.
+ * rol), y cada endpoint traduce lo que recibió (DTOs validados, header y contexto autorizado) a
+ * la solicitud tipada de su caso de uso. Ningún endpoint recibe el directorio como parámetro.
  */
 @ApiTags('Directory')
 @ApiBearerAuth('access-token')
 @Controller('directory/contacts')
 export class DirectoryController {
-  constructor(private readonly directoryService: DirectoryService) {}
+  constructor(
+    private readonly listDirectoryContacts: ListDirectoryContactsUseCase,
+    private readonly createDirectoryContact: CreateDirectoryContactUseCase,
+    private readonly updateDirectoryContact: UpdateDirectoryContactUseCase,
+    private readonly archiveDirectoryContact: ArchiveDirectoryContactUseCase,
+  ) {}
 
   /**
    * Lista los contactos vigentes del directorio activo.
@@ -72,7 +88,12 @@ export class DirectoryController {
     @ActiveAccountId() accountId: string | undefined,
     @Query() query: ListDirectoryContactsDto,
   ): Promise<DirectoryContactListResponse> {
-    return this.directoryService.listContacts(authorization, accountId, query);
+    return this.listDirectoryContacts.execute({
+      actor: { authorization, activeAccountId: accountId },
+      search: query.search || undefined,
+      page: query.page ?? DEFAULT_PAGE,
+      limit: query.limit ?? DEFAULT_LIMIT,
+    });
   }
 
   /**
@@ -101,7 +122,16 @@ export class DirectoryController {
     @ActiveAccountId() accountId: string | undefined,
     @Body() dto: CreateDirectoryContactDto,
   ): Promise<DirectoryContactResponse> {
-    return this.directoryService.createContact(authorization, accountId, dto);
+    return this.createDirectoryContact.execute({
+      actor: { authorization, activeAccountId: accountId },
+      contact: {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        taxId: dto.taxId,
+        phone: dto.phone,
+      },
+    });
   }
 
   /**
@@ -109,7 +139,7 @@ export class DirectoryController {
    *
    * @param authorization - Contexto autorizado por `PermissionsGuard`.
    * @param accountId - Header `X-Account-Id`.
-   * @param contactId - Contacto a actualizar.
+   * @param params - Ruta, con el `contactId` a actualizar.
    * @param dto - Campos a cambiar.
    * @returns El contacto actualizado.
    *
@@ -131,15 +161,20 @@ export class DirectoryController {
   updateContact(
     @CurrentAuthorization() authorization: AuthorizationContext,
     @ActiveAccountId() accountId: string | undefined,
-    @Param('contactId', ParseUUIDPipe) contactId: string,
+    @Param() params: DirectoryContactParamsDto,
     @Body() dto: UpdateDirectoryContactDto,
   ): Promise<DirectoryContactResponse> {
-    return this.directoryService.updateContact(
-      authorization,
-      accountId,
-      contactId,
-      dto,
-    );
+    return this.updateDirectoryContact.execute({
+      actor: { authorization, activeAccountId: accountId },
+      contactId: params.contactId,
+      changes: {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        taxId: dto.taxId,
+        phone: dto.phone,
+      },
+    });
   }
 
   /**
@@ -147,7 +182,7 @@ export class DirectoryController {
    *
    * @param authorization - Contexto autorizado por `PermissionsGuard`.
    * @param accountId - Header `X-Account-Id`.
-   * @param contactId - Contacto a archivar.
+   * @param params - Ruta, con el `contactId` a archivar.
    * @returns El contacto archivado, con `archivedAt`.
    *
    * @throws {BadRequestException} (400) Si falta `X-Account-Id` o `contactId` no es UUID.
@@ -166,12 +201,11 @@ export class DirectoryController {
   archiveContact(
     @CurrentAuthorization() authorization: AuthorizationContext,
     @ActiveAccountId() accountId: string | undefined,
-    @Param('contactId', ParseUUIDPipe) contactId: string,
+    @Param() params: DirectoryContactParamsDto,
   ): Promise<DirectoryContactResponse> {
-    return this.directoryService.archiveContact(
-      authorization,
-      accountId,
-      contactId,
-    );
+    return this.archiveDirectoryContact.execute({
+      actor: { authorization, activeAccountId: accountId },
+      contactId: params.contactId,
+    });
   }
 }
