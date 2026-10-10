@@ -8,6 +8,8 @@ import { DirectoryContactsController } from './directory-contacts.controller';
 import { DirectoryContactsService } from './directory-contacts.service';
 import { DirectoryEntity } from './entities/directory.entity';
 import { DirectoryContactEntity } from './entities/directory-contact.entity';
+import { DirectoryController } from './directory.controller';
+import { DirectoryService } from './directory.service';
 
 /**
  * Directorio de contactos por cuenta activa (personal u organización).

@@ -157,7 +157,7 @@ describe('GetAuthorizationContextUseCase', () => {
       });
     }
 
-    it('publica facturación y sus documentos, sin consultar el rol', async () => {
+    it('publica facturación, sus documentos y su directorio, sin consultar el rol', async () => {
       accountRepository.findOne.mockResolvedValue(personalAccount());
 
       const response = await useCase.execute('user-1', 'account-1');
@@ -170,6 +170,10 @@ describe('GetAuthorizationContextUseCase', () => {
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST,
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF,
         STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CANCEL,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
+        STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
       ]);
       expect(rolesService.listPermissionsByRoleIds).not.toHaveBeenCalled();
     });
@@ -213,7 +217,7 @@ describe('GetAuthorizationContextUseCase', () => {
       expect(response.data.permissions).toContain(
         STATIC_PERMISSION_KEY_ENUM.BILLING_READ,
       );
-      expect(response.data.permissions).toHaveLength(7);
+      expect(response.data.permissions).toHaveLength(11);
     });
   });
 
@@ -242,6 +246,50 @@ describe('GetAuthorizationContextUseCase', () => {
     expect(response.data.permissions).toEqual([
       STATIC_PERMISSION_KEY_ENUM.MEMBER_READ,
       STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_ORGANIZATION,
+    ]);
+  });
+
+  /**
+   * `DIRECTORY.*` no se regala a las organizaciones por ser cuenta: una membresía cuyo rol no lo
+   * trae (MEMBER de fábrica) no publica ninguna de las cuatro claves, y el menú no le muestra el
+   * Directorio.
+   */
+  it('una membresía de organización sin DIRECTORY en su rol no recibe esas claves', async () => {
+    accountRepository.findOne.mockResolvedValue(
+      organizationMembership({
+        role: { id: 'role-1', name: SYSTEM_ROLE_NAME_ENUM.MEMBER },
+      } as Partial<AccountEntity>),
+    );
+    rolesService.listPermissionsByRoleIds.mockResolvedValue(
+      new Map([
+        [
+          'role-1',
+          [
+            grant(STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE),
+            grant(STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN),
+            grant(STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF),
+          ],
+        ],
+      ]),
+    );
+
+    const { permissions } = (await useCase.execute('user-1', 'account-1')).data;
+
+    expect(permissions.filter((key) => key.startsWith('DIRECTORY.'))).toEqual(
+      [],
+    );
+  });
+
+  it('una membresía de organización publica sólo los DIRECTORY.* que su rol concede', async () => {
+    accountRepository.findOne.mockResolvedValue(organizationMembership());
+    rolesService.listPermissionsByRoleIds.mockResolvedValue(
+      new Map([['role-1', [grant(STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ)]]]),
+    );
+
+    const response = await useCase.execute('user-1', 'account-1');
+
+    expect(response.data.permissions).toEqual([
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
     ]);
   });
 
