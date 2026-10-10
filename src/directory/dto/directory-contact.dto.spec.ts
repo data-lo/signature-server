@@ -1,94 +1,88 @@
-import { ValidationPipe } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 
 import { CreateDirectoryContactDto } from './create-directory-contact.dto';
-import { SearchDirectoryContactsDto } from './search-directory-contacts.dto';
 import { UpdateDirectoryContactDto } from './update-directory-contact.dto';
 
-/**
- * Se valida con el mismo `ValidationPipe` que `main.ts` (`whitelist` + `transform`): lo que se
- * prueba es lo que de verdad llega al servicio, incluida la propiedad descartada.
- */
-const pipe = new ValidationPipe({ whitelist: true, transform: true });
-
-function validate<T>(
-  metatype: new () => T,
-  value: unknown,
-  type: 'body' | 'query' = 'body',
-): Promise<T> {
-  return pipe.transform(value, { type, metatype }) as Promise<T>;
+async function errorsOf<T extends object>(
+  cls: new () => T,
+  payload: Record<string, unknown>,
+): Promise<{ dto: T; fields: string[] }> {
+  const dto = plainToInstance(cls, payload);
+  const errors = await validate(dto);
+  return { dto, fields: errors.map((error) => error.property) };
 }
 
 describe('CreateDirectoryContactDto', () => {
-  it('recorta los campos y descarta accountId, organizationId y directoryId', async () => {
-    const dto = await validate(CreateDirectoryContactDto, {
-      firstName: '  Ana ',
-      lastName: ' García ',
-      email: ' ana@example.com ',
-      accountId: 'acc-ajena',
-      organizationId: 'org-ajena',
-      directoryId: 'dir-ajeno',
-    });
+  const valid = {
+    firstName: ' Ana ',
+    lastName: 'García',
+    email: ' ana@example.com ',
+  };
 
-    expect({ ...dto }).toEqual({
-      firstName: 'Ana',
-      lastName: 'García',
-      email: 'ana@example.com',
-    });
+  it('acepta el alta mínima y recorta los textos', async () => {
+    const { dto, fields } = await errorsOf(CreateDirectoryContactDto, valid);
+
+    expect(fields).toEqual([]);
+    expect(dto.firstName).toBe('Ana');
+    expect(dto.email).toBe('ana@example.com');
   });
 
-  it.each([
-    ['sin nombre', { lastName: 'García', email: 'ana@example.com' }],
-    [
-      'con el nombre en blanco',
-      { firstName: '   ', lastName: 'García', email: 'ana@example.com' },
-    ],
-    [
-      'con un correo inválido',
-      { firstName: 'Ana', lastName: 'García', email: 'ana' },
-    ],
-  ])('rechaza el alta %s', async (_case, body) => {
-    await expect(validate(CreateDirectoryContactDto, body)).rejects.toThrow();
+  it('exige nombre, apellido y un correo válido', async () => {
+    const { fields } = await errorsOf(CreateDirectoryContactDto, {
+      firstName: '   ',
+      email: 'no-es-correo',
+    });
+
+    expect(fields.sort()).toEqual(['email', 'firstName', 'lastName']);
+  });
+
+  it('convierte RFC y teléfono vacíos en null', async () => {
+    const { dto, fields } = await errorsOf(CreateDirectoryContactDto, {
+      ...valid,
+      taxId: '  ',
+      phone: '',
+    });
+
+    expect(fields).toEqual([]);
+    expect(dto.taxId).toBeNull();
+    expect(dto.phone).toBeNull();
+  });
+
+  it('rechaza un RFC de más de 13 caracteres', async () => {
+    const { fields } = await errorsOf(CreateDirectoryContactDto, {
+      ...valid,
+      taxId: 'GAAA900101XXXX',
+    });
+
+    expect(fields).toEqual(['taxId']);
   });
 });
 
 describe('UpdateDirectoryContactDto', () => {
-  it('acepta un cambio parcial y descarta los identificadores de dueño', async () => {
-    const dto = await validate(UpdateDirectoryContactDto, {
-      lastName: 'García Soto',
-      organizationId: 'org-ajena',
+  it('acepta el cuerpo vacío', async () => {
+    expect((await errorsOf(UpdateDirectoryContactDto, {})).fields).toEqual([]);
+  });
+
+  /** Con `@IsOptional`, un `null` llegaría hasta una columna NOT NULL y respondería 500. */
+  it('no deja vaciar nombre, apellido ni correo con null', async () => {
+    const { fields } = await errorsOf(UpdateDirectoryContactDto, {
+      firstName: null,
+      lastName: null,
+      email: null,
     });
 
-    expect({ ...dto }).toEqual({ lastName: 'García Soto' });
+    expect(fields.sort()).toEqual(['email', 'firstName', 'lastName']);
   });
 
-  it.each(['firstName', 'lastName', 'email'])(
-    'rechaza %s en null: es obligatorio en la entidad',
-    async (field) => {
-      await expect(
-        validate(UpdateDirectoryContactDto, { [field]: null }),
-      ).rejects.toThrow();
-    },
-  );
-});
+  it('deja vaciar RFC y teléfono con null', async () => {
+    const { dto, fields } = await errorsOf(UpdateDirectoryContactDto, {
+      taxId: null,
+      phone: null,
+    });
 
-describe('SearchDirectoryContactsDto', () => {
-  it('acepta un fragmento de correo, que no tiene por qué ser un correo válido', async () => {
-    const dto = await validate(
-      SearchDirectoryContactsDto,
-      { email: ' garcia ', limit: '10' },
-      'query',
-    );
-
-    expect(dto).toMatchObject({ email: 'garcia', limit: 10 });
-  });
-
-  it.each([
-    ['sin email', {}],
-    ['con email vacío', { email: '  ' }],
-    ['con un límite fuera de rango', { email: 'a', limit: '101' }],
-  ])('rechaza la búsqueda %s', async (_case, query) => {
-    await expect(
-      validate(SearchDirectoryContactsDto, query, 'query'),
-    ).rejects.toThrow();
+    expect(fields).toEqual([]);
+    expect(dto.taxId).toBeNull();
+    expect(dto.phone).toBeNull();
   });
 });

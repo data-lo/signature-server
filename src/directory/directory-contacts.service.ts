@@ -23,6 +23,7 @@ import {
   SearchDirectoryContactsDto,
 } from './dto/search-directory-contacts.dto';
 import { DirectoryContactResponse } from './interfaces/response/directory-contact-response';
+import { normalizeContactTaxId } from './directory.service';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -163,6 +164,8 @@ export class DirectoryContactsService {
       });
     contact.firstName = dto.firstName;
     contact.lastName = dto.lastName;
+    contact.taxId = normalizeContactTaxId(dto.taxId) ?? null;
+    contact.phone = dto.phone ?? null;
     contact.linkedPersonalAccountId =
       await this.resolveLinkedPersonalAccountId(emailNormalized);
     contact.updatedByAccountId = scope.accountId;
@@ -178,7 +181,7 @@ export class DirectoryContactsService {
   }
 
   /**
-   * Actualiza nombre, apellido o correo de un contacto vigente del directorio de la cuenta activa.
+   * Actualiza nombre, apellido, correo, RFC o teléfono de un contacto vigente del directorio de la cuenta activa.
    *
    * Sólo cambia lo enviado. Si cambia el correo, lo normaliza, comprueba que esté libre en el
    * directorio y vuelve a resolver el vínculo con la plataforma (se fija o se quita según el
@@ -231,6 +234,10 @@ export class DirectoryContactsService {
     }
     if (dto.firstName !== undefined) contact.firstName = dto.firstName;
     if (dto.lastName !== undefined) contact.lastName = dto.lastName;
+    if (dto.taxId !== undefined) {
+      contact.taxId = normalizeContactTaxId(dto.taxId) ?? null;
+    }
+    if (dto.phone !== undefined) contact.phone = dto.phone;
     contact.updatedByAccountId = scope.accountId;
 
     const saved = await this.saveContact(contact);
@@ -599,7 +606,10 @@ export class DirectoryContactsService {
       firstName: contact.firstName,
       lastName: contact.lastName,
       email: contact.emailNormalized,
+      taxId: contact.taxId ?? null,
+      phone: contact.phone ?? null,
       linkedPersonalAccountId: contact.linkedPersonalAccountId ?? null,
+      archivedAt: contact.archivedAt ?? null,
       createdAt: contact.createdAt,
       updatedAt: contact.updatedAt,
     };

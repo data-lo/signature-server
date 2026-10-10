@@ -1,29 +1,46 @@
 import { applyDecorators } from '@nestjs/common';
 import {
-  ApiExtraModels,
   ApiHeader,
   ApiOperation,
   ApiParam,
   ApiResponse,
-  getSchemaPath,
 } from '@nestjs/swagger';
 
-import { NotFoundResponse } from 'src/interfaces/api-response.dto';
-import { DirectoryContactResponse } from '../interfaces/response/directory-contact-response';
+import {
+  BadRequestResponse,
+  ConflictResponse,
+  ForbiddenResponse,
+  NotFoundResponse,
+} from 'src/interfaces/api-response.dto';
+import {
+  DirectoryContactListResponse,
+  DirectoryContactResponse,
+} from '../interfaces/response/directory-contact-response';
 
-/** Header y respuestas que comparten los cuatro endpoints. */
-function directoryContactsCommon() {
-  return applyDecorators(
-    ApiExtraModels(DirectoryContactResponse),
+/**
+ * Lo que comparten los cuatro endpoints: la cuenta activa en `X-Account-Id`, el 401 del JWT, el
+ * 400 por header ausente y el 403 de autorización.
+ *
+ * @param permission - Permiso que exige el endpoint a una cuenta de organización.
+ * @returns Los decoradores comunes.
+ *
+ * @example
+ * ```ts
+ * applyDecorators(...commonDirectoryDocs('DIRECTORY.READ'));
+ * ```
+ */
+function commonDirectoryDocs(permission: string) {
+  return [
     ApiHeader({
       name: 'X-Account-Id',
-      required: true,
       description:
-        'Cuenta activa (personal o membresía de organización) del usuario autenticado. Define el directorio.',
+        'UUID de la cuenta activa. Decide el directorio: el de la cuenta personal o el de su organización. El usuario debe ser miembro activo.',
+      required: true,
     }),
     ApiResponse({
       status: 400,
-      description: 'Falta X-Account-Id o la petición no es válida',
+      description: 'Datos inválidos o falta X-Account-Id',
+      type: BadRequestResponse,
     }),
     ApiResponse({
       status: 401,
@@ -32,111 +49,107 @@ function directoryContactsCommon() {
     }),
     ApiResponse({
       status: 403,
-      description:
-        'La cuenta activa no es del usuario autenticado o está dada de baja',
+      description: `Sin membresía activa en la cuenta, X-Account-Id distinto de la cuenta autorizada, o (en una organización) el rol no tiene ${permission}`,
+      type: ForbiddenResponse,
     }),
-  );
-}
-
-/** Esquema `{ success, message, data }` con `data` de un tipo concreto. */
-function wrapped(data: Record<string, unknown>) {
-  return {
-    type: 'object',
-    properties: {
-      success: { type: 'boolean', example: true },
-      message: { type: 'string' },
-      data,
-    },
-  };
+  ];
 }
 
 const CONTACT_ID_PARAM = ApiParam({
-  name: 'id',
-  description: 'Identificador del contacto (UUID)',
+  name: 'contactId',
   format: 'uuid',
+  description: 'Contacto del directorio de la cuenta activa',
 });
 
-const CONTACT_NOT_FOUND = ApiResponse({
-  status: 404,
-  description: 'El contacto no existe, es de otro directorio o está archivado',
-  type: NotFoundResponse,
-});
-
-/** `POST /directory-contacts` — alta de un contacto. */
-export function ApiCreateDirectoryContact() {
+/** `GET /directory/contacts` — contactos vigentes del directorio activo, paginados. */
+export function ApiListDirectoryContacts() {
   return applyDecorators(
-    directoryContactsCommon(),
     ApiOperation({
-      summary: 'Crear un contacto del directorio',
+      summary: 'Listar contactos del directorio',
       description:
-        'Lo da de alta en el directorio de la cuenta activa (personal u organización). Si el correo es de un usuario de la plataforma, lo vincula a su cuenta personal.',
+        'Contactos vigentes (sin archivar) del directorio de la cuenta activa. `search` busca por nombre, apellido, nombre completo, correo o RFC. Una cuenta sin directorio responde la lista vacía. En una organización exige DIRECTORY.READ.',
     }),
     ApiResponse({
-      status: 201,
-      description: 'Contacto creado',
-      schema: wrapped({ $ref: getSchemaPath(DirectoryContactResponse) }),
+      status: 200,
+      description: 'Página de contactos',
+      type: DirectoryContactListResponse,
     }),
-    ApiResponse({
-      status: 409,
-      description: 'Ya existe un contacto con ese correo en el directorio',
-    }),
+    ...commonDirectoryDocs('DIRECTORY.READ'),
   );
 }
 
-/** `PATCH /directory-contacts/:id` — edición de nombre, apellido o correo. */
+/** `POST /directory/contacts` — alta de un contacto en el directorio activo. */
+export function ApiCreateDirectoryContact() {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Crear contacto en el directorio',
+      description:
+        'Crea el contacto en el directorio de la cuenta activa (y el directorio, si es el primero). El correo se normaliza y es único por directorio. Un correo que pertenecía a un contacto archivado lo reactiva con los datos nuevos. El cuerpo no acepta directoryId, organizationId ni la autoría: se descartan. En una organización exige DIRECTORY.CREATE.',
+    }),
+    ApiResponse({
+      status: 201,
+      description: 'Contacto creado o reactivado',
+      type: DirectoryContactResponse,
+    }),
+    ApiResponse({
+      status: 409,
+      description:
+        'Ya existe un contacto vigente con ese correo en el directorio',
+      type: ConflictResponse,
+    }),
+    ...commonDirectoryDocs('DIRECTORY.CREATE'),
+  );
+}
+
+/** `PATCH /directory/contacts/:contactId` — edición de un contacto del directorio activo. */
 export function ApiUpdateDirectoryContact() {
   return applyDecorators(
-    directoryContactsCommon(),
     ApiOperation({
-      summary: 'Actualizar un contacto del directorio',
+      summary: 'Actualizar contacto del directorio',
       description:
-        'Cambia sólo los campos enviados. El contacto no puede pasar a otro directorio.',
+        'Cambia sólo los campos enviados. Si cambia el correo, se normaliza y debe seguir siendo único en el directorio. En una organización exige DIRECTORY.UPDATE.',
     }),
     CONTACT_ID_PARAM,
     ApiResponse({
       status: 200,
       description: 'Contacto actualizado',
-      schema: wrapped({ $ref: getSchemaPath(DirectoryContactResponse) }),
+      type: DirectoryContactResponse,
     }),
-    CONTACT_NOT_FOUND,
+    ApiResponse({
+      status: 404,
+      description:
+        'El contacto no existe en el directorio de la cuenta activa, o está archivado',
+      type: NotFoundResponse,
+    }),
     ApiResponse({
       status: 409,
       description: 'El correo nuevo ya lo usa otro contacto del directorio',
+      type: ConflictResponse,
     }),
+    ...commonDirectoryDocs('DIRECTORY.UPDATE'),
   );
 }
 
-/** `GET /directory-contacts/:id` — detalle de un contacto. */
-export function ApiGetDirectoryContact() {
+/** `DELETE /directory/contacts/:contactId` — archivado (borrado lógico) de un contacto. */
+export function ApiArchiveDirectoryContact() {
   return applyDecorators(
-    directoryContactsCommon(),
-    ApiOperation({ summary: 'Obtener un contacto del directorio' }),
+    ApiOperation({
+      summary: 'Archivar contacto del directorio',
+      description:
+        'Fija `archivedAt`: el contacto deja de aparecer en el listado, pero no se borra. En una organización exige DIRECTORY.DELETE.',
+    }),
     CONTACT_ID_PARAM,
     ApiResponse({
       status: 200,
-      description: 'Contacto encontrado',
-      schema: wrapped({ $ref: getSchemaPath(DirectoryContactResponse) }),
-    }),
-    CONTACT_NOT_FOUND,
-  );
-}
-
-/** `GET /directory-contacts?email=` — búsqueda por correo. */
-export function ApiSearchDirectoryContacts() {
-  return applyDecorators(
-    directoryContactsCommon(),
-    ApiOperation({
-      summary: 'Buscar contactos del directorio por correo',
-      description:
-        'Coincidencia parcial y sin distinguir mayúsculas, sólo dentro del directorio de la cuenta activa.',
+      description: 'Contacto archivado',
+      type: DirectoryContactResponse,
     }),
     ApiResponse({
-      status: 200,
-      description: 'Contactos que coinciden (puede ser una lista vacía)',
-      schema: wrapped({
-        type: 'array',
-        items: { $ref: getSchemaPath(DirectoryContactResponse) },
-      }),
+      status: 404,
+      description:
+        'El contacto no existe en el directorio de la cuenta activa, o ya está archivado',
+      type: NotFoundResponse,
     }),
+    ...commonDirectoryDocs('DIRECTORY.DELETE'),
   );
 }

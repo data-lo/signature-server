@@ -14,10 +14,11 @@ import { DirectoryService } from './directory.service';
 /**
  * Directorio de contactos por cuenta activa (personal u organización).
  *
- * Expone `/directory-contacts` (alta, edición, detalle y búsqueda por correo). `AccountEntity`
- * valida la cuenta activa y resuelve el vínculo con la cuenta personal de un usuario;
- * `UserEntity` encuentra a ese usuario por su correo. Exporta `TypeOrmModule` para que otros
- * consumidores reciban los repositorios del directorio.
+ * Expone `/directory/contacts` (listado, alta, edición y archivado) y `/directory-contacts`
+ * (alta, edición, detalle y búsqueda por correo). `AccountEntity` valida la cuenta activa y
+ * resuelve el vínculo con la cuenta personal de un usuario; `UserEntity` encuentra a ese
+ * usuario por su correo. Exporta `TypeOrmModule` y `DirectoryService` para que otros
+ * consumidores reciban los repositorios y la lógica del directorio.
  */
 @Module({
   imports: [
@@ -28,8 +29,8 @@ import { DirectoryService } from './directory.service';
       UserEntity,
     ]),
   ],
-  controllers: [DirectoryContactsController],
-  providers: [DirectoryContactsService],
-  exports: [TypeOrmModule],
+  controllers: [DirectoryController, DirectoryContactsController],
+  providers: [DirectoryService, DirectoryContactsService],
+  exports: [TypeOrmModule, DirectoryService],
 })
 export class DirectoryModule {}
