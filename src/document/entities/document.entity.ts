@@ -130,9 +130,6 @@ export class DocumentEntity {
   @JoinColumn({ name: 'organization_id' })
   organization: OrganizationEntity | null;
 
-  @Column({ default: 0, name: 'visibility_level' })
-  visibilityLevel: number;
-
   /**
    * Desde cuándo este documento firmado espera su constancia de conservación NOM-151.
    *
