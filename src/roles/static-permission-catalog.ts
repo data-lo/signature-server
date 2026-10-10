@@ -54,6 +54,10 @@ export enum STATIC_PERMISSION_KEY_ENUM {
   DOCUMENT_SIGN_SELF = 'DOCUMENT.SIGN_SELF',
   DOCUMENT_APPROVE = 'DOCUMENT.APPROVE',
   DOCUMENT_CANCEL = 'DOCUMENT.CANCEL',
+  DIRECTORY_READ = 'DIRECTORY.READ',
+  DIRECTORY_CREATE = 'DIRECTORY.CREATE',
+  DIRECTORY_UPDATE = 'DIRECTORY.UPDATE',
+  DIRECTORY_DELETE = 'DIRECTORY.DELETE',
 }
 
 /** Cómo se materializa una clave del catálogo en una fila de `permissions`. */
@@ -78,7 +82,8 @@ export interface StaticPermissionDefinition {
    * cuenta personal).
    *
    * `false` para lo que una persona ejerce sobre lo suyo: su plan y sus pagos (`BILLING.*`) y
-   * sus propios documentos (crear, ver los suyos, mandarlos a firma, firmar y cancelar).
+   * sus propios documentos (crear, ver los suyos, mandarlos a firma, firmar y cancelar) y su
+   * directorio de contactos (`DIRECTORY.*`).
    */
   organizationOnly: boolean;
 }
@@ -98,7 +103,8 @@ export const STATIC_CATALOG_RESOURCES: Record<
   | RESOURCE_KEY_ENUM.BILLING
   | RESOURCE_KEY_ENUM.MEMBER
   | RESOURCE_KEY_ENUM.ROLE
-  | RESOURCE_KEY_ENUM.DOCUMENT,
+  | RESOURCE_KEY_ENUM.DOCUMENT
+  | RESOURCE_KEY_ENUM.DIRECTORY,
   string
 > = {
   [RESOURCE_KEY_ENUM.ORGANIZATION]: 'CUENTAS DE TIPO ORGANIZACIÓN',
@@ -106,6 +112,7 @@ export const STATIC_CATALOG_RESOURCES: Record<
   [RESOURCE_KEY_ENUM.MEMBER]: 'MIEMBROS DE UNA ORGANIZACIÓN',
   [RESOURCE_KEY_ENUM.ROLE]: 'ROLES Y PERMISOS DE LA ORGANIZACIÓN',
   [RESOURCE_KEY_ENUM.DOCUMENT]: 'DOCUMENTOS PARA FIRMA ELECTRÓNICA',
+  [RESOURCE_KEY_ENUM.DIRECTORY]: 'DIRECTORIO DE CONTACTOS DE LA CUENTA',
 };
 
 /** Acciones que usa el catálogo, con la descripción que se guarda en `actions`. */
@@ -119,7 +126,8 @@ export const STATIC_CATALOG_ACTIONS: Record<
   | ACTION_KEY_ENUM.SEND_SIGNATURE_REQUEST
   | ACTION_KEY_ENUM.SIGN
   | ACTION_KEY_ENUM.APPROVE
-  | ACTION_KEY_ENUM.CANCEL,
+  | ACTION_KEY_ENUM.CANCEL
+  | ACTION_KEY_ENUM.DELETE,
   string
 > = {
   [ACTION_KEY_ENUM.CREATE]: 'CREAR UN RECURSO NUEVO',
@@ -132,10 +140,15 @@ export const STATIC_CATALOG_ACTIONS: Record<
   [ACTION_KEY_ENUM.SIGN]: 'FIRMAR UN DOCUMENTO',
   [ACTION_KEY_ENUM.APPROVE]: 'APROBAR O AUTORIZAR UN RECURSO',
   [ACTION_KEY_ENUM.CANCEL]: 'SOLICITAR O CONFIRMAR UNA CANCELACIÓN',
+  [ACTION_KEY_ENUM.DELETE]: 'ELIMINAR O ARCHIVAR UN RECURSO EXISTENTE',
 };
 
 /**
- * Los diecisiete permisos del catálogo, en el orden en que la UI los lista.
+ * Los veintiún permisos del catálogo, en el orden en que la UI los lista.
+ *
+ * Los cuatro de `DIRECTORY` son de la cuenta, no sólo de la organización: una cuenta personal
+ * administra su propio directorio, y en una organización el directorio es uno solo, compartido por
+ * todos los miembros que tengan el permiso. `DIRECTORY.DELETE` archiva el contacto; no lo borra.
  *
  * Las descripciones son las de la tabla de la historia, palabra por palabra: son lo que se ve en
  * pantalla, así que cambiarlas aquí cambia lo que lee quien arma un rol.
@@ -272,6 +285,34 @@ export const STATIC_PERMISSION_CATALOG: Record<
     description: 'SOLICITAR O CONFIRMAR CANCELACIONES, SEGÚN EL FLUJO',
     organizationOnly: false,
   },
+  [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ]: {
+    resource: RESOURCE_KEY_ENUM.DIRECTORY,
+    action: ACTION_KEY_ENUM.READ,
+    scope: PERMISSION_SCOPE_ENUM.ANY,
+    description: 'VER CONTACTOS DEL DIRECTORIO',
+    organizationOnly: false,
+  },
+  [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE]: {
+    resource: RESOURCE_KEY_ENUM.DIRECTORY,
+    action: ACTION_KEY_ENUM.CREATE,
+    scope: PERMISSION_SCOPE_ENUM.ANY,
+    description: 'AGREGAR CONTACTOS AL DIRECTORIO',
+    organizationOnly: false,
+  },
+  [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE]: {
+    resource: RESOURCE_KEY_ENUM.DIRECTORY,
+    action: ACTION_KEY_ENUM.UPDATE,
+    scope: PERMISSION_SCOPE_ENUM.ANY,
+    description: 'EDITAR CONTACTOS DEL DIRECTORIO',
+    organizationOnly: false,
+  },
+  [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE]: {
+    resource: RESOURCE_KEY_ENUM.DIRECTORY,
+    action: ACTION_KEY_ENUM.DELETE,
+    scope: PERMISSION_SCOPE_ENUM.ANY,
+    description: 'ARCHIVAR CONTACTOS DEL DIRECTORIO',
+    organizationOnly: false,
+  },
 };
 
 /**
@@ -311,8 +352,8 @@ export const RETIRED_CATALOG_PERMISSIONS: ReadonlyArray<{
  *
  * MEMBER conserva exactamente las tres capacidades con las que nació —crear, ver lo suyo y
  * firmar—, y la ampliación del catálogo no le agrega ninguna: leer toda la organización,
- * facturación, miembros, roles, enviar solicitudes, aprobar y cancelar son lo que separa a un
- * administrador de un miembro raso. Un ADMIN que quiera dárselas a alguien concreto necesitará un
+ * facturación, miembros, roles, el directorio de contactos, enviar solicitudes, aprobar y cancelar
+ * son lo que separa a un administrador de un miembro raso. Un ADMIN que quiera dárselas a alguien concreto necesitará un
  * rol custom de organización, que este catálogo no toca.
  */
 export const STATIC_ROLE_PERMISSION_MATRIX: Record<
@@ -337,6 +378,10 @@ export const STATIC_ROLE_PERMISSION_MATRIX: Record<
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF,
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_APPROVE,
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CANCEL,
+    STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
+    STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
+    STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
+    STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
   ],
   [SYSTEM_ROLE_NAME_ENUM.MEMBER]: [
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE,
