@@ -250,6 +250,50 @@ describe('GetAuthorizationContextUseCase', () => {
   });
 
   /**
+   * `DIRECTORY.*` no se regala a las organizaciones por ser cuenta: una membresía cuyo rol no lo
+   * trae (MEMBER de fábrica) no publica ninguna de las cuatro claves, y el menú no le muestra el
+   * Directorio.
+   */
+  it('una membresía de organización sin DIRECTORY en su rol no recibe esas claves', async () => {
+    accountRepository.findOne.mockResolvedValue(
+      organizationMembership({
+        role: { id: 'role-1', name: SYSTEM_ROLE_NAME_ENUM.MEMBER },
+      } as Partial<AccountEntity>),
+    );
+    rolesService.listPermissionsByRoleIds.mockResolvedValue(
+      new Map([
+        [
+          'role-1',
+          [
+            grant(STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE),
+            grant(STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN),
+            grant(STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF),
+          ],
+        ],
+      ]),
+    );
+
+    const { permissions } = (await useCase.execute('user-1', 'account-1')).data;
+
+    expect(permissions.filter((key) => key.startsWith('DIRECTORY.'))).toEqual(
+      [],
+    );
+  });
+
+  it('una membresía de organización publica sólo los DIRECTORY.* que su rol concede', async () => {
+    accountRepository.findOne.mockResolvedValue(organizationMembership());
+    rolesService.listPermissionsByRoleIds.mockResolvedValue(
+      new Map([['role-1', [grant(STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ)]]]),
+    );
+
+    const response = await useCase.execute('user-1', 'account-1');
+
+    expect(response.data.permissions).toEqual([
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
+    ]);
+  });
+
+  /**
    * Una membresía sin rol no es un error: `accounts.role_id` es nullable y significa "todavía no
    * puede hacer nada". El menú sale vacío, que es lo correcto, en vez de una pantalla de error.
    */

@@ -289,7 +289,7 @@ export const STATIC_PERMISSION_CATALOG: Record<
     resource: RESOURCE_KEY_ENUM.DIRECTORY,
     action: ACTION_KEY_ENUM.READ,
     scope: PERMISSION_SCOPE_ENUM.ANY,
-    description: 'VER LOS CONTACTOS DEL DIRECTORIO',
+    description: 'VER CONTACTOS DEL DIRECTORIO',
     organizationOnly: false,
   },
   [STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE]: {
@@ -351,9 +351,9 @@ export const RETIRED_CATALOG_PERMISSIONS: ReadonlyArray<{
  * `Object.values(...)`: un permiso nuevo del catálogo no debe colársele solo.
  *
  * MEMBER conserva exactamente las tres capacidades con las que nació —crear, ver lo suyo y
- * firmar—, y la ampliación del catálogo no le agrega ninguna (tampoco `DIRECTORY.*`): leer toda la organización,
- * facturación, miembros, roles, enviar solicitudes, aprobar y cancelar son lo que separa a un
- * administrador de un miembro raso. Un ADMIN que quiera dárselas a alguien concreto necesitará un
+ * firmar—, y la ampliación del catálogo no le agrega ninguna: leer toda la organización,
+ * facturación, miembros, roles, el directorio de contactos, enviar solicitudes, aprobar y cancelar
+ * son lo que separa a un administrador de un miembro raso. Un ADMIN que quiera dárselas a alguien concreto necesitará un
  * rol custom de organización, que este catálogo no toca.
  */
 export const STATIC_ROLE_PERMISSION_MATRIX: Record<

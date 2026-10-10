@@ -96,6 +96,17 @@ describe('permisos de una cuenta PERSONAL', () => {
       ).toEqual([scope]);
     });
 
+    it.each([
+      ACTION_KEY_ENUM.READ,
+      ACTION_KEY_ENUM.CREATE,
+      ACTION_KEY_ENUM.UPDATE,
+      ACTION_KEY_ENUM.DELETE,
+    ])('su directorio concede %s con alcance ANY', (action) => {
+      expect(
+        getPersonalAccountPermissionScopes(RESOURCE_KEY_ENUM.DIRECTORY, action),
+      ).toEqual([PERMISSION_SCOPE_ENUM.ANY]);
+    });
+
     it('firmar alcanza a uno mismo', () => {
       expect(
         getPersonalAccountPermissionScopes(
