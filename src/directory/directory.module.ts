@@ -9,15 +9,19 @@ import { DirectoryContactsController } from './directory-contacts.controller';
 import { DirectoryContactsService } from './directory-contacts.service';
 import { DirectoryEntity } from './entities/directory.entity';
 import { DirectoryContactEntity } from './entities/directory-contact.entity';
+import { DirectoryController } from './directory.controller';
+import { DirectoryService } from './directory.service';
 
 /**
  * Directorio de contactos por cuenta activa (personal u organización).
  *
- * Expone `/directory-contacts` (alta, edición, detalle y búsqueda por correo). `AccountEntity`
- * valida la cuenta activa y resuelve el vínculo con la cuenta personal de un usuario;
- * `UserEntity` encuentra a ese usuario por su correo. Exporta `TypeOrmModule` para que otros
- * consumidores reciban los repositorios del directorio, y `DirectoryCollaboratorsService` para que
- * la creación de documentos resuelva colaboradores del Directorio y registre los manuales.
+ * Expone `/directory/contacts` (listado, alta, edición y archivado) y `/directory-contacts`
+ * (alta, edición, detalle y búsqueda por correo). `AccountEntity` valida la cuenta activa y
+ * resuelve el vínculo con la cuenta personal de un usuario; `UserEntity` encuentra a ese
+ * usuario por su correo. Exporta `TypeOrmModule` y `DirectoryService` para que otros
+ * consumidores reciban los repositorios y la lógica del directorio, y
+ * `DirectoryCollaboratorsService` para que la creación de documentos resuelva colaboradores del
+ * Directorio y registre los manuales.
  */
 @Module({
   imports: [
@@ -28,8 +32,12 @@ import { DirectoryContactEntity } from './entities/directory-contact.entity';
       UserEntity,
     ]),
   ],
-  controllers: [DirectoryContactsController],
-  providers: [DirectoryContactsService, DirectoryCollaboratorsService],
-  exports: [TypeOrmModule, DirectoryCollaboratorsService],
+  controllers: [DirectoryController, DirectoryContactsController],
+  providers: [
+    DirectoryService,
+    DirectoryContactsService,
+    DirectoryCollaboratorsService,
+  ],
+  exports: [TypeOrmModule, DirectoryService, DirectoryCollaboratorsService],
 })
 export class DirectoryModule {}

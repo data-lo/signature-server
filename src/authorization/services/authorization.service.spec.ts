@@ -325,6 +325,26 @@ describe('AuthorizationService', () => {
       expect(context.scopes).toEqual([scope]);
     });
 
+    /** Su directorio es suyo: lo administra entero por catálogo, sin pasar por su rol. */
+    it.each([
+      ACTION_KEY_ENUM.READ,
+      ACTION_KEY_ENUM.CREATE,
+      ACTION_KEY_ENUM.UPDATE,
+      ACTION_KEY_ENUM.DELETE,
+    ])('puede %s sobre DIRECTORY, con alcance ANY', async (action) => {
+      accountRepository.findOne.mockResolvedValue(personalAccount());
+
+      const context = await service.authorize({
+        userId: 'user-1',
+        accountId: 'account-1',
+        resource: RESOURCE_KEY_ENUM.DIRECTORY,
+        action,
+      });
+
+      expect(context.scopes).toEqual([PERMISSION_SCOPE_ENUM.ANY]);
+      expect(rolesService.getPermissionScopes).not.toHaveBeenCalled();
+    });
+
     it.each([
       [RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.READ],
       [RESOURCE_KEY_ENUM.ORGANIZATION, ACTION_KEY_ENUM.UPDATE],
@@ -455,6 +475,59 @@ describe('AuthorizationService', () => {
           resource: RESOURCE_KEY_ENUM.BILLING,
           action: ACTION_KEY_ENUM.READ,
         }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    /**
+     * Igual que facturación: una cuenta personal tiene `DIRECTORY.*` por catálogo, pero una
+     * membresía de organización sólo si su rol lo trae. Cada acción se decide por separado.
+     */
+    it.each([
+      ACTION_KEY_ENUM.READ,
+      ACTION_KEY_ENUM.CREATE,
+      ACTION_KEY_ENUM.UPDATE,
+      ACTION_KEY_ENUM.DELETE,
+    ])(
+      'sin DIRECTORY + %s en su rol recibe 403 en el directorio',
+      async (action) => {
+        accountRepository.findOne.mockResolvedValue(
+          organizationMembership({ roleId: MEMBER_ROLE_ID }),
+        );
+        rolesService.getPermissionScopes.mockResolvedValue([]);
+
+        await expect(
+          service.authorize({
+            userId: 'user-1',
+            accountId: 'account-1',
+            resource: RESOURCE_KEY_ENUM.DIRECTORY,
+            action,
+          }),
+        ).rejects.toThrow(ForbiddenException);
+        expect(rolesService.getPermissionScopes).toHaveBeenCalledWith(
+          MEMBER_ROLE_ID,
+          RESOURCE_KEY_ENUM.DIRECTORY,
+          action,
+        );
+      },
+    );
+
+    it('con DIRECTORY.READ pero sin DIRECTORY.DELETE, lee y no archiva', async () => {
+      accountRepository.findOne.mockResolvedValue(organizationMembership());
+      rolesService.getPermissionScopes.mockImplementation(
+        async (_roleId: string, _resource: string, action: string) =>
+          action === ACTION_KEY_ENUM.READ ? [PERMISSION_SCOPE_ENUM.ANY] : [],
+      );
+      const request = {
+        userId: 'user-1',
+        accountId: 'account-1',
+        resource: RESOURCE_KEY_ENUM.DIRECTORY,
+      };
+
+      await expect(
+        service.authorize({ ...request, action: ACTION_KEY_ENUM.READ }),
+      ).resolves.toMatchObject({ scopes: [PERMISSION_SCOPE_ENUM.ANY] });
+      await expect(
+        service.authorize({ ...request, action: ACTION_KEY_ENUM.DELETE }),
       ).rejects.toThrow(ForbiddenException);
     });
   });

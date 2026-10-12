@@ -58,6 +58,17 @@ export class DirectoryContactEntity {
   @Column({ name: 'last_name', type: 'varchar' })
   lastName: string;
 
+  /**
+   * Identificador fiscal (en México, el RFC), en mayúsculas. Opcional: no todo contacto lo da.
+   * Desde `AddTaxIdAndPhoneToDirectoryContacts1784300000072`.
+   */
+  @Column({ name: 'tax_id', type: 'varchar', nullable: true })
+  taxId: string | null;
+
+  /** Teléfono tal como se capturó, sin espacios en los extremos. Opcional. */
+  @Column({ name: 'phone', type: 'varchar', nullable: true })
+  phone: string | null;
+
   /** Cuenta personal de la plataforma que corresponde a este contacto; `null` si es externo. */
   @Column({ name: 'linked_personal_account_id', type: 'uuid', nullable: true })
   linkedPersonalAccountId: string | null;
