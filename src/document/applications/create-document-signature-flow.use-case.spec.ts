@@ -14,7 +14,6 @@ import { AccountMemberService } from 'src/account/account-member.service';
 import { VerificationCodeService } from '../verification-code.service';
 import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
-import { EmailService } from 'src/common/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { FILE_STATUS_ENUM } from 'src/common/minio/enums/file-status-enum';
@@ -68,7 +67,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let verificationCodeService: Record<string, jest.Mock>;
   let notificationEventsProducer: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
-  let emailService: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let consumeDocumentCredit: Record<string, jest.Mock>;
   let documentReviewerService: Record<string, jest.Mock>;
@@ -95,6 +93,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     },
     collaborators: [
       {
+        source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+        addToDirectory: false,
         collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
         firstName: 'Juan',
         lastName: 'Pérez',
@@ -113,6 +113,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         requiresTwoFactorAuth: true,
       },
       {
+        source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+        addToDirectory: false,
         collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
         firstName: 'María',
         lastName: 'Gómez',
@@ -133,6 +135,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
       },
       {
+        source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+        addToDirectory: false,
         collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
         firstName: 'Carlos',
         lastName: 'Solares',
@@ -228,16 +232,14 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     verificationCodeService = {
       issue: jest.fn().mockResolvedValue({ id: 'vc-1' }),
     };
-    notificationEventsProducer = { emitCreated: jest.fn() };
+    notificationEventsProducer = {
+      emitCreated: jest.fn(),
+      enqueueCreated: jest.fn().mockResolvedValue(undefined),
+    };
     documentEventsProducer = {
       emitCreated: jest.fn(),
       enqueueApprovalEvent: jest.fn().mockResolvedValue({ id: 'event-1' }),
       flushOutbox: jest.fn().mockResolvedValue(undefined),
-    };
-    emailService = {
-      sendDocumentInvitationNotification: jest
-        .fn()
-        .mockResolvedValue(undefined),
     };
     documentTransactionService = { createInitial: jest.fn() };
     consumeDocumentCredit = {
@@ -290,7 +292,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           provide: DocumentEventsProducer,
           useValue: documentEventsProducer,
         },
-        { provide: EmailService, useValue: emailService },
         {
           provide: DocumentTransactionService,
           useValue: documentTransactionService,
@@ -339,7 +340,15 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       expect.any(String),
       expect.objectContaining({ requiresVerification: true }),
     );
-    expect(notificationEventsProducer.emitCreated).toHaveBeenCalledTimes(3);
+    // Una notificación por colaborador, registrada en la outbox con el `manager` de la
+    // transacción (no publicada directo) y publicada por un único flush tras el commit.
+    expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(3);
+    for (const [manager] of notificationEventsProducer.enqueueCreated.mock
+      .calls) {
+      expect(manager).toHaveProperty('getRepository');
+    }
+    expect(notificationEventsProducer.emitCreated).not.toHaveBeenCalled();
+    expect(documentEventsProducer.flushOutbox).toHaveBeenCalledTimes(1);
     expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(1);
     expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith(
       expect.objectContaining({ actorUserId: 'creator-1' }),
@@ -778,17 +787,13 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     expect(juanCall[0].signingOrder).toBe(1);
   });
 
-  it('documento secuencial (default, sin isSequential en el payload): no envía invitaciones de firma simple', async () => {
-    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
-
-    expect(
-      emailService.sendDocumentInvitationNotification,
-    ).not.toHaveBeenCalled();
-    const savedDocumentCall = documentRepo.save.mock.calls[0][0];
-    expect(savedDocumentCall.isSequential).toBe(true);
-  });
-
-  it('documento SIMPLE sin orden (isSequential:false): invita por correo a los firmantes, no al viewer', async () => {
+  /**
+   * Historia "Implementar creación transaccional de colaboradores desde Directorio y captura
+   * manual": la invitación inmediata de firma SIMPLE sin orden ya no sale de aquí. Cada
+   * colaborador deja su `notification.created` en la outbox y el correo lo decide
+   * `SendPendingSignatureNotificationUseCase` (ver su spec) tras el commit.
+   */
+  it('documento SIMPLE sin orden: registra en la outbox la notificación de cada colaborador, sin enviar correo', async () => {
     const dtoSinOrden: CreateDocumentSignaturesDto = {
       ...baseDto,
       documentData: { ...baseDto.documentData, isSequential: false },
@@ -802,54 +807,32 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       '127.0.0.1',
     );
 
-    const savedDocumentCall = documentRepo.save.mock.calls[0][0];
-    expect(savedDocumentCall.isSequential).toBe(false);
-    // Los 2 SIGNER, ninguno para Carlos (VIEWER).
+    expect(documentRepo.save.mock.calls[0][0].isSequential).toBe(false);
     expect(
-      emailService.sendDocumentInvitationNotification,
-    ).toHaveBeenCalledTimes(2);
-    expect(
-      emailService.sendDocumentInvitationNotification,
-    ).toHaveBeenCalledWith(
-      'maria.gomez@mail.com',
-      'María Gómez',
-      dtoSinOrden.documentData.fileName,
-      expect.stringContaining('/access-document?docId='),
-    );
+      notificationEventsProducer.enqueueCreated.mock.calls.map(
+        ([, params]) => params,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        collaboratorId: expect.any(String),
+        documentId: expect.any(String),
+        notificationId: expect.any(String),
+        actorUserId: 'creator-1',
+      }),
+      expect.anything(),
+      expect.anything(),
+    ]);
   });
 
-  it('documento ADVANCED sin orden: no manda la invitación de firma simple a nadie', async () => {
-    const dtoAvanzadoSinOrden: CreateDocumentSignaturesDto = {
-      ...advancedDto,
-      documentData: { ...advancedDto.documentData, isSequential: false },
-    };
-
-    await useCase.execute(
-      'creator-1',
-      'account-1',
-      dtoAvanzadoSinOrden,
-      file,
-      '127.0.0.1',
+  it('un fallo al publicar la outbox tras el commit no tumba la creación del documento', async () => {
+    documentEventsProducer.flushOutbox.mockRejectedValue(
+      new Error('Kafka caído'),
     );
-
-    expect(
-      emailService.sendDocumentInvitationNotification,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('un fallo al enviar la invitación no tumba la creación del documento', async () => {
-    emailService.sendDocumentInvitationNotification.mockRejectedValue(
-      new Error('SendGrid caído'),
-    );
-    const dtoSinOrden: CreateDocumentSignaturesDto = {
-      ...baseDto,
-      documentData: { ...baseDto.documentData, isSequential: false },
-    };
 
     const result = await useCase.execute(
       'creator-1',
       'account-1',
-      dtoSinOrden,
+      baseDto,
       file,
       '127.0.0.1',
     );
@@ -1049,7 +1032,42 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
     ).rejects.toThrow('DB caída');
 
-    expect(notificationEventsProducer.emitCreated).not.toHaveBeenCalled();
+    expect(notificationEventsProducer.enqueueCreated).not.toHaveBeenCalled();
+    expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Las filas de la outbox se escriben con el `manager` de la transacción: si registrar el evento
+   * falla, se revierte todo —documento, colaboradores, contactos y eventos ya escritos— y no se
+   * publica nada.
+   */
+  it('si falla el registro en la outbox, revierte la creación completa y no publica nada', async () => {
+    notificationEventsProducer.enqueueCreated
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('outbox caída'));
+
+    await expect(
+      useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+    ).rejects.toThrow('outbox caída');
+
+    expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
+    expect(
+      directoryCollaborators.addManualCollaboratorsToDirectory,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('si falla el alta en el Directorio, revierte la creación completa y no publica nada', async () => {
+    directoryCollaborators.addManualCollaboratorsToDirectory.mockRejectedValueOnce(
+      new Error('directorio caído'),
+    );
+
+    await expect(
+      useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+    ).rejects.toThrow('directorio caído');
+
+    expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
     expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
   });
 
@@ -1191,26 +1209,22 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
      * Criterio de aceptación: los firmantes no reciben nada antes de la aprobación. Este flujo
      * (firma simple sin orden) es el único que manda correo de invitación al crear.
      */
-    it('no manda invitaciones de firma mientras el documento espera aprobación', async () => {
-      const dtoSinOrden: CreateDocumentSignaturesDto = {
-        ...dtoConAprobacion(),
-        documentData: {
-          ...dtoConAprobacion().documentData,
-          isSequential: false,
-        },
-      };
-
+    /**
+     * Las notificaciones de firmantes y testigos se registran igual; quien decide no enviar nada
+     * mientras el documento espera aprobación es el consumidor, que lee el estado real.
+     */
+    it('registra en la outbox la notificación de cada colaborador y la del aprobador', async () => {
       await useCase.execute(
         'creator-1',
         'account-1',
-        dtoSinOrden,
+        dtoConAprobacion(),
         file,
         '127.0.0.1',
       );
 
-      expect(
-        emailService.sendDocumentInvitationNotification,
-      ).not.toHaveBeenCalled();
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(
+        baseDto.collaborators.length + 1,
+      );
     });
 
     it('rechaza un aprobador enviado junto a requiresApproval=false', async () => {
@@ -1358,7 +1372,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       await useCase.execute('creator-1', 'account-1', dto, file, '127.0.0.1');
 
       expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(1);
-      expect(notificationEventsProducer.emitCreated).toHaveBeenCalled();
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalled();
     });
 
     /**
@@ -1535,19 +1549,36 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
     });
 
-    it('sin `source`, el colaborador se trata como MANUAL (cliente anterior)', async () => {
+    it('un testigo MANUAL se crea con los datos del payload y su RFC', async () => {
       await useCase.execute(
         'creator-1',
         'account-1',
-        baseDto,
+        dtoWith([
+          { ...baseDto.collaborators[0] },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+            firstName: 'Carlos',
+            lastName: 'Solares',
+            email: 'carlos@mail.com',
+            addToDirectory: false,
+            taxId: 'SOCA800101AAA',
+          },
+        ]),
         file,
         '127.0.0.1',
       );
 
-      expect(savedCollaborators()[0]).toMatchObject({
-        firstName: 'Juan',
-        email: 'juan.perez@mail.com',
+      expect(savedCollaborators()[1]).toMatchObject({
+        firstName: 'Carlos',
+        lastName: 'Solares',
+        email: 'carlos@mail.com',
+        taxId: 'SOCA800101AAA',
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
       });
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(
+        2,
+      );
     });
 
     it('un MANUAL con addToDirectory se registra en el Directorio dentro de la transacción', async () => {
@@ -1607,7 +1638,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       );
     });
 
-    it('un firmante del Directorio se crea con la identidad del usuario vinculado, ignorando la del payload', async () => {
+    it('un firmante del Directorio se crea con la identidad del usuario vinculado', async () => {
       await useCase.execute(
         'creator-1',
         'account-1',
@@ -1616,11 +1647,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
             source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
             linkedUserId: 'user-ana',
             collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-            // Un cliente no puede suplantar la identidad del usuario vinculado.
-            firstName: 'Impostor',
-            lastName: 'X',
-            email: 'impostor@evil.com',
-            addToDirectory: true,
             signatures: [position(1)],
             orderIndex: 0,
           },
@@ -1629,6 +1655,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         '127.0.0.1',
       );
 
+      // El alcance (la cuenta activa) viaja siempre junto con el linkedUserId.
       expect(
         directoryCollaborators.resolveLinkedCollaborators,
       ).toHaveBeenCalledWith(expect.objectContaining({ id: 'account-1' }), [
@@ -1647,10 +1674,85 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       });
       // …y en firma SIMPLE se le emite su código de verificación.
       expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
-      // `addToDirectory` sólo aplica a MANUAL: un contacto del Directorio no se vuelve a registrar.
       expect(
         directoryCollaborators.addManualCollaboratorsToDirectory,
       ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
+    });
+
+    /**
+     * Payload inválido para cada origen: el caso de uso aplica la misma regla que el DTO
+     * (`collaboratorSourceViolations`), así que también se rechaza sin pasar por el
+     * `ValidationPipe`, y antes de subir el archivo o resolver nada en el Directorio.
+     */
+    it.each([
+      [
+        'DIRECTORY con datos de identidad',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+          linkedUserId: 'user-ana',
+          firstName: 'Impostor',
+          email: 'impostor@evil.com',
+        },
+        'Con source DIRECTORY no se aceptan: firstName, email',
+      ],
+      [
+        'DIRECTORY con addToDirectory',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+          linkedUserId: 'user-ana',
+          addToDirectory: true,
+        },
+        'Con source DIRECTORY no se aceptan: addToDirectory',
+      ],
+      [
+        'MANUAL con linkedUserId',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+          firstName: 'Juan',
+          lastName: 'Pérez',
+          email: 'juan@mail.com',
+          addToDirectory: false,
+          linkedUserId: 'user-ana',
+        },
+        'Con source MANUAL no se aceptan: linkedUserId',
+      ],
+      [
+        'MANUAL sin addToDirectory',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+          firstName: 'Juan',
+          lastName: 'Pérez',
+          email: 'juan@mail.com',
+        },
+        'Con source MANUAL son obligatorios: addToDirectory',
+      ],
+      [
+        'sin source',
+        { firstName: 'Juan', lastName: 'Pérez', email: 'juan@mail.com' },
+        'source es obligatorio y debe ser DIRECTORY o MANUAL',
+      ],
+    ])('rechaza un colaborador %s', async (_case, fields, message) => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          dtoWith([
+            {
+              collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+              signatures: [position(1)],
+              ...fields,
+            } as CreateDocumentSignaturesDto['collaborators'][number],
+          ]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(message);
+
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).not.toHaveBeenCalled();
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('notifica a cada colaborador del Directorio con su rol (SIGNER o WITNESS)', async () => {
@@ -1686,9 +1788,11 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         signatureType: null,
         taxId: null,
       });
-      // Una notificación por colaborador; el correo de Firmante o Testigo lo decide
+      // Una notificación por colaborador, en la outbox; el correo de Firmante o Testigo lo decide
       // `SendPendingSignatureNotificationUseCase` a partir del `colaboratorType` guardado.
-      expect(notificationEventsProducer.emitCreated).toHaveBeenCalledTimes(2);
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(
+        2,
+      );
     });
 
     it('respeta el orden de firma mezclando firmantes de ambos orígenes', async () => {
@@ -1763,16 +1867,13 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
             {
               source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
               collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
-              firstName: 'Contacto',
-              lastName: 'Externo',
-              email: 'externo@mail.com',
             },
             baseDto.collaborators[0],
           ]),
           file,
           '127.0.0.1',
         ),
-      ).rejects.toThrow(/se envía como MANUAL/);
+      ).rejects.toThrow('Con source DIRECTORY son obligatorios: linkedUserId');
 
       expect(
         directoryCollaborators.resolveLinkedCollaborators,

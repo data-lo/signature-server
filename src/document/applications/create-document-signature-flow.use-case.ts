@@ -11,6 +11,7 @@ import { NotificationEntity } from '../entities/notification.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
 
 import {
+  collaboratorSourceViolations,
   CollaboratorPayloadDto,
   CreateDocumentSignaturesDto,
   isDirectoryCollaborator,
@@ -42,11 +43,9 @@ import { NotificationEventsProducer } from 'src/kafka/notification-events.produc
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
-import { EmailService } from 'src/common/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
-import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
 import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
@@ -197,7 +196,6 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly notificationEventsProducer: NotificationEventsProducer,
     private readonly documentEventsProducer: DocumentEventsProducer,
-    private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
     private readonly documentReviewerService: DocumentReviewerService,
@@ -399,18 +397,7 @@ export class CreateDocumentSignatureFlowUseCase {
     }
     assertNoOverlappingSignaturePositions(positionsByPage);
 
-    /**
-     * Se declara fuera de la transacción porque hace falta después de ella, para publicar el
-     * evento de aprobación solicitada con el colaborador concreto al que hay que esperar.
-     */
-    let reviewerCollaboratorId: string | null = null;
-
-    const {
-      document,
-      notificationEvents,
-      verificationCodesCount,
-      invitationEmailTargets,
-    } = await this.dataSource.transaction(async (manager) => {
+    const created = await this.dataSource.transaction(async (manager) => {
       const documentRepo = manager.getRepository(DocumentEntity);
       const collaboratorRepo = manager.getRepository(CollaboratorEntity);
       const notificationRepo = manager.getRepository(NotificationEntity);
@@ -484,16 +471,6 @@ export class CreateDocumentSignatureFlowUseCase {
 
       const notificationEvents: {
         notification: NotificationEntity;
-        collaboratorId: string;
-      }[] = [];
-      // Firmantes de Firma Digital Simple en un documento sin orden (isSequential=false): se
-      // les invita por correo a registrarse/iniciar sesión de inmediato, ya que no hay que
-      // esperar ningún turno (ver historia "Notificación por Email para Firma Simple y
-      // Vinculación de Cuenta"). Se envían fuera de la transacción, igual que los eventos de
-      // Kafka más abajo.
-      const invitationEmailTargets: {
-        to: string;
-        name: string;
         collaboratorId: string;
       }[] = [];
       let verificationCodesCount = 0;
@@ -594,27 +571,21 @@ export class CreateDocumentSignatureFlowUseCase {
           notification,
           collaboratorId: collaborator.id,
         });
-
         /**
-         * Con aprobación pendiente no se invita a nadie a firmar: el documento todavía puede no
-         * salir nunca a firma. Estas invitaciones las manda el caso de uso de aprobación cuando
-         * el reviewer autoriza (ver `DocumentService.sendSimpleSignatureInvitations`, que
-         * reconstruye exactamente esta misma lista desde la base).
+         * El evento va a la outbox, en esta misma transacción: si el alta revierte, el evento
+         * desaparece con ella. El correo —de firmante o de testigo según `colaboratorType`, incluida
+         * la invitación inmediata de firma SIMPLE sin orden— lo manda después del commit
+         * `SendPendingSignatureNotificationUseCase`, al consumirlo. Nada de este flujo envía
+         * correo directamente.
          */
-        if (
-          isSigner &&
-          !requiresApproval &&
-          documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE &&
-          !isSequential
-        ) {
-          invitationEmailTargets.push({
-            to: collaborator.email!,
-            name:
-              `${collaborator.firstName ?? ''} ${collaborator.lastName ?? ''}`.trim() ||
-              collaborator.email!,
-            collaboratorId: collaborator.id,
-          });
-        }
+        await this.notificationEventsProducer.enqueueCreated(manager, {
+          notificationId: notification.id,
+          documentId: document.id,
+          collaboratorId: collaborator.id,
+          actorType: notification.actorType,
+          notificationChannelSource: notification.notificationChannelSource,
+          actorUserId: createdBy,
+        });
 
         if (isSigner) {
           // Regla de negocio reforzada en el backend, no solo confiada del payload (ver
@@ -681,7 +652,6 @@ export class CreateDocumentSignatureFlowUseCase {
             ipAddress: ip,
           }),
         );
-        reviewerCollaboratorId = reviewer.id;
 
         const reviewerNotification = await notificationRepo.save(
           notificationRepo.create({
@@ -698,6 +668,15 @@ export class CreateDocumentSignatureFlowUseCase {
         notificationEvents.push({
           notification: reviewerNotification,
           collaboratorId: reviewer.id,
+        });
+        await this.notificationEventsProducer.enqueueCreated(manager, {
+          notificationId: reviewerNotification.id,
+          documentId: document.id,
+          collaboratorId: reviewer.id,
+          actorType: reviewerNotification.actorType,
+          notificationChannelSource:
+            reviewerNotification.notificationChannelSource,
+          actorUserId: createdBy,
         });
 
         /**
@@ -721,9 +700,10 @@ export class CreateDocumentSignatureFlowUseCase {
         document,
         notificationEvents,
         verificationCodesCount,
-        invitationEmailTargets,
       };
     });
+
+    const { document, notificationEvents, verificationCodesCount } = created;
 
     // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
     // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.
@@ -741,13 +721,17 @@ export class CreateDocumentSignatureFlowUseCase {
     });
 
     /**
-     * Un documento con aprobación anuncia que está esperando una decisión; uno sin ella ya está
-     * en firma y lo anuncia como siempre. Son dos hechos distintos y por eso son dos eventos
-     * distintos: un consumidor no debería tener que leer el estado del documento para saber cuál
-     * de los dos ocurrió.
+     * Publica lo que la transacción dejó en la outbox: las notificaciones de cada colaborador y,
+     * con aprobación, el `document.approval_requested`. Después del commit y best-effort: si Kafka
+     * falla, las filas quedan pendientes y las publica el siguiente `flush` (ver `OutboxService`),
+     * así que un fallo aquí nunca deshace un documento que ya quedó creado.
      */
-    if (reviewerCollaboratorId) {
+    try {
       await this.documentEventsProducer.flushOutbox();
+    } catch (error) {
+      this.logger.error(
+        `No se pudo publicar la outbox tras crear el documento ${document.id}; queda pendiente para el siguiente flush: ${error}`,
+      );
     }
 
     if (document.isIndexable) {
@@ -764,36 +748,6 @@ export class CreateDocumentSignatureFlowUseCase {
        * así que quien agregue la llamada no tiene que acordarse de filtrarlo — la regla ya está
        * puesta y probada.
        */
-    }
-
-    for (const { notification, collaboratorId } of notificationEvents) {
-      this.notificationEventsProducer.emitCreated({
-        notificationId: notification.id,
-        documentId: document.id,
-        collaboratorId,
-        actorType: notification.actorType,
-        notificationChannelSource: notification.notificationChannelSource,
-        actorUserId: createdBy,
-      });
-    }
-
-    // Igual que arriba: fuera de la transacción, y best-effort por destinatario — un correo que
-    // falla no debe tumbar la creación del documento ni impedir que los demás se envíen (ver
-    // historia "Notificación por Email para Firma Simple y Vinculación de Cuenta").
-    for (const { to, name, collaboratorId } of invitationEmailTargets) {
-      const accessUrl = buildDocumentAccessUrl(document.id, collaboratorId, to);
-      try {
-        await this.emailService.sendDocumentInvitationNotification(
-          to,
-          name,
-          document.fileName,
-          accessUrl,
-        );
-      } catch (error) {
-        this.logger.error(
-          `Error enviando invitación de firma simple a ${to} (documento ${document.id}): ${error}`,
-        );
-      }
     }
 
     return {
@@ -814,8 +768,11 @@ export class CreateDocumentSignatureFlowUseCase {
    *
    * - `MANUAL`: la del payload. Se exige aquí también —no sólo en el DTO— porque el caso de uso no
    *   debe depender de que lo hayan llamado a través del `ValidationPipe`.
-   * - `DIRECTORY`: la del usuario vinculado, resuelta en una sola consulta para todos. Lo que el
-   *   cliente haya mandado como nombre, apellido o correo junto con este origen se ignora.
+   * - `DIRECTORY`: la del usuario vinculado, resuelta en una sola consulta para todos, siempre
+   *   dentro del Directorio de la cuenta activa.
+   *
+   * Antes de resolver nada comprueba la coherencia de cada colaborador con su `source`
+   * (`collaboratorSourceViolations`): la misma regla del DTO, para no depender del `ValidationPipe`.
    *
    * @param activeAccount - Cuenta activa ya validada; define el Directorio.
    * @param collaborators - Colaboradores del payload.
@@ -835,6 +792,11 @@ export class CreateDocumentSignatureFlowUseCase {
     activeAccount: Pick<AccountEntity, 'id' | 'accountType' | 'organizationId'>,
     collaborators: readonly CollaboratorPayloadDto[],
   ): Promise<Map<CollaboratorPayloadDto, CollaboratorIdentity>> {
+    for (const participant of collaborators) {
+      const [violation] = collaboratorSourceViolations(participant);
+      if (violation) throw new BadRequestException(violation);
+    }
+
     const fromDirectory = collaborators.filter(isDirectoryCollaborator);
     if (fromDirectory.some((participant) => !participant.linkedUserId)) {
       throw new BadRequestException(
