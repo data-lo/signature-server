@@ -5,12 +5,16 @@ import { v4 as uuid4 } from 'uuid';
 
 import { DocumentEntity } from '../entities/document.entity';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { NotificationEntity } from '../entities/notification.entity';
 import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
 
 import {
+  collaboratorSourceViolations,
+  CollaboratorPayloadDto,
   CreateDocumentSignaturesDto,
+  isDirectoryCollaborator,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   REQUIRES_DIFFERENT_SIGNATURES_ENUM,
@@ -39,15 +43,17 @@ import { NotificationEventsProducer } from 'src/kafka/notification-events.produc
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
-import { EmailService } from 'src/common/email/email.service';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
-import { buildDocumentAccessUrl } from '../utils/document-access-url.util';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
 import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
 import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
+import {
+  CollaboratorIdentity,
+  DirectoryCollaboratorsService,
+} from 'src/directory/directory-collaborators.service';
 
 const COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN: Record<
   PAYLOAD_COLABORATOR_TYPE_ENUM,
@@ -121,6 +127,26 @@ const EXPECTED_REQUIRES_DIFFERENT_SIGNATURES: Record<
     REQUIRES_DIFFERENT_SIGNATURES_ENUM.BIOMETRIC,
 };
 
+/**
+ * Cómo nombrar a un colaborador en un mensaje de error, antes de haber resuelto su identidad.
+ *
+ * @param collaborator - Colaborador del payload.
+ * @returns Su correo si es manual; "un firmante del Directorio" si viene del Directorio, que no
+ *   trae correo en el payload.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * describeCollaborator({ email: 'ana@example.com' } as CollaboratorPayloadDto); // 'ana@example.com'
+ * ```
+ */
+function describeCollaborator(collaborator: CollaboratorPayloadDto): string {
+  return isDirectoryCollaborator(collaborator)
+    ? 'un firmante del Directorio'
+    : (collaborator.email ?? 'un firmante');
+}
+
 export interface CreateDocumentSignaturesResult {
   id: string;
   status: DOCUMENT_STATUS_ENUM;
@@ -138,6 +164,13 @@ export interface CreateDocumentSignaturesResult {
  *
  * Trata a todos los colaboradores como invitación por email (accountId siempre null) — no
  * intenta resolver si ese correo ya tiene cuenta en la plataforma.
+ *
+ * La identidad de cada colaborador sale de uno de dos orígenes (historia "Enviar colaboradores
+ * desde Directorio mediante usuario vinculado al crear un documento"): `MANUAL`, con nombre,
+ * apellido y correo tal como llegan, o `DIRECTORY`, donde el payload sólo trae `linkedUserId` y
+ * la identidad se resuelve desde ese usuario (`DirectoryCollaboratorsService`), ANTES de crear el
+ * colaborador y, por tanto, de notificarlo. Los manuales con `addToDirectory` quedan además en el
+ * Directorio activo, dentro de la misma transacción.
  *
  * El tipo de firma es del documento, no de cada firmante (historia "Selección de tipo de firma al
  * crear documentos"): llega en `documentData.signatureType`, admite SIMPLE, ADVANCED o
@@ -163,11 +196,11 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly notificationEventsProducer: NotificationEventsProducer,
     private readonly documentEventsProducer: DocumentEventsProducer,
-    private readonly emailService: EmailService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
     private readonly documentReviewerService: DocumentReviewerService,
     private readonly assertPlanAction: AssertPlanActionUseCase,
+    private readonly directoryCollaborators: DirectoryCollaboratorsService,
   ) {}
 
   async execute(
@@ -237,7 +270,7 @@ export class CreateDocumentSignatureFlowUseCase {
     );
     if (signerWithoutPosition) {
       throw new BadRequestException(
-        `Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de ${signerWithoutPosition.email}`,
+        `Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de ${describeCollaborator(signerWithoutPosition)}`,
       );
     }
 
@@ -302,6 +335,16 @@ export class CreateDocumentSignatureFlowUseCase {
         )
       : null;
 
+    /**
+     * Se resuelve aquí, antes de subir el archivo y de abrir la transacción: un `linkedUserId` que
+     * no está en el Directorio activo es un error del payload, y lo barato es enterarse antes de
+     * escribir el PDF en Minio y de cobrar el crédito.
+     */
+    const identities = await this.resolveCollaboratorIdentities(
+      activeAccount,
+      dto.collaborators,
+    );
+
     const totalPages = await this.documentSigningService.getPdfPages(file);
 
     // Antes de subir el archivo: una posición fuera del documento es un error del payload, y
@@ -354,18 +397,7 @@ export class CreateDocumentSignatureFlowUseCase {
     }
     assertNoOverlappingSignaturePositions(positionsByPage);
 
-    /**
-     * Se declara fuera de la transacción porque hace falta después de ella, para publicar el
-     * evento de aprobación solicitada con el colaborador concreto al que hay que esperar.
-     */
-    let reviewerCollaboratorId: string | null = null;
-
-    const {
-      document,
-      notificationEvents,
-      verificationCodesCount,
-      invitationEmailTargets,
-    } = await this.dataSource.transaction(async (manager) => {
+    const created = await this.dataSource.transaction(async (manager) => {
       const documentRepo = manager.getRepository(DocumentEntity);
       const collaboratorRepo = manager.getRepository(CollaboratorEntity);
       const notificationRepo = manager.getRepository(NotificationEntity);
@@ -441,16 +473,6 @@ export class CreateDocumentSignatureFlowUseCase {
         notification: NotificationEntity;
         collaboratorId: string;
       }[] = [];
-      // Firmantes de Firma Digital Simple en un documento sin orden (isSequential=false): se
-      // les invita por correo a registrarse/iniciar sesión de inmediato, ya que no hay que
-      // esperar ningún turno (ver historia "Notificación por Email para Firma Simple y
-      // Vinculación de Cuenta"). Se envían fuera de la transacción, igual que los eventos de
-      // Kafka más abajo.
-      const invitationEmailTargets: {
-        to: string;
-        name: string;
-        collaboratorId: string;
-      }[] = [];
       let verificationCodesCount = 0;
       let anyRequiresVerification = false;
       // Bug corregido: este loop nunca asignaba signingOrder a los firmantes (a diferencia de
@@ -475,6 +497,8 @@ export class CreateDocumentSignatureFlowUseCase {
       for (const participant of orderedCollaborators) {
         const isSigner =
           participant.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER;
+        // Ya resuelta: la del payload para MANUAL, la del usuario vinculado para DIRECTORY.
+        const identity = identities.get(participant)!;
 
         // Se crea para todo SIGNER de este flujo — `simpleSignatureId` asignado distingue a estos
         // colaboradores de los creados por el endpoint POST /document más antiguo (que nunca lo
@@ -510,9 +534,9 @@ export class CreateDocumentSignatureFlowUseCase {
             // lo compara contra el correo ya normalizado del usuario. Guardarlo tal cual se
             // tecleó dejaba invisibles en "Por firmar" a los firmantes invitados con
             // mayúsculas (ver el bug corregido en DocumentService.findWithFilters).
-            email: participant.email.toLowerCase(),
-            firstName: participant.firstName,
-            lastName: participant.lastName,
+            email: identity.email.toLowerCase(),
+            firstName: identity.firstName,
+            lastName: identity.lastName,
             // Solo el WITNESS guarda identificador fiscal: para un firmante el dato ya no se
             // pide al crear el documento, y el del flujo avanzado sale del certificado de
             // e.firma al firmar (ver `CollaboratorPayloadDto.taxId`). Se descarta explícitamente
@@ -547,27 +571,21 @@ export class CreateDocumentSignatureFlowUseCase {
           notification,
           collaboratorId: collaborator.id,
         });
-
         /**
-         * Con aprobación pendiente no se invita a nadie a firmar: el documento todavía puede no
-         * salir nunca a firma. Estas invitaciones las manda el caso de uso de aprobación cuando
-         * el reviewer autoriza (ver `DocumentService.sendSimpleSignatureInvitations`, que
-         * reconstruye exactamente esta misma lista desde la base).
+         * El evento va a la outbox, en esta misma transacción: si el alta revierte, el evento
+         * desaparece con ella. El correo —de firmante o de testigo según `colaboratorType`, incluida
+         * la invitación inmediata de firma SIMPLE sin orden— lo manda después del commit
+         * `SendPendingSignatureNotificationUseCase`, al consumirlo. Nada de este flujo envía
+         * correo directamente.
          */
-        if (
-          isSigner &&
-          !requiresApproval &&
-          documentSignatureType === SIGNATURE_TYPE_ENUM.SIMPLE &&
-          !isSequential
-        ) {
-          invitationEmailTargets.push({
-            to: collaborator.email!,
-            name:
-              `${collaborator.firstName ?? ''} ${collaborator.lastName ?? ''}`.trim() ||
-              collaborator.email!,
-            collaboratorId: collaborator.id,
-          });
-        }
+        await this.notificationEventsProducer.enqueueCreated(manager, {
+          notificationId: notification.id,
+          documentId: document.id,
+          collaboratorId: collaborator.id,
+          actorType: notification.actorType,
+          notificationChannelSource: notification.notificationChannelSource,
+          actorUserId: createdBy,
+        });
 
         if (isSigner) {
           // Regla de negocio reforzada en el backend, no solo confiada del payload (ver
@@ -600,6 +618,23 @@ export class CreateDocumentSignatureFlowUseCase {
       }
 
       /**
+       * Dentro de la transacción: si el documento no llega a crearse, tampoco quedan contactos
+       * nuevos en el Directorio. `addToDirectory` sólo cuenta para los capturados a mano; los del
+       * Directorio ya están en él.
+       */
+      await this.directoryCollaborators.addManualCollaboratorsToDirectory(
+        manager,
+        activeAccount,
+        dto.collaborators
+          .filter(
+            (participant) =>
+              !isDirectoryCollaborator(participant) &&
+              participant.addToDirectory === true,
+          )
+          .map((participant) => identities.get(participant)!),
+      );
+
+      /**
        * El reviewer es un colaborador más —misma tabla, misma transacción— y no una columna del
        * documento: así la decisión que tome queda registrada con su fecha y su nota en la misma
        * fila que todo lo demás, y el día que se admita más de un aprobador no hay que cambiar el
@@ -617,7 +652,6 @@ export class CreateDocumentSignatureFlowUseCase {
             ipAddress: ip,
           }),
         );
-        reviewerCollaboratorId = reviewer.id;
 
         const reviewerNotification = await notificationRepo.save(
           notificationRepo.create({
@@ -634,6 +668,15 @@ export class CreateDocumentSignatureFlowUseCase {
         notificationEvents.push({
           notification: reviewerNotification,
           collaboratorId: reviewer.id,
+        });
+        await this.notificationEventsProducer.enqueueCreated(manager, {
+          notificationId: reviewerNotification.id,
+          documentId: document.id,
+          collaboratorId: reviewer.id,
+          actorType: reviewerNotification.actorType,
+          notificationChannelSource:
+            reviewerNotification.notificationChannelSource,
+          actorUserId: createdBy,
         });
 
         /**
@@ -657,9 +700,10 @@ export class CreateDocumentSignatureFlowUseCase {
         document,
         notificationEvents,
         verificationCodesCount,
-        invitationEmailTargets,
       };
     });
+
+    const { document, notificationEvents, verificationCodesCount } = created;
 
     // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
     // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.
@@ -677,13 +721,17 @@ export class CreateDocumentSignatureFlowUseCase {
     });
 
     /**
-     * Un documento con aprobación anuncia que está esperando una decisión; uno sin ella ya está
-     * en firma y lo anuncia como siempre. Son dos hechos distintos y por eso son dos eventos
-     * distintos: un consumidor no debería tener que leer el estado del documento para saber cuál
-     * de los dos ocurrió.
+     * Publica lo que la transacción dejó en la outbox: las notificaciones de cada colaborador y,
+     * con aprobación, el `document.approval_requested`. Después del commit y best-effort: si Kafka
+     * falla, las filas quedan pendientes y las publica el siguiente `flush` (ver `OutboxService`),
+     * así que un fallo aquí nunca deshace un documento que ya quedó creado.
      */
-    if (reviewerCollaboratorId) {
+    try {
       await this.documentEventsProducer.flushOutbox();
+    } catch (error) {
+      this.logger.error(
+        `No se pudo publicar la outbox tras crear el documento ${document.id}; queda pendiente para el siguiente flush: ${error}`,
+      );
     }
 
     if (document.isIndexable) {
@@ -702,36 +750,6 @@ export class CreateDocumentSignatureFlowUseCase {
        */
     }
 
-    for (const { notification, collaboratorId } of notificationEvents) {
-      this.notificationEventsProducer.emitCreated({
-        notificationId: notification.id,
-        documentId: document.id,
-        collaboratorId,
-        actorType: notification.actorType,
-        notificationChannelSource: notification.notificationChannelSource,
-        actorUserId: createdBy,
-      });
-    }
-
-    // Igual que arriba: fuera de la transacción, y best-effort por destinatario — un correo que
-    // falla no debe tumbar la creación del documento ni impedir que los demás se envíen (ver
-    // historia "Notificación por Email para Firma Simple y Vinculación de Cuenta").
-    for (const { to, name, collaboratorId } of invitationEmailTargets) {
-      const accessUrl = buildDocumentAccessUrl(document.id, collaboratorId, to);
-      try {
-        await this.emailService.sendDocumentInvitationNotification(
-          to,
-          name,
-          document.fileName,
-          accessUrl,
-        );
-      } catch (error) {
-        this.logger.error(
-          `Error enviando invitación de firma simple a ${to} (documento ${document.id}): ${error}`,
-        );
-      }
-    }
-
     return {
       success: true,
       message: 'Documento y flujo de firmas creados correctamente',
@@ -743,6 +761,82 @@ export class CreateDocumentSignatureFlowUseCase {
         verificationCodesCount,
       },
     };
+  }
+
+  /**
+   * Resuelve la identidad (nombre, apellido y correo) de cada colaborador del payload.
+   *
+   * - `MANUAL`: la del payload. Se exige aquí también —no sólo en el DTO— porque el caso de uso no
+   *   debe depender de que lo hayan llamado a través del `ValidationPipe`.
+   * - `DIRECTORY`: la del usuario vinculado, resuelta en una sola consulta para todos, siempre
+   *   dentro del Directorio de la cuenta activa.
+   *
+   * Antes de resolver nada comprueba la coherencia de cada colaborador con su `source`
+   * (`collaboratorSourceViolations`): la misma regla del DTO, para no depender del `ValidationPipe`.
+   *
+   * @param activeAccount - Cuenta activa ya validada; define el Directorio.
+   * @param collaborators - Colaboradores del payload.
+   * @returns Un mapa del colaborador del payload (por referencia) a su identidad.
+   *
+   * @throws {BadRequestException} (400) Si a un colaborador manual le falta nombre, apellido o
+   *   correo, si uno del Directorio no trae `linkedUserId`, o si ese usuario no existe o no está
+   *   vinculado a un contacto vigente del Directorio activo.
+   *
+   * @example
+   * ```ts
+   * const identities = await this.resolveCollaboratorIdentities(activeAccount, dto.collaborators);
+   * identities.get(dto.collaborators[0])!.email; // 'ana@example.com'
+   * ```
+   */
+  private async resolveCollaboratorIdentities(
+    activeAccount: Pick<AccountEntity, 'id' | 'accountType' | 'organizationId'>,
+    collaborators: readonly CollaboratorPayloadDto[],
+  ): Promise<Map<CollaboratorPayloadDto, CollaboratorIdentity>> {
+    for (const participant of collaborators) {
+      const [violation] = collaboratorSourceViolations(participant);
+      if (violation) throw new BadRequestException(violation);
+    }
+
+    const fromDirectory = collaborators.filter(isDirectoryCollaborator);
+    if (fromDirectory.some((participant) => !participant.linkedUserId)) {
+      throw new BadRequestException(
+        'Un colaborador del Directorio debe traer linkedUserId; un contacto sin usuario vinculado se envía como MANUAL',
+      );
+    }
+
+    const linkedIdentities =
+      await this.directoryCollaborators.resolveLinkedCollaborators(
+        activeAccount,
+        fromDirectory.map((participant) => participant.linkedUserId!),
+      );
+
+    return new Map(
+      collaborators.map((participant) => {
+        if (isDirectoryCollaborator(participant)) {
+          return [
+            participant,
+            linkedIdentities.get(participant.linkedUserId!)!,
+          ];
+        }
+        if (
+          !participant.firstName ||
+          !participant.lastName ||
+          !participant.email
+        ) {
+          throw new BadRequestException(
+            'Un colaborador capturado a mano debe traer nombre, apellido y correo',
+          );
+        }
+        return [
+          participant,
+          {
+            firstName: participant.firstName,
+            lastName: participant.lastName,
+            email: participant.email,
+          },
+        ];
+      }),
+    );
   }
 
   /**

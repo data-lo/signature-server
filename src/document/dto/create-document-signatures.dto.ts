@@ -16,8 +16,12 @@ import {
   IsUUID,
   Max,
   Min,
+  Validate,
   ValidateIf,
   ValidateNested,
+  ValidationArguments,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator';
 
 /**
@@ -38,6 +42,196 @@ export enum PAYLOAD_COLABORATOR_TYPE_ENUM {
   SIGNER = 'SIGNER',
   /** Testigo. Era `VIEWER` hasta la historia "Renombrar rol Espectador a Testigo". */
   WITNESS = 'WITNESS',
+}
+
+/**
+ * De dónde sale la identidad de un colaborador (historia "Enviar colaboradores desde Directorio
+ * mediante usuario vinculado al crear un documento").
+ *
+ * - `MANUAL`: el cliente captura nombre, apellido y correo, y puede pedir con `addToDirectory`
+ *   que el contacto quede en el Directorio de la cuenta activa.
+ * - `DIRECTORY`: el cliente sólo manda `linkedUserId`, el usuario vinculado a un contacto del
+ *   Directorio activo. Nombre, apellido y correo los resuelve el backend desde ese usuario, y el
+ *   payload que los traiga se rechaza (historia "Implementar creación transaccional de
+ *   colaboradores desde Directorio y captura manual"): el contrato no deja lugar a datos de
+ *   identidad que el backend fuera a ignorar.
+ *
+ * Un contacto del Directorio SIN usuario vinculado no puede usar `DIRECTORY` —no hay usuario ni
+ * correo de plataforma que resolver—: se envía como `MANUAL` con sus datos completos.
+ */
+export enum PAYLOAD_COLLABORATOR_SOURCE_ENUM {
+  DIRECTORY = 'DIRECTORY',
+  MANUAL = 'MANUAL',
+}
+
+/**
+ * Indica si un colaborador del payload viene del Directorio.
+ *
+ * @param collaborator - Colaborador del payload.
+ * @returns `true` sólo si `source` es `DIRECTORY`.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * isDirectoryCollaborator({ source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY }); // true
+ * isDirectoryCollaborator({ source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL }); // false
+ * ```
+ */
+export function isDirectoryCollaborator(
+  collaborator: Pick<CollaboratorPayloadDto, 'source'>,
+): boolean {
+  return collaborator.source === PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY;
+}
+
+/** Campos que sólo pertenecen al origen MANUAL: la identidad capturada y el alta en Directorio. */
+const MANUAL_ONLY_FIELDS = [
+  'firstName',
+  'lastName',
+  'email',
+  'addToDirectory',
+] as const;
+
+/** Campos que sólo pertenecen al origen DIRECTORY. */
+const DIRECTORY_ONLY_FIELDS = ['linkedUserId'] as const;
+
+type SourceFields = Pick<
+  CollaboratorPayloadDto,
+  'source' | (typeof MANUAL_ONLY_FIELDS)[number] | 'linkedUserId'
+>;
+
+/**
+ * Campos presentes en el colaborador que su `source` no admite.
+ *
+ * Un campo cuenta como "enviado" si no es `undefined`: un `null` explícito también se rechaza,
+ * porque quien lo manda está diciendo algo sobre un campo que no le corresponde a ese origen.
+ *
+ * @param collaborator - Colaborador del payload.
+ * @returns Los nombres de los campos sobrantes, en orden fijo; vacío si no sobra ninguno o si
+ *   `source` no es un valor válido (eso lo reporta su propio validador).
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * forbiddenFieldsForSource({ source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY, email: 'a@b.c' });
+ * // ['email']
+ * ```
+ */
+export function forbiddenFieldsForSource(collaborator: SourceFields): string[] {
+  const forbidden =
+    collaborator.source === PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY
+      ? MANUAL_ONLY_FIELDS
+      : collaborator.source === PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL
+        ? DIRECTORY_ONLY_FIELDS
+        : [];
+  return forbidden.filter((field) => collaborator[field] !== undefined);
+}
+
+/**
+ * Todo lo que hace inválido a un colaborador según su `source`: origen ausente o desconocido,
+ * campos obligatorios que faltan y campos que ese origen no admite.
+ *
+ * Es la regla completa en un solo lugar. El DTO la reparte entre los validadores de cada campo
+ * (formato y obligatoriedad) y `CollaboratorSourceFieldsConstraint` (campos sobrantes);
+ * `CreateDocumentSignatureFlowUseCase` la aplica entera, para no depender de que lo llamen a
+ * través del `ValidationPipe`.
+ *
+ * @param collaborator - Colaborador del payload.
+ * @returns Mensajes en español, uno por problema; vacío si el colaborador es coherente.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * collaboratorSourceViolations({ source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL, firstName: 'Ana' });
+ * // ['Con source MANUAL son obligatorios: lastName, email, addToDirectory']
+ * ```
+ */
+export function collaboratorSourceViolations(
+  collaborator: SourceFields,
+): string[] {
+  if (
+    !Object.values(PAYLOAD_COLLABORATOR_SOURCE_ENUM).includes(
+      collaborator.source as PAYLOAD_COLLABORATOR_SOURCE_ENUM,
+    )
+  ) {
+    return ['source es obligatorio y debe ser DIRECTORY o MANUAL'];
+  }
+
+  const required =
+    collaborator.source === PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY
+      ? DIRECTORY_ONLY_FIELDS
+      : MANUAL_ONLY_FIELDS;
+  const missing = required.filter(
+    (field) =>
+      collaborator[field] === undefined ||
+      collaborator[field] === null ||
+      collaborator[field] === '',
+  );
+  const forbidden = forbiddenFieldsForSource(collaborator);
+
+  return [
+    ...(missing.length
+      ? [
+          `Con source ${collaborator.source} son obligatorios: ${missing.join(', ')}`,
+        ]
+      : []),
+    ...(forbidden.length
+      ? [
+          `Con source ${collaborator.source} no se aceptan: ${forbidden.join(', ')}`,
+        ]
+      : []),
+  ];
+}
+
+/**
+ * Rechaza los campos que el `source` del colaborador no admite (ver `forbiddenFieldsForSource`).
+ *
+ * Va sobre la propiedad `source` y no sobre cada campo: con `ValidateIf`, los validadores de un
+ * campo se saltan TODOS juntos cuando la condición no se cumple, así que no hay forma de decir en
+ * el mismo campo "obligatorio para MANUAL" y "prohibido para DIRECTORY".
+ */
+@ValidatorConstraint({ name: 'collaboratorSourceFields', async: false })
+export class CollaboratorSourceFieldsConstraint implements ValidatorConstraintInterface {
+  /**
+   * Indica si el colaborador no trae campos ajenos a su origen.
+   *
+   * @param _source - Valor de `source` (se lee del objeto completo).
+   * @param args - Argumentos de class-validator; `object` es el colaborador.
+   * @returns `true` si no sobra ningún campo.
+   *
+   * @throws Nada.
+   *
+   * @example
+   * ```ts
+   * new CollaboratorSourceFieldsConstraint().validate('DIRECTORY', { object: { source: 'DIRECTORY' } } as never); // true
+   * ```
+   */
+  validate(_source: unknown, args: ValidationArguments): boolean {
+    return (
+      forbiddenFieldsForSource(args.object as CollaboratorPayloadDto).length ===
+      0
+    );
+  }
+
+  /**
+   * Mensaje con los campos sobrantes.
+   *
+   * @param args - Argumentos de class-validator; `object` es el colaborador.
+   * @returns El mensaje de error.
+   *
+   * @throws Nada.
+   *
+   * @example
+   * ```ts
+   * // 'Con source DIRECTORY no se aceptan: firstName, email'
+   * ```
+   */
+  defaultMessage(args: ValidationArguments): string {
+    const collaborator = args.object as CollaboratorPayloadDto;
+    return `Con source ${collaborator.source} no se aceptan: ${forbiddenFieldsForSource(collaborator).join(', ')}`;
+  }
 }
 
 /**
@@ -228,19 +422,79 @@ export class CollaboratorPayloadDto {
   @IsEnum(PAYLOAD_COLABORATOR_TYPE_ENUM)
   collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM;
 
-  @ApiProperty({ example: 'Juan' })
+  /**
+   * Discriminador del origen. Obligatorio: desde la historia "Implementar creación transaccional de
+   * colaboradores desde Directorio y captura manual" ya no hay un origen por omisión, porque cada
+   * origen exige campos distintos (`addToDirectory` en MANUAL, `linkedUserId` en DIRECTORY).
+   */
+  @ApiProperty({
+    enum: PAYLOAD_COLLABORATOR_SOURCE_ENUM,
+    description:
+      '`MANUAL` (datos capturados) o `DIRECTORY` (sólo `linkedUserId`; el backend resuelve la identidad).',
+  })
+  @IsEnum(PAYLOAD_COLLABORATOR_SOURCE_ENUM, {
+    message: 'source es obligatorio y debe ser DIRECTORY o MANUAL',
+  })
+  @Validate(CollaboratorSourceFieldsConstraint)
+  source: PAYLOAD_COLLABORATOR_SOURCE_ENUM;
+
+  /**
+   * `users.id` del usuario vinculado al contacto del Directorio. Obligatorio con `source:
+   * 'DIRECTORY'`; con `MANUAL` se rechaza. Que exista y que esté vinculado a un contacto vigente
+   * del Directorio de la cuenta activa lo comprueba `CreateDocumentSignatureFlowUseCase`, no este
+   * DTO.
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Obligatorio con `source: DIRECTORY`; no se acepta con `MANUAL`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => isDirectoryCollaborator(c))
+  @IsUUID()
+  linkedUserId?: string;
+
+  /**
+   * Nombre, apellido y correo: obligatorios con `MANUAL` y rechazados con `DIRECTORY` (lo segundo
+   * lo comprueba `CollaboratorSourceFieldsConstraint`, sobre `source`).
+   */
+  @ApiPropertyOptional({
+    example: 'Juan',
+    description: 'Obligatorio con `source: MANUAL`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => !isDirectoryCollaborator(c))
   @IsString()
   @IsNotEmpty()
-  firstName: string;
+  firstName?: string;
 
-  @ApiProperty({ example: 'Pérez' })
+  @ApiPropertyOptional({
+    example: 'Pérez',
+    description: 'Obligatorio con `source: MANUAL`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => !isDirectoryCollaborator(c))
   @IsString()
   @IsNotEmpty()
-  lastName: string;
+  lastName?: string;
 
-  @ApiProperty({ example: 'juan.perez@mail.com' })
+  @ApiPropertyOptional({
+    example: 'juan.perez@mail.com',
+    description: 'Obligatorio con `source: MANUAL`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => !isDirectoryCollaborator(c))
   @IsEmail()
-  email: string;
+  email?: string;
+
+  /**
+   * Si el colaborador capturado a mano debe quedar en el Directorio de la cuenta activa.
+   * Obligatorio con `MANUAL` —el cliente decide siempre, no hay valor por omisión— y rechazado con
+   * `DIRECTORY`, porque ese contacto ya está en el Directorio.
+   */
+  @ApiPropertyOptional({
+    description:
+      'Obligatorio con `source: MANUAL` (crea o reutiliza el contacto en el Directorio activo); no se acepta con `DIRECTORY`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => !isDirectoryCollaborator(c))
+  @IsBoolean({ message: 'addToDirectory es obligatorio con source MANUAL' })
+  addToDirectory?: boolean;
 
   /**
    * Identificador fiscal del colaborador; en México, su RFC (se llamaba `rfc` hasta la historia

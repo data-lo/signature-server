@@ -28,6 +28,7 @@ export function toDirectoryContactResponse(
     taxId: contact.taxId ?? null,
     phone: contact.phone ?? null,
     linkedPersonalAccountId: contact.linkedPersonalAccountId ?? null,
+    linkedUserId: contact.linkedPersonalAccount?.userId ?? null,
     archivedAt: contact.archivedAt ?? null,
     createdAt: contact.createdAt,
     updatedAt: contact.updatedAt,

@@ -119,6 +119,10 @@ export class DirectoryService {
   ): Promise<[DirectoryContactEntity[], number]> {
     const qb = this.contactRepository
       .createQueryBuilder('contact')
+      .leftJoinAndSelect(
+        'contact.linkedPersonalAccount',
+        'linkedPersonalAccount',
+      )
       .where('contact.directoryId = :directoryId', {
         directoryId: query.directoryId,
       })
@@ -164,6 +168,8 @@ export class DirectoryService {
   ): Promise<DirectoryContactEntity | null> {
     return this.contactRepository.findOne({
       where: { id: contactId, directoryId, archivedAt: IsNull() },
+      // Para publicar `linkedUserId`: el contacto guarda la cuenta, no el usuario.
+      relations: { linkedPersonalAccount: true },
     });
   }
 
@@ -187,6 +193,8 @@ export class DirectoryService {
   ): Promise<DirectoryContactEntity | null> {
     return this.contactRepository.findOne({
       where: { directoryId, emailNormalized },
+      // Para publicar `linkedUserId` si se reactiva un contacto ya vinculado.
+      relations: { linkedPersonalAccount: true },
     });
   }
 

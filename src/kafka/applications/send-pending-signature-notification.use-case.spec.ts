@@ -78,6 +78,9 @@ describe('NotificationEventsConsumer', () => {
       sendDocumentApprovalRequestedNotification: jest
         .fn()
         .mockResolvedValue(undefined),
+      sendDocumentInvitationNotification: jest
+        .fn()
+        .mockResolvedValue(undefined),
     };
 
     documentRepository.findOne.mockResolvedValue(buildDocument());
@@ -174,18 +177,93 @@ describe('NotificationEventsConsumer', () => {
     expect(collaboratorRepository.find).not.toHaveBeenCalled();
   });
 
-  it('documento sin orden + firmante SIMPLE: NO envía este correo (ya recibió la invitación dedicada)', async () => {
-    documentRepository.findOne.mockResolvedValue(
-      buildDocument({ isSequential: false }),
-    );
-    const signer = buildCollaborator({
-      signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+  /**
+   * Historia "Implementar creación transaccional de colaboradores desde Directorio y captura
+   * manual": la invitación inmediata de firma SIMPLE sin orden ya no la manda la creación del
+   * documento; sale de aquí, al procesar el `notification.created` que quedó en la outbox.
+   */
+  describe('documento sin orden + firmante SIMPLE: invitación a firmar', () => {
+    beforeEach(() => {
+      documentRepository.findOne.mockResolvedValue(
+        buildDocument({ isSequential: false }),
+      );
+      collaboratorRepository.findOne.mockResolvedValue(
+        buildCollaborator({ signatureType: SIGNATURE_TYPE_ENUM.SIMPLE }),
+      );
     });
-    collaboratorRepository.findOne.mockResolvedValue(signer);
 
-    await consumer.handleCreated(payload);
+    it('envía la invitación —no el correo de documento pendiente— con su enlace de acceso', async () => {
+      await consumer.handleCreated(payload);
 
-    expect(emailService.sendDocumentPendingNotification).not.toHaveBeenCalled();
+      expect(
+        emailService.sendDocumentInvitationNotification,
+      ).toHaveBeenCalledWith(
+        'firmante@correo.com',
+        'Firmante Uno',
+        'contrato.pdf',
+        expect.stringContaining(
+          '/access-document?docId=doc-1&collabId=collaborator-1',
+        ),
+      );
+      expect(
+        emailService.sendDocumentPendingNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('marca la notificación como enviada ANTES de mandar el correo, y como entregada después', async () => {
+      await consumer.handleCreated(payload);
+
+      expect(notificationRepository.update).toHaveBeenNthCalledWith(
+        1,
+        { id: 'notification-1', isNotified: false },
+        { isNotified: true, sentAt: expect.any(Date) },
+      );
+      expect(notificationRepository.update).toHaveBeenLastCalledWith(
+        { id: 'notification-1' },
+        { delivered: true },
+      );
+    });
+
+    it('si otra entrega ya ganó el claim (Kafka o la outbox reentregan), no la repite', async () => {
+      notificationRepository.update.mockResolvedValueOnce({ affected: 0 });
+
+      await consumer.handleCreated(payload);
+
+      expect(
+        emailService.sendDocumentInvitationNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('si el correo falla, revierte el claim y no propaga el error', async () => {
+      emailService.sendDocumentInvitationNotification.mockRejectedValue(
+        new Error('SendGrid caído'),
+      );
+      jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+      await expect(consumer.handleCreated(payload)).resolves.toBeUndefined();
+
+      expect(notificationRepository.update).toHaveBeenCalledWith(
+        { id: 'notification-1', isNotified: true },
+        { isNotified: false, sentAt: null },
+      );
+    });
+
+    it('con aprobación no envía nada: esas invitaciones las manda el flujo de aprobación', async () => {
+      documentRepository.findOne.mockResolvedValue(
+        buildDocument({
+          isSequential: false,
+          requiresApproval: true,
+          status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+        }),
+      );
+
+      await consumer.handleCreated(payload);
+
+      expect(
+        emailService.sendDocumentInvitationNotification,
+      ).not.toHaveBeenCalled();
+      expect(notificationRepository.update).not.toHaveBeenCalled();
+    });
   });
 
   /**

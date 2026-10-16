@@ -25,6 +25,16 @@ export class DirectoryContactResponse {
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   linkedPersonalAccountId: string | null;
 
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    type: String,
+    example: null,
+    description:
+      'Usuario de la plataforma vinculado (`users.id`); es lo que se envía como `linkedUserId` al crear un documento con un colaborador del Directorio. null si el contacto es externo.',
+  })
+  linkedUserId: string | null;
+
   /** `null` mientras el contacto está vigente; con fecha, ya archivado. */
   @ApiProperty({ nullable: true, type: Date })
   archivedAt: Date | null;

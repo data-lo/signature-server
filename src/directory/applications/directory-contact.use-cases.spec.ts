@@ -8,6 +8,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IsNull, QueryFailedError } from 'typeorm';
 
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
@@ -119,6 +120,7 @@ describe('Casos de uso del directorio', () => {
       execute: jest.fn().mockResolvedValue({}),
     };
     listBuilder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -247,6 +249,7 @@ describe('Casos de uso del directorio', () => {
           directoryId: 'directory-1',
           archivedAt: IsNull(),
         },
+        relations: { linkedPersonalAccount: true },
       });
     });
 
@@ -325,6 +328,37 @@ describe('Casos de uso del directorio', () => {
       expect(result.items[0].email).toBe('ana@example.com');
     });
 
+    it('publica linkedUserId desde la cuenta personal vinculada', async () => {
+      listBuilder.getManyAndCount.mockResolvedValue([
+        [
+          contact({
+            linkedPersonalAccountId: 'account-carla',
+            linkedPersonalAccount: {
+              id: 'account-carla',
+              userId: 'user-carla',
+            } as AccountEntity,
+          }),
+          contact({ id: 'contact-2', emailNormalized: 'beto@example.com' }),
+        ],
+        2,
+      ]);
+
+      const result = await listContacts.execute({
+        actor: actor(),
+        page: 1,
+        limit: 25,
+      });
+
+      expect(listBuilder.leftJoinAndSelect).toHaveBeenCalledWith(
+        'contact.linkedPersonalAccount',
+        'linkedPersonalAccount',
+      );
+      expect(result.items.map((item) => item.linkedUserId)).toEqual([
+        'user-carla',
+        null,
+      ]);
+    });
+
     it('busca por nombre, apellido, nombre completo, correo y RFC, con los comodines escapados', async () => {
       await listContacts.execute({
         actor: actor(),
@@ -358,6 +392,7 @@ describe('Casos de uso del directorio', () => {
           'id',
           'lastName',
           'linkedPersonalAccountId',
+          'linkedUserId',
           'phone',
           'taxId',
           'updatedAt',
@@ -432,6 +467,7 @@ describe('Casos de uso del directorio', () => {
           directoryId: 'directory-1',
           emailNormalized: 'ana@example.com',
         },
+        relations: { linkedPersonalAccount: true },
       });
       expect(contactRepository.save).not.toHaveBeenCalled();
     });

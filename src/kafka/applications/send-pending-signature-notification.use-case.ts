@@ -31,7 +31,8 @@ import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
  * —si acaso alguno— le corresponde.
  *
  * SIGNER: manda "tienes un documento por firmar", condicionado al turno (ver
- * `sendSignerNotification`). WITNESS: manda "te agregaron como testigo" y, si el envío tiene
+ * `sendSignerNotification`); en un documento de firma SIMPLE sin orden, la invitación a firmar de
+ * inmediato (ver `sendSimpleSignatureInvitation`). WITNESS: manda "te agregaron como testigo" y, si el envío tiene
  * éxito, lo marca NOTIFIED (historia "Actualizar estatus de watchers a NOTIFIED tras el envío de
  * correo...") — ver `sendWitnessNotification`. REVIEWER: manda "tienes un documento pendiente de
  * aprobación" mientras el documento sigue en `PENDING_APPROVAL` (historia "Corregir notificación
@@ -253,6 +254,7 @@ export class SendPendingSignatureNotificationUseCase {
       !document.isSequential &&
       collaborator.signatureType === SIGNATURE_TYPE_ENUM.SIMPLE
     ) {
+      await this.sendSimpleSignatureInvitation(collaborator, document, payload);
       return;
     }
 
@@ -297,6 +299,86 @@ export class SendPendingSignatureNotificationUseCase {
 
     this.logger.log(
       `Correo de notificación pendiente enviado a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
+    );
+  }
+
+  /**
+   * Invita a un firmante de firma SIMPLE de un documento sin orden a firmar de inmediato.
+   *
+   * Hasta la historia "Implementar creación transaccional de colaboradores desde Directorio y
+   * captura manual" este correo lo mandaba `CreateDocumentSignatureFlowUseCase` directamente,
+   * después del commit; ahora sale de aquí, al consumir el `notification.created` que la creación
+   * registró en la outbox, como el resto de los correos de ese flujo.
+   *
+   * Con `requiresApproval` no se envía nada: tras la aprobación esas invitaciones las manda
+   * `DocumentService.sendSimpleSignatureInvitations`, y una entrega tardía de este evento (la
+   * outbox reintenta lo que no pudo publicar) no debe duplicarlas.
+   *
+   * La deduplicación es la misma que la del aprobador: claim `isNotified: false → true` sobre la
+   * fila de `notifications`, condicionado y antes de enviar; si el envío falla se revierte y el
+   * error sube a `execute()`, que lo registra.
+   *
+   * @param collaborator - Firmante SIMPLE pendiente.
+   * @param document - Su documento, ya leído y sin orden de firma.
+   * @param payload - Evento `notification.created`; su `notificationId` es la llave del claim.
+   * @returns Nada; si no corresponde enviar, sólo lo registra en el log.
+   *
+   * @throws {InternalServerErrorException} Si SendGrid rechaza el envío (desde `EmailService`),
+   *   después de revertir el claim.
+   *
+   * @example
+   * ```ts
+   * await this.sendSimpleSignatureInvitation(signer, document, payload);
+   * ```
+   */
+  private async sendSimpleSignatureInvitation(
+    collaborator: CollaboratorEntity,
+    document: DocumentEntity,
+    payload: NotificationEventPayload,
+  ): Promise<void> {
+    if (document.requiresApproval) return;
+
+    const recipientEmail = collaboratorEmail(collaborator);
+    if (!recipientEmail) {
+      this.logger.warn(
+        `No se pudo determinar el email para el firmante ${collaborator.id}`,
+      );
+      return;
+    }
+
+    const claim = await this.notificationRepository.update(
+      { id: payload.notificationId, isNotified: false },
+      { isNotified: true, sentAt: new Date() },
+    );
+    if (claim.affected !== 1) {
+      this.logger.warn(
+        `La notificación ${payload.notificationId} ya estaba enviada: no se repite la invitación al firmante ${collaborator.id} (documento ${document.id})`,
+      );
+      return;
+    }
+
+    try {
+      await this.emailService.sendDocumentInvitationNotification(
+        recipientEmail,
+        collaboratorDisplayName(collaborator),
+        document.fileName,
+        buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
+      );
+    } catch (error) {
+      await this.notificationRepository.update(
+        { id: payload.notificationId, isNotified: true },
+        { isNotified: false, sentAt: null },
+      );
+      throw error;
+    }
+
+    await this.notificationRepository.update(
+      { id: payload.notificationId },
+      { delivered: true },
+    );
+
+    this.logger.log(
+      `Invitación de firma simple enviada a ${recipientEmail} (documento ${document.id}, colaborador ${collaborator.id})`,
     );
   }
 
