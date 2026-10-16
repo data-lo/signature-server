@@ -24,7 +24,7 @@ import {
   ApiGetDirectoryContact,
   ApiSearchDirectoryContacts,
   ApiUpdateDirectoryContact,
-} from './docs/api-directory-contacts.docs';
+} from './docs/api-directory-contacts-endpoints.docs';
 import { DirectoryContactResponse } from './interfaces/response/directory-contact-response';
 
 /**
@@ -131,7 +131,7 @@ export class DirectoryContactsController {
   }
 
   /**
-   * Actualiza nombre, apellido o correo de un contacto del directorio activo.
+   * Actualiza nombre, apellido, correo, RFC o teléfono de un contacto del directorio activo.
    *
    * @param user - Usuario autenticado.
    * @param accountId - Header `X-Account-Id`.

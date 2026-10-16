@@ -5,4 +5,5 @@ export enum RESOURCE_KEY_ENUM {
   MEMBER = 'MEMBER',
   BILLING = 'BILLING',
   ROLE = 'ROLE',
+  DIRECTORY = 'DIRECTORY',
 }

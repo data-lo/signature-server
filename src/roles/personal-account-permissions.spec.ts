@@ -22,7 +22,7 @@ describe('permisos de una cuenta PERSONAL', () => {
    * catálogo deja de coincidir con ella, esta prueba tiene que fallar. Derivarla del mismo
    * `organizationOnly` que usa el código no probaría nada.
    */
-  it('son facturación y los documentos propios, y nada más', () => {
+  it('son facturación, los documentos propios y su directorio, y nada más', () => {
     expect([...PERSONAL_ACCOUNT_PERMISSION_KEYS]).toEqual([
       STATIC_PERMISSION_KEY_ENUM.BILLING_READ,
       STATIC_PERMISSION_KEY_ENUM.BILLING_MANAGE,
@@ -31,6 +31,10 @@ describe('permisos de una cuenta PERSONAL', () => {
       STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SEND_SIGNATURE_REQUEST,
       STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF,
       STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CANCEL,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
+      STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
     ]);
   });
 
@@ -90,6 +94,17 @@ describe('permisos de una cuenta PERSONAL', () => {
       expect(
         getPersonalAccountPermissionScopes(RESOURCE_KEY_ENUM.BILLING, action),
       ).toEqual([scope]);
+    });
+
+    it.each([
+      ACTION_KEY_ENUM.READ,
+      ACTION_KEY_ENUM.CREATE,
+      ACTION_KEY_ENUM.UPDATE,
+      ACTION_KEY_ENUM.DELETE,
+    ])('su directorio concede %s con alcance ANY', (action) => {
+      expect(
+        getPersonalAccountPermissionScopes(RESOURCE_KEY_ENUM.DIRECTORY, action),
+      ).toEqual([PERMISSION_SCOPE_ENUM.ANY]);
     });
 
     it('firmar alcanza a uno mismo', () => {
