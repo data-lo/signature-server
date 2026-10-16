@@ -41,6 +41,47 @@ export enum PAYLOAD_COLABORATOR_TYPE_ENUM {
 }
 
 /**
+ * De dónde sale la identidad de un colaborador (historia "Enviar colaboradores desde Directorio
+ * mediante usuario vinculado al crear un documento").
+ *
+ * - `MANUAL`: el cliente captura nombre, apellido y correo, y puede pedir con `addToDirectory`
+ *   que el contacto quede en el Directorio de la cuenta activa.
+ * - `DIRECTORY`: el cliente sólo manda `linkedUserId`, el usuario vinculado a un contacto del
+ *   Directorio activo. Nombre, apellido y correo los resuelve el backend desde ese usuario: no se
+ *   confía en datos de identidad que viajen con este origen.
+ *
+ * Un contacto del Directorio SIN usuario vinculado no puede usar `DIRECTORY` —no hay usuario ni
+ * correo de plataforma que resolver—: se envía como `MANUAL` con sus datos completos.
+ */
+export enum PAYLOAD_COLLABORATOR_SOURCE_ENUM {
+  DIRECTORY = 'DIRECTORY',
+  MANUAL = 'MANUAL',
+}
+
+/**
+ * Indica si un colaborador del payload viene del Directorio.
+ *
+ * `source` es opcional en el contrato y su ausencia vale `MANUAL`: un cliente anterior a esta
+ * historia, que no lo manda, sigue enviando colaboradores capturados a mano y no recibe un 400.
+ *
+ * @param collaborator - Colaborador del payload.
+ * @returns `true` sólo si `source` es `DIRECTORY`.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * isDirectoryCollaborator({ source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY }); // true
+ * isDirectoryCollaborator({}); // false (MANUAL)
+ * ```
+ */
+export function isDirectoryCollaborator(
+  collaborator: Pick<CollaboratorPayloadDto, 'source'>,
+): boolean {
+  return collaborator.source === PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY;
+}
+
+/**
  * Valor que el payload usaba para el testigo antes de la historia "Renombrar rol Espectador a
  * Testigo". Se sigue aceptando —y se traduce a `WITNESS`— para que una pestaña con el frontend
  * anterior, abierta mientras se despliega, no reciba un 400 al enviar. Se puede retirar cuando
@@ -228,19 +269,72 @@ export class CollaboratorPayloadDto {
   @IsEnum(PAYLOAD_COLABORATOR_TYPE_ENUM)
   collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM;
 
-  @ApiProperty({ example: 'Juan' })
+  @ApiPropertyOptional({
+    enum: PAYLOAD_COLLABORATOR_SOURCE_ENUM,
+    default: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+    description:
+      '`MANUAL` (datos capturados) o `DIRECTORY` (sólo `linkedUserId`; el backend resuelve la identidad). Si se omite, `MANUAL`.',
+  })
+  @IsOptional()
+  @IsEnum(PAYLOAD_COLLABORATOR_SOURCE_ENUM)
+  source?: PAYLOAD_COLLABORATOR_SOURCE_ENUM;
+
+  /**
+   * `users.id` del usuario vinculado al contacto del Directorio. Obligatorio con `source:
+   * 'DIRECTORY'`; con `MANUAL` no se usa. Que exista y que esté vinculado a un contacto vigente
+   * del Directorio de la cuenta activa lo comprueba `CreateDocumentSignatureFlowUseCase`, no este
+   * DTO.
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Obligatorio con `source: DIRECTORY`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => isDirectoryCollaborator(c))
+  @IsUUID()
+  linkedUserId?: string;
+
+  /**
+   * Nombre, apellido y correo: obligatorios sólo para `MANUAL`. Con `DIRECTORY` no se validan y,
+   * si llegan, se ignoran: la identidad sale del usuario vinculado.
+   */
+  @ApiPropertyOptional({
+    example: 'Juan',
+    description: 'Obligatorio con `source: MANUAL`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => !isDirectoryCollaborator(c))
   @IsString()
   @IsNotEmpty()
-  firstName: string;
+  firstName?: string;
 
-  @ApiProperty({ example: 'Pérez' })
+  @ApiPropertyOptional({
+    example: 'Pérez',
+    description: 'Obligatorio con `source: MANUAL`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => !isDirectoryCollaborator(c))
   @IsString()
   @IsNotEmpty()
-  lastName: string;
+  lastName?: string;
 
-  @ApiProperty({ example: 'juan.perez@mail.com' })
+  @ApiPropertyOptional({
+    example: 'juan.perez@mail.com',
+    description: 'Obligatorio con `source: MANUAL`.',
+  })
+  @ValidateIf((c: CollaboratorPayloadDto) => !isDirectoryCollaborator(c))
   @IsEmail()
-  email: string;
+  email?: string;
+
+  /**
+   * Si el colaborador capturado a mano debe quedar en el Directorio de la cuenta activa. Sólo
+   * aplica a `MANUAL`; con `DIRECTORY` se ignora, porque el contacto ya está en el Directorio.
+   */
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'Sólo con `source: MANUAL`: crea o reutiliza el contacto en el Directorio activo.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  addToDirectory?: boolean;
 
   /**
    * Identificador fiscal del colaborador; en México, su RFC (se llamaba `rfc` hasta la historia

@@ -8,6 +8,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IsNull, QueryFailedError } from 'typeorm';
 
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
@@ -95,6 +96,7 @@ describe('DirectoryService', () => {
       execute: jest.fn().mockResolvedValue({}),
     };
     listBuilder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
@@ -212,6 +214,7 @@ describe('DirectoryService', () => {
           directoryId: 'directory-1',
           archivedAt: IsNull(),
         },
+        relations: { linkedPersonalAccount: true },
       });
     });
 
@@ -293,6 +296,37 @@ describe('DirectoryService', () => {
         totalPages: 2,
       });
       expect(result.items[0].email).toBe('ana@example.com');
+    });
+
+    it('publica linkedUserId desde la cuenta personal vinculada', async () => {
+      listBuilder.getManyAndCount.mockResolvedValue([
+        [
+          contact({
+            linkedPersonalAccountId: 'account-carla',
+            linkedPersonalAccount: {
+              id: 'account-carla',
+              userId: 'user-carla',
+            } as AccountEntity,
+          }),
+          contact({ id: 'contact-2', emailNormalized: 'beto@example.com' }),
+        ],
+        2,
+      ]);
+
+      const result = await service.listContacts(
+        personalAuthorization(),
+        'account-personal',
+        {},
+      );
+
+      expect(listBuilder.leftJoinAndSelect).toHaveBeenCalledWith(
+        'contact.linkedPersonalAccount',
+        'linkedPersonalAccount',
+      );
+      expect(result.items.map((item) => item.linkedUserId)).toEqual([
+        'user-carla',
+        null,
+      ]);
     });
 
     it('busca por nombre, apellido, nombre completo, correo y RFC, con los comodines escapados', async () => {
@@ -384,6 +418,7 @@ describe('DirectoryService', () => {
           directoryId: 'directory-1',
           emailNormalized: 'ana@example.com',
         },
+        relations: { linkedPersonalAccount: true },
       });
       expect(contactRepository.save).not.toHaveBeenCalled();
     });

@@ -166,8 +166,10 @@ export class DirectoryContactsService {
     contact.lastName = dto.lastName;
     contact.taxId = normalizeContactTaxId(dto.taxId) ?? null;
     contact.phone = dto.phone ?? null;
-    contact.linkedPersonalAccountId =
-      await this.resolveLinkedPersonalAccountId(emailNormalized);
+    this.applyLink(
+      contact,
+      await this.resolveLinkedPersonalAccount(emailNormalized),
+    );
     contact.updatedByAccountId = scope.accountId;
     contact.archivedAt = null;
 
@@ -228,8 +230,10 @@ export class DirectoryContactsService {
           throw new ConflictException(DUPLICATE_EMAIL_MESSAGE);
         }
         contact.emailNormalized = emailNormalized;
-        contact.linkedPersonalAccountId =
-          await this.resolveLinkedPersonalAccountId(emailNormalized);
+        this.applyLink(
+          contact,
+          await this.resolveLinkedPersonalAccount(emailNormalized),
+        );
       }
     }
     if (dto.firstName !== undefined) contact.firstName = dto.firstName;
@@ -315,6 +319,10 @@ export class DirectoryContactsService {
     const contacts = directory
       ? await this.contactRepository
           .createQueryBuilder('contact')
+          .leftJoinAndSelect(
+            'contact.linkedPersonalAccount',
+            'linkedPersonalAccount',
+          )
           .where('contact.directoryId = :directoryId', {
             directoryId: directory.id,
           })
@@ -499,6 +507,8 @@ export class DirectoryContactsService {
             directoryId: directory.id,
             archivedAt: IsNull(),
           },
+          // Para publicar `linkedUserId`: el contacto guarda la cuenta, no el usuario.
+          relations: { linkedPersonalAccount: true },
         })
       : null;
 
@@ -518,18 +528,19 @@ export class DirectoryContactsService {
    * usuarios borrados (`is_deleted`) no se vinculan.
    *
    * @param emailNormalized - Correo ya normalizado.
-   * @returns El `accounts.id` de su cuenta PERSONAL, o `null` si no corresponde a nadie.
+   * @returns Su cuenta PERSONAL (`id` y `userId`), o `null` si no corresponde a nadie.
    *
    * @throws Nada más allá de los errores de la base.
    *
    * @example
    * ```ts
-   * await this.resolveLinkedPersonalAccountId('ana@example.com'); // 'acc-personal-ana' | null
+   * await this.resolveLinkedPersonalAccount('ana@example.com');
+   * // { id: 'acc-personal-ana', userId: 'user-ana' } | null
    * ```
    */
-  private async resolveLinkedPersonalAccountId(
+  private async resolveLinkedPersonalAccount(
     emailNormalized: string,
-  ): Promise<string | null> {
+  ): Promise<Pick<AccountEntity, 'id' | 'userId'> | null> {
     const user = await this.userRepository
       .createQueryBuilder('user')
       .select(['user.id'])
@@ -540,10 +551,37 @@ export class DirectoryContactsService {
 
     const personalAccount = await this.accountRepository.findOne({
       where: { userId: user.id, accountType: ACCOUNT_TYPE_ENUM.PERSONAL },
-      select: { id: true },
+      select: { id: true, userId: true },
     });
 
-    return personalAccount?.id ?? null;
+    return personalAccount
+      ? { id: personalAccount.id, userId: personalAccount.userId }
+      : null;
+  }
+
+  /**
+   * Fija (o quita) el vínculo del contacto con una cuenta PERSONAL de la plataforma.
+   *
+   * Asigna la columna y también la relación, para que la respuesta publique `linkedUserId` sin
+   * volver a leer el contacto.
+   *
+   * @param contact - Contacto a modificar (en memoria; no lo guarda).
+   * @param link - Cuenta PERSONAL vinculada, o `null` si el contacto es externo.
+   * @returns Nada.
+   *
+   * @throws Nada.
+   *
+   * @example
+   * ```ts
+   * this.applyLink(contact, { id: 'acc-personal-ana', userId: 'user-ana' });
+   * ```
+   */
+  private applyLink(
+    contact: DirectoryContactEntity,
+    link: Pick<AccountEntity, 'id' | 'userId'> | null,
+  ): void {
+    contact.linkedPersonalAccountId = link?.id ?? null;
+    contact.linkedPersonalAccount = link as AccountEntity | null;
   }
 
   /**
@@ -609,6 +647,7 @@ export class DirectoryContactsService {
       taxId: contact.taxId ?? null,
       phone: contact.phone ?? null,
       linkedPersonalAccountId: contact.linkedPersonalAccountId ?? null,
+      linkedUserId: contact.linkedPersonalAccount?.userId ?? null,
       archivedAt: contact.archivedAt ?? null,
       createdAt: contact.createdAt,
       updatedAt: contact.updatedAt,

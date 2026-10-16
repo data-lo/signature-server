@@ -116,12 +116,22 @@ function createStore() {
     }),
   };
 
+  /** Como la relación `linkedPersonalAccount` cargada por `relations` / `leftJoinAndSelect`. */
+  const withLink = (row: Partial<DirectoryContactEntity>) =>
+    ({
+      ...row,
+      linkedPersonalAccount:
+        accounts.find(
+          (account) => account.id === row.linkedPersonalAccountId,
+        ) ?? null,
+    }) as DirectoryContactEntity;
+
   const contactRepository = {
     findOne: jest.fn(async ({ where }: { where: Row }) => {
       const row = contacts.find((candidate) =>
         matches(candidate as Row, where),
       );
-      return row ? ({ ...row } as DirectoryContactEntity) : null;
+      return row ? withLink(row) : null;
     }),
     exists: jest.fn(async ({ where }: { where: Row }) =>
       contacts.some((candidate) => matches(candidate as Row, where)),
@@ -154,6 +164,7 @@ function createStore() {
       const parameters: Row = {};
       let limit = Infinity;
       const builder = {
+        leftJoinAndSelect: () => builder,
         where: (_sql: string, params: Row) => {
           Object.assign(parameters, params);
           return builder;
@@ -182,7 +193,8 @@ function createStore() {
                 (a.lastName as string).localeCompare(b.lastName as string) ||
                 (a.firstName as string).localeCompare(b.firstName as string),
             )
-            .slice(0, limit);
+            .slice(0, limit)
+            .map(withLink);
         },
       };
       return builder;
@@ -513,12 +525,36 @@ describe('DirectoryContactsService', () => {
       });
 
       expect(data!.linkedPersonalAccountId).toBe(CARLA_PERSONAL);
+      expect(data!.linkedUserId).toBe(CARLA);
+    });
+
+    it('publica linkedUserId también al consultar y al buscar', async () => {
+      const { data: created } = await service.createContact(
+        ALICE,
+        ALICE_PERSONAL,
+        { ...ANA, email: 'carla@example.com' },
+      );
+
+      const { data: detail } = await service.getContact(
+        ALICE,
+        ALICE_PERSONAL,
+        created!.id,
+      );
+      const { data: found } = await service.searchContacts(
+        ALICE,
+        ALICE_PERSONAL,
+        { email: 'carla' },
+      );
+
+      expect(detail!.linkedUserId).toBe(CARLA);
+      expect(found!.map((contact) => contact.linkedUserId)).toEqual([CARLA]);
     });
 
     it('sin usuario con ese correo, el contacto queda sin vínculo', async () => {
       const { data } = await service.createContact(ALICE, ALICE_PERSONAL, ANA);
 
       expect(data!.linkedPersonalAccountId).toBeNull();
+      expect(data!.linkedUserId).toBeNull();
     });
 
     it('no vincula a un usuario borrado', async () => {
@@ -545,6 +581,7 @@ describe('DirectoryContactsService', () => {
       );
 
       expect(updated!.linkedPersonalAccountId).toBeNull();
+      expect(updated!.linkedUserId).toBeNull();
     });
   });
 

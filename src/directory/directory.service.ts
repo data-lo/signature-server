@@ -148,6 +148,10 @@ export class DirectoryService {
 
     const qb = this.contactRepository
       .createQueryBuilder('contact')
+      .leftJoinAndSelect(
+        'contact.linkedPersonalAccount',
+        'linkedPersonalAccount',
+      )
       .where('contact.directoryId = :directoryId', {
         directoryId: directory.id,
       })
@@ -226,6 +230,8 @@ export class DirectoryService {
 
     const existing = await this.contactRepository.findOne({
       where: { directoryId: directory.id, emailNormalized },
+      // Para publicar `linkedUserId` si se reactiva un contacto ya vinculado.
+      relations: { linkedPersonalAccount: true },
     });
 
     if (existing && !existing.archivedAt) {
@@ -479,6 +485,8 @@ export class DirectoryService {
             directoryId: directory.id,
             archivedAt: IsNull(),
           },
+          // Para publicar `linkedUserId`: el contacto guarda la cuenta, no el usuario.
+          relations: { linkedPersonalAccount: true },
         })
       : null;
 
@@ -550,6 +558,7 @@ export class DirectoryService {
       taxId: contact.taxId ?? null,
       phone: contact.phone ?? null,
       linkedPersonalAccountId: contact.linkedPersonalAccountId ?? null,
+      linkedUserId: contact.linkedPersonalAccount?.userId ?? null,
       archivedAt: contact.archivedAt ?? null,
       createdAt: contact.createdAt,
       updatedAt: contact.updatedAt,

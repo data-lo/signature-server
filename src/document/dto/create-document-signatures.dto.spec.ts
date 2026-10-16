@@ -3,6 +3,7 @@ import { validate } from 'class-validator';
 import {
   CollaboratorPayloadDto,
   PAYLOAD_COLABORATOR_TYPE_ENUM,
+  PAYLOAD_COLLABORATOR_SOURCE_ENUM,
 } from './create-document-signatures.dto';
 
 function baseWitness(overrides: Record<string, unknown> = {}) {
@@ -119,4 +120,75 @@ describe('CollaboratorPayloadDto.collaboratorType', () => {
       expect(errorsFor(errors, 'collaboratorType').length).toBeGreaterThan(0);
     },
   );
+});
+
+/**
+ * Historia "Enviar colaboradores desde Directorio mediante usuario vinculado al crear un
+ * documento": `source` decide qué se valida. `DIRECTORY` exige `linkedUserId` y no pide identidad;
+ * `MANUAL` (o sin `source`) exige nombre, apellido y correo.
+ */
+describe('CollaboratorPayloadDto.source', () => {
+  const LINKED_USER_ID = '6a1f2c4e-8d3b-4f7a-9c2e-1b5d7e9f0a3c';
+
+  it('un colaborador DIRECTORY sólo necesita linkedUserId', async () => {
+    const errors = await validateDto({
+      source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+      linkedUserId: LINKED_USER_ID,
+    });
+
+    expect(errors).toHaveLength(0);
+  });
+
+  it.each([
+    ['sin linkedUserId', {}],
+    ['con un linkedUserId que no es UUID', { linkedUserId: 'user-1' }],
+  ])('rechaza un colaborador DIRECTORY %s', async (_case, overrides) => {
+    const errors = await validateDto({
+      source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+      ...overrides,
+    });
+
+    expect(errorsFor(errors, 'linkedUserId').length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['MANUAL', PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL],
+    ['sin source', undefined],
+  ])(
+    'un colaborador %s exige nombre, apellido y correo',
+    async (_case, source) => {
+      const errors = await validateDto({
+        source,
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+      });
+
+      for (const property of ['firstName', 'lastName', 'email']) {
+        expect(errorsFor(errors, property).length).toBeGreaterThan(0);
+      }
+      expect(errorsFor(errors, 'linkedUserId')).toHaveLength(0);
+    },
+  );
+
+  it('acepta addToDirectory booleano en un MANUAL y rechaza otro tipo', async () => {
+    expect(
+      errorsFor(
+        await validateDto(baseWitness({ addToDirectory: true })),
+        'addToDirectory',
+      ),
+    ).toHaveLength(0);
+    expect(
+      errorsFor(
+        await validateDto(baseWitness({ addToDirectory: 'sí' })),
+        'addToDirectory',
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('rechaza un source desconocido', async () => {
+    const errors = await validateDto(baseWitness({ source: 'CRM' }));
+
+    expect(errorsFor(errors, 'source').length).toBeGreaterThan(0);
+  });
 });

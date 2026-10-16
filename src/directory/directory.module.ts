@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 
+import { DirectoryCollaboratorsService } from './directory-collaborators.service';
 import { DirectoryContactsController } from './directory-contacts.controller';
 import { DirectoryContactsService } from './directory-contacts.service';
 import { DirectoryEntity } from './entities/directory.entity';
@@ -18,7 +19,9 @@ import { DirectoryService } from './directory.service';
  * (alta, edición, detalle y búsqueda por correo). `AccountEntity` valida la cuenta activa y
  * resuelve el vínculo con la cuenta personal de un usuario; `UserEntity` encuentra a ese
  * usuario por su correo. Exporta `TypeOrmModule` y `DirectoryService` para que otros
- * consumidores reciban los repositorios y la lógica del directorio.
+ * consumidores reciban los repositorios y la lógica del directorio, y
+ * `DirectoryCollaboratorsService` para que la creación de documentos resuelva colaboradores del
+ * Directorio y registre los manuales.
  */
 @Module({
   imports: [
@@ -30,7 +33,11 @@ import { DirectoryService } from './directory.service';
     ]),
   ],
   controllers: [DirectoryController, DirectoryContactsController],
-  providers: [DirectoryService, DirectoryContactsService],
-  exports: [TypeOrmModule, DirectoryService],
+  providers: [
+    DirectoryService,
+    DirectoryContactsService,
+    DirectoryCollaboratorsService,
+  ],
+  exports: [TypeOrmModule, DirectoryService, DirectoryCollaboratorsService],
 })
 export class DirectoryModule {}

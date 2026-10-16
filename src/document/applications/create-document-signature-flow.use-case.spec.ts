@@ -35,6 +35,11 @@ import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.typ
 import { PlanActionNotIncludedException } from 'src/billing/exceptions/billing.exceptions';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
+import { PAYLOAD_COLLABORATOR_SOURCE_ENUM } from '../dto/create-document-signatures.dto';
+import {
+  DIRECTORY_COLLABORATOR_NOT_FOUND_MESSAGE,
+  DirectoryCollaboratorsService,
+} from 'src/directory/directory-collaborators.service';
 
 function createMockRepository() {
   let seq = 0;
@@ -68,6 +73,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let consumeDocumentCredit: Record<string, jest.Mock>;
   let documentReviewerService: Record<string, jest.Mock>;
   let assertPlanAction: Record<string, jest.Mock>;
+  let directoryCollaborators: Record<string, jest.Mock>;
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -134,6 +140,23 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         taxId: 'AUDI990101YYY',
       },
     ],
+  };
+
+  /** Usuarios vinculados a contactos del Directorio activo, con la identidad que tienen en `users`. */
+  const DIRECTORY_USERS: Record<
+    string,
+    { firstName: string; lastName: string; email: string }
+  > = {
+    'user-ana': {
+      firstName: 'Ana',
+      lastName: 'García',
+      email: 'ana.garcia@example.com',
+    },
+    'user-luis': {
+      firstName: 'Luis',
+      lastName: 'Ramírez',
+      email: 'luis.ramirez@example.com',
+    },
   };
 
   /** El mismo documento, pero en el otro (y único) flujo posible: firma electrónica avanzada. */
@@ -230,6 +253,25 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     };
     /** Por omisión el plan incluye la acción, como todos los planes contratables hoy. */
     assertPlanAction = { execute: jest.fn().mockResolvedValue({}) };
+    /**
+     * Qué hace válido a un `linkedUserId` —contacto vigente del Directorio activo, usuario no
+     * borrado— tiene su propia suite (`directory-collaborators.service.spec.ts`). Aquí basta con
+     * que resuelva a los usuarios de `DIRECTORY_USERS` y rechace a cualquier otro.
+     */
+    directoryCollaborators = {
+      resolveLinkedCollaborators: jest.fn(
+        async (_account: unknown, userIds: string[]) => {
+          const missing = userIds.filter((id) => !DIRECTORY_USERS[id]);
+          if (missing.length) {
+            throw new BadRequestException(
+              DIRECTORY_COLLABORATOR_NOT_FOUND_MESSAGE,
+            );
+          }
+          return new Map(userIds.map((id) => [id, DIRECTORY_USERS[id]]));
+        },
+      ),
+      addManualCollaboratorsToDirectory: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -262,6 +304,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           useValue: documentReviewerService,
         },
         { provide: AssertPlanActionUseCase, useValue: assertPlanAction },
+        {
+          provide: DirectoryCollaboratorsService,
+          useValue: directoryCollaborators,
+        },
       ],
     }).compile();
 
@@ -1430,6 +1476,329 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           expect.objectContaining({ isIndexable: true }),
         );
       });
+    });
+  });
+  /**
+   * Historia "Enviar colaboradores desde Directorio mediante usuario vinculado al crear un
+   * documento": la identidad de un colaborador `DIRECTORY` sale del usuario vinculado, nunca del
+   * payload; la de uno `MANUAL`, del payload, y sólo éste puede pedir `addToDirectory`.
+   */
+  describe('origen de los colaboradores (MANUAL / DIRECTORY)', () => {
+    const position = (page: number) => ({
+      signatureId: `sig-${page}`,
+      page,
+      xRatio: 0.1,
+      yRatio: 0.1,
+      widthRatio: 0.2,
+      heightRatio: 0.08,
+    });
+
+    function dtoWith(
+      collaborators: CreateDocumentSignaturesDto['collaborators'],
+    ): CreateDocumentSignaturesDto {
+      return { ...baseDto, collaborators };
+    }
+
+    function savedCollaborators() {
+      return collaboratorRepo.create.mock.calls.map(([data]) => data);
+    }
+
+    it('un colaborador MANUAL se crea con los datos del payload', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'Juan.Perez@Mail.com',
+            addToDirectory: false,
+            signatures: [position(1)],
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(savedCollaborators()[0]).toMatchObject({
+        firstName: 'Juan',
+        lastName: 'Pérez',
+        email: 'juan.perez@mail.com',
+      });
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).toHaveBeenCalledWith(expect.anything(), []);
+      expect(
+        directoryCollaborators.addManualCollaboratorsToDirectory,
+      ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
+    });
+
+    it('sin `source`, el colaborador se trata como MANUAL (cliente anterior)', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(savedCollaborators()[0]).toMatchObject({
+        firstName: 'Juan',
+        email: 'juan.perez@mail.com',
+      });
+    });
+
+    it('un MANUAL con addToDirectory se registra en el Directorio dentro de la transacción', async () => {
+      const manager = { marker: 'tx' };
+      dataSource.transaction.mockImplementationOnce(
+        async (cb: (m: unknown) => Promise<unknown>) =>
+          cb({
+            ...manager,
+            getRepository: jest.fn((entity: unknown) => {
+              if (entity === DocumentEntity) return documentRepo;
+              if (entity === CollaboratorEntity) return collaboratorRepo;
+              if (entity === NotificationEntity) return notificationRepo;
+              if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
+              throw new Error('repositorio no mockeado');
+            }),
+          }),
+      );
+
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'juan.perez@mail.com',
+            addToDirectory: true,
+            signatures: [position(1)],
+          },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+            firstName: 'Carlos',
+            lastName: 'Solares',
+            email: 'carlos@mail.com',
+            addToDirectory: false,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        directoryCollaborators.addManualCollaboratorsToDirectory,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ marker: 'tx' }),
+        expect.objectContaining({ id: 'account-1' }),
+        [
+          {
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'juan.perez@mail.com',
+          },
+        ],
+      );
+    });
+
+    it('un firmante del Directorio se crea con la identidad del usuario vinculado, ignorando la del payload', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-ana',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            // Un cliente no puede suplantar la identidad del usuario vinculado.
+            firstName: 'Impostor',
+            lastName: 'X',
+            email: 'impostor@evil.com',
+            addToDirectory: true,
+            signatures: [position(1)],
+            orderIndex: 0,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).toHaveBeenCalledWith(expect.objectContaining({ id: 'account-1' }), [
+        'user-ana',
+      ]);
+      expect(savedCollaborators()[0]).toMatchObject({
+        firstName: 'Ana',
+        lastName: 'García',
+        email: 'ana.garcia@example.com',
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        signingOrder: 0,
+      });
+      // Su posición de firma se guarda igual que la de un firmante manual…
+      expect(simpleSignatureRepo.create).toHaveBeenCalledWith({
+        signatureCoordinates: [expect.objectContaining({ page: 1 })],
+      });
+      // …y en firma SIMPLE se le emite su código de verificación.
+      expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+      // `addToDirectory` sólo aplica a MANUAL: un contacto del Directorio no se vuelve a registrar.
+      expect(
+        directoryCollaborators.addManualCollaboratorsToDirectory,
+      ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
+    });
+
+    it('notifica a cada colaborador del Directorio con su rol (SIGNER o WITNESS)', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-ana',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            signatures: [position(1)],
+          },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-luis',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      const [signer, witness] = savedCollaborators();
+      expect(signer).toMatchObject({
+        email: 'ana.garcia@example.com',
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      });
+      expect(witness).toMatchObject({
+        email: 'luis.ramirez@example.com',
+        firstName: 'Luis',
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+        signatureType: null,
+        taxId: null,
+      });
+      // Una notificación por colaborador; el correo de Firmante o Testigo lo decide
+      // `SendPendingSignatureNotificationUseCase` a partir del `colaboratorType` guardado.
+      expect(notificationEventsProducer.emitCreated).toHaveBeenCalledTimes(2);
+    });
+
+    it('respeta el orden de firma mezclando firmantes de ambos orígenes', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'juan.perez@mail.com',
+            addToDirectory: false,
+            signatures: [position(1)],
+            orderIndex: 1,
+          },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-ana',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            signatures: [position(2)],
+            orderIndex: 0,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        savedCollaborators().map((c) => [c.email, c.signingOrder]),
+      ).toEqual([
+        ['ana.garcia@example.com', 0],
+        ['juan.perez@mail.com', 1],
+      ]);
+    });
+
+    it.each([
+      ['inexistente', 'user-inexistente'],
+      ['fuera del Directorio activo', 'user-de-otra-cuenta'],
+    ])(
+      'rechaza un usuario vinculado %s sin subir el archivo ni crear nada',
+      async (_case, linkedUserId) => {
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            dtoWith([
+              {
+                source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+                linkedUserId,
+                collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+                signatures: [position(1)],
+              },
+            ]),
+            file,
+            '127.0.0.1',
+          ),
+        ).rejects.toThrow(DIRECTORY_COLLABORATOR_NOT_FOUND_MESSAGE);
+
+        expect(minioService.uploadObject).not.toHaveBeenCalled();
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rechaza un colaborador del Directorio sin linkedUserId (contacto sin usuario vinculado)', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          dtoWith([
+            {
+              source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+              collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+              firstName: 'Contacto',
+              lastName: 'Externo',
+              email: 'externo@mail.com',
+            },
+            baseDto.collaborators[0],
+          ]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(/se envía como MANUAL/);
+
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).not.toHaveBeenCalled();
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un colaborador MANUAL sin correo aunque no haya pasado por el ValidationPipe', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          dtoWith([
+            {
+              source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+              collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+              firstName: 'Juan',
+              lastName: 'Pérez',
+              signatures: [position(1)],
+            },
+          ]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
     });
   });
 });
