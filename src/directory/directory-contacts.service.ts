@@ -23,7 +23,7 @@ import {
   SearchDirectoryContactsDto,
 } from './dto/search-directory-contacts.dto';
 import { DirectoryContactResponse } from './interfaces/response/directory-contact-response';
-import { normalizeContactTaxId } from './directory.service';
+import { normalizeContactTaxId } from './utils/directory-contact.utils';
 
 const UNIQUE_VIOLATION = '23505';
 

@@ -80,7 +80,7 @@ export class CreateDirectoryContactDto {
 
   /**
    * Se recorta aquí para que `IsEmail` no rechace un correo con espacios alrededor; pasarlo a
-   * minúsculas lo hace el servicio (`normalizeContactEmail`), que es quien compara.
+   * minúsculas lo hace el caso de uso (`normalizeContactEmail`), que es quien compara.
    */
   @ApiProperty({
     example: 'ana@example.com',
