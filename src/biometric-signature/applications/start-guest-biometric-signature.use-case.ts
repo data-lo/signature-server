@@ -67,7 +67,8 @@ export class StartGuestBiometricSignatureUseCase {
       geolocation: dto.geolocation,
       ipAddress,
       // Sin correo ni colaborador en la URL: Didit la conoce, y el invitado retoma con su token.
-      callbackUrl: `${frontendBaseUrl()}/public/documents/${documentId}/biometric-signature`,
+      // Es la pantalla pública única de firma; la ruta vieja `/biometric-signature` redirige aquí.
+      callbackUrl: `${frontendBaseUrl()}/public/documents/${documentId}/sign`,
     });
   }
 }
