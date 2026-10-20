@@ -21,6 +21,7 @@ import { DocumentAuthorizationPolicy } from './../src/document/policies/document
 import { SendCompletedSimpleSignatureToSealUseCase } from './../src/document/seal/use-cases/send-completed-simple-signature-to-seal.use-case';
 import { AdvancedSummaryDocumentService } from './../src/document/summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './../src/document/services/signature-qr.service';
+import { GuestSigningAccessService } from './../src/document/services/guest-signing-access.service';
 import { DOCUMENT_CONTROLLER_USE_CASE_STUBS } from './document-controller-use-case-stubs';
 import { DocumentEntity } from './../src/document/entities/document.entity';
 import { CollaboratorEntity } from './../src/document/entities/collaborator.entity';
@@ -261,6 +262,14 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         {
           provide: getRepositoryToken(BiometricSignatureAttemptEntity),
           useValue: { findOne: jest.fn() },
+        },
+        // Firma con cuenta: sólo revoca (sin efecto) accesos de invitado.
+        {
+          provide: GuestSigningAccessService,
+          useValue: {
+            revokeOpenForCollaborator: jest.fn().mockResolvedValue(0),
+            revokeOpenForDocument: jest.fn().mockResolvedValue(0),
+          },
         },
         { provide: getRepositoryToken(SealEntity), useValue: sealRepository },
         {

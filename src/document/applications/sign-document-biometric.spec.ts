@@ -5,6 +5,7 @@ import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM } from 'src/biometric-signature/enums/biometric-signature-attempt-status.enum';
+import { SIGNING_AUTHORIZATION_ENUM } from '../enum/signing-authorization.enum';
 import { SignDocumentUseCase } from './sign-document.use-case';
 
 const GEO = { latitude: 19.43, longitude: -99.13 };
@@ -87,6 +88,10 @@ describe('SignDocumentUseCase — firma biométrica', () => {
       { hasConsumedCode } as never,
       documentService as never,
       { assertCanSign: jest.fn() } as never,
+      {
+        revokeOpenForCollaborator: jest.fn().mockResolvedValue(0),
+        revokeOpenForDocument: jest.fn().mockResolvedValue(0),
+      } as never,
     );
   });
 
@@ -106,7 +111,10 @@ describe('SignDocumentUseCase — firma biométrica', () => {
 
     expect(collaboratorRepository.update).toHaveBeenCalledWith(
       { id: 'c-1', status: COLLABORATOR_STATUS_ENUM.PENDING },
-      expect.objectContaining({ status: COLLABORATOR_STATUS_ENUM.SIGNED }),
+      expect.objectContaining({
+        status: COLLABORATOR_STATUS_ENUM.SIGNED,
+        signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
+      }),
     );
     expect(collaboratorRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ geolocation: GEO, ipAddress: '10.0.0.7' }),
@@ -126,7 +134,9 @@ describe('SignDocumentUseCase — firma biométrica', () => {
 
     expect(collaboratorRepository.update).toHaveBeenCalledWith(
       { id: 'c-1', status: COLLABORATOR_STATUS_ENUM.PENDING },
-      expect.anything(),
+      expect.objectContaining({
+        signingAuthorization: SIGNING_AUTHORIZATION_ENUM.GUEST_EMAIL_OTP,
+      }),
     );
     expect(producer.emitSigned).toHaveBeenCalledWith(
       expect.objectContaining({ actorUserId: 'guest-collaborator:c-1' }),

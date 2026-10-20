@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 
 import { AuditService } from 'src/audit/audit.service';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
@@ -29,6 +29,17 @@ import { isSignerTurn } from '../utils/next-signer.util';
 import { VerificationCodeService } from '../verification-code.service';
 import { AdvancedSignatureInput, DocumentService } from '../document.service';
 import { DocumentAuthorizationPolicy } from '../policies/document-authorization.policy';
+import { SIGNING_AUTHORIZATION_ENUM } from '../enum/signing-authorization.enum';
+import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from '../enum/guest-signing-access-purpose.enum';
+import {
+  GuestSigningAccessService,
+  hashInvitationEmail,
+  revokeOpenGuestSigningAccesses,
+} from '../services/guest-signing-access.service';
+import {
+  GuestAdvancedInvitationNotFoundException,
+  InvalidGuestSigningAccessException,
+} from '../exceptions/guest-signing-access.exceptions';
 
 /**
  * Lo que el firmante necesita saber en cuanto su firma queda registrada.
@@ -48,6 +59,23 @@ export interface SignedDocumentData {
   documentCompleted: boolean;
 }
 
+/** Firma FIEL de un invitado sin cuenta, tal como llega por la ruta pública. */
+export interface GuestAdvancedSignatureRequest {
+  /** Acceso temporal que acreditó el token (`jti`). */
+  accessId: string;
+  documentId: string;
+  collaboratorId: string;
+  /**
+   * Hash del PDF que el invitado revisó (lo publica la vista del documento). Si ya no es el del
+   * documento, la firma se rechaza: firmaría algo distinto de lo que leyó.
+   */
+  documentHash: string;
+  advancedSignatureInput: AdvancedSignatureInput;
+  geolocation?: GeolocationDto;
+  /** IP de la petición de firma, evidencia del acto. */
+  ipAddress: string | null;
+}
+
 /** Quién firma y con qué evidencia, una vez validado todo lo previo al claim. */
 interface SignatureCompletion {
   document: DocumentEntity;
@@ -61,19 +89,28 @@ interface SignatureCompletion {
   actor: string;
   geolocation: GeolocationDto;
   advancedSignatureResult: SignatureResult | null;
-  /** IP desde la que se autorizó la firma, cuando se conoce (firma biométrica). */
+  /** IP desde la que se autorizó la firma, cuando se conoce (biométrica e invitado FIEL). */
   ipAddress: string | null;
+  /** Cómo se acreditó el firmante; queda en `collaborators.signing_authorization`. */
+  signingAuthorization: SIGNING_AUTHORIZATION_ENUM;
+  /**
+   * Acceso de invitado con el que se firma. Si viene, el claim corre en una transacción que además
+   * lo consume y exige que el colaborador siga sin cuenta: o quedan las tres cosas o ninguna.
+   */
+  guestAccessId?: string;
 }
 
 /**
  * Registra la firma de un colaborador sobre un documento pendiente.
  *
  * @remarks
- * Dos entradas, un mismo final:
+ * Tres entradas, un mismo final:
  * - `execute`: la firma que entra por `PATCH /document/:id/sign` (simple y FIEL), del usuario
  *   autenticado. Nunca firma a un colaborador BIOMETRIC.
  * - `executeBiometric`: la firma biométrica, desde el webhook de Didit. Resuelve al firmante por el
  *   colaborador del intento aprobado, así que sirve también a invitados sin cuenta.
+ * - `executeGuestAdvanced`: la Firma Avanzada (FIEL) de un invitado sin cuenta, con el acceso
+ *   temporal que obtuvo al validar el código de su correo.
  *
  * Flujo:
  *
@@ -117,6 +154,7 @@ export class SignDocumentUseCase {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentService: DocumentService,
     private readonly authorizationPolicy: DocumentAuthorizationPolicy,
+    private readonly guestSigningAccessService: GuestSigningAccessService,
   ) {}
 
   /**
@@ -230,6 +268,7 @@ export class SignDocumentUseCase {
       geolocation,
       advancedSignatureResult,
       ipAddress: null,
+      signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
     });
   }
 
@@ -332,6 +371,130 @@ export class SignDocumentUseCase {
       geolocation: attempt.geolocation,
       advancedSignatureResult: null,
       ipAddress: attempt.ipAddress,
+      signingAuthorization: attempt.userId
+        ? SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION
+        : SIGNING_AUTHORIZATION_ENUM.GUEST_EMAIL_OTP,
+    });
+  }
+
+  /**
+   * Registra la Firma Avanzada (FIEL) de un invitado sin cuenta, con el acceso temporal que obtuvo
+   * al validar el código de su correo.
+   *
+   * Revalida justo antes de firmar todo lo que pudo cambiar desde que se emitió el acceso:
+   *
+   * 1. Geolocalización presente.
+   * 2. Acceso activo (sin vencer, consumir ni revocar), de ESTE documento y ESTE colaborador, para
+   *    Firma Avanzada.
+   * 3. Documento pendiente de firma y con el mismo hash que el invitado revisó.
+   * 4. Colaborador firmante FIEL, todavía sin cuenta vinculada, con el mismo correo al que se emitió
+   *    el acceso, pendiente y en su turno.
+   * 5. Certificado, llave y contraseña válidos (`EfirmaService`, antes del claim: una contraseña
+   *    mal escrita no gasta el acceso).
+   *
+   * El claim consume el acceso, revoca los demás del colaborador y lo marca SIGNED en una sola
+   * transacción, condicionada a que siga PENDING y sin cuenta: una firma por el dashboard y otra
+   * por aquí no pueden ganar las dos.
+   *
+   * @param request - Acceso, documento, colaborador, hash revisado, e.firma, ubicación e IP.
+   * @returns El documento firmado y si esta firma lo dejó completo.
+   *
+   * @throws {BadRequestException} Si falta la geolocalización o la e.firma, el documento no está
+   *   pendiente o cambió, el colaborador ya respondió, falta el código que el documento exige, o
+   *   la e.firma no es válida (los errores de `EfirmaService` se propagan tal cual).
+   * @throws {InvalidGuestSigningAccessException} Si el acceso no está activo o no corresponde.
+   * @throws {GuestAdvancedInvitationNotFoundException} Si el colaborador ya no es un firmante FIEL
+   *   sin cuenta con el correo del acceso.
+   * @throws {ForbiddenException} Si todavía no es su turno.
+   *
+   * @example
+   * ```ts
+   * await signDocument.executeGuestAdvanced({ accessId: 'a-1', documentId: 'd-1',
+   *   collaboratorId: 'c-1', documentHash: 'abc…', advancedSignatureInput, geolocation,
+   *   ipAddress: '10.0.0.1' });
+   * ```
+   */
+  async executeGuestAdvanced(
+    request: GuestAdvancedSignatureRequest,
+  ): Promise<BaseResponse<SignedDocumentData>> {
+    if (!request.geolocation) {
+      throw new BadRequestException(
+        'La geolocalización es obligatoria para poder firmar el documento',
+      );
+    }
+
+    const access = await this.guestSigningAccessService.findActive(
+      request.accessId,
+    );
+    if (
+      !access ||
+      access.documentId !== request.documentId ||
+      access.collaboratorId !== request.collaboratorId ||
+      access.purpose !==
+        GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS
+    ) {
+      throw new InvalidGuestSigningAccessException();
+    }
+
+    const document = await this.documentService.findOne(request.documentId);
+    this.assertPendingSignature(document);
+
+    if (
+      !document.originalHash ||
+      request.documentHash !== document.originalHash
+    ) {
+      throw new BadRequestException(
+        'El documento cambió desde que lo revisaste. Vuelve a abrirlo antes de firmar.',
+      );
+    }
+
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: {
+        documentId: document.id,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { account: { user: true }, simpleSignature: true },
+      order: { signingOrder: 'ASC' },
+    });
+    const participant = signerCollaborators.find(
+      (collaborator) => collaborator.id === access.collaboratorId,
+    );
+
+    const isGuestAdvancedSigner =
+      !!participant &&
+      !participant.accountId &&
+      participant.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
+      !!participant.email &&
+      hashInvitationEmail(participant.email) === access.emailHash;
+
+    if (!isGuestAdvancedSigner) {
+      throw new GuestAdvancedInvitationNotFoundException();
+    }
+
+    this.assertCanRespond(document, participant, signerCollaborators);
+
+    const advancedSignatureResult =
+      await this.documentService.validateAndSignWithEfirma(
+        document,
+        request.advancedSignatureInput,
+      );
+
+    await this.assertVerificationCode(
+      document,
+      participant,
+      VERIFICATION_EVENT_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+    );
+
+    return this.completeSignature({
+      document,
+      participant,
+      signerCollaborators,
+      actor: `guest-collaborator:${participant.id}`,
+      geolocation: request.geolocation,
+      advancedSignatureResult,
+      ipAddress: request.ipAddress,
+      signingAuthorization: SIGNING_AUTHORIZATION_ENUM.GUEST_EMAIL_OTP,
+      guestAccessId: access.id,
     });
   }
 
@@ -428,6 +591,96 @@ export class SignDocumentUseCase {
   }
 
   /**
+   * Claim de la firma de un invitado: consume su acceso, revoca los demás que tenga abiertos y lo
+   * marca SIGNED, todo en una transacción.
+   *
+   * El `UPDATE` del colaborador va condicionado a `PENDING` y a `account_id IS NULL`: si entre la
+   * validación y este punto alguien vinculó una cuenta a la invitación, o firmó por otra vía, no se
+   * registra nada y el acceso tampoco queda consumido.
+   *
+   * @param collaboratorId - Colaborador que firma.
+   * @param accessId - Acceso de invitado con el que firma.
+   * @param resolvedAt - Momento de la firma.
+   * @returns Nada.
+   *
+   * @throws {InvalidGuestSigningAccessException} Si el acceso dejó de estar activo.
+   * @throws {BadRequestException} Si el colaborador ya respondió o ya tiene cuenta vinculada.
+   *
+   * @example
+   * ```ts
+   * await this.claimWithGuestAccess('c-1', 'a-1', new Date());
+   * ```
+   */
+  private async claimWithGuestAccess(
+    collaboratorId: string,
+    accessId: string,
+    resolvedAt: Date,
+  ): Promise<void> {
+    await this.collaboratorRepository.manager.transaction(async (manager) => {
+      const consumed = await this.guestSigningAccessService.consume(
+        manager,
+        accessId,
+      );
+      if (!consumed) {
+        throw new InvalidGuestSigningAccessException();
+      }
+
+      const claim = await manager.getRepository(CollaboratorEntity).update(
+        {
+          id: collaboratorId,
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+          accountId: IsNull(),
+        },
+        {
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
+          resolvedAt,
+          signingAuthorization: SIGNING_AUTHORIZATION_ENUM.GUEST_EMAIL_OTP,
+        },
+      );
+      if (claim.affected !== 1) {
+        throw new BadRequestException(
+          'Ya respondiste a esta solicitud de firma o la invitación quedó vinculada a una cuenta.',
+        );
+      }
+
+      await revokeOpenGuestSigningAccesses(
+        manager,
+        collaboratorId,
+        GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+      );
+    });
+  }
+
+  /**
+   * Corre una revocación de accesos de invitado sin dejar que su fallo tumbe una firma ya
+   * reclamada.
+   *
+   * Revocar aquí es higiene, no la garantía: un acceso que quedara abierto no serviría, porque la
+   * firma de invitado exige un colaborador PENDING y sin cuenta, y el documento pendiente.
+   *
+   * @param revoke - La revocación a ejecutar.
+   * @returns Nada; un fallo se registra en el log.
+   *
+   * @example
+   * ```ts
+   * await this.revokeGuestAccessesQuietly(() => accesses.revokeOpenForDocument('d-1'));
+   * ```
+   */
+  private async revokeGuestAccessesQuietly(
+    revoke: () => Promise<number>,
+  ): Promise<void> {
+    try {
+      await revoke();
+    } catch (error) {
+      this.logger.warn(
+        `No se pudieron revocar accesos de invitado: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
    * Del claim en adelante: reclama el turno, guarda la evidencia, finaliza o avisa al siguiente, y
    * publica eventos y auditoría. Común a las dos entradas.
    *
@@ -451,19 +704,44 @@ export class SignDocumentUseCase {
     geolocation,
     advancedSignatureResult,
     ipAddress,
+    signingAuthorization,
+    guestAccessId,
   }: SignatureCompletion): Promise<BaseResponse<SignedDocumentData>> {
     const documentId = document.id;
+    const resolvedAt = new Date();
 
-    // `affected !== 1` significa que otra petición ya reclamó el turno.
-    const claim = await this.collaboratorRepository.update(
-      { id: myParticipant.id, status: COLLABORATOR_STATUS_ENUM.PENDING },
-      { status: COLLABORATOR_STATUS_ENUM.SIGNED, resolvedAt: new Date() },
-    );
-    if (claim.affected !== 1) {
-      throw new BadRequestException('Ya respondiste a esta solicitud de firma');
+    if (guestAccessId) {
+      await this.claimWithGuestAccess(
+        myParticipant.id,
+        guestAccessId,
+        resolvedAt,
+      );
+    } else {
+      // `affected !== 1` significa que otra petición ya reclamó el turno.
+      const claim = await this.collaboratorRepository.update(
+        { id: myParticipant.id, status: COLLABORATOR_STATUS_ENUM.PENDING },
+        {
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
+          resolvedAt,
+          signingAuthorization,
+        },
+      );
+      if (claim.affected !== 1) {
+        throw new BadRequestException(
+          'Ya respondiste a esta solicitud de firma',
+        );
+      }
+      // Ya firmó: cualquier acceso de invitado que le quedara abierto sobra.
+      await this.revokeGuestAccessesQuietly(() =>
+        this.guestSigningAccessService.revokeOpenForCollaborator(
+          myParticipant.id,
+          GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+        ),
+      );
     }
     myParticipant.status = COLLABORATOR_STATUS_ENUM.SIGNED;
-    myParticipant.resolvedAt = new Date();
+    myParticipant.resolvedAt = resolvedAt;
+    myParticipant.signingAuthorization = signingAuthorization;
     // Evidencia declarada por el dispositivo, no verificada por el servidor.
     myParticipant.geolocation = geolocation;
     if (ipAddress) {
@@ -516,6 +794,10 @@ export class SignDocumentUseCase {
       await this.documentService.finalizeSignedDocument(
         document,
         signerCollaborators,
+      );
+      // Documento completo: ningún acceso de invitado a él tiene ya sentido.
+      await this.revokeGuestAccessesQuietly(() =>
+        this.guestSigningAccessService.revokeOpenForDocument(documentId),
       );
       this.documentEventsProducer.emitSigned({
         documentId,

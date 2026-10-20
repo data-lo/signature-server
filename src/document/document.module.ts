@@ -55,6 +55,8 @@ import { DocumentApprovalService } from './services/document-approval.service';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
 import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
+import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
+import { GuestSigningAccessService } from './services/guest-signing-access.service';
 
 @Module({
   controllers: [DocumentController, DocumentSignaturesController],
@@ -103,6 +105,11 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
     WitnessNotificationService,
     ApproveDocumentUseCase,
     RejectDocumentApprovalUseCase,
+    /**
+     * Accesos temporales de invitado sin cuenta. Vive aquí porque los revocan flujos de este módulo
+     * (vincular cuenta, firmar, rechazar); el módulo de la firma de invitado sólo los emite.
+     */
+    GuestSigningAccessService,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -124,6 +131,7 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
       // La lee `SignDocumentUseCase.executeBiometric` para comprobar el intento aprobado. Sólo la
       // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
       BiometricSignatureAttemptEntity,
+      GuestSigningAccessEntity,
     ]),
     SharedModule,
     UserModule,
@@ -163,12 +171,16 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
    * Lo demás lo consume `BiometricSignatureModule`: la firma biométrica valida al firmante con las
    * mismas piezas que la firma normal (`DocumentAuthorizationPolicy`, códigos de verificación) y la
    * registra por el mismo `SignDocumentUseCase`, sin un camino paralelo que pueda divergir.
+   *
+   * `GuestAdvancedSignatureModule` usa las mismas piezas para la Firma Avanzada del invitado sin
+   * cuenta, más `GuestSigningAccessService` para emitir y comprobar sus accesos temporales.
    */
   exports: [
     DocumentService,
     SignDocumentUseCase,
     VerificationCodeService,
     DocumentAuthorizationPolicy,
+    GuestSigningAccessService,
   ],
 })
 export class DocumentModule {}
