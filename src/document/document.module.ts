@@ -132,6 +132,7 @@ import { GetPublicSigningMethodUseCase } from './applications/get-public-signing
       // La lee `SignDocumentUseCase.executeBiometric` para comprobar el intento aprobado. Sólo la
       // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
       BiometricSignatureAttemptEntity,
+      GuestSigningAccessEntity,
     ]),
     SharedModule,
     UserModule,
@@ -171,12 +172,16 @@ import { GetPublicSigningMethodUseCase } from './applications/get-public-signing
    * Lo demás lo consume `BiometricSignatureModule`: la firma biométrica valida al firmante con las
    * mismas piezas que la firma normal (`DocumentAuthorizationPolicy`, códigos de verificación) y la
    * registra por el mismo `SignDocumentUseCase`, sin un camino paralelo que pueda divergir.
+   *
+   * `GuestAdvancedSignatureModule` usa las mismas piezas para la Firma Avanzada del invitado sin
+   * cuenta, más `GuestSigningAccessService` para emitir y comprobar sus accesos temporales.
    */
   exports: [
     DocumentService,
     SignDocumentUseCase,
     VerificationCodeService,
     DocumentAuthorizationPolicy,
+    GuestSigningAccessService,
   ],
 })
 export class DocumentModule {}

@@ -33,6 +33,7 @@ import { SealModule } from './document/seal/seal.module';
 import { IdentityVerificationModule } from './identity-verification/identity-verification.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { BiometricSignatureModule } from './biometric-signature/biometric-signature.module';
+import { GuestAdvancedSignatureModule } from './guest-advanced-signature/guest-advanced-signature.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { DirectoryModule } from './directory/directory.module';
 
@@ -109,6 +110,7 @@ import { DirectoryModule } from './directory/directory.module';
     IdentityVerificationModule,
     WebhooksModule,
     BiometricSignatureModule,
+    GuestAdvancedSignatureModule,
     AuthorizationModule,
     DirectoryModule,
   ],
