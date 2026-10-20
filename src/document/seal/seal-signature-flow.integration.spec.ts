@@ -30,6 +30,7 @@ import { EfirmaService } from 'src/efirma/efirma.service';
 import { SummaryDocumentService } from '../summary-document/summary-document.service';
 import { AdvancedSummaryDocumentService } from '../summary-document/advanced-summary-document.service';
 import { SignatureQrService } from '../services/signature-qr.service';
+import { GuestSigningAccessService } from '../services/guest-signing-access.service';
 
 import { SealDocumentUseCase } from './use-cases/seal-document.use-case';
 import { SendCompletedSimpleSignatureToSealUseCase } from './use-cases/send-completed-simple-signature-to-seal.use-case';
@@ -253,6 +254,14 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         {
           provide: getRepositoryToken(BiometricSignatureAttemptEntity),
           useValue: { findOne: jest.fn() },
+        },
+        // Firman usuarios con cuenta: sólo se revocan (sin efecto) los accesos de invitado.
+        {
+          provide: GuestSigningAccessService,
+          useValue: {
+            revokeOpenForCollaborator: jest.fn().mockResolvedValue(0),
+            revokeOpenForDocument: jest.fn().mockResolvedValue(0),
+          },
         },
         { provide: getRepositoryToken(SealEntity), useValue: sealRepository },
         {

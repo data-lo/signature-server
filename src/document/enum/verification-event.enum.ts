@@ -8,4 +8,11 @@ export enum VERIFICATION_EVENT_ENUM {
    * de firmar con biometría (ver `src/biometric-signature/`).
    */
   GUEST_BIOMETRIC_ACCESS = 'guest_biometric_access',
+  /**
+   * Código con el que un invitado sin cuenta acredita el control del correo de su invitación para
+   * firmar con Firma Electrónica Avanzada (ver `src/guest-advanced-signature/`). Sólo acredita el
+   * correo: lo que autoriza la firma es el acceso temporal de `guest_signing_accesses` que se
+   * emite al canjearlo.
+   */
+  GUEST_ADVANCED_SIGNATURE_ACCESS = 'guest_advanced_signature_access',
 }

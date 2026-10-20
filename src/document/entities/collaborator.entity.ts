@@ -13,6 +13,7 @@ import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.e
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { SIGNING_AUTHORIZATION_ENUM } from '../enum/signing-authorization.enum';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
 
 /**
@@ -161,6 +162,24 @@ export class CollaboratorEntity {
    */
   @Column({ name: 'advanced_signature', type: 'jsonb', nullable: true })
   advancedSignature: SignatureResult | null;
+
+  /**
+   * Cómo acreditó su identidad al firmar: con sesión en su cuenta o, siendo invitado sin cuenta,
+   * con un acceso emitido tras validar un código en su correo (ver migración
+   * `CreateGuestSigningAccesses`). Se escribe junto con la firma y NULL hasta entonces —y en las
+   * firmas anteriores a esa migración—.
+   *
+   * No se deduce de `accountId` porque éste puede cambiar después: un invitado que firmó sin
+   * cuenta y luego se registra deja de verse como invitado, y la evidencia de su firma no puede
+   * cambiar con él.
+   */
+  @Column({
+    name: 'signing_authorization',
+    type: 'enum',
+    enum: SIGNING_AUTHORIZATION_ENUM,
+    nullable: true,
+  })
+  signingAuthorization: SIGNING_AUTHORIZATION_ENUM | null;
 
   @Column({
     name: 'signature_type',

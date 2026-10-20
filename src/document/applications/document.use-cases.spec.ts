@@ -7,6 +7,9 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { IsNull } from 'typeorm';
+import { GuestSigningAccessService } from '../services/guest-signing-access.service';
+import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from '../enum/guest-signing-access-purpose.enum';
 import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
 import { DocumentEntity } from '../entities/document.entity';
@@ -127,7 +130,7 @@ function organizationReadAuthorization(
 }
 
 function createMockRepository() {
-  return {
+  const repository = {
     findOne: jest.fn(),
     find: jest.fn(),
     create: jest.fn((data) => data),
@@ -138,7 +141,16 @@ function createMockRepository() {
     update: jest.fn().mockResolvedValue({ affected: 1 }),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
+    // La vinculación de cuenta (y la firma de invitado) escriben en transacción: dentro de ella,
+    // cualquier `getRepository` devuelve este mismo mock, así que las aserciones sobre `update`
+    // siguen viendo esas escrituras.
+    manager: { transaction: jest.fn() },
   };
+  repository.manager.transaction.mockImplementation(
+    async (work: (manager: unknown) => unknown) =>
+      work({ getRepository: () => repository }),
+  );
+  return repository;
 }
 
 /**
@@ -216,6 +228,7 @@ describe('casos de uso de documentos', () => {
   let summaryDocumentService: Record<string, jest.Mock>;
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
+  let guestSigningAccessService: Record<string, jest.Mock>;
   let createDocument: CreateDocumentUseCase;
   let getDocuments: GetDocumentsUseCase;
   let getDocument: GetDocumentUseCase;
@@ -397,6 +410,12 @@ describe('casos de uso de documentos', () => {
         .fn()
         .mockResolvedValue(Buffer.from('hoja-de-firmas-avanzada')),
     };
+    guestSigningAccessService = {
+      findActive: jest.fn().mockResolvedValue(null),
+      consume: jest.fn().mockResolvedValue(false),
+      revokeOpenForCollaborator: jest.fn().mockResolvedValue(0),
+      revokeOpenForDocument: jest.fn().mockResolvedValue(0),
+    };
     signatureQrService = {
       generateAdvancedSignaturePng: jest
         .fn()
@@ -478,6 +497,10 @@ describe('casos de uso de documentos', () => {
           useValue: advancedSummaryDocumentService,
         },
         { provide: SignatureQrService, useValue: signatureQrService },
+        {
+          provide: GuestSigningAccessService,
+          useValue: guestSigningAccessService,
+        },
       ],
     }).compile();
 
@@ -3119,7 +3142,11 @@ describe('casos de uso de documentos', () => {
 
       expect(result.success).toBe(true);
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
-        'collaborator-1',
+        {
+          id: 'collaborator-1',
+          accountId: IsNull(),
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+        },
         { accountId: 'account-of-user-1' },
       );
     });
@@ -3746,7 +3773,11 @@ describe('casos de uso de documentos', () => {
 
       expect(result.success).toBe(true);
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
-        'collaborator-1',
+        {
+          id: 'collaborator-1',
+          accountId: IsNull(),
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+        },
         { accountId: 'account-of-user-1' },
       );
     });
@@ -3852,7 +3883,11 @@ describe('casos de uso de documentos', () => {
 
       expect(result.success).toBe(true);
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
-        'collaborator-1',
+        {
+          id: 'collaborator-1',
+          accountId: IsNull(),
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+        },
         { accountId: 'account-of-user-1' },
       );
       expect(verificationCodeService.issue).toHaveBeenCalledWith(
@@ -5213,7 +5248,11 @@ describe('casos de uso de documentos', () => {
 
       expect(result.data.linked).toBe(true);
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
-        'collaborator-1',
+        {
+          id: 'collaborator-1',
+          accountId: IsNull(),
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+        },
         { accountId: 'account-of-user-2' },
       );
     });
@@ -5229,6 +5268,89 @@ describe('casos de uso de documentos', () => {
 
       expect(result.data.linked).toBe(false);
       expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('busca la invitación por el correo exacto de la cuenta, sólo entre firmantes PENDING sin cuenta', async () => {
+      userService.findOne.mockResolvedValue({
+        id: 'user-2',
+        email: 'ana_b@correo.com',
+        isEmailVerified: true,
+      });
+      collaboratorRepository.findOne.mockResolvedValue(null);
+
+      await linkDocumentCollaborator.execute('doc-1', 'user-2');
+
+      const { where } = collaboratorRepository.findOne.mock.calls[0][0];
+      expect(where).toEqual(
+        expect.objectContaining({
+          documentId: 'doc-1',
+          accountId: IsNull(),
+          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+        }),
+      );
+      // Comparación exacta (LOWER = LOWER), no ILIKE: `_` del correo no actúa como comodín.
+      expect(where.email.getSql('email')).toBe('LOWER(email) = LOWER(:email)');
+      expect(where.email.objectLiteralParameters).toEqual({
+        email: 'ana_b@correo.com',
+      });
+    });
+
+    it('no vincula si el correo de la cuenta no está verificado', async () => {
+      userService.findOne.mockResolvedValue({
+        id: 'user-2',
+        email: 'maria@correo.com',
+        isEmailVerified: false,
+      });
+
+      const result = await linkDocumentCollaborator.execute('doc-1', 'user-2');
+
+      expect(result.data.linked).toBe(false);
+      expect(collaboratorRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('al vincular, revoca en la misma transacción los accesos de invitado sin cuenta del colaborador', async () => {
+      userService.findOne.mockResolvedValue({
+        id: 'user-2',
+        email: 'maria@correo.com',
+      });
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'collaborator-1',
+        email: 'maria@correo.com',
+        accountId: null,
+      });
+
+      await linkDocumentCollaborator.execute('doc-1', 'user-2');
+
+      expect(collaboratorRepository.manager.transaction).toHaveBeenCalled();
+      expect(collaboratorRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          collaboratorId: 'collaborator-1',
+          purpose:
+            GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+          consumedAt: IsNull(),
+          revokedAt: IsNull(),
+        }),
+        { revokedAt: expect.any(Date) },
+      );
+    });
+
+    it('no sustituye una cuenta ya vinculada: si otra petición ganó, responde linked:false y no revoca', async () => {
+      userService.findOne.mockResolvedValue({
+        id: 'user-2',
+        email: 'maria@correo.com',
+      });
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'collaborator-1',
+        email: 'maria@correo.com',
+        accountId: null,
+      });
+      collaboratorRepository.update.mockResolvedValueOnce({ affected: 0 });
+
+      const result = await linkDocumentCollaborator.execute('doc-1', 'user-2');
+
+      expect(result.data.linked).toBe(false);
+      expect(collaboratorRepository.update).toHaveBeenCalledTimes(1);
     });
   });
   /**

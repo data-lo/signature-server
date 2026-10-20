@@ -63,9 +63,14 @@ export class VerificationCodeService {
    * @param submittedCode - Código que escribió el usuario.
    * @param event - Si se indica, sólo considera códigos de ese evento. Opcional para no cambiar a
    *   quienes ya lo llamaban.
+   * @param manager - Transacción del llamador, para que el consumo se deshaga si algo posterior
+   *   falla (ver el canje del acceso de invitado a Firma Avanzada). Sin ella, usa el repositorio
+   *   inyectado.
    * @returns Nada; el código queda consumido.
    *
-   * @throws {BadRequestException} Si no hay código pendiente, expiró o no coincide.
+   * @throws {BadRequestException} Si no hay código pendiente, expiró, no coincide, o otra petición
+   *   lo consumió primero. El consumo es un `UPDATE` condicionado a `is_used = false`: dos canjes
+   *   simultáneos del mismo código no pueden ganar los dos.
    *
    * @example
    * ```ts
@@ -77,8 +82,13 @@ export class VerificationCodeService {
     signerId: string | null,
     submittedCode: string,
     event?: VERIFICATION_EVENT_ENUM,
+    manager?: EntityManager,
   ): Promise<void> {
-    const record = await this.verificationCodeRepository.findOne({
+    const repository = manager
+      ? manager.getRepository(VerificationCodeEntity)
+      : this.verificationCodeRepository;
+
+    const record = await repository.findOne({
       where: {
         documentId,
         signerId: signerId ?? IsNull(),
@@ -104,9 +114,15 @@ export class VerificationCodeService {
       throw new BadRequestException('Código de verificación inválido');
     }
 
-    record.isUsed = true;
-    record.usedAt = new Date();
-    await this.verificationCodeRepository.save(record);
+    const consumed = await repository.update(
+      { id: record.id, isUsed: false },
+      { isUsed: true, usedAt: new Date() },
+    );
+    if (consumed.affected !== 1) {
+      throw new BadRequestException(
+        'El código de verificación ya fue utilizado',
+      );
+    }
   }
 
   /** Usado por DocumentService.sign() para exigir verificación cuando document.requiresVerification=true. */
