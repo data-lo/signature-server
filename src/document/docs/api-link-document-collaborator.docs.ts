@@ -1,18 +1,36 @@
 import { applyDecorators } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
+import { ApiBody, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
+import { LinkDocumentCollaboratorDto } from '../dto/link-document-collaborator.dto';
 
-/** `PATCH /document/:id/link-collaborator` — vincula la cuenta a una invitación por email. */
+/**
+ * `PATCH /document/:id/link-collaborator` — vincula la cuenta autenticada a una invitación.
+ *
+ * @returns Los decoradores de Swagger del endpoint.
+ *
+ * @example
+ * ```ts
+ * @ApiLinkDocumentCollaborator()
+ * ```
+ */
 export function ApiLinkDocumentCollaborator() {
   return applyDecorators(
     ApiOperation({
       summary:
-        'Vincula al usuario autenticado como firmante del documento si fue invitado solo por email (Firma Digital Simple) — ver historia "Notificación por Email para Firma Simple y Vinculación de Cuenta"',
+        'Vincula al usuario autenticado como firmante del documento si fue invitado por email. ' +
+        'Con `collaboratorId` vincula esa invitación y responde un `outcome` explícito; el correo ' +
+        'que se compara es siempre el verificado de la cuenta, nunca uno del cliente.',
     }),
     ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' }),
+    ApiBody({ type: LinkDocumentCollaboratorDto, required: false }),
     ApiResponse({
       status: 200,
       description:
-        'Vinculación procesada (linked=true si había una invitación pendiente que coincidía con el email del usuario autenticado, linked=false si no)',
+        "Sin collaboratorId: { linked }. Con collaboratorId: { linked, outcome: 'LINKED' | 'ALREADY_LINKED' | 'ACCOUNT_MISMATCH' | 'NOT_AVAILABLE' }; sólo LINKED y ALREADY_LINKED traen linked=true",
+    }),
+    ApiResponse({
+      status: 404,
+      description:
+        'Con collaboratorId: el documento no existe o ese colaborador no es firmante de él',
     }),
     ApiResponse({
       status: 401,

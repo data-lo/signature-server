@@ -358,7 +358,15 @@ describe('DocumentController', () => {
 
     expect(
       useCase(LinkDocumentCollaboratorUseCase).execute,
-    ).toHaveBeenCalledWith('doc-1', 'user-1');
+    ).toHaveBeenCalledWith('doc-1', 'user-1', undefined);
+  });
+
+  it('linkCollaborator pasa la referencia de la invitación, nunca un correo', async () => {
+    await controller.linkCollaborator(user, 'doc-1', { collaboratorId: 'c-1' });
+
+    expect(
+      useCase(LinkDocumentCollaboratorUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1', 'c-1');
   });
 
   it('requestVerificationCode pasa la IP del cliente al caso de uso', () => {

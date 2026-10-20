@@ -95,7 +95,8 @@ export class BiometricSignerService {
    *
    * @param documentId - Documento de la invitación.
    * @param collaboratorId - Colaborador de la invitación.
-   * @param email - Correo de la invitación (se compara sin mayúsculas).
+   * @param email - Correo de la invitación (se compara sin mayúsculas). Opcional: sin él, la
+   *   invitación se identifica sólo por el colaborador.
    * @returns Documento, colaborador y firmantes.
    *
    * @throws {NotFoundException} Si el documento no existe.
@@ -110,7 +111,7 @@ export class BiometricSignerService {
   async resolveGuestSigner(
     documentId: string,
     collaboratorId: string,
-    email: string,
+    email: string | undefined,
   ): Promise<ResolvedBiometricSigner> {
     const document = await this.documentService.findOne(documentId);
     const signers = await this.collaboratorRepository.find({
@@ -124,7 +125,8 @@ export class BiometricSignerService {
       !!signer &&
       !signer.accountId &&
       signer.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC &&
-      collaboratorEmail(signer).toLowerCase() === email.trim().toLowerCase();
+      (email === undefined ||
+        collaboratorEmail(signer).toLowerCase() === email.trim().toLowerCase());
 
     if (!isGuestInvitation) {
       throw new GuestInvitationNotFoundException();

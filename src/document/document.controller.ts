@@ -27,6 +27,7 @@ import { RejectDocumentDto } from './dto/reject-document.dto';
 import { RejectDocumentApprovalDto } from './dto/reject-document-approval.dto';
 import { VerifyCodeDto } from './dto/verify-code.dto';
 import { SignDocumentDto } from './dto/sign-document.dto';
+import { LinkDocumentCollaboratorDto } from './dto/link-document-collaborator.dto';
 import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
 import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 
@@ -356,8 +357,16 @@ export class DocumentController {
 
   @Patch(':id/link-collaborator')
   @ApiLinkDocumentCollaborator()
-  linkCollaborator(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.linkDocumentCollaborator.execute(id, user.sub);
+  linkCollaborator(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto?: LinkDocumentCollaboratorDto,
+  ) {
+    return this.linkDocumentCollaborator.execute(
+      id,
+      user.sub,
+      dto?.collaboratorId,
+    );
   }
 
   @Post(':id/verification-codes')

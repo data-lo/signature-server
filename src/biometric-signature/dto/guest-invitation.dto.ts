@@ -1,7 +1,8 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
   IsNotEmpty,
+  IsOptional,
   IsString,
   IsUUID,
   Matches,
@@ -16,9 +17,19 @@ export class GuestInvitationDto {
   @IsUUID()
   collaboratorId: string;
 
-  @ApiProperty({ example: 'ana@correo.mx', description: 'Correo invitado' })
+  /**
+   * Opcional: la invitación la identifica el colaborador. Cuando viene (enlace del correo) se
+   * compara con el guardado como verificación adicional; cuando no (regreso desde el login de la
+   * pantalla pública, que no guarda el correo), basta el colaborador. En ningún caso autoriza
+   * nada: el acceso lo da el código enviado al correo GUARDADO.
+   */
+  @ApiPropertyOptional({
+    example: 'ana@correo.mx',
+    description: 'Correo invitado (opcional)',
+  })
+  @IsOptional()
   @IsEmail()
-  email: string;
+  email?: string;
 }
 
 /** Datos de la invitación más el código que llegó al correo. */

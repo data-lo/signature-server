@@ -55,9 +55,15 @@ import { DocumentApprovalService } from './services/document-approval.service';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
 import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
+import { PublicSigningController } from './public-signing.controller';
+import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
 
 @Module({
-  controllers: [DocumentController, DocumentSignaturesController],
+  controllers: [
+    DocumentController,
+    DocumentSignaturesController,
+    PublicSigningController,
+  ],
   providers: [
     DocumentService,
     VerificationCodeService,
@@ -103,6 +109,8 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
     WitnessNotificationService,
     ApproveDocumentUseCase,
     RejectDocumentApprovalUseCase,
+    /** Valida la invitación de la pantalla pública `/public/documents/:id/sign`. */
+    GetPublicSigningInvitationUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
