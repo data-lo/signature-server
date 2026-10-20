@@ -55,11 +55,17 @@ import { DocumentApprovalService } from './services/document-approval.service';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
 import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
+import { PublicSigningController } from './public-signing.controller';
+import { GetPublicSigningMethodUseCase } from './applications/get-public-signing-method.use-case';
 import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
 
 @Module({
-  controllers: [DocumentController, DocumentSignaturesController],
+  controllers: [
+    DocumentController,
+    DocumentSignaturesController,
+    PublicSigningController,
+  ],
   providers: [
     DocumentService,
     VerificationCodeService,
@@ -110,6 +116,8 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
      * (vincular cuenta, firmar, rechazar); el módulo de la firma de invitado sólo los emite.
      */
     GuestSigningAccessService,
+    /** Qué flujo de firma pública le toca a una invitación (pantalla `/public/documents/:id/sign`). */
+    GetPublicSigningMethodUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
