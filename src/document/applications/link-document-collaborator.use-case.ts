@@ -11,6 +11,8 @@ import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { COLLABORATOR_LINK_OUTCOME_ENUM } from '../enum/collaborator-link-outcome.enum';
+import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from '../enum/guest-signing-access-purpose.enum';
+import { revokeOpenGuestSigningAccesses } from '../services/guest-signing-access.service';
 
 /** Respuesta de la vinculación de una invitación concreta. */
 export interface InvitationLinkResult {
@@ -102,6 +104,9 @@ export class LinkDocumentCollaboratorUseCase {
    * 4. Sólo se vincula un firmante PENDING → si ya respondió, `NOT_AVAILABLE`.
    * 5. El `UPDATE` va condicionado a `account_id IS NULL` y `PENDING`: de dos vinculaciones
    *    simultáneas sólo una gana; la otra se resuelve releyendo al colaborador.
+   * 6. En la misma transacción del `UPDATE` se revocan los accesos de invitado sin cuenta (Firma
+   *    Avanzada) del colaborador: desde ahora firma con su cuenta, igual que en
+   *    `DocumentService.linkPendingCollaboratorAccount`.
    *
    * @param documentId - Documento.
    * @param collaboratorId - Colaborador de la invitación.
@@ -174,15 +179,29 @@ export class LinkDocumentCollaboratorUseCase {
       };
     }
 
-    const claim = await this.collaboratorRepository.update(
-      {
-        id: collaborator.id,
-        accountId: IsNull(),
-        status: COLLABORATOR_STATUS_ENUM.PENDING,
+    const claimed = await this.collaboratorRepository.manager.transaction(
+      async (manager) => {
+        const claim = await manager.getRepository(CollaboratorEntity).update(
+          {
+            id: collaborator.id,
+            accountId: IsNull(),
+            status: COLLABORATOR_STATUS_ENUM.PENDING,
+          },
+          { accountId: personalAccountId },
+        );
+        if (claim.affected !== 1) {
+          return false;
+        }
+
+        await revokeOpenGuestSigningAccesses(
+          manager,
+          collaborator.id,
+          GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+        );
+        return true;
       },
-      { accountId: personalAccountId },
     );
-    if (claim.affected === 1) {
+    if (claimed) {
       return { linked: true, outcome: COLLABORATOR_LINK_OUTCOME_ENUM.LINKED };
     }
 

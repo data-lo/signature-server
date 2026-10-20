@@ -25,6 +25,7 @@ import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { isSignerTurn } from '../utils/next-signer.util';
 import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
+import { GuestSigningAccessService } from '../services/guest-signing-access.service';
 
 /**
  * `PATCH /document/:id/reject`: el firmante autenticado se niega a firmar, si es su turno.
@@ -53,6 +54,7 @@ export class RejectDocumentUseCase {
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly documentService: DocumentService,
     private readonly witnessNotificationService: WitnessNotificationService,
+    private readonly guestSigningAccessService: GuestSigningAccessService,
   ) {}
 
   async execute(
@@ -141,6 +143,17 @@ export class RejectDocumentUseCase {
     document.rejectedAt = new Date();
     document.status = DOCUMENT_STATUS_ENUM.REJECTED;
     await this.documentRepository.save(document);
+
+    // Un documento rechazado ya no se firma: los accesos de invitado que quedaran abiertos para él
+    // dejan de valer. No bloquea el rechazo si falla: esos accesos tampoco servirían, porque la
+    // firma de invitado exige el documento pendiente.
+    try {
+      await this.guestSigningAccessService.revokeOpenForDocument(documentId);
+    } catch (error) {
+      this.logger.warn(
+        `No se pudieron revocar los accesos de invitado del documento ${documentId}: ${error}`,
+      );
+    }
 
     // status/cancellationReason ya se persistieron atómicamente en el claim de arriba.
 

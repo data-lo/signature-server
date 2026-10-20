@@ -9,7 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 
 // TypeORM
-import { FindOptionsRelations, ILike, IsNull, Repository } from 'typeorm';
+import { FindOptionsRelations, IsNull, Raw, Repository } from 'typeorm';
 
 // Entities
 import { DocumentEntity } from './entities/document.entity';
@@ -65,6 +65,8 @@ import {
 } from './services/signature-qr.service';
 import { VerificationCodeService } from './verification-code.service';
 import { VERIFICATION_EVENT_ENUM } from './enum/verification-event.enum';
+import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from './enum/guest-signing-access-purpose.enum';
+import { revokeOpenGuestSigningAccesses } from './services/guest-signing-access.service';
 import { MAX_EFIRMA_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
@@ -287,33 +289,92 @@ export class DocumentService {
    *
    * No lanza si no hay nada que vincular (`linked: false`): no tener una invitación pendiente
    * con ese email no es un error, es el caso normal para cualquier documento sin este flujo.
+   *
+   * Reglas (historia "Autorización de invitado para Firma Avanzada con y sin cuenta"):
+   *  - El correo es el de la CUENTA autenticada, nunca uno que mande el cliente, y tiene que estar
+   *    verificado. Se compara exacto sin distinguir mayúsculas: antes era un `ILIKE`, en el que
+   *    `_` y `%` del correo actuaban como comodines y `ana_b@x.mx` reclamaba la invitación de
+   *    `anaXb@x.mx`.
+   *  - Sólo un colaborador PENDING: una firma ya resuelta como invitado no se reasigna a una
+   *    cuenta después.
+   *  - Nunca sustituye una cuenta ya vinculada: el `UPDATE` va condicionado a `account_id IS NULL`,
+   *    así que de dos vinculaciones simultáneas sólo una gana.
+   *  - En la misma transacción revoca los accesos de invitado sin cuenta de ese colaborador: desde
+   *    ahora firma con su cuenta, y un token público que ya tuviera deja de servir.
+   *
+   * @param documentId - Documento de la invitación.
+   * @param currentUserId - Usuario autenticado (`sub` del JWT).
+   * @returns `linked: true` si vinculó su cuenta personal a una invitación; `linked: false` si no
+   *   había ninguna que le correspondiera o si otra petición la vinculó primero.
+   *
+   * @throws {NotFoundException} Si el usuario no existe o no tiene cuenta PERSONAL.
+   *
+   * @example
+   * ```ts
+   * const { data } = await documentService.linkPendingCollaboratorAccount('doc-1', 'user-1');
+   * ```
    */
   async linkPendingCollaboratorAccount(
     documentId: string,
     currentUserId: string,
   ): Promise<BaseResponse<{ linked: boolean }>> {
+    const notLinked = {
+      success: true,
+      message: 'No hay ninguna invitación pendiente para vincular',
+      data: { linked: false },
+    };
+
     const user = await this.userService.findOne(currentUserId);
+    if (!user.email || user.isEmailVerified === false) {
+      return notLinked;
+    }
 
     const collaborator = await this.collaboratorRepository.findOne({
       where: {
         documentId,
-        email: ILike(user.email),
+        email: Raw((column) => `LOWER(${column}) = LOWER(:email)`, {
+          email: user.email.trim(),
+        }),
         accountId: IsNull(),
         colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        status: COLLABORATOR_STATUS_ENUM.PENDING,
       },
+      order: { signingOrder: 'ASC' },
     });
 
     if (!collaborator) {
-      return {
-        success: true,
-        message: 'No hay ninguna invitación pendiente para vincular',
-        data: { linked: false },
-      };
+      return notLinked;
     }
 
     const accountId =
       await this.accountMemberService.findPersonalAccountId(currentUserId);
-    await this.collaboratorRepository.update(collaborator.id, { accountId });
+
+    const linked = await this.collaboratorRepository.manager.transaction(
+      async (manager) => {
+        const claim = await manager.getRepository(CollaboratorEntity).update(
+          {
+            id: collaborator.id,
+            accountId: IsNull(),
+            status: COLLABORATOR_STATUS_ENUM.PENDING,
+          },
+          { accountId },
+        );
+        if (claim.affected !== 1) {
+          return false;
+        }
+
+        await revokeOpenGuestSigningAccesses(
+          manager,
+          collaborator.id,
+          GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+        );
+        return true;
+      },
+    );
+
+    if (!linked) {
+      return notLinked;
+    }
 
     return {
       success: true,

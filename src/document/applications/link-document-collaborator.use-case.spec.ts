@@ -1,5 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { IsNull } from 'typeorm';
+import { CollaboratorEntity } from '../entities/collaborator.entity';
+import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from '../enum/guest-signing-access-purpose.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { COLLABORATOR_LINK_OUTCOME_ENUM } from '../enum/collaborator-link-outcome.enum';
@@ -13,7 +15,12 @@ import { LinkDocumentCollaboratorUseCase } from './link-document-collaborator.us
 describe('LinkDocumentCollaboratorUseCase — por invitación', () => {
   let collaborator: Record<string, unknown> | null;
   let user: Record<string, unknown>;
-  let repository: { findOne: jest.Mock; update: jest.Mock };
+  let repository: {
+    findOne: jest.Mock;
+    update: jest.Mock;
+    manager: { transaction: jest.Mock };
+  };
+  let guestAccessRepository: { update: jest.Mock };
   let documentService: {
     findOne: jest.Mock;
     linkPendingCollaboratorAccount: jest.Mock;
@@ -33,7 +40,18 @@ describe('LinkDocumentCollaboratorUseCase — por invitación', () => {
     repository = {
       findOne: jest.fn(async () => collaborator),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      manager: { transaction: jest.fn() },
     };
+    guestAccessRepository = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    repository.manager.transaction.mockImplementation(
+      (work: (manager: unknown) => unknown) =>
+        work({
+          getRepository: (entity: unknown) =>
+            entity === CollaboratorEntity ? repository : guestAccessRepository,
+        }),
+    );
     documentService = {
       findOne: jest.fn(async () => ({ id: 'd-1' })),
       linkPendingCollaboratorAccount: jest.fn(async () => ({
@@ -65,6 +83,30 @@ describe('LinkDocumentCollaboratorUseCase — por invitación', () => {
       },
       { accountId: 'acc-mine' },
     );
+  });
+
+  it('al vincular revoca en la misma transacción los accesos de invitado abiertos', async () => {
+    await useCase.execute('d-1', 'u-1', 'c-1');
+
+    expect(repository.manager.transaction).toHaveBeenCalledTimes(1);
+    expect(guestAccessRepository.update).toHaveBeenCalledWith(
+      {
+        collaboratorId: 'c-1',
+        purpose:
+          GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+        consumedAt: IsNull(),
+        revokedAt: IsNull(),
+      },
+      { revokedAt: expect.any(Date) },
+    );
+  });
+
+  it('si el UPDATE no gana, no revoca accesos de invitado', async () => {
+    repository.update.mockResolvedValue({ affected: 0 });
+
+    await useCase.execute('d-1', 'u-1', 'c-1');
+
+    expect(guestAccessRepository.update).not.toHaveBeenCalled();
   });
 
   it('correo distinto: no vincula ni modifica al colaborador', async () => {

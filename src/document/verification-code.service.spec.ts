@@ -11,6 +11,7 @@ function createMockRepository() {
     findOne: jest.fn(),
     create: jest.fn((data) => data),
     save: jest.fn(async (data) => ({ id: 'code-1', ...data })),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
 }
 
@@ -82,9 +83,37 @@ describe('VerificationCodeService', () => {
       await service.verifyAndConsume('doc-1', 'collaborator-1', '482913');
 
       expect(otpService.verify).toHaveBeenCalledWith('482913', '482913');
-      expect(repository.save).toHaveBeenCalledWith(
+      expect(repository.update).toHaveBeenCalledWith(
+        { id: 'code-1', isUsed: false },
         expect.objectContaining({ isUsed: true }),
       );
+    });
+
+    it('si otra petición consumió el código primero, no lo da por bueno dos veces', async () => {
+      repository.findOne.mockResolvedValue(buildRecord());
+      repository.update.mockResolvedValue({ affected: 0 });
+
+      await expect(
+        service.verifyAndConsume('doc-1', 'collaborator-1', '482913'),
+      ).rejects.toThrow('El código de verificación ya fue utilizado');
+    });
+
+    it('con transacción, busca y consume con el repositorio de esa transacción', async () => {
+      const transactional = createMockRepository();
+      transactional.findOne.mockResolvedValue(buildRecord());
+      const manager = { getRepository: jest.fn(() => transactional) };
+
+      await service.verifyAndConsume(
+        'doc-1',
+        'collaborator-1',
+        '482913',
+        VERIFICATION_EVENT_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+        manager as never,
+      );
+
+      expect(transactional.update).toHaveBeenCalled();
+      expect(repository.findOne).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
     });
 
     it('rechaza si no hay ningún código pendiente para ese documento/firmante', async () => {
@@ -103,7 +132,7 @@ describe('VerificationCodeService', () => {
       await expect(
         service.verifyAndConsume('doc-1', 'collaborator-1', '482913'),
       ).rejects.toThrow('El código de verificación expiró');
-      expect(repository.save).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
     });
 
     it('rechaza si el código no coincide', async () => {
@@ -113,7 +142,7 @@ describe('VerificationCodeService', () => {
       await expect(
         service.verifyAndConsume('doc-1', 'collaborator-1', 'wrong'),
       ).rejects.toThrow('Código de verificación inválido');
-      expect(repository.save).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
     });
 
     it('un código emitido para un documento no sirve para otro documento', async () => {
