@@ -57,6 +57,8 @@ import { RejectDocumentApprovalUseCase } from './applications/reject-document-ap
 import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
 import { PublicSigningController } from './public-signing.controller';
 import { GetPublicSigningMethodUseCase } from './applications/get-public-signing-method.use-case';
+import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
+import { GuestSigningAccessService } from './services/guest-signing-access.service';
 
 @Module({
   controllers: [
@@ -109,6 +111,11 @@ import { GetPublicSigningMethodUseCase } from './applications/get-public-signing
     WitnessNotificationService,
     ApproveDocumentUseCase,
     RejectDocumentApprovalUseCase,
+    /**
+     * Accesos temporales de invitado sin cuenta. Vive aquí porque los revocan flujos de este módulo
+     * (vincular cuenta, firmar, rechazar); el módulo de la firma de invitado sólo los emite.
+     */
+    GuestSigningAccessService,
     /** Qué flujo de firma pública le toca a una invitación (pantalla `/public/documents/:id/sign`). */
     GetPublicSigningMethodUseCase,
   ],
