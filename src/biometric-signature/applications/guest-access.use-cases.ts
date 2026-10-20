@@ -56,7 +56,7 @@ export class GuestBiometricAccessUseCases {
    *
    * @param documentId - Documento de la invitación.
    * @param collaboratorId - Colaborador de la invitación.
-   * @param email - Correo de la invitación.
+   * @param email - Correo de la invitación (opcional; ver `GuestInvitationDto.email`).
    * @returns `{ guestBiometric: true }` si el colaborador es un firmante biométrico sin cuenta con
    *   ese correo.
    *
@@ -68,7 +68,7 @@ export class GuestBiometricAccessUseCases {
   async checkInvitation(
     documentId: string,
     collaboratorId: string,
-    email: string,
+    email: string | undefined,
   ): Promise<{ guestBiometric: boolean }> {
     try {
       await this.signers.resolveGuestSigner(documentId, collaboratorId, email);
@@ -86,7 +86,7 @@ export class GuestBiometricAccessUseCases {
    *
    * @param documentId - Documento de la invitación.
    * @param collaboratorId - Colaborador de la invitación.
-   * @param email - Correo de la invitación.
+   * @param email - Correo de la invitación (opcional; ver `GuestInvitationDto.email`).
    * @param ipAddress - IP de la petición (queda en el código).
    * @returns Si el correo salió.
    *
@@ -101,7 +101,7 @@ export class GuestBiometricAccessUseCases {
   async requestCode(
     documentId: string,
     collaboratorId: string,
-    email: string,
+    email: string | undefined,
     ipAddress: string,
   ): Promise<{ emailDelivered: boolean }> {
     const { document, signer } = await this.signers.resolveGuestSigner(
@@ -139,7 +139,7 @@ export class GuestBiometricAccessUseCases {
    *
    * @param documentId - Documento de la invitación.
    * @param collaboratorId - Colaborador de la invitación.
-   * @param email - Correo de la invitación.
+   * @param email - Correo de la invitación (opcional; ver `GuestInvitationDto.email`).
    * @param code - Código recibido por correo.
    * @returns El token y cuándo vence.
    *
@@ -155,7 +155,7 @@ export class GuestBiometricAccessUseCases {
   async verifyCode(
     documentId: string,
     collaboratorId: string,
-    email: string,
+    email: string | undefined,
     code: string,
   ): Promise<{ accessToken: string; expiresAt: Date }> {
     const { signer } = await this.signers.resolveGuestSigner(

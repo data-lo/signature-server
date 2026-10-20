@@ -55,6 +55,19 @@ describe('BiometricSignerService', () => {
       expect(resolved.signer.id).toBe('c-1');
     });
 
+    it('sin correo (regreso desde el login de la pantalla pública) la identifica el colaborador', async () => {
+      const resolved = await service.resolveGuestSigner(
+        'd-1',
+        'c-1',
+        undefined,
+      );
+
+      expect(resolved.signer.id).toBe('c-1');
+      await expect(
+        service.resolveGuestSigner('d-1', 'c-otro', undefined),
+      ).rejects.toBeInstanceOf(GuestInvitationNotFoundException);
+    });
+
     it.each([
       ['otro colaborador', () => undefined, 'c-otro', 'ana@correo.mx'],
       ['otro correo', () => undefined, 'c-1', 'otra@correo.mx'],

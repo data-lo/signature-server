@@ -1,16 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsUUID } from 'class-validator';
+import { IsUUID } from 'class-validator';
 
 /**
- * Datos de la invitación que el invitado trae en el enlace de su correo (`collabId` y `email`).
- * Sólo IDENTIFICAN la invitación: no dan acceso a nada.
+ * Referencia de la invitación que el invitado trae en el enlace de su correo (`collabId`). Sólo la
+ * IDENTIFICA: no da acceso a nada. El correo del enlace no se usa: el que cuenta es el guardado en
+ * el colaborador.
  */
 export class PublicSigningInvitationDto {
   @ApiProperty({ format: 'uuid', description: 'Colaborador de la invitación' })
   @IsUUID()
   collaboratorId: string;
-
-  @ApiProperty({ example: 'ana@correo.mx', description: 'Correo invitado' })
-  @IsEmail()
-  email: string;
 }
