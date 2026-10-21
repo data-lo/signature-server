@@ -14,12 +14,12 @@ import { maskEmail } from '../utils/mask-email.util';
 /**
  * Tipos de firma que un invitado puede completar sin cuenta desde la pantalla pública.
  *
- * Sólo biometría por ahora: la Firma Avanzada pública (OTP + `.cer`/`.key`) llega en otra historia,
- * y mientras tanto ofrecer "Continuar sin cuenta" a un firmante FIEL lo llevaría a un callejón sin
- * salida. Al integrarla, basta con agregar `FIEL` aquí.
+ * Biometría y Firma Electrónica Avanzada (FIEL) tienen su respectivo flujo público. El código de
+ * acceso por correo sigue siendo obligatorio antes de mostrar el documento o aceptar la firma.
  */
 const GUEST_SIGNING_TYPES: ReadonlySet<SIGNATURE_TYPE_ENUM> = new Set([
   SIGNATURE_TYPE_ENUM.BIOMETRIC,
+  SIGNATURE_TYPE_ENUM.FIEL,
 ]);
 
 /** Lo que la pantalla pública de firma necesita para decidir cómo sigue el invitado. */

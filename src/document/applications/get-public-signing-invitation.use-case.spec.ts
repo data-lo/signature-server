@@ -88,16 +88,26 @@ describe('GetPublicSigningInvitationUseCase', () => {
     expect(result.guestSigningAllowed).toBe(false);
   });
 
-  it.each([SIGNATURE_TYPE_ENUM.SIMPLE, SIGNATURE_TYPE_ENUM.FIEL])(
-    'firma %s: todavía no admite continuar sin cuenta',
-    async (signatureType) => {
-      collaborator!.signatureType = signatureType;
-      const result = await useCase.execute('d-1', 'c-1');
-      expect(result).toEqual(
-        expect.objectContaining({ signatureType, guestSigningAllowed: false }),
-      );
-    },
-  );
+  it('firma simple: no admite continuar sin cuenta', async () => {
+    collaborator!.signatureType = SIGNATURE_TYPE_ENUM.SIMPLE;
+    const result = await useCase.execute('d-1', 'c-1');
+    expect(result).toEqual(
+      expect.objectContaining({
+        signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
+        guestSigningAllowed: false,
+      }),
+    );
+  });
+
+  it('firma FIEL: admite continuar sin cuenta', async () => {
+    collaborator!.signatureType = SIGNATURE_TYPE_ENUM.FIEL;
+    await expect(useCase.execute('d-1', 'c-1')).resolves.toEqual(
+      expect.objectContaining({
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        guestSigningAllowed: true,
+      }),
+    );
+  });
 
   it('si no hay correo de invitación, enmascara el de la cuenta vinculada', async () => {
     Object.assign(collaborator!, {
