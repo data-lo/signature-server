@@ -302,7 +302,7 @@ describe('DocumentController', () => {
    * El controller aplana los arreglos de multer: el caso de uso recibe "la llave" y "el
    * certificado", no la forma que impone el multipart.
    */
-  it('sign aplana los archivos de e.firma y pasa la geolocalizacion del DTO', () => {
+  it('sign aplana los archivos de e.firma y pasa la geolocalizacion del DTO y la IP de la peticion', () => {
     const keyFile = { originalname: 'clave.key' } as Express.Multer.File;
     const cerFile = { originalname: 'cert.cer' } as Express.Multer.File;
     const geolocation = { latitude: 19.4326, longitude: -99.1332 } as any;
@@ -316,6 +316,7 @@ describe('DocumentController', () => {
         cer: [cerFile],
       },
       authorization(ACTION_KEY_ENUM.SIGN),
+      '10.0.0.7',
     );
 
     expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
@@ -324,6 +325,7 @@ describe('DocumentController', () => {
       { password: 'secreto', keyFile, cerFile },
       geolocation,
       authorization(ACTION_KEY_ENUM.SIGN),
+      '10.0.0.7',
     );
   });
 
@@ -334,6 +336,7 @@ describe('DocumentController', () => {
       {} as any,
       {},
       authorization(ACTION_KEY_ENUM.SIGN),
+      undefined as unknown as string,
     );
 
     expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
@@ -342,6 +345,7 @@ describe('DocumentController', () => {
       { password: undefined, keyFile: undefined, cerFile: undefined },
       undefined,
       authorization(ACTION_KEY_ENUM.SIGN),
+      null,
     );
   });
 

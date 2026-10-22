@@ -341,6 +341,7 @@ export class DocumentController {
     @UploadedFiles()
     files: { key?: Express.Multer.File[]; cer?: Express.Multer.File[] },
     @CurrentAuthorization() authorization: AuthorizationContext,
+    @ClientIp() ipAddress: string,
   ) {
     return this.signDocument.execute(
       id,
@@ -352,6 +353,7 @@ export class DocumentController {
       },
       dto?.geolocation,
       authorization,
+      ipAddress ?? null,
     );
   }
 

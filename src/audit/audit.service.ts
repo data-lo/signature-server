@@ -21,6 +21,13 @@ export interface AuditPayload {
   verificationCodeId?: string;
   signedAt?: Date;
   geolocation?: { latitude: number; longitude: number; accuracy?: number };
+  /** Tipo de firma del firmante (`SIMPLE`, `FIEL`, `BIOMETRIC`); sólo en `DOCUMENT_SIGNED`. */
+  signatureType?: string;
+  /**
+   * Cómo acreditó el firmante su identidad (`ACCOUNT_SESSION` o `GUEST_EMAIL_OTP`); sólo en
+   * `DOCUMENT_SIGNED`. Distingue en la bitácora una firma con cuenta de una sin cuenta.
+   */
+  signingAuthorization?: string;
 }
 
 /**
