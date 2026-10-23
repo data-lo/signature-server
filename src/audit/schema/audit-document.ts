@@ -41,6 +41,17 @@ export class AuditDocument extends Document {
   })
   geolocation?: { latitude: number; longitude: number; accuracy?: number };
 
+  /** Tipo de firma con el que firmó (`SIMPLE`, `FIEL`, `BIOMETRIC`). Sólo en `DOCUMENT_SIGNED`. */
+  @Prop()
+  signatureType?: string;
+
+  /**
+   * Método con el que el firmante acreditó su identidad: `ACCOUNT_SESSION` (sesión en su cuenta) o
+   * `GUEST_EMAIL_OTP` (invitado sin cuenta, con código al correo). Sólo en `DOCUMENT_SIGNED`.
+   */
+  @Prop()
+  signingAuthorization?: string;
+
   @Prop({ required: true })
   chainIndex: number;
 

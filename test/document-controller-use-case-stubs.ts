@@ -9,6 +9,8 @@ import { CreateDocumentUseCase } from './../src/document/applications/create-doc
 import { GetDocumentsUseCase } from './../src/document/applications/get-documents.use-case';
 import { GetDocumentUseCase } from './../src/document/applications/get-document.use-case';
 import { SubmitDocumentForAuthorizationUseCase } from './../src/document/applications/submit-document-for-authorization.use-case';
+import { ApproveDocumentUseCase } from './../src/document/applications/approve-document.use-case';
+import { RejectDocumentApprovalUseCase } from './../src/document/applications/reject-document-approval.use-case';
 import { LinkDocumentCollaboratorUseCase } from './../src/document/applications/link-document-collaborator.use-case';
 import { RequestDocumentVerificationCodeUseCase } from './../src/document/applications/request-document-verification-code.use-case';
 import { VerifyDocumentCodeUseCase } from './../src/document/applications/verify-document-code.use-case';
@@ -17,6 +19,8 @@ import { SubmitDocumentForCancellationUseCase } from './../src/document/applicat
 import { ConfirmDocumentCancellationUseCase } from './../src/document/applications/confirm-document-cancellation.use-case';
 import { UpdateDocumentUseCase } from './../src/document/applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './../src/document/applications/delete-document.use-case';
+import { ArchiveCompletedDocumentUseCase } from './../src/document/applications/archive-document.use-case';
+import { RestoreArchivedDocumentUseCase } from './../src/document/applications/restore-archived-document.use-case';
 
 /**
  * Dobles inertes para los casos de uso de `DocumentController` que una prueba end-to-end no
@@ -37,6 +41,8 @@ export const DOCUMENT_CONTROLLER_USE_CASE_STUBS: Provider[] = [
   GetDocumentsUseCase,
   GetDocumentUseCase,
   SubmitDocumentForAuthorizationUseCase,
+  ApproveDocumentUseCase,
+  RejectDocumentApprovalUseCase,
   LinkDocumentCollaboratorUseCase,
   RequestDocumentVerificationCodeUseCase,
   VerifyDocumentCodeUseCase,
@@ -45,4 +51,6 @@ export const DOCUMENT_CONTROLLER_USE_CASE_STUBS: Provider[] = [
   ConfirmDocumentCancellationUseCase,
   UpdateDocumentUseCase,
   DeleteDocumentUseCase,
+  ArchiveCompletedDocumentUseCase,
+  RestoreArchivedDocumentUseCase,
 ].map((provide) => ({ provide, useValue: { execute: jest.fn() } }));

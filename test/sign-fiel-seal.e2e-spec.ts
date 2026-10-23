@@ -5,7 +5,7 @@ import {
   UnprocessableEntityException,
   ValidationPipe,
 } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -36,6 +36,8 @@ import { PdfSignatureService } from './../src/common/document-signing/document-s
 import { SignatureService } from './../src/signature/signature.service';
 import { EmailService } from './../src/common/email/email.service';
 import { AuditService } from './../src/audit/audit.service';
+import { RequestIpInterceptor } from './../src/common/interceptors/request-ip.interceptor';
+import { SIGNING_AUTHORIZATION_ENUM } from './../src/document/enum/signing-authorization.enum';
 import { DocumentEventsProducer } from './../src/kafka/document-events.producer';
 import { AccountMemberService } from './../src/account/account-member.service';
 import { VerificationCodeService } from './../src/document/verification-code.service';
@@ -185,6 +187,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let sealRepository: ReturnType<typeof createMockRepository>;
   let efirmaService: { firmar: jest.Mock };
+  let auditService: { create: jest.Mock };
   let document: DocumentEntity;
 
   function signRequest() {
@@ -212,6 +215,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     collaboratorRepository = createMockRepository();
     sealRepository = createMockRepository();
     efirmaService = { firmar: jest.fn().mockReturnValue(EFIRMA_RESULT) };
+    auditService = { create: jest.fn() };
 
     document = mockDocument();
     documentRepository.findOne.mockResolvedValue(document);
@@ -250,6 +254,8 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
           },
         },
         { provide: APP_GUARD, useClass: FakeAuthGuard },
+        // Mismo interceptor global que monta AppModule: deja `clientIp` para `@ClientIp()`.
+        { provide: APP_INTERCEPTOR, useClass: RequestIpInterceptor },
         {
           provide: getRepositoryToken(DocumentEntity),
           useValue: documentRepository,
@@ -343,7 +349,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
             sendDocumentPendingNotification: jest.fn(),
           },
         },
-        { provide: AuditService, useValue: { create: jest.fn() } },
+        { provide: AuditService, useValue: auditService },
         {
           provide: DocumentEventsProducer,
           useValue: {
@@ -414,6 +420,29 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
 
       // 3. El documento quedó firmado.
       expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+    });
+
+    it('audita la firma con cuenta: IP de la petición, tipo FIEL y método ACCOUNT_SESSION', async () => {
+      await withEfirmaFiles(
+        signRequest().set('X-Forwarded-For', '203.0.113.7'),
+      ).expect(200);
+
+      expect(auditService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: DOCUMENT_ID,
+          ipAddress: '203.0.113.7',
+          users: [expect.objectContaining({ userId: SIGNER_USER_ID })],
+          signedAt: expect.any(Date),
+          signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+          signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
+        }),
+      );
+      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ipAddress: '203.0.113.7',
+          signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
+        }),
+      );
     });
 
     it('manda a Seal Service el documentId, el arreglo de firmas y la API key', async () => {

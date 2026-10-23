@@ -14,12 +14,16 @@ import { maskEmail } from '../utils/mask-email.util';
 /**
  * Tipos de firma que un invitado puede completar sin cuenta desde la pantalla pública.
  *
- * Sólo biometría por ahora: la Firma Avanzada pública (OTP + `.cer`/`.key`) llega en otra historia,
- * y mientras tanto ofrecer "Continuar sin cuenta" a un firmante FIEL lo llevaría a un callejón sin
- * salida. Al integrarla, basta con agregar `FIEL` aquí.
+ * - `BIOMETRIC`: código al correo y verificación de identidad en Didit.
+ * - `FIEL`: código al correo (`/advanced-signature/access-code`) y firma con su e.firma
+ *   (`.cer` + `.key` + contraseña). La cuenta en la plataforma deja de ser requisito: lo que acredita
+ *   al invitado es el código, y lo que da validez a la firma, su certificado del SAT.
+ *
+ * `SIMPLE` queda fuera: la firma simple estampa la rúbrica registrada en una cuenta.
  */
 const GUEST_SIGNING_TYPES: ReadonlySet<SIGNATURE_TYPE_ENUM> = new Set([
   SIGNATURE_TYPE_ENUM.BIOMETRIC,
+  SIGNATURE_TYPE_ENUM.FIEL,
 ]);
 
 /** Lo que la pantalla pública de firma necesita para decidir cómo sigue el invitado. */

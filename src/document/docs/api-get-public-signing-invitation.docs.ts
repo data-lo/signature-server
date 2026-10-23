@@ -17,7 +17,8 @@ export function ApiGetPublicSigningInvitation() {
       summary:
         'Valida la invitación de un firmante y devuelve lo que la pantalla pública necesita para ' +
         'decidir: nombre del documento, correo invitado enmascarado, tipo de firma, si sigue ' +
-        'disponible para firmar y si admite continuar sin cuenta.',
+        'disponible para firmar y si admite continuar sin cuenta (firmantes BIOMETRIC y FIEL sin ' +
+        'cuenta vinculada).',
     }),
     ApiParam({
       name: 'documentId',

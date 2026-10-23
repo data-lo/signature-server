@@ -45,8 +45,8 @@ export function ApiCheckGuestAdvancedInvitation() {
   return applyDecorators(
     ApiOperation({
       summary:
-        'Indica si la invitación (colaborador + correo del enlace) admite Firma Avanzada sin ' +
-        'cuenta. No dice por qué no.',
+        'Indica si la invitación (colaborador y, si viene, correo del enlace) admite Firma ' +
+        'Avanzada sin cuenta. No dice por qué no.',
     }),
     DOCUMENT_PARAM,
     ApiResponse({

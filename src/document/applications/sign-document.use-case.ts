@@ -89,7 +89,7 @@ interface SignatureCompletion {
   actor: string;
   geolocation: GeolocationDto;
   advancedSignatureResult: SignatureResult | null;
-  /** IP desde la que se autorizó la firma, cuando se conoce (biométrica e invitado FIEL). */
+  /** IP desde la que se autorizó la firma, cuando se conoce. */
   ipAddress: string | null;
   /** Cómo se acreditó el firmante; queda en `collaborators.signing_authorization`. */
   signingAuthorization: SIGNING_AUTHORIZATION_ENUM;
@@ -172,6 +172,8 @@ export class SignDocumentUseCase {
    *   autorización. Cuando llega, `DocumentAuthorizationPolicy` comprueba además el alcance
    *   `SELF` del catálogo; cuando no, siguen rigiendo las validaciones de firmante y de turno
    *   que este método ya hacía, que son las que de verdad protegen la firma.
+   * @param ipAddress IP de la petición de firma, evidencia del acto. Opcional por los mismos
+   *   llamadores sin petición HTTP; sin ella la auditoría cae en la IP del documento, como antes.
    * @returns El documento firmado y si esta firma lo dejó completo.
    * @throws {BadRequestException} Cuando falta la geolocalización, el documento no está en
    *   `PENDING`, el firmante ya respondió, el documento exige un código de verificación que no se
@@ -182,7 +184,7 @@ export class SignDocumentUseCase {
    *
    * @example
    * ```ts
-   * await signDocument.execute('d-1', 'u-1', undefined, { latitude: 19.4, longitude: -99.1 }, auth);
+   * await signDocument.execute('d-1', 'u-1', undefined, { latitude: 19.4, longitude: -99.1 }, auth, '10.0.0.1');
    * ```
    */
   async execute(
@@ -191,6 +193,7 @@ export class SignDocumentUseCase {
     advancedSignatureInput?: AdvancedSignatureInput,
     geolocation?: GeolocationDto,
     authorization?: AuthorizationContext,
+    ipAddress: string | null = null,
   ): Promise<BaseResponse<SignedDocumentData>> {
     // Se revalida aunque el DTO ya la exija: este método también se invoca desde otros puntos.
     if (!geolocation) {
@@ -267,7 +270,7 @@ export class SignDocumentUseCase {
       actor: currentUserId,
       geolocation,
       advancedSignatureResult,
-      ipAddress: null,
+      ipAddress,
       signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
     });
   }
@@ -848,6 +851,9 @@ export class SignDocumentUseCase {
       users: [{ userId: actor, action: AuditAction.DOCUMENT_SIGNED }],
       signedAt: myParticipant.resolvedAt,
       geolocation,
+      // Método de validación del firmante: distingue una firma con cuenta de una sin cuenta.
+      signatureType: myParticipant.signatureType ?? undefined,
+      signingAuthorization,
     });
 
     if (remainingSigners.length > 0) {

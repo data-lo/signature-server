@@ -70,7 +70,7 @@ export class PublicGuestAdvancedSignatureController {
     return this.guestAccess.checkInvitation(
       documentId,
       query.collaboratorId,
-      query.email,
+      query.email ?? null,
     );
   }
 
@@ -88,7 +88,7 @@ export class PublicGuestAdvancedSignatureController {
     return this.guestAccess.requestCode(
       documentId,
       dto.collaboratorId,
-      dto.email,
+      dto.email ?? null,
       ipAddress ?? null,
     );
   }
@@ -107,7 +107,7 @@ export class PublicGuestAdvancedSignatureController {
     return this.guestAccess.verifyCode(
       documentId,
       dto.collaboratorId,
-      dto.email,
+      dto.email ?? null,
       dto.code,
       ipAddress ?? null,
     );

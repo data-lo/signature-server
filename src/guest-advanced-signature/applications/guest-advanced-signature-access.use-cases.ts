@@ -72,7 +72,8 @@ export class GuestAdvancedSignatureAccessUseCases {
    *
    * @param documentId - Documento de la invitación.
    * @param collaboratorId - Colaborador de la invitación.
-   * @param email - Correo de la invitación.
+   * @param email - Correo del enlace, si lo trae (verificación adicional), o `null`: la invitación
+   *   la identifica el colaborador.
    * @returns `{ guestAdvancedSignature: true }` si el colaborador es un firmante FIEL sin cuenta con
    *   ese correo.
    *
@@ -84,7 +85,7 @@ export class GuestAdvancedSignatureAccessUseCases {
   async checkInvitation(
     documentId: string,
     collaboratorId: string,
-    email: string,
+    email: string | null,
   ): Promise<{ guestAdvancedSignature: boolean }> {
     try {
       await this.signers.resolveGuestSigner(documentId, collaboratorId, email);
@@ -102,7 +103,8 @@ export class GuestAdvancedSignatureAccessUseCases {
    *
    * @param documentId - Documento de la invitación.
    * @param collaboratorId - Colaborador de la invitación.
-   * @param email - Correo de la invitación.
+   * @param email - Correo del enlace, si lo trae (verificación adicional), o `null`: la invitación
+   *   la identifica el colaborador.
    * @param ipAddress - IP de la petición (queda en el código).
    * @returns Si el correo salió.
    *
@@ -119,7 +121,7 @@ export class GuestAdvancedSignatureAccessUseCases {
   async requestCode(
     documentId: string,
     collaboratorId: string,
-    email: string,
+    email: string | null,
     ipAddress: string | null,
   ): Promise<{ emailDelivered: boolean }> {
     const resolved = await this.signers.resolveGuestSigner(
@@ -162,7 +164,8 @@ export class GuestAdvancedSignatureAccessUseCases {
    *
    * @param documentId - Documento de la invitación.
    * @param collaboratorId - Colaborador de la invitación.
-   * @param email - Correo de la invitación.
+   * @param email - Correo del enlace, si lo trae (verificación adicional), o `null`: la invitación
+   *   la identifica el colaborador.
    * @param code - Código recibido por correo.
    * @param ipAddress - IP desde la que se valida (queda en el acceso).
    * @returns El token (su `jti` es el id del acceso) y cuándo vence.
@@ -182,7 +185,7 @@ export class GuestAdvancedSignatureAccessUseCases {
   async verifyCode(
     documentId: string,
     collaboratorId: string,
-    email: string,
+    email: string | null,
     code: string,
     ipAddress: string | null,
   ): Promise<{ accessToken: string; expiresAt: Date }> {

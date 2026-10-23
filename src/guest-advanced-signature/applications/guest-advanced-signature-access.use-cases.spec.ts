@@ -145,6 +145,24 @@ describe('GuestAdvancedSignatureAccessUseCases', () => {
       expect(result).toEqual({ emailDelivered: true });
     });
 
+    it('sin correo en la petición (pantalla pública /sign) identifica la invitación por el colaborador', async () => {
+      const result = await useCases.requestCode('d-1', 'c-1', null, '10.0.0.1');
+
+      expect(email.sendVerificationCodeNotification).toHaveBeenCalledWith(
+        'ana@correo.mx',
+        'contrato.pdf',
+        '123456',
+      );
+      expect(result).toEqual({ emailDelivered: true });
+    });
+
+    it('si el correo viene y no coincide, no emite código', async () => {
+      await expect(
+        useCases.requestCode('d-1', 'c-1', 'otra@correo.mx', null),
+      ).rejects.toThrow(GuestAdvancedInvitationNotFoundException);
+      expect(verificationCodes.issue).not.toHaveBeenCalled();
+    });
+
     it('no emite código si el documento no está pendiente de firma', async () => {
       document.status = DOCUMENT_STATUS_ENUM.PENDING_APPROVAL;
 
@@ -194,6 +212,25 @@ describe('GuestAdvancedSignatureAccessUseCases', () => {
   });
 
   describe('verifyCode', () => {
+    it('sin correo en la petición canjea el código y emite el acceso al correo guardado', async () => {
+      await useCases.verifyCode('d-1', 'c-1', null, '123456', '10.0.0.2');
+
+      expect(verificationCodes.verifyAndConsume).toHaveBeenCalledWith(
+        'd-1',
+        'c-1',
+        '123456',
+        VERIFICATION_EVENT_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+        manager,
+      );
+      expect(accesses.issue).toHaveBeenCalledWith(
+        manager,
+        expect.objectContaining({
+          email: 'ana@correo.mx',
+          ipAddress: '10.0.0.2',
+        }),
+      );
+    });
+
     it('consume el código y emite el acceso en la MISMA transacción', async () => {
       const result = await useCases.verifyCode(
         'd-1',

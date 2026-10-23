@@ -1,7 +1,8 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
   IsNotEmpty,
+  IsOptional,
   IsString,
   IsUUID,
   Matches,
@@ -19,9 +20,18 @@ export class GuestAdvancedInvitationDto {
   @IsUUID()
   collaboratorId: string;
 
-  @ApiProperty({ example: 'ana@correo.mx', description: 'Correo invitado' })
+  /**
+   * Opcional, igual que en la firma biométrica de invitado: la pantalla pública
+   * `/public/documents/:id/sign` sólo conoce el colaborador y el correo enmascarado. Cuando viene,
+   * se compara con el guardado como verificación adicional; nunca autoriza nada.
+   */
+  @ApiPropertyOptional({
+    example: 'ana@correo.mx',
+    description: 'Correo invitado (opcional)',
+  })
+  @IsOptional()
   @IsEmail()
-  email: string;
+  email?: string;
 }
 
 /** Datos de la invitación más el código que llegó al correo. */

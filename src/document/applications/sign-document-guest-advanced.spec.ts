@@ -184,6 +184,21 @@ describe('SignDocumentUseCase — Firma Avanzada de invitado sin cuenta', () => 
     );
   });
 
+  it('la auditoría registra firmante, documento, fecha, IP y el método de validación sin cuenta', async () => {
+    await useCase.executeGuestAdvanced(request());
+
+    expect(audit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documentId: 'd-1',
+        ipAddress: '10.0.0.9',
+        signedAt: expect.any(Date),
+        geolocation: GEO,
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        signingAuthorization: SIGNING_AUTHORIZATION_ENUM.GUEST_EMAIL_OTP,
+      }),
+    );
+  });
+
   it('si era el último firmante, finaliza el documento y revoca todos sus accesos', async () => {
     await useCase.executeGuestAdvanced(request());
 
@@ -340,6 +355,56 @@ describe('SignDocumentUseCase — Firma Avanzada de invitado sin cuenta', () => 
       GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
     );
     expect(collaboratorRepository.manager.transaction).not.toHaveBeenCalled();
+  });
+
+  it('la firma FIEL con cuenta audita ACCOUNT_SESSION con la IP de la petición', async () => {
+    Object.assign(signer, {
+      accountId: 'acc-personal',
+      account: { userId: 'u-1', user: { id: 'u-1' } },
+    });
+    documentService.findOrLinkMySignerCollaborator = jest.fn(async () => ({
+      signerCollaborators: [signer],
+      myParticipant: signer,
+    }));
+
+    await useCase.execute(
+      'd-1',
+      'u-1',
+      { password: 'x' },
+      GEO,
+      undefined,
+      '10.0.0.4',
+    );
+
+    expect(audit.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ipAddress: '10.0.0.4',
+        users: [expect.objectContaining({ userId: 'u-1' })],
+        signatureType: SIGNATURE_TYPE_ENUM.FIEL,
+        signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
+      }),
+    );
+    expect(collaboratorRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ ipAddress: '10.0.0.4' }),
+    );
+  });
+
+  it('sin IP conocida, la firma con cuenta audita la IP del documento como antes', async () => {
+    Object.assign(signer, {
+      accountId: 'acc-personal',
+      account: { userId: 'u-1', user: { id: 'u-1' } },
+    });
+    document.ipAddress = '192.168.0.1';
+    documentService.findOrLinkMySignerCollaborator = jest.fn(async () => ({
+      signerCollaborators: [signer],
+      myParticipant: signer,
+    }));
+
+    await useCase.execute('d-1', 'u-1', { password: 'x' }, GEO);
+
+    expect(audit.create).toHaveBeenCalledWith(
+      expect.objectContaining({ ipAddress: '192.168.0.1' }),
+    );
   });
 
   it('un fallo al revocar no deshace una firma ya registrada', async () => {
