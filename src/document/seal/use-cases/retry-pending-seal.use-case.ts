@@ -3,8 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { X509Certificate } from 'node:crypto';
 
-import { EfirmaService } from 'src/efirma/efirma.service';
-import { OscpService } from 'src/efirma/oscp/oscp.service';
+import { CertificateValidationApiService } from 'src/efirma/certificate-validation/certificate-validation-api.service';
+import { OCSPEvidence } from 'src/efirma/interfaces/OCSPEvidence.interface';
 import { CollaboratorEntity } from '../../entities/collaborator.entity';
 import { DocumentEntity } from '../../entities/document.entity';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
@@ -33,8 +33,7 @@ export class RetryPendingSealUseCase {
     private readonly documentRepository: Repository<DocumentEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
-    private readonly efirmaService: EfirmaService,
-    private readonly ocspService: OscpService,
+    private readonly certificateValidationApiService: CertificateValidationApiService,
   ) {}
 
   /**
@@ -99,26 +98,53 @@ export class RetryPendingSealUseCase {
   }
 
   /**
-   * Vuelve a consultar el estado de revocación con el certificado que quedó guardado en la firma.
+   * Vuelve a validar el certificado que quedó guardado en la firma para obtener su evidencia OCSP.
    *
    * El PEM se persiste íntegro en `advancedSignature.certificate`, así que no hace falta que el
    * firmante vuelva a subir su e.firma: la comprobación de revocación sólo necesita el
    * certificado público, nunca la llave privada.
+   *
+   * **La vigencia se evalúa en la fecha de la firma**, no en la del reintento. Antes de migrar a
+   * Certificate Validation Service el reintento no revisaba la vigencia (sólo cadena y OCSP); el
+   * servicio siempre la revisa, así que sin `referenceDate` un certificado que venció entre la
+   * firma y el reintento dejaría el documento pendiente para siempre, aunque firmó estando vigente.
+   *
+   * Aquí NO se tolera que el SAT no responda (`allowUnverifiedRevocation` en `false`): el
+   * reintento existe precisamente para obtener la evidencia.
+   *
+   * @param collaborator - Firmante FIEL cuya firma no tiene `ocspEvidence`.
+   * @returns La evidencia OCSP, o `null` si no se pudo obtener por cualquier motivo.
+   *
+   * @example
+   * ```ts
+   * const evidence = await this.obtainOcspEvidence(collaborator);
+   * ```
    */
-  private async obtainOcspEvidence(collaborator: CollaboratorEntity) {
+  private async obtainOcspEvidence(
+    collaborator: CollaboratorEntity,
+  ): Promise<OCSPEvidence | null> {
     try {
+      const { advancedSignature } = collaborator;
       const certificado = new X509Certificate(
-        collaborator.advancedSignature.certificate.certificatePem,
+        advancedSignature.certificate.certificatePem,
       );
-      const cerBuffer = Buffer.from(certificado.raw);
-      const emisor = this.efirmaService.validarCadenaConfianza(cerBuffer);
+      const signedAt = advancedSignature.signedAt ?? collaborator.signedAt;
 
-      return await this.ocspService.verifyRevokedOCSP(cerBuffer, emisor);
+      const { ocspEvidence } =
+        await this.certificateValidationApiService.validateCertificate(
+          Buffer.from(certificado.raw),
+          {
+            ...(signedAt && { referenceDate: new Date(signedAt) }),
+            allowUnverifiedRevocation: false,
+          },
+        );
+
+      return ocspEvidence ?? null;
     } catch (error) {
       /**
-       * Se traga cualquier error, no sólo la indisponibilidad del SAT: un certificado revocado o
-       * una cadena de confianza rota tampoco deben tumbar la pantalla desde la que se reintentó.
-       * El documento se queda pendiente y el motivo queda en el log.
+       * Se traga cualquier error, no sólo la indisponibilidad del SAT: un certificado revocado,
+       * una cadena de confianza rota o el microservicio caído tampoco deben tumbar la pantalla
+       * desde la que se reintentó. El documento se queda pendiente y el motivo queda en el log.
        */
       this.logger.warn(
         `No se pudo completar la evidencia OCSP del firmante ${collaborator.id}: ${

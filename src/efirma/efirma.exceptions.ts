@@ -77,3 +77,21 @@ export class OCSPNotAvailableException extends ServiceUnavailableException {
     );
   }
 }
+
+/**
+ * No se pudo obtener una respuesta útil de Certificate Validation Service.
+ *
+ * Cubre lo que NO es un veredicto sobre el certificado: el servicio caído o lento, su configuración
+ * ausente en este servidor (`CERTIFICATE_VALIDATION_SERVICE_URL` / `_API_KEY`), una API Key
+ * rechazada o un error interno suyo. Es distinto de `OCSPNotAvailableException`: aquí no se pudo
+ * comprobar ni la vigencia ni la cadena de confianza, así que la firma NO puede seguir adelante.
+ *
+ * 503 porque, igual que con el SAT, reintentar más tarde tiene sentido. El detalle va al log.
+ */
+export class CertificateValidationServiceUnavailableException extends ServiceUnavailableException {
+  constructor() {
+    super(
+      'No fue posible validar tu certificado en este momento. Vuelve a intentarlo en unos minutos.',
+    );
+  }
+}

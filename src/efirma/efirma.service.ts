@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   X509Certificate,
   KeyObject,
@@ -9,50 +9,29 @@ import {
 } from 'node:crypto';
 import { CertificateInfo } from './interfaces/certificate.interface';
 import {
-  CadenaConfianzaInvalidaException,
-  CertificadoExpiradoException,
   CertificadoInvalidoException,
   LLaveNoCorrespondeCertificadoException,
   LLavePrivadaInvalidException,
-  OCSPNotAvailableException,
 } from './efirma.exceptions';
-import { join } from 'node:path';
-import { readdirSync, readFileSync } from 'node:fs';
-import { ResultadoVerificacion } from './interfaces/verification.interface';
 import { SignatureResult } from './interfaces/signature-result.interface';
-import { OscpService } from './oscp/oscp.service';
-import { OCSPEvidence } from './interfaces/OCSPEvidence.interface';
+import { CertificateValidationApiService } from './certificate-validation/certificate-validation-api.service';
 
+/**
+ * Firma con la e.firma del SAT.
+ *
+ * Desde la migración a Certificate Validation Service, aquí sólo queda lo que necesita la llave
+ * privada (descifrarla, comprobar que corresponde al certificado y firmar) y la lectura de los
+ * datos públicos del certificado. La vigencia, la cadena de confianza y la revocación OCSP se
+ * validan en ese microservicio (ver `CertificateValidationApiService`): la llave privada y su
+ * contraseña nunca salen de este servidor.
+ */
 @Injectable()
-export class EfirmaService implements OnModuleInit {
+export class EfirmaService {
   private readonly logger = new Logger(EfirmaService.name);
-  private cadenaConfianza: X509Certificate[] = [];
 
-  constructor(private readonly ocspService: OscpService) {}
-
-  onModuleInit() {
-    this.cadenaConfianza = this.cargarCertificadosDeConfianza();
-    this.logger.log(
-      `Cargados ${this.cadenaConfianza.length} certificados de confianza`,
-    );
-  }
-
-  private cargarCertificadosDeConfianza(): X509Certificate[] {
-    const dir = join(process.cwd(), 'dist', 'certificates');
-    const files = readdirSync(dir).filter((f) => /\.(cer|crt)$/i.test(f));
-
-    return files.map((fileName) => {
-      const buffer = readFileSync(join(dir, fileName));
-      try {
-        return new X509Certificate(buffer);
-      } catch (error) {
-        this.logger.error(
-          `Unable to load ${fileName}: ${(error as Error).message}`,
-        );
-        throw error;
-      }
-    });
-  }
+  constructor(
+    private readonly certificateValidationApiService: CertificateValidationApiService,
+  ) {}
 
   parsearCertificado(cerBuffer: Buffer): CertificateInfo {
     let cert: X509Certificate;
@@ -102,71 +81,6 @@ export class EfirmaService implements OnModuleInit {
     return linea?.substring(campo.length + 1);
   }
 
-  validarVigencia(
-    info: CertificateInfo,
-    fechaReferencia: Date = new Date(),
-  ): void {
-    if (
-      fechaReferencia < info.vigenciaDesde ||
-      fechaReferencia > info.vigenciaHasta
-    ) {
-      throw new CertificadoExpiradoException(info.vigenciaHasta);
-    }
-  }
-
-  /**
-   * Valida la cadena de confianza y regresa el CERTIFICADO EMISOR INMEDIATO
-   * (no la raíz) — lo necesitas para la consulta OCSP, ya que la respuesta
-   * OCSP del SAT se firma con la CA que emitió directamente el certificado.
-   */
-  validarCadenaConfianza(cerBuffer: Buffer): X509Certificate {
-    const certOriginal = new X509Certificate(cerBuffer);
-    let actual = certOriginal;
-    let emisorInmediato: X509Certificate | undefined;
-    const vistos = new Set<string>();
-
-    while (true) {
-      if (actual.issuer === actual.subject) {
-        const esRaizConfiable = this.cadenaConfianza.some(
-          (raiz) => raiz.fingerprint256 === actual.fingerprint256,
-        );
-        if (!esRaizConfiable) {
-          throw new CadenaConfianzaInvalidaException(
-            `El certificado raíz "${actual.subject}" no está en tu directorio de confianza`,
-          );
-        }
-        if (!emisorInmediato) {
-          // Cadena de un solo nivel: el propio "actual" es raíz y emisor a la vez
-          emisorInmediato = actual;
-        }
-        return emisorInmediato;
-      }
-
-      const emisor = this.cadenaConfianza.find(
-        (candidato) =>
-          actual.checkIssued(candidato) && actual.verify(candidato.publicKey),
-      );
-
-      if (!emisor) {
-        throw new CadenaConfianzaInvalidaException(
-          `No se encontró (o no valida criptográficamente) el emisor "${actual.issuer}" en tu directorio`,
-        );
-      }
-
-      if (!emisorInmediato) {
-        emisorInmediato = emisor;
-      }
-
-      if (vistos.has(emisor.fingerprint256)) {
-        throw new CadenaConfianzaInvalidaException(
-          'Ciclo detectado al validar la cadena de confianza',
-        );
-      }
-      vistos.add(emisor.fingerprint256);
-      actual = emisor;
-    }
-  }
-
   descifrarLlavePrivada(keyBuffer: Buffer, password: string): KeyObject {
     try {
       return createPrivateKey({
@@ -213,6 +127,32 @@ export class EfirmaService implements OnModuleInit {
    * indisponibilidad del respondedor OCSP NO: se firma sin esa evidencia y el sellado queda
    * pendiente hasta poder obtenerla (ver `documents.sealing_pending_at`). La diferencia es entre
    * un "no" del SAT y un silencio del SAT.
+   *
+   * La vigencia, la cadena de confianza y la revocación se validan en Certificate Validation
+   * Service con `allowUnverifiedRevocation`: si el SAT no responde, el servicio contesta 200 sin
+   * `ocspEvidence` en vez de un error, y la firma continúa. Si el que no responde es el propio
+   * microservicio, la firma NO continúa: no se sabría ni si el certificado está vigente.
+   *
+   * @param document - Contenido del documento a firmar.
+   * @param cerBuffer - Certificado (.cer) del firmante.
+   * @param keyBuffer - Llave privada (.key) cifrada, en DER PKCS#8.
+   * @param password - Contraseña de la llave privada.
+   * @returns La firma en Base64 con los datos públicos del certificado, y `ocspEvidence` sólo si el
+   * SAT respondió.
+   *
+   * @throws {CertificadoInvalidoException} Si el certificado no es legible o no trae RFC.
+   * @throws {CertificadoExpiradoException} Si el certificado está vencido o aún no vigente.
+   * @throws {CadenaConfianzaInvalidaException} Si no encadena a una AC del SAT.
+   * @throws {CertificadoRevocadoException} Si el SAT lo reporta revocado.
+   * @throws {CertificateValidationServiceUnavailableException} Si no se pudo validar el certificado.
+   * @throws {LLavePrivadaInvalidException} Si la contraseña no descifra la llave.
+   * @throws {LLaveNoCorrespondeCertificadoException} Si la llave no corresponde al certificado.
+   *
+   * @example
+   * ```ts
+   * const result = await efirmaService.firmar(pdf, cerFile.buffer, keyFile.buffer, password);
+   * const pendingSeal = !result.ocspEvidence;
+   * ```
    */
   async firmar(
     document: Buffer,
@@ -221,31 +161,13 @@ export class EfirmaService implements OnModuleInit {
     password: string,
   ): Promise<SignatureResult> {
     const infoCertificado = this.parsearCertificado(cerBuffer);
-    this.validarVigencia(infoCertificado);
-    const emisorInmediato = this.validarCadenaConfianza(cerBuffer);
-    /**
-     * Que el SAT no responda NO impide firmar, pero deja la firma sin comprobación de revocación.
-     *
-     * Un certificado REVOCADO sigue siendo un rechazo definitivo: eso es una respuesta del SAT, no
-     * su ausencia. Lo que se tolera aquí es no haber podido preguntar, que es un fallo ajeno y
-     * frecuente.
-     *
-     * La firma se produce sin `ocspEvidence`, y quien la persiste marca el documento como
-     * pendiente de sellar (ver `documents.sealing_pending_at`): Seal Service exige esa evidencia,
-     * así que el sellado se difiere hasta poder obtenerla en vez de intentarse y fallar.
-     */
-    let ocspEvidence: OCSPEvidence | undefined;
-
-    try {
-      ocspEvidence = await this.ocspService.verifyRevokedOCSP(
+    const { ocspEvidence } =
+      await this.certificateValidationApiService.validateCertificate(
         cerBuffer,
-        emisorInmediato,
+        { allowUnverifiedRevocation: true },
       );
-    } catch (err) {
-      if (!(err instanceof OCSPNotAvailableException)) {
-        throw err;
-      }
 
+    if (!ocspEvidence) {
       this.logger.warn(
         `El SAT no respondió la consulta OCSP del certificado ${infoCertificado.numeroCertificado}: ` +
           'se firma sin comprobación de revocación y el documento quedará pendiente de sellar.',
@@ -258,9 +180,7 @@ export class EfirmaService implements OnModuleInit {
     this.logger.log(
       `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`,
     );
-    this.logger.log(
-      `Desde efirma, OCSPEvidence ${JSON.stringify(ocspEvidence)}`,
-    );
+
     return {
       signatureBase64,
       algorithm: 'sha256',
@@ -273,81 +193,12 @@ export class EfirmaService implements OnModuleInit {
         certificateNumber: infoCertificado.numeroCertificado,
         certificatePem: infoCertificado.certificadoPem,
       },
-      ocspEvidence: {
-        status: ocspEvidence.status,
-        verifiedAt: ocspEvidence.verifiedAt,
-        ocspResponse: ocspEvidence.ocspResponse,
-        ocspUrl: ocspEvidence.ocspUrl,
-      },
-    };
-  }
-
-  verificar(
-    documento: Buffer,
-    hashDocumentoOriginal: string,
-    firmaBase64: string,
-    certificadoPem: string,
-    firmadoEn: Date,
-  ): ResultadoVerificacion {
-    const errores: string[] = [];
-    const cerBuffer = Buffer.from(certificadoPem);
-
-    const hashActual = this.calcularHashDocumento(documento);
-    const hashCoincide = hashActual === hashDocumentoOriginal;
-    if (!hashCoincide) {
-      errores.push(
-        'El hash del documento no coincide: el archivo fue modificado o no es el original',
-      );
-    }
-
-    let cadenaConfianzaValida = true;
-    try {
-      this.validarCadenaConfianza(cerBuffer);
-    } catch (err) {
-      cadenaConfianzaValida = false;
-      errores.push(`Cadena de confianza inválida: ${(err as Error).message}`);
-    }
-
-    const infoCertificado = this.parsearCertificado(cerBuffer);
-    let vigenteAlFirmar = true;
-    try {
-      this.validarVigencia(infoCertificado, firmadoEn);
-    } catch (err) {
-      vigenteAlFirmar = false;
-      errores.push(
-        `El certificado no estaba vigente al momento de firmar: ${(err as Error).message}`,
-      );
-    }
-
-    const cert = new X509Certificate(cerBuffer);
-    let firmaValida = false;
-    try {
-      firmaValida = createVerify('RSA-SHA256')
-        .update(documento)
-        .verify(cert.publicKey, Buffer.from(firmaBase64, 'base64'));
-    } catch (err) {
-      errores.push(`No se pudo verificar la firma: ${(err as Error).message}`);
-    }
-    if (!firmaValida) {
-      errores.push('La firma no corresponde a este documento y certificado');
-    }
-
-    const esValida =
-      hashCoincide && firmaValida && cadenaConfianzaValida && vigenteAlFirmar;
-
-    return {
-      esValida,
-      hashCoincide,
-      firmaValida,
-      cadenaConfianzaValida,
-      vigenteAlFirmar,
-      detalle: {
-        rfc: infoCertificado.rfc,
-        nombre: infoCertificado.nombre,
-        numeroCertificado: infoCertificado.numeroCertificado,
-        firmadoEn,
-      },
-      errores,
+      /**
+       * Se omite la propiedad —no se deja en `undefined`— cuando el SAT no respondió: antes de la
+       * migración se leía `ocspEvidence.status` sin comprobar, y justo en ese caso la firma
+       * reventaba con un TypeError en vez de quedar pendiente de sellar.
+       */
+      ...(ocspEvidence && { ocspEvidence }),
     };
   }
 }
