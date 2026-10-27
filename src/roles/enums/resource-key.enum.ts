@@ -6,4 +6,5 @@ export enum RESOURCE_KEY_ENUM {
   BILLING = 'BILLING',
   ROLE = 'ROLE',
   DIRECTORY = 'DIRECTORY',
+  API_KEY = 'API_KEY',
 }

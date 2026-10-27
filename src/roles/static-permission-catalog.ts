@@ -58,6 +58,7 @@ export enum STATIC_PERMISSION_KEY_ENUM {
   DIRECTORY_CREATE = 'DIRECTORY.CREATE',
   DIRECTORY_UPDATE = 'DIRECTORY.UPDATE',
   DIRECTORY_DELETE = 'DIRECTORY.DELETE',
+  API_KEY_MANAGE = 'API_KEY.MANAGE',
 }
 
 /** Cómo se materializa una clave del catálogo en una fila de `permissions`. */
@@ -79,7 +80,7 @@ export interface StaticPermissionDefinition {
    * miembros (`MEMBER.*`), sus roles (`ROLE.*`), leer los documentos de todos
    * (`DOCUMENT.READ_ORGANIZATION`) y aprobarlos (`DOCUMENT.APPROVE`, que exige un aprobador
    * miembro — ver `CreateDocumentSignatureFlowUseCase`, que rechaza `requiresApproval` en una
-   * cuenta personal).
+   * cuenta personal) y sus API keys (`API_KEY.MANAGE`).
    *
    * `false` para lo que una persona ejerce sobre lo suyo: su plan y sus pagos (`BILLING.*`) y
    * sus propios documentos (crear, ver los suyos, mandarlos a firma, firmar y cancelar) y su
@@ -104,7 +105,8 @@ export const STATIC_CATALOG_RESOURCES: Record<
   | RESOURCE_KEY_ENUM.MEMBER
   | RESOURCE_KEY_ENUM.ROLE
   | RESOURCE_KEY_ENUM.DOCUMENT
-  | RESOURCE_KEY_ENUM.DIRECTORY,
+  | RESOURCE_KEY_ENUM.DIRECTORY
+  | RESOURCE_KEY_ENUM.API_KEY,
   string
 > = {
   [RESOURCE_KEY_ENUM.ORGANIZATION]: 'CUENTAS DE TIPO ORGANIZACIÓN',
@@ -113,6 +115,7 @@ export const STATIC_CATALOG_RESOURCES: Record<
   [RESOURCE_KEY_ENUM.ROLE]: 'ROLES Y PERMISOS DE LA ORGANIZACIÓN',
   [RESOURCE_KEY_ENUM.DOCUMENT]: 'DOCUMENTOS PARA FIRMA ELECTRÓNICA',
   [RESOURCE_KEY_ENUM.DIRECTORY]: 'DIRECTORIO DE CONTACTOS DE LA CUENTA',
+  [RESOURCE_KEY_ENUM.API_KEY]: 'API KEYS DE INTEGRACIÓN DE LA ORGANIZACIÓN',
 };
 
 /** Acciones que usa el catálogo, con la descripción que se guarda en `actions`. */
@@ -144,7 +147,7 @@ export const STATIC_CATALOG_ACTIONS: Record<
 };
 
 /**
- * Los veintiún permisos del catálogo, en el orden en que la UI los lista.
+ * Los veintidós permisos del catálogo, en el orden en que la UI los lista.
  *
  * Los cuatro de `DIRECTORY` son de la cuenta, no sólo de la organización: una cuenta personal
  * administra su propio directorio, y en una organización el directorio es uno solo, compartido por
@@ -157,6 +160,10 @@ export const STATIC_CATALOG_ACTIONS: Record<
  * (`OWN` vs `ORGANIZATION`), que es justamente para lo que existe esa columna. Ninguno de los dos
  * es la fila `DOCUMENT+READ+ANY` que sembró `seed:roles`: aquella no distingue alcance y este
  * catálogo la sustituye (ver `--prune-superseded` en el seed).
+ *
+ * `API_KEY.MANAGE` cubre todo el ciclo de la API key de la organización (emitirla, consultarla,
+ * rotarla y revocarla) en un solo permiso: ver la llave vigente ya es parte de administrarla, y
+ * separar lectura de escritura no protegería nada, porque el secreto nunca se vuelve a mostrar.
  *
  * `ORGANIZATION.READ` y `ORGANIZATION.UPDATE` sí son exactamente las filas de aquella rejilla
  * (`ORGANIZATION`+`READ`/`UPDATE`+`ANY`), las mismas que hoy consultan `AccountService` y
@@ -313,6 +320,13 @@ export const STATIC_PERMISSION_CATALOG: Record<
     description: 'ARCHIVAR CONTACTOS DEL DIRECTORIO',
     organizationOnly: false,
   },
+  [STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE]: {
+    resource: RESOURCE_KEY_ENUM.API_KEY,
+    action: ACTION_KEY_ENUM.MANAGE,
+    scope: PERMISSION_SCOPE_ENUM.ANY,
+    description: 'CREAR, CONSULTAR, ROTAR Y REVOCAR LA API KEY DE LA ORGANIZACIÓN',
+    organizationOnly: true,
+  },
 };
 
 /**
@@ -382,6 +396,7 @@ export const STATIC_ROLE_PERMISSION_MATRIX: Record<
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
+    STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE,
   ],
   [SYSTEM_ROLE_NAME_ENUM.MEMBER]: [
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE,
