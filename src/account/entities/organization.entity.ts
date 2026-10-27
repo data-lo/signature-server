@@ -1,4 +1,5 @@
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
 
 /**
  * Entidad propia (ver plan de migración ER-V2, Fase 5) — reemplaza a
@@ -72,4 +73,8 @@ export class OrganizationEntity {
    */
   @Column({ default: true, name: 'index_documents' })
   indexDocuments: boolean;
+
+  /** Historial de API keys de la organización: a lo sumo una `ACTIVE`, el resto `REVOKED`. */
+  @OneToMany(() => ApiKeyEntity, (apiKey) => apiKey.organization)
+  apiKeys: ApiKeyEntity[];
 }

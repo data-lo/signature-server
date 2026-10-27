@@ -5,6 +5,7 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
@@ -12,6 +13,7 @@ import { ACCOUNT_STATUS_ENUM } from '../enums/account-status.enum';
 import { OrganizationEntity } from './organization.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { RoleEntity } from 'src/roles/entities/role.entity';
+import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
 
 /**
  * Fusión de las antiguas AccountEntity (el tenant: PERSONAL u ORGANIZATION) +
@@ -108,4 +110,12 @@ export class AccountEntity {
 
   @Column({ nullable: true })
   position: string | null;
+
+  /** API keys que emitió esta membresía (auditoría: `api_keys.created_by_account_id`). */
+  @OneToMany(() => ApiKeyEntity, (apiKey) => apiKey.createdByAccount)
+  createdApiKeys: ApiKeyEntity[];
+
+  /** API keys que revocó esta membresía (auditoría: `api_keys.revoked_by_account_id`). */
+  @OneToMany(() => ApiKeyEntity, (apiKey) => apiKey.revokedByAccount)
+  revokedApiKeys: ApiKeyEntity[];
 }
