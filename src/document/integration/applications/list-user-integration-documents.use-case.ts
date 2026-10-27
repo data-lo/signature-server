@@ -41,6 +41,46 @@ export class ListUserIntegrationDocumentsUseCase {
   ) {}
 
   /**
+   * Documentos de un miembro identificado por su correo (`GET /integration/documents?creatorEmail=`).
+   * Resuelve el usuario sólo entre los miembros activos de la organización de la llave y aplica las
+   * mismas reglas de alcance que `execute`.
+   *
+   * @param apiClient - Cliente autenticado por la API key.
+   * @param creatorEmail - Correo del creador (se compara normalizado).
+   * @param query - Paginación, orden y filtros.
+   * @returns La página de documentos de ese creador.
+   *
+   * @throws {IntegrationUserNotFoundException} (404) Si el correo no es de un miembro activo de la
+   *   organización (mismo error que un usuario inexistente).
+   * @throws {IntegrationScopeDeniedException} (403) Si la llave sólo tiene alcance `OWN` y el correo
+   *   no es el de su propio usuario.
+   *
+   * @example
+   * ```ts
+   * await listUserIntegrationDocuments.executeByEmail(apiClient, 'ana@acme.mx', { page: 1, limit: 25 });
+   * ```
+   */
+  async executeByEmail(
+    apiClient: IntegrationApiClient,
+    creatorEmail: string,
+    query: ListIntegrationDocumentsQueryDto,
+  ): Promise<BaseResponse<IntegrationDocumentsPage>> {
+    const membership = await this.accountRepository.findOne({
+      where: {
+        organizationId: apiClient.organizationId,
+        isActive: true,
+        user: { email: creatorEmail.trim().toLowerCase() },
+      },
+      relations: { user: true },
+      select: { id: true, userId: true },
+    });
+    if (!membership) {
+      throw new IntegrationUserNotFoundException();
+    }
+    return this.execute(apiClient, membership.userId, query);
+  }
+
+  /**
    * Lista una página de documentos creados por el usuario en la organización de la llave.
    *
    * @param apiClient - Cliente autenticado por la API key.

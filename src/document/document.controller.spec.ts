@@ -317,6 +317,7 @@ describe('DocumentController', () => {
       },
       authorization(ACTION_KEY_ENUM.SIGN),
       '10.0.0.7',
+      'Mozilla/5.0',
     );
 
     expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
@@ -326,6 +327,7 @@ describe('DocumentController', () => {
       geolocation,
       authorization(ACTION_KEY_ENUM.SIGN),
       '10.0.0.7',
+      'Mozilla/5.0',
     );
   });
 
@@ -337,6 +339,7 @@ describe('DocumentController', () => {
       {},
       authorization(ACTION_KEY_ENUM.SIGN),
       undefined as unknown as string,
+      undefined,
     );
 
     expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
@@ -345,6 +348,7 @@ describe('DocumentController', () => {
       { password: undefined, keyFile: undefined, cerFile: undefined },
       undefined,
       authorization(ACTION_KEY_ENUM.SIGN),
+      null,
       null,
     );
   });

@@ -27,6 +27,7 @@ import {} from './summary-document/signature-legal-text';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
 import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './services/signature-qr.service';
+import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
 
 function createMockRepository() {
   return {
@@ -259,6 +260,13 @@ describe('DocumentService', () => {
           useValue: advancedSummaryDocumentService,
         },
         { provide: SignatureQrService, useValue: signatureQrService },
+        // Enlace de firma real: `/access-document` salvo en documentos de integración.
+        {
+          provide: SigningLinkService,
+          useValue: new SigningLinkService({
+            issue: jest.fn(async () => ({ url: 'http://app/sign/token' })),
+          } as never),
+        },
       ],
     }).compile();
 

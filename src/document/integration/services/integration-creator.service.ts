@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, IsNull } from 'typeorm';
 
 import { AccountMemberService } from 'src/account/account-member.service';
 import { AccountService } from 'src/account/account.service';
@@ -28,6 +28,14 @@ export interface ResolveIntegrationCreatorParams {
   lastName: string;
   /** Usuario que emitió la llave: queda como actor del aviso de alta en la organización. */
   actorUserId: string;
+}
+
+/** Identidad de una persona a la que se puede aprovisionar un usuario. */
+export interface ProvisionalUserIdentity {
+  /** Ya normalizado (minúsculas, sin espacios). */
+  email: string;
+  firstName: string;
+  lastName: string;
 }
 
 /** El creador ya listo para crear el documento a su nombre. */
@@ -177,9 +185,58 @@ export class IntegrationCreatorService {
    * const user = await this.provisionUser(manager, params);
    * ```
    */
+  /**
+   * Cuenta a la que se vincula un firmante de firma simple de un documento creado por integración,
+   * para que firme desde `/sign/:token` sin iniciar sesión. Reutiliza el mismo aprovisionamiento
+   * que el creador (`provisionUser`): usuario `PROVISIONED` y su cuenta personal.
+   *
+   * - **El correo no tiene usuario:** se crea `PROVISIONED`; se devuelve su cuenta personal.
+   * - **Ya es `PROVISIONED` (activo):** se reutiliza; su cuenta personal.
+   * - **Es un usuario `ACTIVE`, inactivo o borrado:** `null`. Un usuario con cuenta firma desde ella,
+   *   como siempre, y la invitación no lo vincula por su cuenta.
+   *
+   * No crea membresía en la organización: el firmante no es miembro, sólo firma.
+   *
+   * @param manager - Transacción del alta del documento.
+   * @param identity - Correo (normalizado), nombre y apellido del firmante.
+   * @returns El `accounts.id` personal del usuario provisional, o `null`.
+   *
+   * @throws {QueryFailedError} (23505) Si otra transacción aprovisionó el mismo correo a la vez; el
+   *   alta del documento falla y el cliente la reintenta con su `Idempotency-Key`.
+   *
+   * @example
+   * ```ts
+   * const accountId = await creators.resolveProvisionalSigner(manager, { email: 'beto@acme.mx', firstName: 'Beto', lastName: 'Ruiz' });
+   * ```
+   */
+  async resolveProvisionalSigner(
+    manager: EntityManager,
+    identity: ProvisionalUserIdentity,
+  ): Promise<string | null> {
+    let user = await manager
+      .getRepository(UserEntity)
+      .findOne({ where: { email: identity.email } });
+
+    if (!user) {
+      user = await this.provisionUser(manager, identity);
+    } else if (
+      user.lifecycleStatus !== USER_LIFECYCLE_STATUS_ENUM.PROVISIONED ||
+      !user.isActive ||
+      user.isDeleted
+    ) {
+      return null;
+    }
+
+    const personal = await manager.getRepository(AccountEntity).findOne({
+      where: { userId: user.id, organizationId: IsNull() },
+      select: { id: true },
+    });
+    return personal?.id ?? null;
+  }
+
   private async provisionUser(
     manager: EntityManager,
-    params: ResolveIntegrationCreatorParams,
+    params: ProvisionalUserIdentity,
   ): Promise<UserEntity> {
     const user = await manager.getRepository(UserEntity).save(
       manager.getRepository(UserEntity).create({

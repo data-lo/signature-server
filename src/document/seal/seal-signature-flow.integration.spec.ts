@@ -38,6 +38,7 @@ import { SealApiService } from './services/seal-api.service';
 import { SealEntity } from './entities/seal.entity';
 import { SealDocumentDto } from './dto/seal-document.dto';
 import { SealDocumentResponse } from './interfaces/seal-document-response.interface';
+import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
 
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
@@ -234,6 +235,13 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        // Enlace de firma real: `/access-document` salvo en documentos de integración.
+        {
+          provide: SigningLinkService,
+          useValue: new SigningLinkService({
+            issue: jest.fn(async () => ({ url: 'http://app/sign/token' })),
+          } as never),
+        },
         // Cadena real bajo prueba.
         SignDocumentUseCase,
         DocumentAuthorizationPolicy,

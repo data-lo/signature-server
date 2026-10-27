@@ -1,5 +1,5 @@
 /**
- * Estado de una sesión de firma abierta con un token de invitación (`GET /public/signing-sessions/:token`).
+ * Estado de una invitación individual de firma (`GET /public/signing-invitations/:token`).
  *
  * Sólo `ACTIVE` viene con datos del documento y del firmante. Los demás llegan solos, para que un
  * enlace vencido, revocado o de un documento cerrado no publique nada del documento. Un token que
@@ -13,7 +13,7 @@
  * - `UNAVAILABLE`: el documento no admite la firma de este firmante (rechazado, vencido, todavía en
  *   aprobación o el firmante ya lo rechazó).
  */
-export enum SIGNING_SESSION_STATUS_ENUM {
+export enum SIGNING_INVITATION_STATUS_ENUM {
   ACTIVE = 'ACTIVE',
   EXPIRED = 'EXPIRED',
   REVOKED = 'REVOKED',

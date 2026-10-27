@@ -7,4 +7,9 @@
  */
 export enum GUEST_SIGNING_ACCESS_PURPOSE_ENUM {
   GUEST_ADVANCED_SIGNATURE_ACCESS = 'GUEST_ADVANCED_SIGNATURE_ACCESS',
+  /**
+   * Sesión pública de firma de una invitación individual (`/sign/:token`): la abre el código del
+   * correo y la usa cualquiera de los tres tipos de firma. Viaja en cookie `HttpOnly`.
+   */
+  PUBLIC_SIGNING_SESSION = 'PUBLIC_SIGNING_SESSION',
 }

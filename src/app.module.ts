@@ -34,6 +34,7 @@ import { IdentityVerificationModule } from './identity-verification/identity-ver
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { BiometricSignatureModule } from './biometric-signature/biometric-signature.module';
 import { GuestAdvancedSignatureModule } from './guest-advanced-signature/guest-advanced-signature.module';
+import { PublicSigningModule } from './public-signing/public-signing.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
@@ -112,6 +113,8 @@ import { ApiKeyModule } from './api-key/api-key.module';
     WebhooksModule,
     BiometricSignatureModule,
     GuestAdvancedSignatureModule,
+    /** Firma pública por invitación (`/sign/:token`): token, código, sesión en cookie y firma. */
+    PublicSigningModule,
     AuthorizationModule,
     DirectoryModule,
     ApiKeyModule,

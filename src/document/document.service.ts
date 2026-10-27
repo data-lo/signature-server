@@ -56,9 +56,9 @@ import { isAdvancedSignatureDocument } from './utils/advanced-signature-document
 import { toIsoStringOrNull } from './utils/iso-date.util';
 import {
   buildAdvancedSignatureUrl,
-  buildDocumentAccessUrl,
   buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
+import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
 import {
   SignatureQrService,
   type AdvancedSignatureQrData,
@@ -180,6 +180,7 @@ export class DocumentService {
     private readonly summaryDocumentService: SummaryDocumentService,
     private readonly advancedSummaryDocumentService: AdvancedSummaryDocumentService,
     private readonly signatureQrService: SignatureQrService,
+    private readonly signingLinks: SigningLinkService,
   ) {}
 
   async getCollaboratorNames(documentId: string): Promise<{
@@ -642,11 +643,11 @@ export class DocumentService {
     for (const signer of signers) {
       if (!signer.email) continue;
 
-      const accessUrl = buildDocumentAccessUrl(
-        documentId,
-        signer.id,
-        signer.email,
-      );
+      const accessUrl = await this.signingLinks.signerLink({
+        document,
+        collaboratorId: signer.id,
+        email: signer.email,
+      });
       try {
         await this.emailService.sendDocumentInvitationNotification(
           signer.email,
@@ -730,7 +731,11 @@ export class DocumentService {
       collaboratorDisplayName(nextSigner),
       creator.email,
       document.fileName,
-      buildDocumentAccessUrl(documentId, nextSigner.id, signerEmail),
+      await this.signingLinks.signerLink({
+        document,
+        collaboratorId: nextSigner.id,
+        email: signerEmail,
+      }),
     );
   }
 

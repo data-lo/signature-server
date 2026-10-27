@@ -3,8 +3,9 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, IsNull, Repository } from 'typeorm';
 
-import { SigningInvitationEntity } from '../entities/signing-invitation.entity';
-import { buildSigningInvitationUrl } from '../utils/document-access-url.util';
+import { buildSigningInvitationUrl } from 'src/document/utils/document-access-url.util';
+
+import { SigningInvitationEntity } from './entities/signing-invitation.entity';
 
 /** Vigencia por omisión de una invitación: 30 días. */
 export const DEFAULT_SIGNING_INVITATION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -17,6 +18,12 @@ const TOKEN_BYTES = 32;
  * no la tenga no se busca en la base.
  */
 const TOKEN_FORMAT = /^[A-Za-z0-9_-]{43}$/;
+
+/** Documento y firmante (con cuenta, usuario y posiciones) de una invitación. */
+const INVITATION_RELATIONS = {
+  document: true,
+  collaborator: { account: { user: true }, simpleSignature: true },
+} as const;
 
 /** Lo que se necesita para emitir una invitación. */
 export interface IssueSigningInvitationInput {
@@ -150,10 +157,28 @@ export class SigningInvitationService {
 
     return this.invitationRepository.findOne({
       where: { tokenHash: hashSigningInvitationToken(token) },
-      relations: {
-        document: true,
-        collaborator: { account: { user: true }, simpleSignature: true },
-      },
+      relations: INVITATION_RELATIONS,
+    });
+  }
+
+  /**
+   * Busca una invitación por su id, con las mismas relaciones que `findByToken`. La usa la sesión
+   * pública, que ya no recibe el token: lo único que conserva es el id de la invitación que la abrió.
+   *
+   * @param invitationId - Id de la invitación.
+   * @returns La invitación, o `null` si no existe.
+   *
+   * @throws Nada propio; errores de la base.
+   *
+   * @example
+   * ```ts
+   * const invitation = await invitations.findById(claims.invitationId);
+   * ```
+   */
+  findById(invitationId: string): Promise<SigningInvitationEntity | null> {
+    return this.invitationRepository.findOne({
+      where: { id: invitationId },
+      relations: INVITATION_RELATIONS,
     });
   }
 }

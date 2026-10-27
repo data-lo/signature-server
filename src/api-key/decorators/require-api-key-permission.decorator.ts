@@ -19,7 +19,7 @@ export interface RequiredApiKeyPermission {
 
 /**
  * Declara el permiso que un endpoint de integración exige a la API key, con recurso, acción y
- * alcances aceptados. Lo hace cumplir `OrganizationApiKeyGuard`.
+ * alcances aceptados. Lo hace cumplir `ApiKeyPermissionGuard`, que rechaza una ruta sin él.
  *
  * A diferencia de `@RequirePermission` (miembros con JWT), aquí el alcance SÍ se declara: una
  * llave no tiene rol que lo decida, y el endpoint es quien sabe si le alcanza con `OWN`.

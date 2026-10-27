@@ -13,6 +13,7 @@ import { ListOrganizationApiKeysUseCase } from './applications/list-organization
 import { RevokeOrganizationApiKeyUseCase } from './applications/revoke-organization-api-key.use-case';
 import { RotateOrganizationApiKeyUseCase } from './applications/rotate-organization-api-key.use-case';
 import { ApiKeyEntity } from './entities/api-key.entity';
+import { ApiKeyPermissionGuard } from './guards/api-key-permission.guard';
 import { OrganizationApiKeyGuard } from './guards/organization-api-key.guard';
 import { OrganizationApiKeysController } from './organization-api-keys.controller';
 
@@ -52,7 +53,13 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
     RotateOrganizationApiKeyUseCase,
     RevokeOrganizationApiKeyUseCase,
     OrganizationApiKeyGuard,
+    ApiKeyPermissionGuard,
   ],
-  exports: [TypeOrmModule, ApiKeySecretService, OrganizationApiKeyGuard],
+  exports: [
+    TypeOrmModule,
+    ApiKeySecretService,
+    OrganizationApiKeyGuard,
+    ApiKeyPermissionGuard,
+  ],
 })
 export class ApiKeyModule {}

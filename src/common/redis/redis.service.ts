@@ -29,6 +29,56 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Guarda un valor sólo si la clave no existe (`SET NX EX`), de forma atómica.
+   *
+   * @param key - Clave.
+   * @param value - Valor.
+   * @param expireSeconds - Vigencia de la clave.
+   * @returns `true` si la guardó; `false` si ya existía.
+   *
+   * @throws Errores de conexión de Redis.
+   *
+   * @example
+   * ```ts
+   * await redis.setIfAbsent('lock:x', 'PROCESSING', 600); // true la primera vez
+   * ```
+   */
+  async setIfAbsent(
+    key: string,
+    value: string,
+    expireSeconds: number,
+  ): Promise<boolean> {
+    const result = await this.client.set(key, value, 'EX', expireSeconds, 'NX');
+    return result === 'OK';
+  }
+
+  /**
+   * Incrementa un contador y, si es nuevo, le pone vigencia; las dos cosas en una transacción.
+   *
+   * @param key - Clave del contador.
+   * @param expireSeconds - Vigencia de la ventana; sólo se aplica al crear el contador.
+   * @returns El valor del contador después de incrementarlo.
+   *
+   * @throws Errores de conexión de Redis.
+   *
+   * @example
+   * ```ts
+   * await redis.incrementWithExpiry('otp-sends:inv-1', 3600); // 1, 2, 3…
+   * ```
+   */
+  async incrementWithExpiry(
+    key: string,
+    expireSeconds: number,
+  ): Promise<number> {
+    const results = await this.client
+      .multi()
+      .incr(key)
+      .expire(key, expireSeconds, 'NX')
+      .exec();
+    return Number(results?.[0]?.[1] ?? 0);
+  }
+
+  /**
    * Obtiene el valor almacenado bajo la clave indicada.
    * Retorna null si la clave no existe o ya expiró.
    */

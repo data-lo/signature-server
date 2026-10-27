@@ -21,6 +21,7 @@ import { DocumentAuthorizationPolicy } from './../src/document/policies/document
 import { SendCompletedSimpleSignatureToSealUseCase } from './../src/document/seal/use-cases/send-completed-simple-signature-to-seal.use-case';
 import { AdvancedSummaryDocumentService } from './../src/document/summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './../src/document/services/signature-qr.service';
+import { SigningLinkService } from './../src/signing-invitation/signing-link.service';
 import { GuestSigningAccessService } from './../src/document/services/guest-signing-access.service';
 import { DOCUMENT_CONTROLLER_USE_CASE_STUBS } from './document-controller-use-case-stubs';
 import { DocumentEntity } from './../src/document/entities/document.entity';
@@ -252,6 +253,11 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
               .fn()
               .mockResolvedValue(Buffer.from('qr-png')),
           },
+        },
+        // El aviso al siguiente firmante arma su enlace aquí; esta prueba no llega a enviarlo.
+        {
+          provide: SigningLinkService,
+          useValue: { signerLink: jest.fn().mockResolvedValue('http://app/x') },
         },
         { provide: APP_GUARD, useClass: FakeAuthGuard },
         // Mismo interceptor global que monta AppModule: deja `clientIp` para `@ClientIp()`.

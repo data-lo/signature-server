@@ -236,4 +236,83 @@ describe('IntegrationCreatorService', () => {
     expect(dataSource.transaction).toHaveBeenCalledTimes(2);
     expect(result.account).toBe(membership);
   });
+
+  describe('resolveProvisionalSigner (firmantes de firma simple)', () => {
+    const identity = {
+      email: 'beto@acme.mx',
+      firstName: 'beto',
+      lastName: 'ruiz',
+    };
+
+    it('un correo sin usuario: crea el usuario PROVISIONED con el mismo aprovisionamiento y devuelve su cuenta personal', async () => {
+      accounts.findOne.mockResolvedValue({ id: 'account-beto-personal' });
+
+      await expect(
+        service.resolveProvisionalSigner(manager as never, identity),
+      ).resolves.toBe('account-beto-personal');
+
+      expect(users.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'beto@acme.mx',
+          lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
+          password: null,
+          nationalId: null,
+        }),
+      );
+      expect(accountService.createDefaultPersonalAccount).toHaveBeenCalled();
+      // No es miembro de la organización: sólo firma.
+      expect(accountMemberService.saveMembership).not.toHaveBeenCalled();
+    });
+
+    it('un usuario PROVISIONED existente se reutiliza', async () => {
+      users.findOne.mockResolvedValue({
+        id: 'user-beto',
+        lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
+        isActive: true,
+        isDeleted: false,
+      });
+      accounts.findOne.mockResolvedValue({ id: 'account-beto-personal' });
+
+      await expect(
+        service.resolveProvisionalSigner(manager as never, identity),
+      ).resolves.toBe('account-beto-personal');
+      expect(users.save).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'ACTIVE',
+        {
+          lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.ACTIVE,
+          isActive: true,
+          isDeleted: false,
+        },
+      ],
+      [
+        'inactivo',
+        {
+          lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
+          isActive: false,
+          isDeleted: false,
+        },
+      ],
+      [
+        'borrado',
+        {
+          lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
+          isActive: true,
+          isDeleted: true,
+        },
+      ],
+    ])(
+      'un usuario %s no se vincula (firma desde su cuenta, o no firma)',
+      async (_case, user) => {
+        users.findOne.mockResolvedValue({ id: 'user-beto', ...user });
+        await expect(
+          service.resolveProvisionalSigner(manager as never, identity),
+        ).resolves.toBeNull();
+        expect(users.save).not.toHaveBeenCalled();
+      },
+    );
+  });
 });

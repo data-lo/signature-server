@@ -9,7 +9,11 @@ import { IsNull, Repository } from 'typeorm';
 
 import { AuditService } from 'src/audit/audit.service';
 import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
-import { AuditAction } from 'src/audit/schema/audit-document';
+import {
+  AUDIT_AUTH_MECHANISM_ENUM,
+  AuditAction,
+  AuditActorContext,
+} from 'src/audit/schema/audit-document';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
@@ -40,6 +44,11 @@ import {
   GuestAdvancedInvitationNotFoundException,
   InvalidGuestSigningAccessException,
 } from '../exceptions/guest-signing-access.exceptions';
+import {
+  SigningActor,
+  SigningRequestMetadata,
+  signingActorReference,
+} from '../interfaces/signing-actor.interface';
 
 /**
  * Lo que el firmante necesita saber en cuanto su firma queda registrada.
@@ -98,6 +107,60 @@ interface SignatureCompletion {
    * lo consume y exige que el colaborador siga sin cuenta: o quedan las tres cosas o ninguna.
    */
   guestAccessId?: string;
+  /**
+   * Cuenta que el colaborador debe seguir teniendo al consumir el acceso: `null` para el invitado
+   * sin cuenta, la del usuario provisional en la firma pública. Sólo con `guestAccessId`.
+   */
+  guestAccountId?: string | null;
+  /** Actor para la auditoría de la firma. */
+  auditActor?: AuditActorContext;
+}
+
+/** Lo que se firma, sin el actor: documento, e.firma, ubicación y evidencia de la petición. */
+export interface SignatureCommand {
+  documentId: string;
+  /** Certificado, llave y contraseña; sólo FIEL. */
+  advancedSignatureInput?: AdvancedSignatureInput;
+  geolocation?: GeolocationDto;
+  /** Hash del PDF que revisó el firmante; obligatorio para `PUBLIC_INVITATION`. */
+  documentHash?: string;
+  metadata: SigningRequestMetadata;
+}
+
+/**
+ * Contexto de auditoría de un actor de firma: tipo, mecanismo y, si aplica, invitación y
+ * colaborador. Nunca el token ni el código.
+ *
+ * @param actor - Quién firma.
+ * @param userAgent - User-agent de la petición.
+ * @returns El contexto para `AuditPayload.actor`.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * toAuditActor(actor, 'Mozilla/5.0'); // { type: 'PUBLIC_INVITATION', authMechanism: 'PUBLIC_SIGNING_SESSION', … }
+ * ```
+ */
+export function toAuditActor(
+  actor: SigningActor,
+  userAgent: string | null,
+): AuditActorContext {
+  const base = userAgent ? { userAgent } : {};
+  if (actor.type === 'AUTHENTICATED_ACCOUNT') {
+    return {
+      type: actor.type,
+      authMechanism: AUDIT_AUTH_MECHANISM_ENUM.JWT,
+      ...base,
+    };
+  }
+  return {
+    type: actor.type,
+    authMechanism: AUDIT_AUTH_MECHANISM_ENUM.PUBLIC_SIGNING_SESSION,
+    invitationId: actor.invitationId,
+    collaboratorId: actor.collaboratorId,
+    ...base,
+  };
 }
 
 /**
@@ -158,7 +221,8 @@ export class SignDocumentUseCase {
   ) {}
 
   /**
-   * Registra la firma simple o FIEL del usuario autenticado (`PATCH /document/:id/sign`).
+   * Registra la firma simple o FIEL del usuario autenticado (`PATCH /document/:id/sign`). Arma el
+   * actor `AUTHENTICATED_ACCOUNT` y delega en `sign`: la firma autenticada es la misma de siempre.
    *
    * @param documentId Documento que se firma.
    * @param currentUserId Usuario autenticado que firma.
@@ -174,6 +238,7 @@ export class SignDocumentUseCase {
    *   que este método ya hacía, que son las que de verdad protegen la firma.
    * @param ipAddress IP de la petición de firma, evidencia del acto. Opcional por los mismos
    *   llamadores sin petición HTTP; sin ella la auditoría cae en la IP del documento, como antes.
+   * @param userAgent User-agent de la petición, evidencia para la auditoría. Opcional.
    * @returns El documento firmado y si esta firma lo dejó completo.
    * @throws {BadRequestException} Cuando falta la geolocalización, el documento no está en
    *   `PENDING`, el firmante ya respondió, el documento exige un código de verificación que no se
@@ -194,85 +259,227 @@ export class SignDocumentUseCase {
     geolocation?: GeolocationDto,
     authorization?: AuthorizationContext,
     ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ): Promise<BaseResponse<SignedDocumentData>> {
+    return this.sign(
+      {
+        type: 'AUTHENTICATED_ACCOUNT',
+        userId: currentUserId,
+        accountId: authorization?.accountId ?? null,
+        organizationId: authorization?.organizationId ?? null,
+        authorization,
+      },
+      {
+        documentId,
+        advancedSignatureInput,
+        geolocation,
+        metadata: { ipAddress, userAgent },
+      },
+    );
+  }
+
+  /**
+   * Registra la firma simple o FIEL de un actor ya autenticado por su audiencia: un usuario con
+   * sesión (`PATCH /document/:id/sign`) o el firmante de una invitación con sesión pública
+   * (`/public/signing-sessions/current/{simple|advanced}/sign`). Es la misma firma para los dos:
+   * cambia sólo cómo se resuelve el colaborador, qué código acredita al firmante y qué evidencia
+   * queda (ver `SigningActor`).
+   *
+   * - `AUTHENTICATED_ACCOUNT`: el colaborador se resuelve —o se vincula— por el usuario; con
+   *   contexto de autorización se comprueba además `DOCUMENT.SIGN` con alcance `SELF`. El código
+   *   exigido es el de firma (`sign_document`).
+   * - `PUBLIC_INVITATION`: el colaborador es el de la invitación, y su cuenta tiene que seguir
+   *   siendo la que había al abrir la sesión. El código exigido es el que abrió la sesión
+   *   (`public_signing_access`), el PDF tiene que ser el que revisó (`documentHash`) y la firma
+   *   consume el acceso de la sesión.
+   *
+   * @param actor - Quién firma.
+   * @param command - Documento, e.firma (sólo FIEL), ubicación, hash revisado y evidencia de la
+   *   petición.
+   * @param expectedType - Tipo de firma de la ruta, si la ruta es de un tipo (`simple`/`advanced`).
+   *   Si el colaborador exige otro, se rechaza: el tipo lo decide el documento, no el cliente.
+   * @returns El documento firmado y si esta firma lo dejó completo.
+   *
+   * @throws {BadRequestException} Falta la ubicación, el documento no está pendiente, el tipo no
+   *   corresponde, el firmante ya respondió, es BIOMETRIC, el PDF cambió, falta el código exigido u
+   *   otra petición reclamó el turno primero.
+   * @throws {ForbiddenException} No es firmante del documento, no es su turno, o su rol no tiene
+   *   `DOCUMENT.SIGN_SELF`.
+   * @throws {InvalidGuestSigningAccessException} La sesión pública ya no sirve o la invitación quedó
+   *   vinculada a otra cuenta.
+   *
+   * @example
+   * ```ts
+   * await signDocument.sign(actor, { documentId: 'd-1', geolocation, metadata }, SIGNATURE_TYPE_ENUM.SIMPLE);
+   * ```
+   */
+  async sign(
+    actor: SigningActor,
+    command: SignatureCommand,
+    expectedType?: SIGNATURE_TYPE_ENUM,
   ): Promise<BaseResponse<SignedDocumentData>> {
     // Se revalida aunque el DTO ya la exija: este método también se invoca desde otros puntos.
+    const { geolocation } = command;
     if (!geolocation) {
       throw new BadRequestException(
         'La geolocalización es obligatoria para poder firmar el documento',
       );
     }
 
-    const document = await this.documentService.findOne(documentId);
+    const document = await this.documentService.findOne(command.documentId);
     this.assertPendingSignature(document);
 
-    const { signerCollaborators, myParticipant } =
-      await this.documentService.findOrLinkMySignerCollaborator(
-        documentId,
-        currentUserId,
-        {
-          account: { user: true },
-          simpleSignature: true,
-        },
+    const { signerCollaborators, participant } = await this.resolveParticipant(
+      actor,
+      document,
+    );
+
+    if (expectedType && participant.signatureType !== expectedType) {
+      throw new BadRequestException(
+        'Este documento no se firma con este tipo de firma.',
       );
-
-    if (!myParticipant) {
-      throw new ForbiddenException('No eres firmante de este documento');
     }
 
-    /**
-     * Va aquí y no antes porque `SIGN + SELF` se valida CONTRA el participante: el guard ya
-     * comprobó que el rol puede firmar, y lo que falta es que quien firma sea el firmante, algo
-     * que sólo se sabe una vez resuelto (o enlazado) el colaborador.
-     */
-    if (authorization) {
-      this.authorizationPolicy.assertCanSign({
-        document,
-        authorization,
-        participant: myParticipant,
-      });
-    }
-
-    this.assertCanRespond(document, myParticipant, signerCollaborators);
+    this.assertCanRespond(document, participant, signerCollaborators);
 
     /**
      * Un firmante BIOMETRIC nunca firma por esta ruta: sin esta salida caería en la rama de firma
      * simple de abajo y firmaría sin pasar por Didit.
      */
-    if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+    if (participant.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
       throw new BadRequestException(
         'Este documento se firma con biometría. Inicia la firma con "Firmar con biometría".',
       );
     }
 
+    const isPublic = actor.type === 'PUBLIC_INVITATION';
+    if (
+      isPublic &&
+      (!document.originalHash || command.documentHash !== document.originalHash)
+    ) {
+      throw new BadRequestException(
+        'El documento cambió desde que lo revisaste. Vuelve a abrirlo antes de firmar.',
+      );
+    }
+
     let advancedSignatureResult: SignatureResult | null = null;
-    if (myParticipant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
+    if (participant.signatureType === SIGNATURE_TYPE_ENUM.FIEL) {
       advancedSignatureResult =
         await this.documentService.validateAndSignWithEfirma(
           document,
-          advancedSignatureInput,
+          command.advancedSignatureInput,
         );
     } else {
       this.documentService.assertCanSignWithSimpleSignature(
-        myParticipant.account!.user,
+        participant.account!.user,
       );
     }
 
     await this.assertVerificationCode(
       document,
-      myParticipant,
-      VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
+      participant,
+      isPublic
+        ? VERIFICATION_EVENT_ENUM.PUBLIC_SIGNING_ACCESS
+        : VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
     );
 
     return this.completeSignature({
       document,
-      participant: myParticipant,
+      participant,
       signerCollaborators,
-      actor: currentUserId,
+      actor: signingActorReference(actor),
       geolocation,
       advancedSignatureResult,
-      ipAddress,
-      signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
+      ipAddress: command.metadata.ipAddress,
+      signingAuthorization: isPublic
+        ? SIGNING_AUTHORIZATION_ENUM.GUEST_EMAIL_OTP
+        : SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
+      ...(isPublic
+        ? {
+            guestAccessId: actor.sessionAccessId,
+            guestAccountId: actor.accountId ?? null,
+          }
+        : {}),
+      auditActor: toAuditActor(actor, command.metadata.userAgent),
     });
+  }
+
+  /**
+   * Resuelve el colaborador que firma según el actor.
+   *
+   * @param actor - Quién firma.
+   * @param document - Documento, ya en `PENDING_SIGNATURE`.
+   * @returns Los firmantes del documento (en orden) y el del actor, con cuenta, usuario y
+   *   posiciones cargados.
+   *
+   * @throws {ForbiddenException} Si el actor no es firmante del documento o su rol no puede firmar.
+   * @throws {InvalidGuestSigningAccessException} Si la cuenta del colaborador cambió desde que se
+   *   abrió la sesión pública.
+   *
+   * @example
+   * ```ts
+   * const { participant } = await this.resolveParticipant(actor, document);
+   * ```
+   */
+  private async resolveParticipant(
+    actor: SigningActor,
+    document: DocumentEntity,
+  ): Promise<{
+    signerCollaborators: CollaboratorEntity[];
+    participant: CollaboratorEntity;
+  }> {
+    if (actor.type === 'AUTHENTICATED_ACCOUNT') {
+      const { signerCollaborators, myParticipant } =
+        await this.documentService.findOrLinkMySignerCollaborator(
+          document.id,
+          actor.userId,
+          {
+            account: { user: true },
+            simpleSignature: true,
+          },
+        );
+
+      if (!myParticipant) {
+        throw new ForbiddenException('No eres firmante de este documento');
+      }
+
+      /**
+       * Va aquí y no antes porque `SIGN + SELF` se valida CONTRA el participante: el guard ya
+       * comprobó que el rol puede firmar, y lo que falta es que quien firma sea el firmante, algo
+       * que sólo se sabe una vez resuelto (o enlazado) el colaborador.
+       */
+      if (actor.authorization) {
+        this.authorizationPolicy.assertCanSign({
+          document,
+          authorization: actor.authorization,
+          participant: myParticipant,
+        });
+      }
+
+      return { signerCollaborators, participant: myParticipant };
+    }
+
+    const signerCollaborators = await this.collaboratorRepository.find({
+      where: {
+        documentId: document.id,
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      },
+      relations: { account: { user: true }, simpleSignature: true },
+      order: { signingOrder: 'ASC' },
+    });
+    const participant = signerCollaborators.find(
+      (collaborator) => collaborator.id === actor.collaboratorId,
+    );
+    if (!participant) {
+      throw new ForbiddenException('No eres firmante de este documento');
+    }
+    // La sesión se abrió para el colaborador con la cuenta que tenía entonces: si después se
+    // vinculó a otra (o a una), ya no es la misma invitación.
+    if ((participant.accountId ?? undefined) !== actor.accountId) {
+      throw new InvalidGuestSigningAccessException();
+    }
+
+    return { signerCollaborators, participant };
   }
 
   /**
@@ -604,6 +811,8 @@ export class SignDocumentUseCase {
    * @param collaboratorId - Colaborador que firma.
    * @param accessId - Acceso de invitado con el que firma.
    * @param resolvedAt - Momento de la firma.
+   * @param accountId - Cuenta que el colaborador debe seguir teniendo: `null` (sin cuenta) para el
+   *   invitado, la del usuario provisional en la firma pública.
    * @returns Nada.
    *
    * @throws {InvalidGuestSigningAccessException} Si el acceso dejó de estar activo.
@@ -618,6 +827,7 @@ export class SignDocumentUseCase {
     collaboratorId: string,
     accessId: string,
     resolvedAt: Date,
+    accountId: string | null = null,
   ): Promise<void> {
     await this.collaboratorRepository.manager.transaction(async (manager) => {
       const consumed = await this.guestSigningAccessService.consume(
@@ -632,7 +842,7 @@ export class SignDocumentUseCase {
         {
           id: collaboratorId,
           status: COLLABORATOR_STATUS_ENUM.PENDING,
-          accountId: IsNull(),
+          accountId: accountId ?? IsNull(),
         },
         {
           status: COLLABORATOR_STATUS_ENUM.SIGNED,
@@ -646,11 +856,10 @@ export class SignDocumentUseCase {
         );
       }
 
-      await revokeOpenGuestSigningAccesses(
-        manager,
-        collaboratorId,
-        GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
-      );
+      // Quedó firmado: ningún otro acceso del colaborador (de invitado o de sesión pública) sirve.
+      for (const purpose of Object.values(GUEST_SIGNING_ACCESS_PURPOSE_ENUM)) {
+        await revokeOpenGuestSigningAccesses(manager, collaboratorId, purpose);
+      }
     });
   }
 
@@ -709,6 +918,8 @@ export class SignDocumentUseCase {
     ipAddress,
     signingAuthorization,
     guestAccessId,
+    guestAccountId = null,
+    auditActor,
   }: SignatureCompletion): Promise<BaseResponse<SignedDocumentData>> {
     const documentId = document.id;
     const resolvedAt = new Date();
@@ -718,6 +929,7 @@ export class SignDocumentUseCase {
         myParticipant.id,
         guestAccessId,
         resolvedAt,
+        guestAccountId,
       );
     } else {
       // `affected !== 1` significa que otra petición ya reclamó el turno.
@@ -739,6 +951,13 @@ export class SignDocumentUseCase {
         this.guestSigningAccessService.revokeOpenForCollaborator(
           myParticipant.id,
           GUEST_SIGNING_ACCESS_PURPOSE_ENUM.GUEST_ADVANCED_SIGNATURE_ACCESS,
+        ),
+      );
+      // Firmó con su cuenta: una sesión pública abierta para la misma invitación ya no sirve.
+      await this.revokeGuestAccessesQuietly(() =>
+        this.guestSigningAccessService.revokeOpenForCollaborator(
+          myParticipant.id,
+          GUEST_SIGNING_ACCESS_PURPOSE_ENUM.PUBLIC_SIGNING_SESSION,
         ),
       );
     }
@@ -854,6 +1073,7 @@ export class SignDocumentUseCase {
       // Método de validación del firmante: distingue una firma con cuenta de una sin cuenta.
       signatureType: myParticipant.signatureType ?? undefined,
       signingAuthorization,
+      ...(auditActor ? { actor: auditActor, result: 'SUCCESS' as const } : {}),
     });
 
     if (remainingSigners.length > 0) {

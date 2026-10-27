@@ -172,6 +172,21 @@ export interface DocumentCreationOrigin {
     manager: EntityManager,
     document: DocumentEntity,
   ) => Promise<void>;
+
+  /**
+   * Cuenta a la que se vincula un firmante al crearlo, dentro de la misma transacción. La usa la
+   * API de integración para el usuario provisional de los firmantes de firma simple (que firman
+   * desde `/sign/:token` sin iniciar sesión). `null` deja al firmante sin cuenta, como siempre.
+   */
+  resolveSignerAccountId?: (
+    manager: EntityManager,
+    signer: {
+      email: string;
+      firstName: string;
+      lastName: string;
+      signatureType: SIGNATURE_TYPE_ENUM;
+    },
+  ) => Promise<string | null>;
 }
 
 export interface CreateDocumentSignaturesResult {
@@ -562,9 +577,21 @@ export class CreateDocumentSignatureFlowUseCase {
           simpleSignatureId = simpleSignature.id;
         }
 
+        // Sólo con origen que lo pida (integración): el resto sigue creando firmantes sin cuenta.
+        const signerAccountId =
+          isSigner && origin?.resolveSignerAccountId
+            ? await origin.resolveSignerAccountId(manager, {
+                email: identity.email.toLowerCase(),
+                firstName: identity.firstName,
+                lastName: identity.lastName,
+                signatureType: documentSignatureType,
+              })
+            : null;
+
         const collaborator = await collaboratorRepo.save(
           collaboratorRepo.create({
             documentId: document.id,
+            accountId: signerAccountId,
             // Normalizado igual que `users.email` (ver UserService): mientras el colaborador no
             // tiene cuenta vinculada, este correo es su única identidad, y todo lo que lo
             // empareja después —listado "Por firmar", vinculación de cuenta, firma y rechazo—

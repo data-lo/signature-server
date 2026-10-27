@@ -4,7 +4,6 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -12,19 +11,14 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
-import { buildPermissionKey } from 'src/roles/permission-catalog.util';
 
 import { ApiKeySecretService } from '../api-key-secret.service';
-import {
-  REQUIRED_API_KEY_PERMISSION_METADATA,
-  RequiredApiKeyPermission,
-} from '../decorators/require-api-key-permission.decorator';
+import { RequiredApiKeyPermission } from '../decorators/require-api-key-permission.decorator';
 import { ApiKeyEntity } from '../entities/api-key.entity';
 import { ApiKeyStatusEnum } from '../enums/api-key-status.enum';
 import {
   ApiKeyActorInactiveException,
   ApiKeyOrganizationInactiveException,
-  ApiKeyPermissionDeniedException,
   ExpiredApiKeyException,
   InvalidApiKeyException,
 } from '../exceptions/api-key.exceptions';
@@ -37,21 +31,22 @@ import {
 export const API_KEY_HEADER = 'x-api-key';
 
 /**
- * Autenticación de la API de integración con la API key de una organización.
+ * Autenticación de la API de integración con la API key de una organización. Sólo autentica: el
+ * permiso del endpoint lo exige `ApiKeyPermissionGuard`, que va después.
  *
- * Se declara por controller (`@UseGuards`), junto con `@SkipJwtAuth()`: estas rutas no llevan JWT,
- * y tampoco usan el `ApiKeyGuard` global, que compara `x-api-key` contra la llave interna de
- * `process.env.API_KEY` sólo en rutas `@Public()`.
+ * Se declara por controller (`@UseGuards(OrganizationApiKeyGuard, ApiKeyPermissionGuard)`), junto
+ * con `@SkipJwtAuth()`: estas rutas no llevan JWT, y tampoco usan el `ApiKeyGuard` global, que
+ * compara `x-api-key` contra la llave interna de `process.env.API_KEY` sólo en rutas `@Public()`.
  *
  * Valida, en este orden y sin atajos:
  * 1. formato de `X-API-Key` (`fma_live_<publicId>_<secret>`);
  * 2. que exista la llave de ese `publicId` y que el HMAC del secreto coincida (tiempo constante);
  * 3. estado `ACTIVE` y `expiresAt` futura;
  * 4. organización activa;
- * 5. que el actor —la membresía que emitió la llave— siga activo en ESA organización;
- * 6. el permiso que declaró el endpoint con `@RequireApiKeyPermission`.
+ * 5. que el actor —la membresía que emitió la llave— siga activo en ESA organización.
  *
- * Deja el resultado en `request.apiClient` y marca `lastUsedAt`. **El valor de la llave no se
+ * Deja el `IntegrationApiClient` (llave, organización, actor y permisos, resueltos de la base y
+ * nunca del request) en `request.apiClient` y marca `lastUsedAt`. **El valor de la llave no se
  * registra en ningún lado**: ni en logs, ni en excepciones, ni en `request.apiClient`.
  */
 @Injectable()
@@ -59,7 +54,6 @@ export class OrganizationApiKeyGuard implements CanActivate {
   private readonly logger = new Logger(OrganizationApiKeyGuard.name);
 
   constructor(
-    private readonly reflector: Reflector,
     @InjectRepository(ApiKeyEntity)
     private readonly apiKeyRepository: Repository<ApiKeyEntity>,
     @InjectRepository(AccountEntity)
@@ -68,22 +62,21 @@ export class OrganizationApiKeyGuard implements CanActivate {
   ) {}
 
   /**
-   * Autentica la llave de la petición y autoriza el permiso del endpoint.
+   * Autentica la llave de la petición y resuelve su contexto.
    *
    * @param context - Contexto de ejecución de Nest.
-   * @returns `true` si la llave es válida y tiene el permiso.
+   * @returns `true` si la llave es válida.
    *
    * @throws {InvalidApiKeyException} (401) Si la llave falta, no tiene formato, no existe, no
    *   coincide o está revocada.
    * @throws {ExpiredApiKeyException} (401) Si venció.
    * @throws {ApiKeyOrganizationInactiveException} (403) Si su organización está desactivada.
    * @throws {ApiKeyActorInactiveException} (403) Si su actor ya no es miembro activo.
-   * @throws {ApiKeyPermissionDeniedException} (403) Si no tiene el permiso del endpoint.
    *
    * @example
    * ```ts
    * @SkipJwtAuth()
-   * @UseGuards(OrganizationApiKeyGuard)
+   * @UseGuards(OrganizationApiKeyGuard, ApiKeyPermissionGuard)
    * @Controller('integration')
    * export class IntegrationDocumentsController {}
    * ```
@@ -114,20 +107,6 @@ export class OrganizationApiKeyGuard implements CanActivate {
         action: permission.action.key as ACTION_KEY_ENUM,
         scope: permission.scope as PERMISSION_SCOPE_ENUM,
       }));
-
-    const required = this.reflector.getAllAndOverride<RequiredApiKeyPermission>(
-      REQUIRED_API_KEY_PERMISSION_METADATA,
-      [context.getHandler(), context.getClass()],
-    );
-    if (required && !hasApiKeyPermission(permissions, required)) {
-      throw new ApiKeyPermissionDeniedException(
-        required.scopes
-          .map((scope) =>
-            buildPermissionKey(required.resource, required.action, scope),
-          )
-          .join(' o '),
-      );
-    }
 
     const apiClient: IntegrationApiClient = {
       apiKeyId: apiKey.id,

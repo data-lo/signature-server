@@ -11,6 +11,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 
 import { CreateDocumentSignatureFlowUseCase } from '../../applications/create-document-signature-flow.use-case';
 import { DocumentReadService } from '../../services/document-read.service';
+import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
 import { buildPublicDocumentUrl } from '../../utils/document-access-url.util';
 import { assertPdfFile } from '../../utils/pdf-file.util';
 import { IntegrationCreatedDocumentData } from '../interfaces/integration-document-response';
@@ -147,6 +148,14 @@ export class CreateIntegrationDocumentUseCase {
         {
           apiKeyId: apiClient.apiKeyId,
           apiKeyName: apiClient.apiKeyName,
+          // Los firmantes de firma simple firman desde `/sign/:token` con un usuario provisional.
+          resolveSignerAccountId: (manager, signer) =>
+            signer.signatureType === SIGNATURE_TYPE_ENUM.SIMPLE
+              ? this.integrationCreatorService.resolveProvisionalSigner(
+                  manager,
+                  signer,
+                )
+              : Promise.resolve(null),
           onDocumentSaved: (manager, document) =>
             this.idempotencyService.complete(
               manager,

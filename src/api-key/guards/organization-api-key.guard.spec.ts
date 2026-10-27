@@ -1,6 +1,5 @@
 import { ExecutionContext } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Reflector } from '@nestjs/core';
 import { Repository } from 'typeorm';
 
 import { AccountEntity } from 'src/account/entities/account.entity';
@@ -9,13 +8,11 @@ import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
 import { ApiKeySecretService } from '../api-key-secret.service';
-import { RequiredApiKeyPermission } from '../decorators/require-api-key-permission.decorator';
 import { ApiKeyEntity } from '../entities/api-key.entity';
 import { ApiKeyStatusEnum } from '../enums/api-key-status.enum';
 import {
   ApiKeyActorInactiveException,
   ApiKeyOrganizationInactiveException,
-  ApiKeyPermissionDeniedException,
   ExpiredApiKeyException,
   InvalidApiKeyException,
 } from '../exceptions/api-key.exceptions';
@@ -34,7 +31,6 @@ describe('OrganizationApiKeyGuard', () => {
 
   let apiKeyRepository: { findOne: jest.Mock; update: jest.Mock };
   let accountRepository: { findOne: jest.Mock };
-  let required: RequiredApiKeyPermission | undefined;
   let guard: OrganizationApiKeyGuard;
 
   function permission(resource: string, action: string, scope: string) {
@@ -85,13 +81,7 @@ describe('OrganizationApiKeyGuard', () => {
         .fn()
         .mockResolvedValue({ id: 'account-actor', userId: 'user-actor' }),
     };
-    required = {
-      resource: RESOURCE_KEY_ENUM.DOCUMENT,
-      action: ACTION_KEY_ENUM.READ,
-      scopes: [PERMISSION_SCOPE_ENUM.ORGANIZATION],
-    };
     guard = new OrganizationApiKeyGuard(
-      { getAllAndOverride: () => required } as unknown as Reflector,
       apiKeyRepository as unknown as Repository<ApiKeyEntity>,
       accountRepository as unknown as Repository<AccountEntity>,
       secrets,
@@ -202,17 +192,28 @@ describe('OrganizationApiKeyGuard', () => {
     ).rejects.toBeInstanceOf(ApiKeyActorInactiveException);
   });
 
-  it('rechaza con 403 si la llave sólo tiene OWN y el endpoint exige ORGANIZATION', async () => {
+  it('sólo autentica: una llave válida pasa aunque no tenga el permiso del endpoint (eso es de ApiKeyPermissionGuard)', async () => {
     apiKeyRepository.findOne.mockResolvedValue(
       storedKey({
         permissions: [permission('DOCUMENT', 'READ', 'OWN')] as never,
       }),
     );
 
+    const { request, ctx } = context({ 'x-api-key': issued.key });
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(request.apiClient).toEqual(
+      expect.objectContaining({
+        permissions: [{ resource: 'DOCUMENT', action: 'READ', scope: 'OWN' }],
+      }),
+    );
+  });
+
+  it('no acepta un JWT de la plataforma en lugar de la llave', async () => {
     await expect(
-      guard.canActivate(context({ 'x-api-key': issued.key }).ctx),
-    ).rejects.toBeInstanceOf(ApiKeyPermissionDeniedException);
-    expect(apiKeyRepository.update).not.toHaveBeenCalled();
+      guard.canActivate(
+        context({ authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.e30.x' }).ctx,
+      ),
+    ).rejects.toBeInstanceOf(InvalidApiKeyException);
   });
 
   it('un fallo al marcar el último uso no rechaza la petición', async () => {

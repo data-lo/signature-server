@@ -8,8 +8,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { DocumentEntity } from './document.entity';
-import { CollaboratorEntity } from './collaborator.entity';
+import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
+import { DocumentEntity } from 'src/document/entities/document.entity';
 
 /**
  * Invitación individual de un firmante, la que abre la pantalla pública `/sign/:token` (ver

@@ -39,6 +39,7 @@ import { ProcessDocumentCancelledEventUseCase } from './applications/process-doc
 import { SendPendingSignatureNotificationUseCase } from './applications/send-pending-signature-notification.use-case';
 import { SendOrganizationInvitationEmailUseCase } from './applications/send-organization-invitation-email.use-case';
 import { NotifyOrganizationAdminsOfNewMemberUseCase } from './applications/notify-organization-admins-of-new-member.use-case';
+import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
 @Module({
   imports: [
@@ -51,6 +52,8 @@ import { NotifyOrganizationAdminsOfNewMemberUseCase } from './applications/notif
       RoleEntity,
     ]),
     SharedModule,
+    // Enlace `/sign/:token` de los firmantes de documentos creados por integración.
+    SigningInvitationModule,
     forwardRef(() => EventModule),
     DocumentTransactionModule,
     AuditChainModule,

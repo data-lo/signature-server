@@ -13,6 +13,7 @@ import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 import { EmailService } from 'src/common/email/email.service';
 import type { NotificationEventPayload } from '../notification-events.topics';
+import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
 
 function createMockRepository() {
   return {
@@ -114,6 +115,13 @@ describe('NotificationEventsConsumer', () => {
           useValue: notificationRepository,
         },
         { provide: EmailService, useValue: emailService },
+        // Enlace de firma real: `/access-document` salvo en documentos de integración.
+        {
+          provide: SigningLinkService,
+          useValue: new SigningLinkService({
+            issue: jest.fn(async () => ({ url: 'http://app/sign/token' })),
+          } as never),
+        },
       ],
     }).compile();
 
@@ -143,6 +151,25 @@ describe('NotificationEventsConsumer', () => {
       expect.stringContaining(
         '/access-document?docId=doc-1&collabId=collaborator-1',
       ),
+    );
+  });
+
+  it('documento creado por integración: el firmante recibe su invitación individual /sign/:token', async () => {
+    const signer = buildCollaborator();
+    collaboratorRepository.findOne.mockResolvedValue(signer);
+    collaboratorRepository.find.mockResolvedValue([signer]);
+    documentRepository.findOne.mockResolvedValue(
+      buildDocument({ createdViaApiKeyId: 'key-1' }),
+    );
+
+    await consumer.handleCreated(payload);
+
+    expect(emailService.sendDocumentPendingNotification).toHaveBeenCalledWith(
+      'firmante@correo.com',
+      'Firmante Uno',
+      'creador@correo.com',
+      'contrato.pdf',
+      'http://app/sign/token',
     );
   });
 
