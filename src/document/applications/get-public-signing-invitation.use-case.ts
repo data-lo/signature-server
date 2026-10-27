@@ -21,7 +21,7 @@ import { maskEmail } from '../utils/mask-email.util';
  *
  * `SIMPLE` queda fuera: la firma simple estampa la rúbrica registrada en una cuenta.
  */
-const GUEST_SIGNING_TYPES: ReadonlySet<SIGNATURE_TYPE_ENUM> = new Set([
+export const GUEST_SIGNING_TYPES: ReadonlySet<SIGNATURE_TYPE_ENUM> = new Set([
   SIGNATURE_TYPE_ENUM.BIOMETRIC,
   SIGNATURE_TYPE_ENUM.FIEL,
 ]);
@@ -38,6 +38,44 @@ export interface PublicSigningInvitation {
   availableForSigning: boolean;
   /** `true` si puede continuar sin cuenta: no tiene cuenta vinculada y su tipo lo admite. */
   guestSigningAllowed: boolean;
+}
+
+/**
+ * Resume una invitación ya encontrada: lo mismo que decide la pantalla pública, venga por
+ * documento + colaborador (`/public/documents/:id/sign`) o por token (`/sign/:token`).
+ *
+ * @param document - Documento de la invitación.
+ * @param collaborator - Firmante de la invitación, con `account.user` cargado si tiene cuenta.
+ * @returns Nombre del documento, correo enmascarado, tipo de firma, disponibilidad y si admite
+ *   continuar sin cuenta.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * summarizeSigningInvitation(document, collaborator).guestSigningAllowed; // true
+ * ```
+ */
+export function summarizeSigningInvitation(
+  document: DocumentEntity,
+  collaborator: CollaboratorEntity,
+): PublicSigningInvitation {
+  const signatureType = collaborator.signatureType ?? null;
+
+  return {
+    documentName: document.fileName,
+    maskedEmail: maskEmail(
+      collaborator.email ?? collaboratorEmail(collaborator),
+    ),
+    signatureType,
+    availableForSigning:
+      document.status === DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE &&
+      collaborator.status === COLLABORATOR_STATUS_ENUM.PENDING,
+    guestSigningAllowed:
+      !collaborator.accountId &&
+      !!signatureType &&
+      GUEST_SIGNING_TYPES.has(signatureType),
+  };
 }
 
 /**
@@ -95,21 +133,6 @@ export class GetPublicSigningInvitationUseCase {
       throw new NotFoundException('Esta invitación no es válida.');
     }
 
-    const signatureType = collaborator.signatureType ?? null;
-
-    return {
-      documentName: document.fileName,
-      maskedEmail: maskEmail(
-        collaborator.email ?? collaboratorEmail(collaborator),
-      ),
-      signatureType,
-      availableForSigning:
-        document.status === DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE &&
-        collaborator.status === COLLABORATOR_STATUS_ENUM.PENDING,
-      guestSigningAllowed:
-        !collaborator.accountId &&
-        !!signatureType &&
-        GUEST_SIGNING_TYPES.has(signatureType),
-    };
+    return summarizeSigningInvitation(document, collaborator);
   }
 }
