@@ -35,6 +35,12 @@ export interface DocumentEventPayload {
   /** ISO 8601 del momento en que ocurrió el hecho, no de su publicación. */
   occurredAt: string;
   version?: number;
+  /**
+   * Sólo en `document.created` de un documento creado por la API de integración: la llave con la
+   * que se creó y su nombre administrativo. Nunca el valor de la llave ni su hash.
+   */
+  createdViaApiKeyId?: string;
+  createdViaApiKeyName?: string;
 }
 
 /**

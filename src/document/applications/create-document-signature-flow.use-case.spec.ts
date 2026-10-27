@@ -1025,6 +1025,87 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     expect(simpleSignatureRepo.save).not.toHaveBeenCalled();
   });
 
+  /**
+   * Historia "Exponer API de integración para consultar y crear documentos mediante API Key": la
+   * API de integración reutiliza este mismo flujo con un `origin`. Sin él, nada cambia.
+   */
+  describe('origen de la creación (API de integración)', () => {
+    const origin = { apiKeyId: 'key-1', apiKeyName: 'Integración ERP' };
+
+    it('sin origen, el documento no lleva llave y el evento de creación no menciona ninguna', async () => {
+      await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createdViaApiKeyId: null }),
+      );
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith({
+        documentId: expect.any(String),
+        fileName: baseDto.documentData.fileName,
+        actorUserId: 'creator-1',
+      });
+    });
+
+    it('con origen, guarda la llave en el documento y la anuncia en el evento, sin su secreto', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+        origin,
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createdViaApiKeyId: 'key-1' }),
+      );
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 'creator-1',
+          createdViaApiKeyId: 'key-1',
+          createdViaApiKeyName: 'Integración ERP',
+        }),
+      );
+    });
+
+    it('el gancho del origen corre dentro de la transacción, con el documento guardado y antes del cobro', async () => {
+      const onDocumentSaved = jest.fn().mockResolvedValue(undefined);
+
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+        { ...origin, onDocumentSaved },
+      );
+
+      expect(onDocumentSaved).toHaveBeenCalledWith(
+        expect.objectContaining({ getRepository: expect.any(Function) }),
+        expect.objectContaining({ id: expect.any(String), createdViaApiKeyId: 'key-1' }),
+      );
+      expect(onDocumentSaved.mock.invocationCallOrder[0]).toBeLessThan(
+        consumeDocumentCredit.execute.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('si el gancho falla, no se cobra el crédito ni se publica nada', async () => {
+      const onDocumentSaved = jest
+        .fn()
+        .mockRejectedValue(new Error('clave de idempotencia ya usada'));
+
+      await expect(
+        useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1', {
+          ...origin,
+          onDocumentSaved,
+        }),
+      ).rejects.toThrow('clave de idempotencia ya usada');
+
+      expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+      expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
+      expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    });
+  });
+
   it('Escenario 2: si falla la inserción dentro de la transacción, no se publica ningún evento a Kafka', async () => {
     collaboratorRepo.save.mockRejectedValueOnce(new Error('DB caída'));
 

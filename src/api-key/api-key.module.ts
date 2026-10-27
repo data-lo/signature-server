@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AccountEntity } from 'src/account/entities/account.entity';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { PermissionEntity } from 'src/roles/entities/permission.entity';
 
@@ -12,6 +13,7 @@ import { ListOrganizationApiKeysUseCase } from './applications/list-organization
 import { RevokeOrganizationApiKeyUseCase } from './applications/revoke-organization-api-key.use-case';
 import { RotateOrganizationApiKeyUseCase } from './applications/rotate-organization-api-key.use-case';
 import { ApiKeyEntity } from './entities/api-key.entity';
+import { OrganizationApiKeyGuard } from './guards/organization-api-key.guard';
 import { OrganizationApiKeysController } from './organization-api-keys.controller';
 
 /**
@@ -27,8 +29,9 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
  * `forFeature()` que la nombre, las relaciones `apiKeys` de `OrganizationEntity`,
  * `AccountEntity` y `PermissionEntity` no tendrían metadatos y la aplicación no arrancaría.
  * `OrganizationEntity` y `PermissionEntity` se registran para validar la organización y los
- * permisos sin importar `AccountModule` ni `RolesModule`. Exporta `TypeOrmModule` y
- * `ApiKeySecretService` para quien valide llaves en el consumo externo.
+ * permisos sin importar `AccountModule` ni `RolesModule`; `AccountEntity`, para que
+ * `OrganizationApiKeyGuard` compruebe que el actor de la llave sigue activo. Exporta el guard (y lo
+ * que necesita para inyectarse) a los módulos que expongan la API de integración.
  */
 @Module({
   imports: [
@@ -36,6 +39,7 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
       ApiKeyEntity,
       OrganizationEntity,
       PermissionEntity,
+      AccountEntity,
     ]),
   ],
   controllers: [OrganizationApiKeysController],
@@ -47,7 +51,8 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
     GetCurrentOrganizationApiKeyUseCase,
     RotateOrganizationApiKeyUseCase,
     RevokeOrganizationApiKeyUseCase,
+    OrganizationApiKeyGuard,
   ],
-  exports: [TypeOrmModule, ApiKeySecretService],
+  exports: [TypeOrmModule, ApiKeySecretService, OrganizationApiKeyGuard],
 })
 export class ApiKeyModule {}

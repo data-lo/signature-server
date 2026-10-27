@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac, randomBytes } from 'crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 import { ApiKeyNotConfiguredException } from './exceptions/api-key.exceptions';
 
@@ -15,6 +15,20 @@ const PUBLIC_ID_BYTES = 8;
 
 /** Largo mínimo del pepper: por debajo, un HMAC filtrado se atacaría por fuerza bruta del pepper. */
 const MIN_PEPPER_LENGTH = 32;
+
+/**
+ * Forma de una llave completa: prefijo fijo, `publicId` (16 hexadecimales) y secreto en base64url
+ * (43 caracteres para 32 bytes). El secreto puede contener `_` y `-`; el `publicId`, no.
+ */
+const API_KEY_TOKEN_PATTERN = new RegExp(
+  `^${API_KEY_TOKEN_PREFIX}_([0-9a-f]{${PUBLIC_ID_BYTES * 2}})_([A-Za-z0-9_-]{43})$`,
+);
+
+/** Una llave recibida, separada en sus dos partes. */
+export interface ParsedApiKeyToken {
+  publicId: string;
+  secret: string;
+}
 
 /** Lo que se genera al emitir una llave. Sólo `secretHash` se persiste junto a los datos públicos. */
 export interface GeneratedApiKeySecret {
@@ -89,6 +103,50 @@ export class ApiKeySecretService {
    */
   hashSecret(secret: string): string {
     return createHmac('sha256', this.getPepper()).update(secret).digest('hex');
+  }
+
+  /**
+   * Separa una llave recibida en `publicId` y secreto, si tiene el formato que emite `generate`.
+   *
+   * No consulta la base ni calcula hashes: es el filtro barato que descarta basura antes de ir a
+   * buscar la llave.
+   *
+   * @param token - El valor recibido en `X-API-Key`.
+   * @returns Sus dos partes, o `null` si no tiene el formato de una llave de la plataforma.
+   *
+   * @example
+   * ```ts
+   * apiKeySecretService.parseToken('fma_live_3f9a0c1b2d4e5f60_Qm9…'); // { publicId, secret }
+   * apiKeySecretService.parseToken('cualquier-cosa'); // null
+   * ```
+   */
+  parseToken(token: string): ParsedApiKeyToken | null {
+    const match = API_KEY_TOKEN_PATTERN.exec(token);
+
+    return match ? { publicId: match[1], secret: match[2] } : null;
+  }
+
+  /**
+   * Compara un secreto recibido con el hash guardado, en tiempo constante.
+   *
+   * @param secret - La parte secreta de la llave recibida.
+   * @param secretHash - `api_keys.secret_hash` de la llave localizada por su `publicId`.
+   * @returns `true` si el HMAC del secreto coincide con el guardado.
+   *
+   * @throws {ApiKeyNotConfiguredException} (500) Si `API_KEY_PEPPER` falta o es demasiado corto.
+   *
+   * @example
+   * ```ts
+   * apiKeySecretService.matchesSecret('Qm9…', apiKey.secretHash); // true
+   * ```
+   */
+  matchesSecret(secret: string, secretHash: string): boolean {
+    const expected = Buffer.from(secretHash, 'hex');
+    const actual = Buffer.from(this.hashSecret(secret), 'hex');
+
+    return (
+      expected.length === actual.length && timingSafeEqual(expected, actual)
+    );
   }
 
   /**

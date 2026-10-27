@@ -22,6 +22,20 @@ export class ProcessDocumentCreatedEventUseCase {
       `Documento creado: ${payload.documentId} ("${payload.fileName}") por ${payload.actorUserId} @ ${payload.occurredAt}`,
     );
 
-    await this.audit.record(payload, AUDIT_TYPE_ENUM.CREATED);
+    /**
+     * Un documento creado por la API de integración deja en el ledger con qué llave llegó, para
+     * que la auditoría pueda decir "Creado por Juan Pérez vía Integración ERP". Sólo el id y el
+     * nombre de la llave: su valor nunca viaja en el evento.
+     */
+    await this.audit.record(
+      payload,
+      AUDIT_TYPE_ENUM.CREATED,
+      payload.createdViaApiKeyId
+        ? {
+            createdViaApiKeyId: payload.createdViaApiKeyId,
+            createdViaApiKeyName: payload.createdViaApiKeyName,
+          }
+        : undefined,
+    );
   }
 }

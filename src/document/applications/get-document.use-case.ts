@@ -73,6 +73,7 @@ export class GetDocumentUseCase {
     const documentDetailRelations: FindOptionsRelations<DocumentEntity> = {
       requestedBy: true,
       collaborators: { account: { user: true } },
+      createdViaApiKey: true,
     };
 
     const document = await this.documentRepository.findOne({
@@ -198,6 +199,17 @@ export class GetDocumentUseCase {
          * este campo, la única forma de saber si un documento quedó indexado sería buscarlo.
          */
         isIndexable: document.isIndexable,
+        /**
+         * La integración por la que llegó el documento, o `null` si lo creó una persona desde la
+         * plataforma. Con `creator` arma "Creado por Juan Pérez vía Integración ERP". Sólo el id y
+         * el nombre de la llave: nunca su prefijo, su secreto ni su hash.
+         */
+        createdViaIntegration: document.createdViaApiKey
+          ? {
+              apiKeyId: document.createdViaApiKey.id,
+              name: document.createdViaApiKey.name,
+            }
+          : null,
         // Avance de firmas en tiempo real (ver Registro de Transacciones / Document
         // Transaction): completedSignersCount se compara contra totalSigners para saber si al
         // documento le falta algún firmante. completedSignedAt es la fecha en la que se

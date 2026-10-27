@@ -3,6 +3,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -12,12 +13,17 @@ import {
 import { UserEntity } from 'src/user/entities/user.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { CollaboratorEntity } from './collaborator.entity';
 
 // document.entity.ts
 @Entity('documents')
+/** Parcial: casi todos los documentos se crean desde la plataforma y no tienen llave. */
+@Index('IDX_documents_created_via_api_key_id', ['createdViaApiKeyId'], {
+  where: '"created_via_api_key_id" IS NOT NULL',
+})
 export class DocumentEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -129,6 +135,24 @@ export class DocumentEntity {
   @ManyToOne(() => OrganizationEntity, { nullable: true })
   @JoinColumn({ name: 'organization_id' })
   organization: OrganizationEntity | null;
+
+  /**
+   * API key de la organización con la que se creó el documento desde la API de integración;
+   * `null` si lo creó una persona desde la plataforma.
+   *
+   * Es trazabilidad, no autoría: el autor sigue siendo `createdBy` (el actor de la llave). Juntos
+   * dicen "Creado por Juan Pérez vía Integración ERP". `SET NULL` porque una llave sólo se borra con
+   * su organización, y el documento no debe impedirlo.
+   */
+  @Column({ name: 'created_via_api_key_id', type: 'uuid', nullable: true })
+  createdViaApiKeyId: string | null;
+
+  @ManyToOne(() => ApiKeyEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({
+    name: 'created_via_api_key_id',
+    foreignKeyConstraintName: 'FK_documents_created_via_api_key_id',
+  })
+  createdViaApiKey?: ApiKeyEntity | null;
 
   /**
    * Desde cuándo este documento firmado espera su constancia de conservación NOM-151.

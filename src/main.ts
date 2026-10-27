@@ -11,6 +11,7 @@ import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
+import { INTEGRATION_API_KEY_SECURITY } from './document/integration/docs/api-integration-documents-common.docs';
 import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
 import { frontendBaseUrl } from './common/utils/frontend-url.util';
 import {
@@ -74,6 +75,12 @@ async function bootstrap() {
     .addBearerAuth(
       { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
       'access-token',
+    )
+    // API key de organización de la API de integración (`/integration/...`). Mismo header que la
+    // llave interna `x-api-key` de arriba, pero es otra cosa: la emite cada organización.
+    .addApiKey(
+      { type: 'apiKey', name: 'X-API-Key', in: 'header' },
+      INTEGRATION_API_KEY_SECURITY,
     )
     .build();
 

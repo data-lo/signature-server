@@ -1,0 +1,94 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpStatus,
+  NotFoundException,
+} from '@nestjs/common';
+
+import { buildApiKeyErrorBody } from 'src/api-key/exceptions/api-key.exceptions';
+
+/** Códigos estables de error de la API de integración de documentos. */
+export enum INTEGRATION_DOCUMENT_ERROR_CODE_ENUM {
+  TENANT_OVERRIDE_NOT_ALLOWED = 'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
+  USER_NOT_FOUND = 'INTEGRATION_USER_NOT_FOUND',
+  SCOPE_DENIED = 'INTEGRATION_SCOPE_DENIED',
+  IDEMPOTENCY_KEY_REQUIRED = 'INTEGRATION_IDEMPOTENCY_KEY_REQUIRED',
+  IDEMPOTENCY_KEY_MISMATCH = 'INTEGRATION_IDEMPOTENCY_KEY_MISMATCH',
+}
+
+/**
+ * La petición trae un campo de organización, cuenta o autor (en query, header o body). Se rechaza
+ * en vez de ignorarlo: un cliente que lo manda cree que elige el tenant, y no es así.
+ */
+export class TenantOverrideNotAllowedException extends BadRequestException {
+  constructor(fields: string[]) {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.BAD_REQUEST,
+        'Bad Request',
+        `La organización, la cuenta y el autor salen de la API key; no se aceptan: ${fields.join(', ')}`,
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.TENANT_OVERRIDE_NOT_ALLOWED,
+      ),
+    );
+  }
+}
+
+/**
+ * El usuario no es miembro activo de la organización de la llave. Mismo 404 exista o no en otra
+ * organización: la API no confirma nada fuera del tenant de la llave.
+ */
+export class IntegrationUserNotFoundException extends NotFoundException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.NOT_FOUND,
+        'Not Found',
+        'El usuario no existe en la organización',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.USER_NOT_FOUND,
+      ),
+    );
+  }
+}
+
+/** La llave sólo tiene `DOCUMENT.READ + OWN` y se piden documentos de otro usuario. */
+export class IntegrationScopeDeniedException extends ForbiddenException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.FORBIDDEN,
+        'Forbidden',
+        'Con DOCUMENT.READ_OWN la API key sólo puede consultar los documentos de su propio usuario',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.SCOPE_DENIED,
+      ),
+    );
+  }
+}
+
+/** Falta `Idempotency-Key` o no es un valor válido. */
+export class IdempotencyKeyRequiredException extends BadRequestException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.BAD_REQUEST,
+        'Bad Request',
+        'El header Idempotency-Key es obligatorio: de 1 a 255 caracteres ASCII visibles',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.IDEMPOTENCY_KEY_REQUIRED,
+      ),
+    );
+  }
+}
+
+/** La `Idempotency-Key` ya se usó en esta organización con otro archivo u otro payload. */
+export class IdempotencyKeyMismatchException extends ConflictException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.CONFLICT,
+        'Conflict',
+        'Este Idempotency-Key ya se usó con otro archivo o con otros datos. Usa una clave nueva para un documento nuevo.',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.IDEMPOTENCY_KEY_MISMATCH,
+      ),
+    );
+  }
+}
