@@ -132,3 +132,36 @@ export class IntegrationCreatedDocumentResponse extends BaseResponse<Integration
   @ApiProperty({ type: IntegrationCreatedDocumentData })
   data: IntegrationCreatedDocumentData;
 }
+
+/** Contenido de `error` en toda respuesta de error de la API de integración. */
+export class IntegrationErrorData {
+  @ApiProperty({
+    example: 'DUPLICATE_PARTICIPANT_EMAIL',
+    description:
+      'Código estable del error (p. ej. `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED`, `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`, `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`, `API_KEY_INVALID`, `INTERNAL_ERROR`)',
+  })
+  code: string;
+
+  @ApiProperty({
+    example: 'Un colaborador sólo puede participar una vez en el documento.',
+  })
+  message: string;
+
+  @ApiProperty({
+    required: false,
+    type: Object,
+    example: { field: 'participants[2].email', email: 'ana@correo.com' },
+    description:
+      'Datos del error: `field` con la ruta del campo afectado cuando aplica, y los valores que lo explican (`limit`, `received`, `page`, `totalPages`…).',
+  })
+  details?: Record<string, unknown>;
+}
+
+/** `{ success: false, error: { code, message, details } }`: forma de todo error de integración. */
+export class IntegrationErrorResponseDto {
+  @ApiProperty({ example: false })
+  success: false;
+
+  @ApiProperty({ type: IntegrationErrorData })
+  error: IntegrationErrorData;
+}

@@ -16,8 +16,11 @@ import { IntegrationApprovalNotSupportedException } from '../exceptions/integrat
  *
  * - Cada participante es un colaborador `MANUAL` (invitado por correo), sin alta en el Directorio:
  *   el aprovisionamiento automático de cuentas es sólo para el creador.
- * - `order` (desde 1) se vuelve `orderIndex` (desde 0) sólo si TODOS los participantes lo traen,
- *   la misma regla que aplica el flujo; si no, se firma en el orden del arreglo.
+ * - En un documento secuencial (`isSequential` distinto de `false`), los firmantes se ordenan por
+ *   su `order` —que `IntegrationPayloadValidator` ya exigió único y consecutivo— y los testigos van
+ *   después, en el orden del arreglo. El resultado viaja como `orderIndex` en TODOS los
+ *   colaboradores, que es lo que el flujo necesita para respetarlo. En uno no secuencial se
+ *   conserva el orden del arreglo.
  * - El nombre del documento es el del PDF recibido.
  *
  * @param payload - Payload ya validado.
@@ -42,9 +45,17 @@ export function toCreateDocumentSignaturesDto(
     throw new IntegrationApprovalNotSupportedException();
   }
 
-  const everyoneHasOrder = participants.every(
-    (participant) => typeof participant.order === 'number',
-  );
+  const isSequential = document.isSequential !== false;
+  const ordered = isSequential
+    ? [
+        ...participants
+          .filter((p) => p.role === INTEGRATION_PARTICIPANT_ROLE_ENUM.SIGNER)
+          .sort((a, b) => a.order! - b.order!),
+        ...participants.filter(
+          (p) => p.role !== INTEGRATION_PARTICIPANT_ROLE_ENUM.SIGNER,
+        ),
+      ]
+    : participants;
 
   return {
     documentData: {
@@ -54,7 +65,7 @@ export function toCreateDocumentSignaturesDto(
       requiresApproval: false,
       isIndexable: document.isIndexable,
     },
-    collaborators: participants.map((participant) => {
+    collaborators: ordered.map((participant, position) => {
       const isSigner =
         participant.role === INTEGRATION_PARTICIPANT_ROLE_ENUM.SIGNER;
 
@@ -69,7 +80,7 @@ export function toCreateDocumentSignaturesDto(
         email: participant.email,
         signatures: isSigner ? participant.signaturePositions : undefined,
         requiresTwoFactorAuth: participant.requiresTwoFactorAuth,
-        orderIndex: everyoneHasOrder ? participant.order! - 1 : undefined,
+        orderIndex: isSequential ? position : undefined,
       };
     }),
   } as CreateDocumentSignaturesDto;

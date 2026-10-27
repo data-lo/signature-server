@@ -11,6 +11,7 @@ import {
   Req,
   Res,
   UploadedFile,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -39,6 +40,7 @@ import { ApiListUserIntegrationDocuments } from './docs/api-list-user-integratio
 import { CreateIntegrationDocumentDto } from './dto/create-integration-document.dto';
 import { ListIntegrationDocumentsQueryDto } from './dto/list-integration-documents-query.dto';
 import { IntegrationUserNotFoundException } from './exceptions/integration-document.exceptions';
+import { IntegrationErrorFilter } from './filters/integration-error.filter';
 import {
   assertNoTenantOverrides,
   buildRequestFingerprint,
@@ -57,10 +59,14 @@ export const IDEMPOTENT_REPLAYED_HEADER = 'Idempotent-Replayed';
  * llave y lo deja en `@CurrentApiClient()`. Cada ruta declara su permiso con
  * `@RequireApiKeyPermission` y, antes de nada, rechaza cualquier intento de elegir organización,
  * cuenta o autor (`assertNoTenantOverrides`).
+ *
+ * Todos sus errores —incluidos los del guard— salen con la forma de `IntegrationErrorFilter`:
+ * `{ success: false, error: { code, message, details } }`.
  */
 @ApiTags('Integration Documents')
 @SkipJwtAuth()
 @UseGuards(OrganizationApiKeyGuard)
+@UseFilters(IntegrationErrorFilter)
 @Controller('integration')
 export class IntegrationDocumentsController {
   constructor(
@@ -139,7 +145,7 @@ export class IntegrationDocumentsController {
     const { replayed, ...result } =
       await this.createIntegrationDocument.execute({
         apiClient,
-        payload: dto.payload,
+        rawPayload: dto.payload,
         file,
         ip,
         idempotencyKey,

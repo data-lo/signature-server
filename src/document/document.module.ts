@@ -30,6 +30,7 @@ import { ListUserIntegrationDocumentsUseCase } from './integration/applications/
 import { CreateIntegrationDocumentUseCase } from './integration/applications/create-integration-document.use-case';
 import { IntegrationIdempotencyService } from './integration/services/integration-idempotency.service';
 import { IntegrationCreatorService } from './integration/services/integration-creator.service';
+import { IntegrationPayloadValidator } from './integration/validation/integration-payload.validator';
 import { RolesModule } from 'src/roles/roles.module';
 import { IntegrationIdempotencyKeyEntity } from './integration/entities/integration-idempotency-key.entity';
 import { SignatureQrService } from './services/signature-qr.service';
@@ -137,6 +138,7 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
     DocumentReadService,
     IntegrationIdempotencyService,
     IntegrationCreatorService,
+    IntegrationPayloadValidator,
     ListOrganizationIntegrationDocumentsUseCase,
     ListUserIntegrationDocumentsUseCase,
     CreateIntegrationDocumentUseCase,

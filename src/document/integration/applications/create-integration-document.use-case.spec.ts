@@ -1,4 +1,7 @@
+import { ConfigService } from '@nestjs/config';
+
 import { IntegrationApiClient } from 'src/api-key/interfaces/integration-api-client.interface';
+import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
 
 import { CreateDocumentSignatureFlowUseCase } from '../../applications/create-document-signature-flow.use-case';
 import { PAYLOAD_SIGNATURE_TYPE_ENUM } from '../../dto/create-document-signatures.dto';
@@ -16,6 +19,11 @@ import {
 import { IntegrationCreatorService } from '../services/integration-creator.service';
 import { IntegrationIdempotencyService } from '../services/integration-idempotency.service';
 import { CreateIntegrationDocumentUseCase } from './create-integration-document.use-case';
+import {
+  INTEGRATION_VALIDATION_CODE_ENUM,
+  IntegrationValidationException,
+} from '../validation/integration-validation.exception';
+import { IntegrationPayloadValidator } from '../validation/integration-payload.validator';
 
 const API_CLIENT: IntegrationApiClient = {
   apiKeyId: 'key-1',
@@ -35,6 +43,7 @@ const PAYLOAD: IntegrationDocumentPayloadDto = {
       firstName: 'Luis',
       lastName: 'Martínez',
       email: 'luis@correo.com',
+      order: 1,
       signaturePositions: [
         {
           page: 1,
@@ -75,6 +84,7 @@ describe('CreateIntegrationDocumentUseCase', () => {
   };
   let creators: { resolve: jest.Mock };
   let reads: { findCreatedDocument: jest.Mock };
+  let pdf: { getPdfPages: jest.Mock };
 
   const useCase = () =>
     new CreateIntegrationDocumentUseCase(
@@ -82,10 +92,14 @@ describe('CreateIntegrationDocumentUseCase', () => {
       idempotency as unknown as IntegrationIdempotencyService,
       creators as unknown as IntegrationCreatorService,
       reads as unknown as DocumentReadService,
+      new IntegrationPayloadValidator({
+        get: () => undefined,
+      } as unknown as ConfigService),
+      pdf as unknown as PdfSignatureService,
     );
   const request = (payload = PAYLOAD) => ({
     apiClient: API_CLIENT,
-    payload,
+    rawPayload: JSON.stringify(payload),
     file: FILE,
     ip: '203.0.113.7',
     idempotencyKey: 'erp-pedido-1',
@@ -110,6 +124,7 @@ describe('CreateIntegrationDocumentUseCase', () => {
       }),
     };
     reads = { findCreatedDocument: jest.fn().mockResolvedValue(CREATED) };
+    pdf = { getPdfPages: jest.fn().mockResolvedValue(1) };
   });
 
   afterAll(() => {
@@ -121,7 +136,8 @@ describe('CreateIntegrationDocumentUseCase', () => {
 
     expect(creators.resolve).toHaveBeenCalledWith({
       organizationId: 'org-1',
-      email: 'Ana@Cliente.com',
+      // Normalizado por la validación del payload.
+      email: 'ana@cliente.com',
       firstName: 'Ana',
       lastName: 'López',
       actorUserId: 'user-actor',
@@ -230,5 +246,88 @@ describe('CreateIntegrationDocumentUseCase', () => {
       ),
     ).rejects.toBeInstanceOf(IntegrationApprovalNotSupportedException);
     expect(idempotency.reserve).not.toHaveBeenCalled();
+  });
+
+  describe('validación antes de cualquier efecto', () => {
+    function expectRejectedWithoutEffects(
+      code: INTEGRATION_VALIDATION_CODE_ENUM,
+    ) {
+      return async (promise: Promise<unknown>) => {
+        const error = (await promise.catch(
+          (reason) => reason,
+        )) as IntegrationValidationException;
+        expect(error).toBeInstanceOf(IntegrationValidationException);
+        expect(error.getResponse()).toMatchObject({ code });
+        expect(idempotency.reserve).not.toHaveBeenCalled();
+        expect(creators.resolve).not.toHaveBeenCalled();
+        expect(flow.execute).not.toHaveBeenCalled();
+      };
+    }
+
+    it('un colaborador inválido no reserva la clave, no aprovisiona y no crea nada', async () => {
+      await expectRejectedWithoutEffects(
+        INTEGRATION_VALIDATION_CODE_ENUM.SIGNER_SIGNATURE_POSITION_REQUIRED,
+      )(
+        useCase().execute(
+          request({
+            ...PAYLOAD,
+            participants: [
+              { ...PAYLOAD.participants[0], signaturePositions: [] },
+            ],
+          }),
+        ),
+      );
+    });
+
+    it('una posición en una página que el PDF no tiene se rechaza antes de reservar', async () => {
+      pdf.getPdfPages.mockResolvedValue(1);
+
+      await expectRejectedWithoutEffects(
+        INTEGRATION_VALIDATION_CODE_ENUM.SIGNATURE_POSITION_PAGE_OUT_OF_RANGE,
+      )(
+        useCase().execute(
+          request({
+            ...PAYLOAD,
+            participants: [
+              {
+                ...PAYLOAD.participants[0],
+                signaturePositions: [
+                  {
+                    page: 3,
+                    xRatio: 0.1,
+                    yRatio: 0.1,
+                    widthRatio: 0.2,
+                    heightRatio: 0.06,
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
+      );
+    });
+
+    it('un archivo que no es PDF responde INVALID_DOCUMENT_FILE sin leer páginas', async () => {
+      const promise = useCase().execute({
+        ...request(),
+        file: {
+          ...FILE,
+          buffer: Buffer.from('no soy un pdf'),
+        } as Express.Multer.File,
+      });
+
+      await expectRejectedWithoutEffects(
+        INTEGRATION_VALIDATION_CODE_ENUM.INVALID_DOCUMENT_FILE,
+      )(promise);
+      expect(pdf.getPdfPages).not.toHaveBeenCalled();
+    });
+
+    it('un PDF que no se puede leer también es INVALID_DOCUMENT_FILE', async () => {
+      pdf.getPdfPages.mockRejectedValue(new Error('No se pudo leer el PDF'));
+
+      await expectRejectedWithoutEffects(
+        INTEGRATION_VALIDATION_CODE_ENUM.INVALID_DOCUMENT_FILE,
+      )(useCase().execute(request()));
+    });
   });
 });
