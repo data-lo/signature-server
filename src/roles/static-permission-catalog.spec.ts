@@ -84,6 +84,10 @@ const CATALOG_TABLE: ReadonlyArray<[STATIC_PERMISSION_KEY_ENUM, string]> = [
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
     'ARCHIVAR CONTACTOS DEL DIRECTORIO',
   ],
+  [
+    STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE,
+    'CREAR, CONSULTAR, ROTAR Y REVOCAR LA API KEY DE LA ORGANIZACIÓN',
+  ],
 ];
 
 const DIRECTORY_KEYS = [
@@ -184,6 +188,24 @@ describe('static-permission-catalog', () => {
           STATIC_ROLE_PERMISSION_MATRIX[SYSTEM_ROLE_NAME_ENUM.MEMBER],
         ).not.toContain(key);
       }
+    });
+
+    it('OWNER y ADMIN traen API_KEY.MANAGE; MEMBER y las cuentas personales, no', () => {
+      for (const role of [
+        SYSTEM_ROLE_NAME_ENUM.OWNER,
+        SYSTEM_ROLE_NAME_ENUM.ADMIN,
+      ]) {
+        expect(STATIC_ROLE_PERMISSION_MATRIX[role]).toContain(
+          STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE,
+        );
+      }
+      expect(
+        STATIC_ROLE_PERMISSION_MATRIX[SYSTEM_ROLE_NAME_ENUM.MEMBER],
+      ).not.toContain(STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE);
+      expect(
+        STATIC_PERMISSION_CATALOG[STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE]
+          .organizationOnly,
+      ).toBe(true);
     });
 
     it('ningún rol recibe una clave que no exista en el catálogo', () => {

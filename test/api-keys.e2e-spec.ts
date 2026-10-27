@@ -543,7 +543,17 @@ describe('API keys de organización (e2e)', () => {
                   (SELECT count(*)::int FROM pg_type WHERE typname = 'api_key_status_enum') AS enum`,
         );
 
-      await dataSource.undoLastMigration({ transaction: 'each' });
+      // Revierte también las migraciones posteriores (p. ej. `AddApiKeyManagePermission`), que
+      // se aplicaron después y tienen que salir antes.
+      const isApplied = async () =>
+        (
+          await dataSource.query(
+            `SELECT 1 FROM migrations WHERE name = 'CreateApiKeys1784300000077'`,
+          )
+        ).length > 0;
+      while (await isApplied()) {
+        await dataSource.undoLastMigration({ transaction: 'each' });
+      }
       await expect(objects()).resolves.toEqual([
         { keys: null, pivot: null, enum: 0 },
       ]);
