@@ -30,15 +30,42 @@ function boxesOverlap(
 export function assertNoOverlappingSignaturePositions(
   positionsByPage: Map<number, SignaturePositionDto[]>,
 ): void {
+  if (findOverlappingSignaturePositions(positionsByPage)) {
+    throw new BadRequestException(
+      'Las firmas de los colaboradores no pueden solaparse en la misma página',
+    );
+  }
+}
+
+/**
+ * La regla de `assertNoOverlappingSignaturePositions`, sin lanzar: devuelve el primer par de
+ * posiciones que se solapan en una misma página.
+ *
+ * Devuelve las posiciones por referencia, tal como llegaron en el mapa, para que quien llama
+ * pueda reconocer a qué firmante y a qué índice corresponde cada una (la API de integración
+ * responde con los dos campos).
+ *
+ * @param positionsByPage - Todas las posiciones de todos los firmantes, agrupadas por página.
+ * @returns El primer par solapado, o `null` si ninguno se solapa.
+ *
+ * @example
+ * ```ts
+ * const overlap = findOverlappingSignaturePositions(new Map([[1, [a, b]]]));
+ * overlap; // [a, b] si se solapan
+ * ```
+ */
+export function findOverlappingSignaturePositions(
+  positionsByPage: Map<number, SignaturePositionDto[]>,
+): [SignaturePositionDto, SignaturePositionDto] | null {
   for (const positions of positionsByPage.values()) {
     for (let i = 0; i < positions.length; i += 1) {
       for (let j = i + 1; j < positions.length; j += 1) {
         if (boxesOverlap(positions[i], positions[j])) {
-          throw new BadRequestException(
-            'Las firmas de los colaboradores no pueden solaparse en la misma página',
-          );
+          return [positions[i], positions[j]];
         }
       }
     }
   }
+
+  return null;
 }

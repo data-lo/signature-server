@@ -1,7 +1,6 @@
 import { applyDecorators } from '@nestjs/common';
 import { ApiHeader, ApiResponse, ApiSecurity } from '@nestjs/swagger';
-
-import { OrganizationApiKeyErrorResponse } from 'src/api-key/interfaces/response/organization-api-key-response';
+import { IntegrationErrorResponseDto } from '../interfaces/integration-document-response';
 
 /** Nombre del esquema de seguridad de Swagger para la API key de organización. */
 export const INTEGRATION_API_KEY_SECURITY = 'integration-api-key';
@@ -31,18 +30,18 @@ export function ApiIntegrationCommonResponses(requiredPermission: string) {
       status: 400,
       description:
         '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId`, `accountId`, `createdBy`, `createdByUserId`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave); o un filtro inválido',
-      type: OrganizationApiKeyErrorResponse,
+      type: IntegrationErrorResponseDto,
     }),
     ApiResponse({
       status: 401,
       description:
         '`API_KEY_INVALID` (falta, formato, secreto o revocada) o `API_KEY_EXPIRED`',
-      type: OrganizationApiKeyErrorResponse,
+      type: IntegrationErrorResponseDto,
     }),
     ApiResponse({
       status: 403,
       description: `\`API_KEY_PERMISSION_DENIED\` (la llave no tiene ${requiredPermission}), \`API_KEY_ORGANIZATION_INACTIVE\` o \`API_KEY_ACTOR_INACTIVE\` (quien emitió la llave ya no es miembro activo)`,
-      type: OrganizationApiKeyErrorResponse,
+      type: IntegrationErrorResponseDto,
     }),
   );
 }

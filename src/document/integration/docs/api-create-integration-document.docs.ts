@@ -8,14 +8,13 @@ import {
   ApiResponse,
 } from '@nestjs/swagger';
 
-import { OrganizationApiKeyErrorResponse } from 'src/api-key/interfaces/response/organization-api-key-response';
-
 import {
   CreateIntegrationDocumentDto,
   IntegrationDocumentPayloadDto,
 } from '../dto/create-integration-document.dto';
 import { IntegrationCreatedDocumentResponse } from '../interfaces/integration-document-response';
 import { ApiIntegrationCommonResponses } from './api-integration-documents-common.docs';
+import { IntegrationErrorResponseDto } from '../interfaces/integration-document-response';
 
 /** `POST /api/v1/integration/documents` — alta de un documento con creador por correo. */
 export function ApiCreateIntegrationDocument() {
@@ -59,13 +58,19 @@ export function ApiCreateIntegrationDocument() {
       status: 409,
       description:
         '`INTEGRATION_IDEMPOTENCY_KEY_MISMATCH` (la clave ya se usó con otro archivo o datos) o `INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS` (otra petición con la misma clave sigue en curso)',
-      type: OrganizationApiKeyErrorResponse,
+      type: IntegrationErrorResponseDto,
     }),
     ApiResponse({
       status: 422,
-      description:
-        '`INTEGRATION_CREATOR_UNAVAILABLE` (el creador está desactivado) o `INTEGRATION_CREATOR_MEMBERSHIP_REVOKED` (fue dado de baja de la organización)',
-      type: OrganizationApiKeyErrorResponse,
+      description: [
+        'Validación del payload o del archivo, con `error.details.field` apuntando al campo (p. ej. `participants[2].email`). Se valida antes de subir el archivo, aprovisionar al creador o reservar la `Idempotency-Key`:',
+        '`INVALID_PAYLOAD`, `INVALID_CREATOR`, `INVALID_DOCUMENT_OPTIONS`, `INVALID_DOCUMENT_FILE` (no es un PDF legible o pesa de más);',
+        '`PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED` (`MAX_INTEGRATION_DOCUMENT_PARTICIPANTS`, 50 por omisión), `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_NAME`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL` (sin espacios y en minúsculas, aunque cambie el rol);',
+        '`SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `MAX_SIGNATURE_POSITIONS_EXCEEDED`, `INVALID_SIGNING_ORDER` / `DUPLICATE_SIGNING_ORDER` (con `isSequential`, `order` único y consecutivo desde 1 entre firmantes);',
+        '`INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`;',
+        'y `INTEGRATION_CREATOR_UNAVAILABLE` / `INTEGRATION_CREATOR_MEMBERSHIP_REVOKED` para el creador.',
+      ].join(' '),
+      type: IntegrationErrorResponseDto,
     }),
   );
 }

@@ -1,10 +1,9 @@
 import { applyDecorators } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 
-import { OrganizationApiKeyErrorResponse } from 'src/api-key/interfaces/response/organization-api-key-response';
-
 import { IntegrationDocumentsPageResponse } from '../interfaces/integration-document-response';
 import { ApiIntegrationCommonResponses } from './api-integration-documents-common.docs';
+import { IntegrationErrorResponseDto } from '../interfaces/integration-document-response';
 
 /** `GET /api/v1/integration/users/:userId/documents` — documentos creados por un miembro. */
 export function ApiListUserIntegrationDocuments() {
@@ -32,7 +31,7 @@ export function ApiListUserIntegrationDocuments() {
       status: 404,
       description:
         '`INTEGRATION_USER_NOT_FOUND`: el usuario no es miembro activo de la organización de la llave',
-      type: OrganizationApiKeyErrorResponse,
+      type: IntegrationErrorResponseDto,
     }),
   );
 }

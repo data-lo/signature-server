@@ -5,21 +5,29 @@ import {
 } from '@nestjs/common';
 
 import { IntegrationApiClient } from 'src/api-key/interfaces/integration-api-client.interface';
+import { MAX_PDF_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
+import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 
 import { CreateDocumentSignatureFlowUseCase } from '../../applications/create-document-signature-flow.use-case';
 import { DocumentReadService } from '../../services/document-read.service';
 import { buildPublicDocumentUrl } from '../../utils/document-access-url.util';
-import { IntegrationDocumentPayloadDto } from '../dto/create-integration-document.dto';
+import { assertPdfFile } from '../../utils/pdf-file.util';
 import { IntegrationCreatedDocumentData } from '../interfaces/integration-document-response';
 import { IntegrationCreatorService } from '../services/integration-creator.service';
 import { IntegrationIdempotencyService } from '../services/integration-idempotency.service';
 import { toCreateDocumentSignaturesDto } from '../utils/integration-payload.mapper';
+import {
+  INTEGRATION_VALIDATION_CODE_ENUM,
+  IntegrationValidationException,
+} from '../validation/integration-validation.exception';
+import { IntegrationPayloadValidator } from '../validation/integration-payload.validator';
 
 /** Lo que llega de la petición, ya autenticada y validada. */
 export interface CreateIntegrationDocumentRequest {
   apiClient: IntegrationApiClient;
-  payload: IntegrationDocumentPayloadDto;
+  /** El campo multipart `payload`, crudo: lo valida `IntegrationPayloadValidator`. */
+  rawPayload: unknown;
   file: Express.Multer.File;
   ip: string;
   idempotencyKey: string;
@@ -60,14 +68,18 @@ export class CreateIntegrationDocumentUseCase {
     private readonly idempotencyService: IntegrationIdempotencyService,
     private readonly integrationCreatorService: IntegrationCreatorService,
     private readonly documentReadService: DocumentReadService,
+    private readonly payloadValidator: IntegrationPayloadValidator,
+    private readonly pdfSignatureService: PdfSignatureService,
   ) {}
 
   /**
    * Crea el documento, o responde con el de una petición anterior con la misma clave.
    *
-   * @param request - Cliente autenticado, payload, archivo, IP, clave y huella.
+   * @param request - Cliente autenticado, payload crudo, archivo, IP, clave y huella.
    * @returns El documento creado (o el original) con su URL pública.
    *
+   * @throws {IntegrationValidationException} (422) Si el payload, los colaboradores, sus posiciones
+   *   o el PDF no son válidos (ver `IntegrationPayloadValidator`).
    * @throws {IdempotencyKeyMismatchException} (409) Si la clave ya se usó con otro contenido.
    * @throws {IdempotencyKeyInProgressException} (409) Si otra petición con la misma clave sigue en
    *   curso.
@@ -81,18 +93,22 @@ export class CreateIntegrationDocumentUseCase {
    *
    * @example
    * ```ts
-   * const result = await createIntegrationDocument.execute({ apiClient, payload, file, ip, idempotencyKey, requestHash });
+   * const result = await createIntegrationDocument.execute({ apiClient, rawPayload, file, ip, idempotencyKey, requestHash });
    * result.data.publicUrl; // 'https://app.firmalo.com/public/documents/…'
    * ```
    */
   async execute(
     request: CreateIntegrationDocumentRequest,
   ): Promise<CreateIntegrationDocumentResult> {
-    const { apiClient, payload, file, ip, idempotencyKey, requestHash } =
+    const { apiClient, rawPayload, file, ip, idempotencyKey, requestHash } =
       request;
     const organizationId = apiClient.organizationId;
 
-    // Antes de reservar: un payload que pide aprobación no debe ocupar la clave.
+    // Todo lo que se puede rechazar sin efectos va antes de reservar la clave, de aprovisionar al
+    // creador y de subir el archivo: un payload inválido no ocupa la clave ni deja nada a medias.
+    const payload = this.payloadValidator.validatePayload(rawPayload);
+    const totalPages = await this.readPdfPages(file);
+    this.payloadValidator.assertPositionsFitDocument(payload, totalPages);
     const dto = toCreateDocumentSignaturesDto(payload, file.originalname);
 
     const reservation = await this.idempotencyService.reserve({
@@ -157,6 +173,41 @@ export class CreateIntegrationDocumentUseCase {
       data: await this.loadCreatedDocument(organizationId, documentId),
       replayed: false,
     };
+  }
+
+  /**
+   * Comprueba que el archivo sea un PDF de verdad y cuenta sus páginas, con las mismas reglas del
+   * flujo de creación (`assertPdfFile`, `PdfSignatureService.getPdfPages`), pero respondiendo con el
+   * error de integración.
+   *
+   * @param file - Archivo recibido.
+   * @returns Páginas del PDF.
+   *
+   * @throws {IntegrationValidationException} (422) `INVALID_DOCUMENT_FILE` si no es un PDF legible.
+   *
+   * @example
+   * ```ts
+   * const totalPages = await this.readPdfPages(file);
+   * ```
+   */
+  private async readPdfPages(file: Express.Multer.File): Promise<number> {
+    try {
+      if (file.size > MAX_PDF_FILE_SIZE_BYTES) {
+        throw new Error(
+          `El documento debe pesar menos de ${Math.floor(MAX_PDF_FILE_SIZE_BYTES / (1024 * 1024))}MB`,
+        );
+      }
+      assertPdfFile(file);
+      return await this.pdfSignatureService.getPdfPages(file);
+    } catch (error) {
+      throw new IntegrationValidationException(
+        INTEGRATION_VALIDATION_CODE_ENUM.INVALID_DOCUMENT_FILE,
+        error instanceof Error
+          ? error.message
+          : 'El archivo no es un PDF válido',
+        { field: 'file' },
+      );
+    }
   }
 
   private async loadCreatedDocument(

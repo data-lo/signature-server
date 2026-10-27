@@ -10,6 +10,7 @@ import { config } from 'dotenv';
 import { join } from 'path';
 import { Client } from 'pg';
 import * as request from 'supertest';
+import { PDFDocument } from 'pdf-lib';
 import { DataSource, EntityManager } from 'typeorm';
 
 import { AccountMemberService } from './../src/account/account-member.service';
@@ -20,6 +21,7 @@ import { ApiKeyModule } from './../src/api-key/api-key.module';
 import { JwtAuthGuard } from './../src/auth/guards/jwt-auth.guard';
 import { AuthorizationModule } from './../src/authorization/authorization.module';
 import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
+import { PdfSignatureService } from './../src/common/document-signing/document-signing.service';
 import { RedisService } from './../src/common/redis/redis.service';
 import {
   CreateDocumentSignatureFlowUseCase,
@@ -36,6 +38,7 @@ import { IntegrationIdempotencyKeyEntity } from './../src/document/integration/e
 import { IntegrationDocumentsController } from './../src/document/integration/integration-documents.controller';
 import { IntegrationIdempotencyService } from './../src/document/integration/services/integration-idempotency.service';
 import { IntegrationCreatorService } from './../src/document/integration/services/integration-creator.service';
+import { IntegrationPayloadValidator } from './../src/document/integration/validation/integration-payload.validator';
 import { OrganizationMemberEventsProducer } from './../src/kafka/organization-member.producer';
 import { RolesModule } from './../src/roles/roles.module';
 import { UserEntity } from './../src/user/entities/user.entity';
@@ -77,6 +80,13 @@ class E2eJwtModule {}
  * **No toca `signature_db`.** Crea una base propia (`signature_integration_e2e_*`) en el mismo
  * servidor de `POSTGRES_DB_URL`, le aplica todas las migraciones y la borra al terminar.
  */
+/** Un PDF real con `pages` páginas en blanco. */
+async function buildPdf(pages: number): Promise<Buffer> {
+  const pdf = await PDFDocument.create();
+  for (let page = 0; page < pages; page += 1) pdf.addPage([595, 842]);
+  return Buffer.from(await pdf.save());
+}
+
 describe('API de integración de documentos (e2e)', () => {
   const DATABASE_NAME = `signature_integration_e2e_${process.pid}_${Date.now()}`;
   const baseUrl = process.env.POSTGRES_DB_URL as string;
@@ -90,6 +100,9 @@ describe('API de integración de documentos (e2e)', () => {
   const ids: Record<string, string> = {};
   /** Llaves completas en claro, como las tendría el sistema externo. */
   const keys: Record<string, string> = {};
+  /** PDF real de 2 páginas que mandan las pruebas; `otherPdf` tiene 3. */
+  let twoPagePdf: Buffer;
+  let otherPdf: Buffer;
   /** Cuántas veces el doble del flujo "cobró" un crédito. */
   let creditsCharged = 0;
   /** Cuántas altas siguientes debe hacer fallar el doble del flujo (después del gancho). */
@@ -372,17 +385,23 @@ describe('API de integración de documentos (e2e)', () => {
   function postDocument(
     keyName: string,
     idempotencyKey: string | null,
-    options: { pdf?: string; body?: Record<string, any> | string } = {},
+    options: {
+      pdf?: Buffer | string;
+      body?: Record<string, any> | string;
+    } = {},
   ) {
     const body = options.body ?? payload();
     const call = request(app.getHttpServer())
       .post('/api/v1/integration/documents')
       .set(api(keyName))
       .field('payload', typeof body === 'string' ? body : JSON.stringify(body))
-      .attach('file', Buffer.from(options.pdf ?? '%PDF-1.4 erp'), {
-        filename: 'contrato-erp.pdf',
-        contentType: 'application/pdf',
-      });
+      .attach(
+        'file',
+        typeof options.pdf === 'string'
+          ? Buffer.from(options.pdf)
+          : (options.pdf ?? twoPagePdf),
+        { filename: 'contrato-erp.pdf', contentType: 'application/pdf' },
+      );
     return idempotencyKey ? call.set('Idempotency-Key', idempotencyKey) : call;
   }
 
@@ -405,6 +424,8 @@ describe('API de integración de documentos (e2e)', () => {
   beforeAll(async () => {
     process.env.API_KEY_PEPPER = API_KEY_PEPPER;
     process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test/';
+    twoPagePdf = await buildPdf(2);
+    otherPdf = await buildPdf(3);
     await adminQuery(`CREATE DATABASE "${DATABASE_NAME}"`);
 
     dataSource = new DataSource({
@@ -445,6 +466,9 @@ describe('API de integración de documentos (e2e)', () => {
         DocumentReadService,
         IntegrationIdempotencyService,
         IntegrationCreatorService,
+        IntegrationPayloadValidator,
+        // Real: la validación lee las páginas del PDF con el mismo servicio que el flujo.
+        PdfSignatureService,
         AccountMemberService,
         {
           /**
@@ -614,7 +638,7 @@ describe('API de integración de documentos (e2e)', () => {
         .get('/api/v1/integration/documents')
         .set(headers)
         .expect(401);
-      expect(response.body.code).toBe('API_KEY_INVALID');
+      expect(response.body.error.code).toBe('API_KEY_INVALID');
     });
 
     it('responde 401 a una llave revocada', async () => {
@@ -622,7 +646,7 @@ describe('API de integración de documentos (e2e)', () => {
         .get('/api/v1/integration/documents')
         .set(api('org1-revoked'))
         .expect(401);
-      expect(response.body.code).toBe('API_KEY_INVALID');
+      expect(response.body.error.code).toBe('API_KEY_INVALID');
     });
 
     it('responde 401 API_KEY_EXPIRED a una llave vencida', async () => {
@@ -635,7 +659,7 @@ describe('API de integración de documentos (e2e)', () => {
           .get('/api/v1/integration/documents')
           .set(api('org1-full'))
           .expect(401);
-        expect(response.body.code).toBe('API_KEY_EXPIRED');
+        expect(response.body.error.code).toBe('API_KEY_EXPIRED');
       } finally {
         await dataSource.query(
           `UPDATE api_keys SET expires_at = NULL WHERE id = $1`,
@@ -649,7 +673,7 @@ describe('API de integración de documentos (e2e)', () => {
         .get('/api/v1/integration/documents')
         .set(api('org-off'))
         .expect(403);
-      expect(response.body.code).toBe('API_KEY_ORGANIZATION_INACTIVE');
+      expect(response.body.error.code).toBe('API_KEY_ORGANIZATION_INACTIVE');
     });
 
     it('responde 403 si el actor de la llave ya no es miembro activo', async () => {
@@ -662,7 +686,7 @@ describe('API de integración de documentos (e2e)', () => {
           .get('/api/v1/integration/documents')
           .set(api('org2-full'))
           .expect(403);
-        expect(response.body.code).toBe('API_KEY_ACTOR_INACTIVE');
+        expect(response.body.error.code).toBe('API_KEY_ACTOR_INACTIVE');
       } finally {
         await dataSource.query(
           `UPDATE accounts SET is_active = true WHERE id = $1`,
@@ -763,7 +787,10 @@ describe('API de integración de documentos (e2e)', () => {
       await request(app.getHttpServer())
         .get('/api/v1/integration/documents?limit=101')
         .set(api('org1-full'))
-        .expect(400);
+        .expect(422)
+        .expect((response) =>
+          expect(response.body.error.code).toBe('INVALID_REQUEST'),
+        );
     });
 
     it.each([
@@ -788,7 +815,7 @@ describe('API de integración de documentos (e2e)', () => {
             ),
           )
           .expect(400);
-        expect(response.body.code).toBe(
+        expect(response.body.error.code).toBe(
           'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
         );
       },
@@ -801,7 +828,7 @@ describe('API de integración de documentos (e2e)', () => {
         .get('/api/v1/integration/documents')
         .set(api('org1-own'))
         .expect(403);
-      expect(response.body.code).toBe('API_KEY_PERMISSION_DENIED');
+      expect(response.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
     });
   });
 
@@ -830,7 +857,7 @@ describe('API de integración de documentos (e2e)', () => {
         .get(userUrl(userKey))
         .set(api('org1-full'))
         .expect(404);
-      expect(response.body.code).toBe('INTEGRATION_USER_NOT_FOUND');
+      expect(response.body.error.code).toBe('INTEGRATION_USER_NOT_FOUND');
     });
 
     it('con sólo OWN consulta al actor de la llave', async () => {
@@ -851,7 +878,7 @@ describe('API de integración de documentos (e2e)', () => {
           .get(userUrl(userKey))
           .set(api('org1-own'))
           .expect(403);
-        expect(response.body.code).toBe('INTEGRATION_SCOPE_DENIED');
+        expect(response.body.error.code).toBe('INTEGRATION_SCOPE_DENIED');
       }
     });
   });
@@ -1017,7 +1044,7 @@ describe('API de integración de documentos (e2e)', () => {
           },
         ).expect(422);
 
-        expect(response.body.code).toBe(
+        expect(response.body.error.code).toBe(
           'INTEGRATION_CREATOR_MEMBERSHIP_REVOKED',
         );
         const [{ count }] = await dataSource.query(
@@ -1084,7 +1111,9 @@ describe('API de integración de documentos (e2e)', () => {
           }),
         }).expect(409);
 
-        expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_MISMATCH');
+        expect(response.body.error.code).toBe(
+          'INTEGRATION_IDEMPOTENCY_KEY_MISMATCH',
+        );
       });
 
       it('la misma clave con otro archivo responde 409', async () => {
@@ -1092,10 +1121,12 @@ describe('API de integración de documentos (e2e)', () => {
         await postDocument('org1-full', idempotencyKey).expect(201);
 
         const response = await postDocument('org1-full', idempotencyKey, {
-          pdf: '%PDF-1.4 otro contenido',
+          pdf: otherPdf,
         }).expect(409);
 
-        expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_MISMATCH');
+        expect(response.body.error.code).toBe(
+          'INTEGRATION_IDEMPOTENCY_KEY_MISMATCH',
+        );
       });
 
       it('peticiones simultáneas con la misma clave crean un solo documento y cobran una vez', async () => {
@@ -1114,7 +1145,7 @@ describe('API de integración de documentos (e2e)', () => {
         for (const response of responses.filter((r) => r.status !== 201)) {
           expect([200, 409]).toContain(response.status);
           if (response.status === 409) {
-            expect(response.body.code).toBe(
+            expect(response.body.error.code).toBe(
               'INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS',
             );
           }
@@ -1177,7 +1208,9 @@ describe('API de integración de documentos (e2e)', () => {
     describe('validación del contrato', () => {
       it('exige Idempotency-Key', async () => {
         const response = await postDocument('org1-full', null).expect(400);
-        expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_REQUIRED');
+        expect(response.body.error.code).toBe(
+          'INTEGRATION_IDEMPOTENCY_KEY_REQUIRED',
+        );
       });
 
       it('exige el archivo PDF', async () => {
@@ -1189,47 +1222,288 @@ describe('API de integración de documentos (e2e)', () => {
           .expect(400);
       });
 
-      it.each([
-        ['un payload que no es JSON', '{no es json'],
-        [
-          'sin creador',
-          JSON.stringify(payload((value) => delete value.creator)),
-        ],
-        [
-          'un correo de creador inválido',
-          JSON.stringify(
-            payload((value) => (value.creator.email = 'no-es-correo')),
-          ),
-        ],
-        [
-          'sin participantes',
-          JSON.stringify(payload((value) => (value.participants = []))),
-        ],
-        [
-          'un firmante sin posiciones',
-          JSON.stringify(
-            payload((value) => delete value.participants[0].signaturePositions),
-          ),
-        ],
-        [
-          'una posición fuera de rango',
-          JSON.stringify(
-            payload(
-              (value) =>
-                (value.participants[0].signaturePositions[0].xRatio = 2),
-            ),
-          ),
-        ],
-        [
-          'un rol desconocido',
-          JSON.stringify(
-            payload((value) => (value.participants[0].role = 'VIEWER')),
-          ),
-        ],
-      ])('rechaza con 400 %s', async (_label, body) => {
-        await postDocument('org1-full', `invalido-${randomUUID()}`, {
-          body,
-        }).expect(400);
+      describe('colaboradores y posiciones (422 con código y campo)', () => {
+        const signer = (email: string, order: number, extra: object = {}) => ({
+          role: 'SIGNER',
+          firstName: 'Firma',
+          lastName: 'Prueba',
+          email,
+          order,
+          signaturePositions: [{ ...POSITION, yRatio: 0.1 * order }],
+          ...extra,
+        });
+
+        it.each([
+          [
+            'un payload que no es JSON',
+            '{no es json',
+            'INVALID_PAYLOAD',
+            'payload',
+          ],
+          [
+            'sin creador',
+            (v: any) => delete v.creator,
+            'INVALID_CREATOR',
+            'creator',
+          ],
+          [
+            'un correo de creador inválido',
+            (v: any) => (v.creator.email = 'no-es-correo'),
+            'INVALID_CREATOR',
+            'creator.email',
+          ],
+          [
+            'sin participants',
+            (v: any) => delete v.participants,
+            'PARTICIPANTS_REQUIRED',
+            'participants',
+          ],
+          [
+            'participants vacío',
+            (v: any) => (v.participants = []),
+            'PARTICIPANTS_REQUIRED',
+            'participants',
+          ],
+          [
+            'sin ningún SIGNER',
+            (v: any) => (v.participants = [v.participants[1]]),
+            'SIGNER_REQUIRED',
+            'participants',
+          ],
+          [
+            'un rol desconocido',
+            (v: any) => (v.participants[1].role = 'VIEWER'),
+            'INVALID_PARTICIPANT_ROLE',
+            'participants[1].role',
+          ],
+          [
+            'un nombre vacío',
+            (v: any) => (v.participants[0].firstName = ' '),
+            'INVALID_PARTICIPANT_NAME',
+            'participants[0].firstName',
+          ],
+          [
+            'un apellido demasiado largo',
+            (v: any) => (v.participants[0].lastName = 'x'.repeat(101)),
+            'INVALID_PARTICIPANT_NAME',
+            'participants[0].lastName',
+          ],
+          [
+            'un correo de colaborador inválido',
+            (v: any) => (v.participants[0].email = 'luis@'),
+            'INVALID_PARTICIPANT_EMAIL',
+            'participants[0].email',
+          ],
+          [
+            'un correo repetido con otro rol y mayúsculas',
+            (v: any) => (v.participants[1].email = ' LUIS@correo.test'),
+            'DUPLICATE_PARTICIPANT_EMAIL',
+            'participants[1].email',
+          ],
+          [
+            'un firmante sin posiciones',
+            (v: any) => delete v.participants[0].signaturePositions,
+            'SIGNER_SIGNATURE_POSITION_REQUIRED',
+            'participants[0].signaturePositions',
+          ],
+          [
+            'un testigo con posiciones',
+            (v: any) =>
+              (v.participants[1].signaturePositions = [
+                { ...POSITION, yRatio: 0.5 },
+              ]),
+            'WITNESS_SIGNATURE_POSITION_NOT_ALLOWED',
+            'participants[1].signaturePositions',
+          ],
+          [
+            'un firmante sin order en documento secuencial',
+            (v: any) => delete v.participants[0].order,
+            'INVALID_SIGNING_ORDER',
+            'participants[0].order',
+          ],
+          [
+            'órdenes repetidos',
+            (v: any) =>
+              (v.participants = [
+                signer('a@correo.test', 1),
+                signer('b@correo.test', 1, {
+                  signaturePositions: [{ ...POSITION, yRatio: 0.5 }],
+                }),
+              ]),
+            'DUPLICATE_SIGNING_ORDER',
+            'participants[1].order',
+          ],
+          [
+            'órdenes no consecutivos',
+            (v: any) =>
+              (v.participants = [
+                signer('a@correo.test', 1),
+                signer('b@correo.test', 3),
+              ]),
+            'INVALID_SIGNING_ORDER',
+            'participants',
+          ],
+          [
+            'una posición con página 0',
+            (v: any) => (v.participants[0].signaturePositions[0].page = 0),
+            'INVALID_SIGNATURE_POSITION',
+            'participants[0].signaturePositions[0].page',
+          ],
+          [
+            'un ratio fuera de rango',
+            (v: any) => (v.participants[0].signaturePositions[0].xRatio = 2),
+            'INVALID_SIGNATURE_POSITION',
+            'participants[0].signaturePositions[0].xRatio',
+          ],
+          [
+            'un ancho de 0',
+            (v: any) =>
+              (v.participants[0].signaturePositions[0].widthRatio = 0),
+            'INVALID_SIGNATURE_POSITION',
+            'participants[0].signaturePositions[0].widthRatio',
+          ],
+          [
+            'una página que el PDF no tiene',
+            (v: any) => (v.participants[0].signaturePositions[0].page = 3),
+            'SIGNATURE_POSITION_PAGE_OUT_OF_RANGE',
+            'participants[0].signaturePositions[0].page',
+          ],
+          [
+            'una caja que se sale de la página',
+            (v: any) =>
+              Object.assign(v.participants[0].signaturePositions[0], {
+                xRatio: 0.95,
+                widthRatio: 0.2,
+              }),
+            'INVALID_SIGNATURE_POSITION',
+            'participants[0].signaturePositions[0]',
+          ],
+          [
+            'posiciones traslapadas entre firmantes',
+            (v: any) =>
+              (v.participants = [
+                signer('a@correo.test', 1),
+                signer('b@correo.test', 2, {
+                  signaturePositions: [
+                    { ...POSITION, yRatio: 0.1, xRatio: 0.15 },
+                  ],
+                }),
+              ]),
+            'SIGNATURE_POSITION_OVERLAP',
+            'participants[1].signaturePositions[0]',
+          ],
+        ])('rechaza %s', async (_label, patch, code, field) => {
+          const before = creditsCharged;
+
+          const response = await postDocument(
+            'org1-full',
+            `regla-${randomUUID()}`,
+            {
+              body:
+                typeof patch === 'string'
+                  ? patch
+                  : payload(patch as (v: any) => void),
+            },
+          ).expect(422);
+
+          expect(response.body).toEqual({
+            success: false,
+            error: {
+              code,
+              message: expect.any(String),
+              details: expect.objectContaining({ field }),
+            },
+          });
+          expect(creditsCharged).toBe(before);
+        });
+
+        it('rechaza más colaboradores que el máximo, con el límite y lo recibido', async () => {
+          const participants = [
+            signer('firmante@correo.test', 1),
+            ...Array.from({ length: 52 }, (_, index) => ({
+              role: 'WITNESS',
+              firstName: 'Testigo',
+              lastName: `${index}`,
+              email: `testigo-${index}@correo.test`,
+            })),
+          ];
+
+          const response = await postDocument(
+            'org1-full',
+            `maximo-${randomUUID()}`,
+            {
+              body: payload((value) => (value.participants = participants)),
+            },
+          ).expect(422);
+
+          expect(response.body).toEqual({
+            success: false,
+            error: {
+              code: 'MAX_PARTICIPANTS_EXCEEDED',
+              message: 'El documento admite como máximo 50 colaboradores.',
+              details: { field: 'participants', limit: 50, received: 53 },
+            },
+          });
+        });
+
+        it('un error de validación no ocupa la Idempotency-Key ni aprovisiona al creador', async () => {
+          const idempotencyKey = `invalido-luego-valido-${randomUUID()}`;
+          const email = `sin-alta-${randomUUID()}@cliente.test`;
+
+          await postDocument('org1-full', idempotencyKey, {
+            body: payload((value) => {
+              value.creator.email = email;
+              value.participants[0].signaturePositions[0].page = 9;
+            }),
+          }).expect(422);
+          expect(await userByEmail(email)).toBeUndefined();
+
+          await postDocument('org1-full', idempotencyKey, {
+            body: payload((value) => (value.creator.email = email)),
+          }).expect(201);
+        });
+
+        it('un archivo que no es PDF responde INVALID_DOCUMENT_FILE', async () => {
+          const response = await postDocument(
+            'org1-full',
+            `no-pdf-${randomUUID()}`,
+            {
+              pdf: 'esto no es un pdf',
+            },
+          ).expect(422);
+
+          expect(response.body.error).toMatchObject({
+            code: 'INVALID_DOCUMENT_FILE',
+            details: { field: 'file' },
+          });
+        });
+
+        it('un documento no secuencial puede omitir order', async () => {
+          await postDocument('org1-full', `no-secuencial-${randomUUID()}`, {
+            body: payload((value) => {
+              value.document.isSequential = false;
+              delete value.participants[0].order;
+              delete value.participants[1].order;
+            }),
+          }).expect(201);
+        });
+      });
+
+      it('un error inesperado responde 500 genérico, sin detalles internos', async () => {
+        flowFailures = 1;
+
+        const response = await postDocument(
+          'org1-full',
+          `interno-${randomUUID()}`,
+        ).expect(500);
+
+        expect(response.body).toEqual({
+          success: false,
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: 'Ocurrió un error interno. Vuelve a intentarlo más tarde.',
+          },
+        });
       });
 
       it.each([
@@ -1277,7 +1551,7 @@ describe('API de integración de documentos (e2e)', () => {
             },
           ).expect(400);
 
-          expect(response.body.code).toBe(
+          expect(response.body.error.code).toBe(
             'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
           );
           expect(await userByEmail(email)).toBeUndefined();
@@ -1292,7 +1566,9 @@ describe('API de integración de documentos (e2e)', () => {
             body: payload((value) => (value.document.requiresApproval = true)),
           },
         ).expect(400);
-        expect(response.body.code).toBe('INTEGRATION_APPROVAL_NOT_SUPPORTED');
+        expect(response.body.error.code).toBe(
+          'INTEGRATION_APPROVAL_NOT_SUPPORTED',
+        );
       });
 
       it('responde 403 a una llave sin DOCUMENT.CREATE', async () => {
@@ -1302,7 +1578,7 @@ describe('API de integración de documentos (e2e)', () => {
           'org1-own',
           `sin-permiso-${randomUUID()}`,
         ).expect(403);
-        expect(response.body.code).toBe('API_KEY_PERMISSION_DENIED');
+        expect(response.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
       });
     });
   });

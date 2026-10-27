@@ -51,6 +51,17 @@ function payload(
   };
 }
 
+function signer(email: string, order?: number) {
+  return {
+    role: INTEGRATION_PARTICIPANT_ROLE_ENUM.SIGNER,
+    firstName: 'Firmante',
+    lastName: 'Prueba',
+    email,
+    order,
+    signaturePositions: [POSITION],
+  };
+}
+
 describe('toCreateDocumentSignaturesDto', () => {
   it('arma el documento con el nombre del PDF y las opciones del payload', () => {
     const dto = toCreateDocumentSignaturesDto(payload(), 'contrato.pdf');
@@ -65,39 +76,76 @@ describe('toCreateDocumentSignaturesDto', () => {
   });
 
   it('invita a cada participante como colaborador MANUAL por correo, sin Directorio', () => {
-    const [signer, witness] = toCreateDocumentSignaturesDto(
-      payload(),
+    const [witness] = toCreateDocumentSignaturesDto(
+      payload({
+        participants: [
+          {
+            role: INTEGRATION_PARTICIPANT_ROLE_ENUM.WITNESS,
+            firstName: 'Eva',
+            lastName: 'Ruiz',
+            email: 'eva@correo.com',
+          },
+          {
+            role: INTEGRATION_PARTICIPANT_ROLE_ENUM.SIGNER,
+            firstName: 'Luis',
+            lastName: 'Martínez',
+            email: 'luis@correo.com',
+            order: 1,
+            signaturePositions: [POSITION],
+          },
+        ],
+      }),
       'contrato.pdf',
-    ).collaborators;
+    ).collaborators.slice(1);
 
-    expect(signer).toMatchObject({
+    expect(witness).toMatchObject({
       source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
       addToDirectory: false,
-      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-      email: 'luis@correo.com',
-      signatures: [POSITION],
-      orderIndex: 1,
-    });
-    // El testigo no firma: sus posiciones, si las manda, no se trasladan.
-    expect(witness).toMatchObject({
       collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+      email: 'eva@correo.com',
       signatures: undefined,
-      orderIndex: 0,
     });
   });
 
-  it('si algún participante no trae order, conserva el orden del arreglo', () => {
-    const base = payload();
-    delete base.participants[1].order;
-
+  it('en un documento secuencial ordena a los firmantes por order y deja a los testigos al final', () => {
     const collaborators = toCreateDocumentSignaturesDto(
-      base,
+      payload({
+        participants: [
+          signer('b@correo.com', 2),
+          {
+            role: INTEGRATION_PARTICIPANT_ROLE_ENUM.WITNESS,
+            firstName: 'Eva',
+            lastName: 'Ruiz',
+            email: 'eva@correo.com',
+          },
+          signer('a@correo.com', 1),
+        ],
+      }),
       'contrato.pdf',
     ).collaborators;
 
-    expect(collaborators.map((c) => c.orderIndex)).toEqual([
-      undefined,
-      undefined,
+    expect(collaborators.map((c) => [c.email, c.orderIndex])).toEqual([
+      ['a@correo.com', 0],
+      ['b@correo.com', 1],
+      ['eva@correo.com', 2],
+    ]);
+  });
+
+  it('en un documento no secuencial conserva el orden del arreglo y no manda orderIndex', () => {
+    const collaborators = toCreateDocumentSignaturesDto(
+      payload({
+        document: {
+          signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE,
+          isSequential: false,
+        },
+        participants: [signer('b@correo.com', 2), signer('a@correo.com')],
+      }),
+      'contrato.pdf',
+    ).collaborators;
+
+    expect(collaborators.map((c) => [c.email, c.orderIndex])).toEqual([
+      ['b@correo.com', undefined],
+      ['a@correo.com', undefined],
     ]);
   });
 

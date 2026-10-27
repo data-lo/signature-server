@@ -1,7 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 
 import { SignaturePositionDto } from '../dto/create-document-signatures.dto';
-import { assertSignaturePositionsInsideDocument } from './signature-position.util';
+import {
+  assertSignaturePositionsInsideDocument,
+  findSignaturePositionOutsideDocument,
+} from './signature-position.util';
 
 function position(
   overrides: Partial<SignaturePositionDto> = {},
@@ -49,5 +52,33 @@ describe('assertSignaturePositionsInsideDocument', () => {
     expect(() =>
       assertSignaturePositionsInsideDocument([position(box)], 1),
     ).toThrow('se sale de los límites de la página');
+  });
+});
+
+describe('findSignaturePositionOutsideDocument', () => {
+  it('devuelve null si todas las posiciones caben', () => {
+    expect(
+      findSignaturePositionOutsideDocument(
+        [position(), position({ page: 2 })],
+        2,
+      ),
+    ).toBeNull();
+  });
+
+  it('señala la primera posición en una página inexistente, con su índice', () => {
+    const outside = position({ page: 5 });
+
+    expect(
+      findSignaturePositionOutsideDocument([position(), outside], 3),
+    ).toEqual({ index: 1, position: outside, reason: 'PAGE_OUT_OF_RANGE' });
+  });
+
+  it('señala la caja que se sale de la página', () => {
+    expect(
+      findSignaturePositionOutsideDocument(
+        [position({ xRatio: 0.9, widthRatio: 0.2 })],
+        1,
+      ),
+    ).toMatchObject({ index: 0, reason: 'OUT_OF_PAGE_BOUNDS' });
   });
 });
