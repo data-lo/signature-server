@@ -36,6 +36,7 @@ import { BiometricSignatureModule } from './biometric-signature/biometric-signat
 import { GuestAdvancedSignatureModule } from './guest-advanced-signature/guest-advanced-signature.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { DirectoryModule } from './directory/directory.module';
+import { ApiKeyModule } from './api-key/api-key.module';
 
 @Module({
   imports: [
@@ -113,6 +114,7 @@ import { DirectoryModule } from './directory/directory.module';
     GuestAdvancedSignatureModule,
     AuthorizationModule,
     DirectoryModule,
+    ApiKeyModule,
   ],
   controllers: [AppController],
   providers: [
