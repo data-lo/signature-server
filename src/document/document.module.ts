@@ -21,6 +21,15 @@ import { SealModule } from './seal/seal.module';
 import { SummaryDocumentModule } from './summary-document/summary-document.module';
 import { BillingModule } from 'src/billing/billing.module';
 import { DirectoryModule } from 'src/directory/directory.module';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { ApiKeyModule } from 'src/api-key/api-key.module';
+import { DocumentReadService } from './services/document-read.service';
+import { IntegrationDocumentsController } from './integration/integration-documents.controller';
+import { ListOrganizationIntegrationDocumentsUseCase } from './integration/applications/list-organization-integration-documents.use-case';
+import { ListUserIntegrationDocumentsUseCase } from './integration/applications/list-user-integration-documents.use-case';
+import { CreateIntegrationDocumentUseCase } from './integration/applications/create-integration-document.use-case';
+import { IntegrationIdempotencyService } from './integration/services/integration-idempotency.service';
+import { IntegrationIdempotencyKeyEntity } from './integration/entities/integration-idempotency-key.entity';
 import { SignatureQrService } from './services/signature-qr.service';
 import { DocumentAuthorizationPolicy } from './policies/document-authorization.policy';
 import { DocumentReadAccessService } from './services/document-read-access.service';
@@ -65,6 +74,11 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
     DocumentController,
     DocumentSignaturesController,
     PublicSigningController,
+    /**
+     * API de integración para sistemas externos (`/integration/...`), autenticada con la API key
+     * de la organización en vez de JWT. Reutiliza los casos de uso de este módulo.
+     */
+    IntegrationDocumentsController,
   ],
   providers: [
     DocumentService,
@@ -118,6 +132,11 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
     GuestSigningAccessService,
     /** Valida la invitación de la pantalla pública `/public/documents/:id/sign`. */
     GetPublicSigningInvitationUseCase,
+    DocumentReadService,
+    IntegrationIdempotencyService,
+    ListOrganizationIntegrationDocumentsUseCase,
+    ListUserIntegrationDocumentsUseCase,
+    CreateIntegrationDocumentUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -140,6 +159,10 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
       // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
       BiometricSignatureAttemptEntity,
       GuestSigningAccessEntity,
+      IntegrationIdempotencyKeyEntity,
+      // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
+      // pedido dentro de la organización de la API key.
+      AccountEntity,
     ]),
     SharedModule,
     UserModule,
@@ -159,6 +182,8 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
      * Directorio no importa nada de documentos.
      */
     DirectoryModule,
+    // `OrganizationApiKeyGuard` y lo que necesita para inyectarse en `IntegrationDocumentsController`.
+    ApiKeyModule,
     /**
      * De aquí sale `ConsumeDocumentCreditUseCase`: crear un documento cuesta un crédito.
      *

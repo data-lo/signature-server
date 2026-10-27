@@ -1,8 +1,10 @@
 import {
   ConflictException,
+  ForbiddenException,
   HttpStatus,
   InternalServerErrorException,
   NotFoundException,
+  UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 
@@ -20,14 +22,24 @@ export enum API_KEY_ERROR_CODE_ENUM {
   API_KEY_INVALID_EXPIRATION = 'API_KEY_INVALID_EXPIRATION',
   API_KEY_INVALID_BODY = 'API_KEY_INVALID_BODY',
   API_KEY_NOT_CONFIGURED = 'API_KEY_NOT_CONFIGURED',
+  API_KEY_INVALID = 'API_KEY_INVALID',
+  API_KEY_EXPIRED = 'API_KEY_EXPIRED',
+  API_KEY_ORGANIZATION_INACTIVE = 'API_KEY_ORGANIZATION_INACTIVE',
+  API_KEY_ACTOR_INACTIVE = 'API_KEY_ACTOR_INACTIVE',
+  API_KEY_PERMISSION_DENIED = 'API_KEY_PERMISSION_DENIED',
 }
 
-/** Cuerpo de error de estos endpoints: el de Nest más `code`. */
+/**
+ * Cuerpo de error de estos endpoints: el de Nest más `code`.
+ *
+ * `code` es texto y no `API_KEY_ERROR_CODE_ENUM` para que la API de integración (que autentica con
+ * estas llaves) responda con el mismo cuerpo y sus propios códigos.
+ */
 export interface ApiKeyErrorBody {
   statusCode: number;
   error: string;
   message: string | string[];
-  code: API_KEY_ERROR_CODE_ENUM;
+  code: string;
 }
 
 /**
@@ -48,7 +60,7 @@ export function buildApiKeyErrorBody(
   statusCode: number,
   error: string,
   message: string | string[],
-  code: API_KEY_ERROR_CODE_ENUM,
+  code: string,
 ): ApiKeyErrorBody {
   return { statusCode, error, message, code };
 }
@@ -166,6 +178,87 @@ export class ApiKeyNotConfiguredException extends InternalServerErrorException {
         'Internal Server Error',
         'La emisión de API keys no está disponible en este momento',
         API_KEY_ERROR_CODE_ENUM.API_KEY_NOT_CONFIGURED,
+      ),
+    );
+  }
+}
+
+/**
+ * `X-API-Key` falta, no tiene el formato de una llave de la plataforma, no existe, su secreto no
+ * coincide o está revocada. Un solo mensaje para todos: distinguirlos ayudaría a quien prueba
+ * llaves a ciegas.
+ */
+export class InvalidApiKeyException extends UnauthorizedException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.UNAUTHORIZED,
+        'Unauthorized',
+        'API key inválida o revocada',
+        API_KEY_ERROR_CODE_ENUM.API_KEY_INVALID,
+      ),
+    );
+  }
+}
+
+/**
+ * La llave es auténtica pero pasó su `expiresAt`. Se dice aparte del caso inválido porque quien
+ * llega aquí ya demostró tener el secreto, y lo que necesita saber es que debe rotarla.
+ */
+export class ExpiredApiKeyException extends UnauthorizedException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.UNAUTHORIZED,
+        'Unauthorized',
+        'La API key venció. Genera una nueva desde Integraciones.',
+        API_KEY_ERROR_CODE_ENUM.API_KEY_EXPIRED,
+      ),
+    );
+  }
+}
+
+/** La organización de la llave está desactivada. */
+export class ApiKeyOrganizationInactiveException extends ForbiddenException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.FORBIDDEN,
+        'Forbidden',
+        'La organización de esta API key está desactivada',
+        API_KEY_ERROR_CODE_ENUM.API_KEY_ORGANIZATION_INACTIVE,
+      ),
+    );
+  }
+}
+
+/**
+ * La membresía que emitió la llave —su actor— ya no está activa en la organización. La llave deja
+ * de servir sin revocarse: lo que crea en nombre de alguien no puede sobrevivir a que esa persona
+ * salga de la organización.
+ */
+export class ApiKeyActorInactiveException extends ForbiddenException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.FORBIDDEN,
+        'Forbidden',
+        'La cuenta asociada a esta API key ya no está activa en la organización',
+        API_KEY_ERROR_CODE_ENUM.API_KEY_ACTOR_INACTIVE,
+      ),
+    );
+  }
+}
+
+/** La llave no tiene concedido el permiso (recurso, acción y alcance) que exige el endpoint. */
+export class ApiKeyPermissionDeniedException extends ForbiddenException {
+  constructor(requiredPermission: string) {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.FORBIDDEN,
+        'Forbidden',
+        `La API key no tiene el permiso requerido: ${requiredPermission}`,
+        API_KEY_ERROR_CODE_ENUM.API_KEY_PERMISSION_DENIED,
       ),
     );
   }

@@ -21,6 +21,15 @@ import { DOCUMENT_VIEW_ENUM } from '../enum/document-view.enum';
 import { DOCUMENT_PARTICIPATION_ENUM } from '../enum/document-participation.enum';
 import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { DocumentService } from '../document.service';
+import {
+  applyDocumentStatusAndDateFilters,
+  assertValidDocumentDateRanges,
+  buildDocumentsPagination,
+  DOCUMENT_SORT_COLUMNS,
+  DocumentsPagination,
+} from '../utils/document-list-query.util';
+
+export type { DocumentsPagination };
 
 /** Lo que el caso de uso necesita: quién pregunta, desde qué cuenta, y qué quiere ver. */
 export interface GetDocumentsParams {
@@ -42,13 +51,6 @@ export interface GetDocumentsParams {
   filters: GetDocumentsQueryDto;
 }
 
-export interface DocumentsPagination {
-  page: number;
-  limit: number;
-  total: number;
-  totalPages: number;
-}
-
 /**
  * Los roles que tienen algo que HACER con un documento.
  *
@@ -60,20 +62,6 @@ const ACTING_COLLABORATOR_TYPES = [
   COLABORATOR_TYPE_ENUM.SIGNER,
   COLABORATOR_TYPE_ENUM.REVIEWER,
 ];
-
-/**
- * De qué campo del enum sale cada columna del `ORDER BY`.
- *
- * El mapa es lo que convierte la lista cerrada del DTO en SQL. Es la única forma en que un valor
- * del cliente llega al ordenamiento, y llega como CLAVE de este objeto, nunca como texto: el
- * `ORDER BY` no admite parámetros preparados, así que lo que se interpola tiene que salir de acá.
- */
-const SORT_COLUMNS: Record<DOCUMENT_SORT_FIELD_ENUM, string> = {
-  [DOCUMENT_SORT_FIELD_ENUM.CREATED_AT]: 'document.createdAt',
-  [DOCUMENT_SORT_FIELD_ENUM.SIGNED_AT]: 'document.signedAt',
-  [DOCUMENT_SORT_FIELD_ENUM.FILE_NAME]: 'document.fileName',
-  [DOCUMENT_SORT_FIELD_ENUM.STATUS]: 'document.status',
-};
 
 /**
  * Lista los documentos que la cuenta activa puede ver, con búsqueda, recorte, orden y paginación.
@@ -149,8 +137,12 @@ export class GetDocumentsUseCase {
       archived = false,
     } = filters;
 
-    this.assertValidDateRange(createdFrom, createdTo, 'creación');
-    this.assertValidDateRange(signedFrom, signedTo, 'firma');
+    assertValidDocumentDateRanges({
+      createdFrom,
+      createdTo,
+      signedFrom,
+      signedTo,
+    });
 
     /**
      * El correo sale del servidor y no de la query: pedírselo al cliente sería confiarle de quién
@@ -176,7 +168,7 @@ export class GetDocumentsUseCase {
       .leftJoinAndSelect('document.collaborators', 'collaborator')
       .leftJoinAndSelect('collaborator.account', 'collaboratorAccount')
       .leftJoinAndSelect('collaboratorAccount.user', 'collaboratorUser')
-      .orderBy(SORT_COLUMNS[sortBy], sortDirection)
+      .orderBy(DOCUMENT_SORT_COLUMNS[sortBy], sortDirection)
       // Desempate estable: sin él, un documento se repite entre páginas mientras otro no sale.
       .addOrderBy('document.id', sortDirection)
       .skip((page - 1) * limit)
@@ -196,9 +188,13 @@ export class GetDocumentsUseCase {
       qb.andWhere('document.id = :id', { id });
     }
 
-    if (statuses?.length) {
-      qb.andWhere('document.status IN (:...statuses)', { statuses });
-    }
+    applyDocumentStatusAndDateFilters(qb, {
+      statuses,
+      createdFrom,
+      createdTo,
+      signedFrom,
+      signedTo,
+    });
 
     if (search) {
       // Una caja para nombre y participantes: es lo que la persona tiene en la cabeza al buscar.
@@ -215,30 +211,6 @@ export class GetDocumentsUseCase {
     if (participant) {
       qb.andWhere(this.participantMatchSubquery('participant'), {
         participant: `%${participant}%`,
-      });
-    }
-
-    if (createdFrom) {
-      qb.andWhere('document.createdAt >= :createdFrom', {
-        createdFrom: new Date(createdFrom),
-      });
-    }
-
-    if (createdTo) {
-      qb.andWhere('document.createdAt <= :createdTo', {
-        createdTo: new Date(createdTo),
-      });
-    }
-
-    if (signedFrom) {
-      qb.andWhere('document.signedAt >= :signedFrom', {
-        signedFrom: new Date(signedFrom),
-      });
-    }
-
-    if (signedTo) {
-      qb.andWhere('document.signedAt <= :signedTo', {
-        signedTo: new Date(signedTo),
       });
     }
 
@@ -304,12 +276,11 @@ export class GetDocumentsUseCase {
       }),
     );
 
-    const pagination: DocumentsPagination = {
+    const pagination: DocumentsPagination = buildDocumentsPagination(
       page,
       limit,
       total,
-      totalPages: Math.ceil(total / limit),
-    };
+    );
 
     return { items, pagination };
   }
@@ -600,22 +571,4 @@ export class GetDocumentsUseCase {
     return DOCUMENT_PARTICIPATION_ENUM.PARTICIPANT;
   }
 
-  /**
-   * Un rango al revés (`desde` posterior a `hasta`) no devuelve nada, y en silencio: la lista
-   * sale vacía y quien la mira no tiene cómo saber si es que no hay documentos o es que tecleó
-   * las fechas cambiadas. Vale más un 400 que lo diga.
-   */
-  private assertValidDateRange(
-    from: string | undefined,
-    to: string | undefined,
-    label: string,
-  ): void {
-    if (!from || !to) return;
-
-    if (new Date(from).getTime() > new Date(to).getTime()) {
-      throw new BadRequestException(
-        `El rango de fechas de ${label} está invertido: la fecha inicial (${from}) es posterior a la final (${to})`,
-      );
-    }
-  }
 }

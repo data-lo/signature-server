@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { v4 as uuid4 } from 'uuid';
 
 import { DocumentEntity } from '../entities/document.entity';
@@ -147,6 +147,32 @@ function describeCollaborator(collaborator: CollaboratorPayloadDto): string {
     : (collaborator.email ?? 'un firmante');
 }
 
+/**
+ * Desde dónde se crea el documento, cuando no es la plataforma: hoy, la API de integración con
+ * una API key de organización.
+ *
+ * Es el único punto de extensión del flujo para ese origen. La validación, la carga, el cobro, la
+ * outbox y los eventos son los mismos; lo que cambia es que el documento queda marcado con su
+ * llave, el evento de creación dice por qué integración llegó y el llamador puede escribir algo
+ * propio —la clave de idempotencia— dentro de la MISMA transacción.
+ */
+export interface DocumentCreationOrigin {
+  /** `api_keys.id` con la que se crea; queda en `documents.created_via_api_key_id`. */
+  apiKeyId: string;
+
+  /** Nombre de la llave, para el evento de creación ("vía Integración ERP"). Nunca su secreto. */
+  apiKeyName: string;
+
+  /**
+   * Se ejecuta dentro de la transacción, justo después de guardar el documento y ANTES de cobrar
+   * el crédito. Si lanza, la transacción entera se deshace: ni documento ni crédito.
+   */
+  onDocumentSaved?: (
+    manager: EntityManager,
+    document: DocumentEntity,
+  ) => Promise<void>;
+}
+
 export interface CreateDocumentSignaturesResult {
   id: string;
   status: DOCUMENT_STATUS_ENUM;
@@ -209,6 +235,7 @@ export class CreateDocumentSignatureFlowUseCase {
     dto: CreateDocumentSignaturesDto,
     file: Express.Multer.File,
     ip: string,
+    origin?: DocumentCreationOrigin,
   ): Promise<BaseResponse<CreateDocumentSignaturesResult>> {
     if (!accountId) {
       throw new BadRequestException(
@@ -434,8 +461,15 @@ export class CreateDocumentSignatureFlowUseCase {
            * colaboradores.
            */
           signatureType: documentSignatureType,
+          createdViaApiKeyId: origin?.apiKeyId ?? null,
         }),
       );
+
+      /**
+       * Antes del cobro a propósito: si el gancho del origen falla —p. ej. la clave de idempotencia
+       * ya la usó otra petición—, la transacción se deshace sin haber tocado el saldo.
+       */
+      await origin?.onDocumentSaved?.(manager, document);
 
       /**
        * El crédito se cobra AQUÍ: con el documento ya guardado —hace falta su id para el recibo—
@@ -718,6 +752,10 @@ export class CreateDocumentSignatureFlowUseCase {
       documentId: document.id,
       fileName: document.fileName,
       actorUserId: createdBy,
+      ...(origin && {
+        createdViaApiKeyId: origin.apiKeyId,
+        createdViaApiKeyName: origin.apiKeyName,
+      }),
     });
 
     /**

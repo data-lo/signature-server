@@ -15,6 +15,9 @@ interface EmitDocumentEventParams {
   documentId: string;
   fileName: string;
   actorUserId: string;
+  /** Ver `DocumentEventPayload.createdViaApiKeyId`. */
+  createdViaApiKeyId?: string;
+  createdViaApiKeyName?: string;
 }
 
 interface EmitCollaboratorSignedParams extends EmitDocumentEventParams {
@@ -62,13 +65,20 @@ export class DocumentEventsProducer {
 
   private emitEvent(
     topic: DOCUMENT_KAFKA_TOPICS,
-    { documentId, fileName, actorUserId }: EmitDocumentEventParams,
+    {
+      documentId,
+      fileName,
+      actorUserId,
+      createdViaApiKeyId,
+      createdViaApiKeyName,
+    }: EmitDocumentEventParams,
   ) {
     const payload: DocumentEventPayload = {
       documentId,
       fileName,
       actorUserId,
       occurredAt: new Date().toISOString(),
+      ...(createdViaApiKeyId && { createdViaApiKeyId, createdViaApiKeyName }),
     };
     this.kafkaProducer.emit(topic, payload);
 
