@@ -5,13 +5,19 @@ import {
   TenantOverrideNotAllowedException,
 } from '../exceptions/integration-document.exceptions';
 
-/** Campos con los que un cliente intentaría elegir el tenant o el autor. */
+/**
+ * Campos con los que un cliente intentaría elegir el tenant, el autor o los permisos, o mandar el
+ * PDF por otra vía que no sea el archivo binario.
+ */
 export const TENANT_OVERRIDE_FIELDS = [
   'organizationId',
   'taxId',
+  'userId',
   'accountId',
   'createdBy',
   'createdByUserId',
+  'permissionIds',
+  'documentBase64',
 ] as const;
 
 /** Headers de cuenta activa de la plataforma, que esta API no usa. */
@@ -32,8 +38,8 @@ export interface IntegrationRawRequest {
  *
  * Se revisa la petición CRUDA porque el `ValidationPipe` global (`whitelist`) descartaría esos
  * campos en silencio, y un cliente que los manda tiene que enterarse de que no sirven. Se mira el
- * query, los headers de cuenta activa, el primer nivel del body y `documentData` (que en multipart
- * llega como JSON en texto). `collaborators` no: el `taxId` de un testigo es un dato legítimo.
+ * query, los headers de cuenta activa, el primer nivel del body y, dentro de `payload` (que en
+ * multipart llega como JSON en texto), su primer nivel, `creator`, `document` y cada participante.
  *
  * @param request - Headers, query y body tal como llegaron.
  * @returns Nada.
@@ -52,10 +58,17 @@ export function assertNoTenantOverrides(request: IntegrationRawRequest): void {
     if (request.headers?.[header] !== undefined) found.add(header);
   }
 
+  const payload = parseJsonObject(request.body?.payload);
+  const participants = Array.isArray(payload?.participants)
+    ? (payload.participants as unknown[])
+    : [];
   const containers = [
     request.query,
     request.body,
-    parseJsonObject(request.body?.documentData),
+    payload,
+    asObject(payload?.creator),
+    asObject(payload?.document),
+    ...participants.map(asObject),
   ];
   for (const container of containers) {
     for (const field of TENANT_OVERRIDE_FIELDS) {
@@ -116,15 +129,14 @@ export function buildRequestFingerprint(
     .digest('hex');
 
   return createHash('sha256')
-    .update(
-      JSON.stringify([
-        fileHash,
-        body?.documentData ?? null,
-        body?.collaborators ?? null,
-        body?.requiresDifferentSignatures ?? null,
-      ]),
-    )
+    .update(JSON.stringify([fileHash, body?.payload ?? null]))
     .digest('hex');
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> | null {

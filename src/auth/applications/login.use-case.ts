@@ -8,6 +8,7 @@ import { AccountService } from 'src/account/account.service';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { PasswordService } from 'src/common/password/password.service';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status.enum';
 import { UserService } from 'src/user/user.service';
 
 import { AuthService } from '../auth.service';
@@ -25,6 +26,11 @@ import { LoginDto } from '../dto/login.dto';
  * Todos los motivos de rechazo por credenciales dan el mismo 401 con el mismo texto: separar
  * "ese correo no existe" de "esa contraseña no es" convertiría el endpoint en un oráculo de qué
  * correos están registrados.
+ *
+ * Un usuario `PROVISIONED` —creado por la API de integración al recibir un documento a su nombre—
+ * no inicia sesión con contraseña. Normalmente su cuenta no tiene contraseña y cae en el mismo 401
+ * de siempre; si consiguió una (por ejemplo, con el restablecimiento de contraseña), responde 403
+ * porque ya demostró conocerla y lo que le falta es completar su registro.
  */
 @Injectable()
 export class LoginUseCase {
@@ -41,7 +47,8 @@ export class LoginUseCase {
     const account = await this.accountService.findActiveAccountByEmail(
       dto.email.toLowerCase(),
     );
-    if (!account) {
+    // Sin contraseña (usuario aprovisionado) no hay nada contra qué comparar: mismo 401.
+    if (!account?.password) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
@@ -67,6 +74,12 @@ export class LoginUseCase {
      * para que el frontend pueda distinguir "credenciales inválidas" de "falta verificar tu
      * correo" y mandar al usuario a la pantalla de OTP en vez de a un error genérico.
      */
+    if (user.lifecycleStatus === USER_LIFECYCLE_STATUS_ENUM.PROVISIONED) {
+      throw new ForbiddenException(
+        'Tu cuenta se creó desde una integración y todavía no está activada. Completa tu registro para iniciar sesión.',
+      );
+    }
+
     if (!user.isEmailVerified) {
       throw new ForbiddenException(
         'Debes verificar tu correo antes de iniciar sesión',

@@ -29,6 +29,8 @@ import { ListOrganizationIntegrationDocumentsUseCase } from './integration/appli
 import { ListUserIntegrationDocumentsUseCase } from './integration/applications/list-user-integration-documents.use-case';
 import { CreateIntegrationDocumentUseCase } from './integration/applications/create-integration-document.use-case';
 import { IntegrationIdempotencyService } from './integration/services/integration-idempotency.service';
+import { IntegrationCreatorService } from './integration/services/integration-creator.service';
+import { RolesModule } from 'src/roles/roles.module';
 import { IntegrationIdempotencyKeyEntity } from './integration/entities/integration-idempotency-key.entity';
 import { SignatureQrService } from './services/signature-qr.service';
 import { DocumentAuthorizationPolicy } from './policies/document-authorization.policy';
@@ -134,6 +136,7 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
     GetPublicSigningInvitationUseCase,
     DocumentReadService,
     IntegrationIdempotencyService,
+    IntegrationCreatorService,
     ListOrganizationIntegrationDocumentsUseCase,
     ListUserIntegrationDocumentsUseCase,
     CreateIntegrationDocumentUseCase,
@@ -184,6 +187,8 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
     DirectoryModule,
     // `OrganizationApiKeyGuard` y lo que necesita para inyectarse en `IntegrationDocumentsController`.
     ApiKeyModule,
+    // `IntegrationCreatorService` resuelve el rol `INTEGRATION_DOCUMENT_CREATOR` del creador aprovisionado.
+    RolesModule,
     /**
      * De aquí sale `ConsumeDocumentCreditUseCase`: crear un documento cuesta un crédito.
      *

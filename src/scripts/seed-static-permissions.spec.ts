@@ -261,13 +261,22 @@ function expectedMatrixOf(role: SYSTEM_ROLE_NAME_ENUM): string[] {
 const OWNER_MATRIX = expectedMatrixOf(SYSTEM_ROLE_NAME_ENUM.OWNER);
 const ADMIN_MATRIX = expectedMatrixOf(SYSTEM_ROLE_NAME_ENUM.ADMIN);
 const MEMBER_MATRIX = expectedMatrixOf(SYSTEM_ROLE_NAME_ENUM.MEMBER);
+const INTEGRATION_CREATOR_MATRIX = expectedMatrixOf(
+  SYSTEM_ROLE_NAME_ENUM.INTEGRATION_DOCUMENT_CREATOR,
+);
+/** Un rol por valor de `SYSTEM_ROLE_NAME_ENUM`. */
+const SYSTEM_ROLES_COUNT = Object.values(SYSTEM_ROLE_NAME_ENUM).length;
 
 /** Cuántas filas debería dejar el catálogo sobre una base vacía. */
 const CATALOG_SIZE = {
   resources: Object.keys(STATIC_CATALOG_RESOURCES).length,
   actions: Object.keys(STATIC_CATALOG_ACTIONS).length,
   permissions: Object.keys(STATIC_PERMISSION_CATALOG).length,
-  grants: OWNER_MATRIX.length + ADMIN_MATRIX.length + MEMBER_MATRIX.length,
+  grants:
+    OWNER_MATRIX.length +
+    ADMIN_MATRIX.length +
+    MEMBER_MATRIX.length +
+    INTEGRATION_CREATOR_MATRIX.length,
 };
 
 describe('syncStaticPermissionCatalog', () => {
@@ -284,7 +293,7 @@ describe('syncStaticPermissionCatalog', () => {
       silentLogger,
     );
 
-    expect(summary.roles.created).toBe(3);
+    expect(summary.roles.created).toBe(SYSTEM_ROLES_COUNT);
     expect(summary.resources.created).toBe(CATALOG_SIZE.resources);
     expect(summary.actions.created).toBe(CATALOG_SIZE.actions);
     expect(summary.permissions.created).toBe(CATALOG_SIZE.permissions);
@@ -293,6 +302,7 @@ describe('syncStaticPermissionCatalog', () => {
     expect(
       repositories.resources.rows.map((resource) => resource.key).sort(),
     ).toEqual([
+      'API_KEY',
       'BILLING',
       'DIRECTORY',
       'DOCUMENT',
@@ -473,7 +483,7 @@ describe('syncStaticPermissionCatalog', () => {
       expect(summary.grants.created).toBe(0);
       expect(summary.resources.updated).toBe(0);
       expect(summary.actions.updated).toBe(0);
-      expect(summary.roles.reused).toBe(3);
+      expect(summary.roles.reused).toBe(SYSTEM_ROLES_COUNT);
       expect(summary.permissions.reused).toBe(CATALOG_SIZE.permissions);
       expect(summary.grants.reused).toBe(CATALOG_SIZE.grants);
     }
@@ -501,11 +511,17 @@ describe('syncStaticPermissionCatalog', () => {
       silentLogger,
     );
 
-    expect(summary.roles.created).toBe(1); // sólo OWNER, que no existía en la rejilla anterior
+    // OWNER e INTEGRATION_DOCUMENT_CREATOR, que no existían en la rejilla anterior.
+    expect(summary.roles.created).toBe(SYSTEM_ROLES_COUNT - 2);
     expect(summary.roles.reused).toBe(2);
     expect(
       repositories.roles.rows.map((role) => `${role.id}:${role.name}`).sort(),
-    ).toEqual(['role-1:OWNER', 'role-admin:ADMIN', 'role-member:MEMBER']);
+    ).toEqual([
+      'role-1:OWNER',
+      'role-2:INTEGRATION_DOCUMENT_CREATOR',
+      'role-admin:ADMIN',
+      'role-member:MEMBER',
+    ]);
   });
 
   it('preserva permisos y asignaciones ajenos al catálogo', async () => {
@@ -556,7 +572,7 @@ describe('syncStaticPermissionCatalog', () => {
     );
 
     // DOCUMENT y ORGANIZATION ya estaban, con la descripción en minúsculas de `seed:roles`.
-    expect(summary.resources.created).toBe(4); // BILLING, MEMBER, ROLE, DIRECTORY
+    expect(summary.resources.created).toBe(5); // BILLING, MEMBER, ROLE, DIRECTORY, API_KEY
     expect(summary.resources.updated).toBe(2); // DOCUMENT y ORGANIZATION, pasadas a MAYÚSCULAS
     expect(summary.actions.created).toBe(8);
     expect(summary.actions.updated).toBe(3); // CREATE, READ y UPDATE ya estaban

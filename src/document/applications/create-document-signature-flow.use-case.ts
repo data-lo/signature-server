@@ -22,6 +22,7 @@ import {
 } from '../dto/create-document-signatures.dto';
 import { assertNoOverlappingSignaturePositions } from '../utils/signature-collision.util';
 import { assertSignaturePositionsInsideDocument } from '../utils/signature-position.util';
+import { assertPdfFile } from '../utils/pdf-file.util';
 
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
@@ -250,6 +251,8 @@ export class CreateDocumentSignatureFlowUseCase {
         `El documento debe pesar menos de ${Math.floor(MAX_PDF_FILE_SIZE_BYTES / (1024 * 1024))}MB`,
       );
     }
+    // Tipo declarado y bytes reales, antes de leer páginas o subir nada (ver `assertPdfFile`).
+    assertPdfFile(file);
 
     // Historia "Selección de tipo de firma al crear documentos": el tipo de firma es UNA decisión
     // del documento (SIMPLE, ADVANCED o BIOMETRIC) y se aplica igual a todos sus firmantes. Se

@@ -21,3 +21,24 @@ export function frontendBaseUrl(): string {
   const configured = process.env.FRONTEND_URL?.trim();
   return (configured || DEFAULT_FRONTEND_URL).replace(/\/+$/, '');
 }
+
+/**
+ * Base pública de la aplicación web: la que va en los enlaces que se entregan a terceros o se
+ * imprimen (la URL de consulta que devuelve la API de integración, el QR de la hoja de firmas).
+ *
+ * Sale de `PUBLIC_WEB_APP_URL` y, si no está, de `FRONTEND_URL`: en la mayoría de los entornos son
+ * la misma app, y así nada cambia mientras la variable nueva no se configure. Nunca se arma con el
+ * header `Host` de la petición, que lo controla quien llama.
+ *
+ * @returns La base sin diagonales finales.
+ *
+ * @example
+ * ```ts
+ * // PUBLIC_WEB_APP_URL=https://app.firmalo.com/
+ * publicWebAppBaseUrl(); // 'https://app.firmalo.com'
+ * ```
+ */
+export function publicWebAppBaseUrl(): string {
+  const configured = process.env.PUBLIC_WEB_APP_URL?.trim();
+  return configured ? configured.replace(/\/+$/, '') : frontendBaseUrl();
+}

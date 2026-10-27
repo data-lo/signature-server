@@ -1,58 +1,64 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 
 import { IntegrationApiClient } from 'src/api-key/interfaces/integration-api-client.interface';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 
 import { CreateDocumentSignatureFlowUseCase } from '../../applications/create-document-signature-flow.use-case';
 import { DocumentReadService } from '../../services/document-read.service';
-import { CreateIntegrationDocumentDto } from '../dto/create-integration-document.dto';
-import { IdempotencyKeyMismatchException } from '../exceptions/integration-document.exceptions';
-import { IntegrationDocumentData } from '../interfaces/integration-document-response';
-import {
-  IntegrationIdempotencyService,
-  isIdempotencyKeyConflict,
-} from '../services/integration-idempotency.service';
+import { buildPublicDocumentUrl } from '../../utils/document-access-url.util';
+import { IntegrationDocumentPayloadDto } from '../dto/create-integration-document.dto';
+import { IntegrationCreatedDocumentData } from '../interfaces/integration-document-response';
+import { IntegrationCreatorService } from '../services/integration-creator.service';
+import { IntegrationIdempotencyService } from '../services/integration-idempotency.service';
+import { toCreateDocumentSignaturesDto } from '../utils/integration-payload.mapper';
 
-/** Lo que llega de la petición, ya autenticada. */
+/** Lo que llega de la petición, ya autenticada y validada. */
 export interface CreateIntegrationDocumentRequest {
   apiClient: IntegrationApiClient;
-  dto: CreateIntegrationDocumentDto;
+  payload: IntegrationDocumentPayloadDto;
   file: Express.Multer.File;
   ip: string;
   idempotencyKey: string;
-  /** Huella del archivo y del payload (`buildRequestFingerprint`). */
-  requestFingerprint: string;
+  /** SHA-256 del archivo y del payload (`buildRequestFingerprint`). */
+  requestHash: string;
 }
 
 /** Resultado del alta: el documento y si fue una repetición de una petición anterior. */
-export interface CreateIntegrationDocumentResult extends BaseResponse<IntegrationDocumentData> {
-  /** `true` si la clave ya se había usado y no se creó nada nuevo. */
+export interface CreateIntegrationDocumentResult extends BaseResponse<IntegrationCreatedDocumentData> {
+  /** `true` si la clave ya tenía documento y no se creó nada nuevo. */
   replayed: boolean;
 }
 
 /**
- * `POST /api/v1/integration/documents`: crea un documento en nombre del actor de la API key.
+ * `POST /api/v1/integration/documents`: crea un documento PDF en la organización de la API key, a
+ * nombre de un creador identificado por su correo.
  *
- * **No reimplementa la creación.** Delega en `CreateDocumentSignatureFlowUseCase` —el flujo de
- * `POST /documents/signatures`— con `createdBy = actorUserId` y `accountId = actorAccountId`, así
- * que la validación del PDF y de los participantes, la carga en MinIO, el hash, el cobro de
- * crédito, la transacción documental, la outbox, Kafka y las notificaciones son exactamente los de
- * la plataforma. Lo propio del origen viaja en `DocumentCreationOrigin`: la llave queda en
- * `documents.created_via_api_key_id` y en el evento de creación.
+ * 1. **Reserva la `Idempotency-Key`** antes de nada costoso. Si ya tiene documento con el mismo
+ *    contenido, responde con él sin subir, crear, cobrar ni notificar nada.
+ * 2. **Resuelve al creador** (`IntegrationCreatorService`): usa su membresía en la organización o
+ *    la crea, y si el correo no existe da de alta un usuario provisional con su cuenta personal.
+ * 3. **Crea el documento con el flujo moderno** (`CreateDocumentSignatureFlowUseCase`), con
+ *    `createdBy` = creador, `accountId` = su membresía y la llave como origen. La validación del PDF
+ *    (tipo y bytes) y de los participantes, MinIO, hash y páginas, la transacción documental, el
+ *    crédito, la auditoría, la outbox, Kafka y las notificaciones son los de la plataforma.
+ * 4. **Completa la clave** dentro de esa misma transacción; si algo falla, la libera para que el
+ *    cliente pueda reintentar.
  *
- * **Idempotencia.** La clave se registra DENTRO de la transacción del alta, antes del cobro:
- * - clave nueva: se crea el documento y se registra la clave, todo o nada;
- * - clave ya usada con la misma huella: no se sube nada ni se cobra; se responde con el documento
- *   original (`replayed: true`);
- * - dos peticiones simultáneas con la misma clave: la segunda choca contra el índice único, su
- *   transacción se deshace sin documento ni crédito, y responde como repetición;
- * - clave ya usada con otro archivo o payload: 409.
+ * Devuelve la URL pública de consulta armada con `PUBLIC_WEB_APP_URL`, nunca con el `Host` de la
+ * petición. Nada del PDF, de la llave ni de los datos del creador se escribe en logs.
  */
 @Injectable()
 export class CreateIntegrationDocumentUseCase {
+  private readonly logger = new Logger(CreateIntegrationDocumentUseCase.name);
+
   constructor(
     private readonly createDocumentSignatureFlow: CreateDocumentSignatureFlowUseCase,
     private readonly idempotencyService: IntegrationIdempotencyService,
+    private readonly integrationCreatorService: IntegrationCreatorService,
     private readonly documentReadService: DocumentReadService,
   ) {}
 
@@ -60,33 +66,65 @@ export class CreateIntegrationDocumentUseCase {
    * Crea el documento, o responde con el de una petición anterior con la misma clave.
    *
    * @param request - Cliente autenticado, payload, archivo, IP, clave y huella.
-   * @returns El documento y si fue una repetición.
+   * @returns El documento creado (o el original) con su URL pública.
    *
    * @throws {IdempotencyKeyMismatchException} (409) Si la clave ya se usó con otro contenido.
-   * @throws {BadRequestException} (400) Si el payload o el PDF no pasan las validaciones del
-   *   flujo de creación.
-   * @throws {ForbiddenException} (403) Si el actor ya no es miembro activo de la organización.
+   * @throws {IdempotencyKeyInProgressException} (409) Si otra petición con la misma clave sigue en
+   *   curso.
+   * @throws {IntegrationApprovalNotSupportedException} (400) Si pide aprobación previa.
+   * @throws {IntegrationCreatorUnavailableException} (422) Si el creador está desactivado.
+   * @throws {IntegrationCreatorMembershipRevokedException} (422) Si fue dado de baja de la
+   *   organización.
+   * @throws {BadRequestException} (400) Si el PDF o los participantes no pasan las validaciones
+   *   del flujo de creación.
+   * @throws {InsufficientDocumentCreditsException} (402) Si la organización no tiene créditos.
    *
    * @example
    * ```ts
-   * const result = await createIntegrationDocument.execute({ apiClient, dto, file, ip, idempotencyKey, requestFingerprint });
-   * result.replayed; // false la primera vez
+   * const result = await createIntegrationDocument.execute({ apiClient, payload, file, ip, idempotencyKey, requestHash });
+   * result.data.publicUrl; // 'https://app.firmalo.com/public/documents/…'
    * ```
    */
   async execute(
     request: CreateIntegrationDocumentRequest,
   ): Promise<CreateIntegrationDocumentResult> {
-    const { apiClient, dto, file, ip, idempotencyKey, requestFingerprint } =
+    const { apiClient, payload, file, ip, idempotencyKey, requestHash } =
       request;
+    const organizationId = apiClient.organizationId;
 
-    const previous = await this.replayIfUsed(request);
-    if (previous) return previous;
+    // Antes de reservar: un payload que pide aprobación no debe ocupar la clave.
+    const dto = toCreateDocumentSignaturesDto(payload, file.originalname);
+
+    const reservation = await this.idempotencyService.reserve({
+      apiKeyId: apiClient.apiKeyId,
+      idempotencyKey,
+      requestHash,
+    });
+    if (reservation.kind === 'REPLAY') {
+      return {
+        success: true,
+        message: 'El documento ya se había creado con este Idempotency-Key',
+        data: await this.loadCreatedDocument(
+          organizationId,
+          reservation.documentId,
+        ),
+        replayed: true,
+      };
+    }
 
     let documentId: string;
     try {
+      const creator = await this.integrationCreatorService.resolve({
+        organizationId,
+        email: payload.creator.email,
+        firstName: payload.creator.firstName,
+        lastName: payload.creator.lastName,
+        actorUserId: apiClient.actorUserId,
+      });
+
       const created = await this.createDocumentSignatureFlow.execute(
-        apiClient.actorUserId,
-        apiClient.actorAccountId,
+        creator.user.id,
+        creator.account.id,
         dto,
         file,
         ip,
@@ -94,73 +132,38 @@ export class CreateIntegrationDocumentUseCase {
           apiKeyId: apiClient.apiKeyId,
           apiKeyName: apiClient.apiKeyName,
           onDocumentSaved: (manager, document) =>
-            this.idempotencyService.record(manager, {
-              organizationId: apiClient.organizationId,
-              apiKeyId: apiClient.apiKeyId,
-              idempotencyKey,
-              requestFingerprint,
-              documentId: document.id,
-            }),
+            this.idempotencyService.complete(
+              manager,
+              reservation.reservationId,
+              document.id,
+            ),
         },
       );
       documentId = created.data!.id;
     } catch (error) {
-      if (isIdempotencyKeyConflict(error)) {
-        const concurrent = await this.replayIfUsed(request);
-        if (concurrent) return concurrent;
-      }
+      await this.idempotencyService
+        .release(reservation.reservationId)
+        .catch((releaseError) =>
+          this.logger.error(
+            `No se pudo liberar la reserva de idempotencia ${reservation.reservationId}: ${releaseError}`,
+          ),
+        );
       throw error;
     }
 
     return {
       success: true,
       message: 'Documento y flujo de firmas creados correctamente',
-      data: await this.loadDocument(apiClient.organizationId, documentId),
+      data: await this.loadCreatedDocument(organizationId, documentId),
       replayed: false,
     };
   }
 
-  /**
-   * Si la clave ya se usó en la organización, responde con su documento o rechaza otro contenido.
-   *
-   * @param request - La petición en curso.
-   * @returns La repetición, o `null` si la clave es nueva.
-   *
-   * @throws {IdempotencyKeyMismatchException} (409) Si la huella no coincide.
-   *
-   * @example
-   * ```ts
-   * const previous = await this.replayIfUsed(request);
-   * ```
-   */
-  private async replayIfUsed({
-    apiClient,
-    idempotencyKey,
-    requestFingerprint,
-  }: CreateIntegrationDocumentRequest): Promise<CreateIntegrationDocumentResult | null> {
-    const used = await this.idempotencyService.find(
-      apiClient.organizationId,
-      idempotencyKey,
-    );
-    if (!used) return null;
-
-    if (used.requestFingerprint !== requestFingerprint) {
-      throw new IdempotencyKeyMismatchException();
-    }
-
-    return {
-      success: true,
-      message: 'El documento ya se había creado con este Idempotency-Key',
-      data: await this.loadDocument(apiClient.organizationId, used.documentId),
-      replayed: true,
-    };
-  }
-
-  private async loadDocument(
+  private async loadCreatedDocument(
     organizationId: string,
     documentId: string,
-  ): Promise<IntegrationDocumentData> {
-    const document = await this.documentReadService.findOrganizationDocument(
+  ): Promise<IntegrationCreatedDocumentData> {
+    const document = await this.documentReadService.findCreatedDocument(
       organizationId,
       documentId,
     );
@@ -170,6 +173,16 @@ export class CreateIntegrationDocumentUseCase {
         'No se encontró el documento recién creado',
       );
     }
-    return document;
+
+    return {
+      id: document.id,
+      status: document.status,
+      signatureType: document.signatureType,
+      fileName: document.fileName,
+      createdAt: document.createdAt,
+      creator: { email: document.creatorEmail },
+      participantsCount: document.participantsCount,
+      publicUrl: buildPublicDocumentUrl(document.id),
+    };
   }
 }

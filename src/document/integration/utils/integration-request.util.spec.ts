@@ -8,41 +8,81 @@ import {
   readIdempotencyKey,
 } from './integration-request.util';
 
+const VALID_PAYLOAD = {
+  creator: { email: 'ana@cliente.com', firstName: 'Ana', lastName: 'López' },
+  document: { signatureType: 'SIMPLE' },
+  participants: [
+    {
+      role: 'SIGNER',
+      firstName: 'Luis',
+      lastName: 'M',
+      email: 'luis@correo.com',
+    },
+  ],
+};
+
+function withPayload(patch: (payload: Record<string, any>) => void) {
+  const payload = JSON.parse(JSON.stringify(VALID_PAYLOAD));
+  patch(payload);
+  return { body: { payload: JSON.stringify(payload) } };
+}
+
 describe('integration-request.util', () => {
   describe('assertNoTenantOverrides', () => {
     it('deja pasar una petición sin campos de tenant', () => {
       expect(() =>
         assertNoTenantOverrides({
           headers: { 'x-api-key': 'fma_live_…' },
-          query: { page: '1', statuses: 'SIGNED' },
-          body: {
-            documentData: JSON.stringify({ fileName: 'a.pdf' }),
-            // El taxId de un testigo, dentro de collaborators, es un dato legítimo.
-            collaborators: JSON.stringify([{ taxId: 'AUDI990101YYY' }]),
-          },
+          query: {},
+          body: { payload: JSON.stringify(VALID_PAYLOAD) },
         }),
       ).not.toThrow();
     });
 
     it.each([
       ['organizationId en el query', { query: { organizationId: 'org-2' } }],
-      ['accountId en el query', { query: { accountId: 'acc-2' } }],
       ['X-Account-Id', { headers: { 'x-account-id': 'acc-2' } }],
       ['X-Organization-Id', { headers: { 'x-organization-id': 'org-2' } }],
-      ['createdBy en el body', { body: { createdBy: 'user-2' } }],
-      ['taxId en el body', { body: { taxId: 'RFC' } }],
       [
-        'createdByUserId dentro de documentData',
-        { body: { documentData: JSON.stringify({ createdByUserId: 'u' }) } },
+        'documentBase64 como campo multipart',
+        { body: { documentBase64: 'JVBERi0x' } },
       ],
       [
-        'organizationId dentro de documentData',
-        { body: { documentData: JSON.stringify({ organizationId: 'org-2' }) } },
+        'organizationId en el payload',
+        withPayload((p) => (p.organizationId = 'org-2')),
+      ],
+      [
+        'permissionIds en el payload',
+        withPayload((p) => (p.permissionIds = ['perm'])),
+      ],
+      [
+        'documentBase64 en el payload',
+        withPayload((p) => (p.documentBase64 = 'JVBERi0x')),
+      ],
+      ['userId en creator', withPayload((p) => (p.creator.userId = 'user-2'))],
+      [
+        'accountId en creator',
+        withPayload((p) => (p.creator.accountId = 'acc-2')),
+      ],
+      [
+        'createdBy en document',
+        withPayload((p) => (p.document.createdBy = 'user-2')),
+      ],
+      ['taxId en document', withPayload((p) => (p.document.taxId = 'RFC'))],
+      [
+        'userId en un participante',
+        withPayload((p) => (p.participants[0].userId = 'u')),
       ],
     ])('rechaza %s', (_label, request) => {
       expect(() => assertNoTenantOverrides(request)).toThrow(
         TenantOverrideNotAllowedException,
       );
+    });
+
+    it('un payload que no es JSON no rompe la revisión: lo rechaza la validación', () => {
+      expect(() =>
+        assertNoTenantOverrides({ body: { payload: '{no es json' } }),
+      ).not.toThrow();
     });
   });
 
@@ -62,18 +102,17 @@ describe('integration-request.util', () => {
   });
 
   describe('buildRequestFingerprint', () => {
-    const body = {
-      documentData: '{"fileName":"a.pdf"}',
-      collaborators: '[]',
-    };
+    const body = { payload: JSON.stringify(VALID_PAYLOAD) };
 
     it('es la misma para el mismo archivo y payload', () => {
-      const file = { buffer: Buffer.from('%PDF-1') };
-
-      expect(buildRequestFingerprint(file, body)).toBe(
+      expect(
+        buildRequestFingerprint({ buffer: Buffer.from('%PDF-1') }, body),
+      ).toBe(
         buildRequestFingerprint({ buffer: Buffer.from('%PDF-1') }, { ...body }),
       );
-      expect(buildRequestFingerprint(file, body)).toMatch(/^[0-9a-f]{64}$/);
+      expect(
+        buildRequestFingerprint({ buffer: Buffer.from('%PDF-1') }, body),
+      ).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it('cambia con otro archivo o con otro payload', () => {
@@ -88,7 +127,7 @@ describe('integration-request.util', () => {
       expect(
         buildRequestFingerprint(
           { buffer: Buffer.from('%PDF-1') },
-          { ...body, collaborators: '[{}]' },
+          withPayload((p) => (p.document.signatureType = 'ADVANCED')).body,
         ),
       ).not.toBe(base);
     });

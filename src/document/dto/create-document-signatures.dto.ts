@@ -264,7 +264,7 @@ export enum REQUIRES_DIFFERENT_SIGNATURES_ENUM {
  * silencio (bug real encontrado al probar contra un servidor corriendo: `documentData.fileName`
  * llegaba `null` al service pese a venir bien armado en el request).
  */
-function parseJson<T>(cls: new () => T) {
+export function parseJson<T>(cls: new () => T) {
   return ({ value }: { value: unknown }): T | T[] | unknown => {
     let parsed: unknown = value;
     if (typeof value === 'string') {

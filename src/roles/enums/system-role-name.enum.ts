@@ -10,9 +10,13 @@
  *   de miembros. Todo el catálogo de negocio menos dar de baja miembros.
  * - `MEMBER`: miembro raso — crear, ver y firmar sus documentos. Es el rol predeterminado al
  *   dar de alta o invitar a alguien nuevo.
+ * - `INTEGRATION_DOCUMENT_CREATOR`: el rol mínimo de un creador que la API de integración dio de
+ *   alta en la organización al recibir un documento a su nombre (ver `IntegrationCreatorService`).
+ *   Sólo crear y ver sus propios documentos; un administrador puede cambiárselo después.
  */
 export enum SYSTEM_ROLE_NAME_ENUM {
   OWNER = 'OWNER',
   ADMIN = 'ADMIN',
   MEMBER = 'MEMBER',
+  INTEGRATION_DOCUMENT_CREATOR = 'INTEGRATION_DOCUMENT_CREATOR',
 }

@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -8,27 +9,41 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
-import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
 import { DocumentEntity } from 'src/document/entities/document.entity';
 
+/** En qué punto está la petición que usó la clave. */
+export enum INTEGRATION_IDEMPOTENCY_STATUS_ENUM {
+  /** Reservada: la petición está creando el documento. Todavía no hay `documentId`. */
+  PROCESSING = 'PROCESSING',
+  /** El documento se creó; `documentId` es el que se devuelve a cada repetición. */
+  COMPLETED = 'COMPLETED',
+}
+
 /**
- * Un `Idempotency-Key` ya usado al crear un documento por la API de integración.
+ * Un `Idempotency-Key` usado al crear un documento por la API de integración.
  *
- * La fila se inserta DENTRO de la transacción que crea el documento y cobra el crédito: si dos
- * peticiones con la misma clave llegan a la vez, la segunda choca contra
- * `UQ_integration_idempotency_keys_organization_key` y su transacción entera se deshace —sin
- * documento ni crédito—; después se responde con el documento de la primera.
+ * El ciclo es reservar → completar:
+ * 1. Antes de subir nada, la petición RESERVA la clave (`PROCESSING`, con una vigencia corta). Una
+ *    segunda petición con la misma clave choca contra
+ *    `UQ_integration_idempotency_keys_api_key_key` y responde sin subir el archivo ni crear nada.
+ * 2. Dentro de la transacción que crea el documento y cobra el crédito, la reserva pasa a
+ *    `COMPLETED` con su `documentId` y la retención larga. Si el alta falla, la reserva se borra y
+ *    el cliente puede reintentar con la misma clave.
  *
- * La clave es por ORGANIZACIÓN y no por llave: rotar la llave a mitad de un reintento no debe
- * crear un segundo documento. `requestFingerprint` (SHA-256 del archivo y del payload) detecta la
+ * `expiresAt` es a la vez el plazo de la reserva y la retención de la clave completada: vencida,
+ * la clave se puede volver a usar. `requestHash` (SHA-256 del archivo y del payload) detecta la
  * misma clave reutilizada con otro contenido.
  */
 @Entity('integration_idempotency_keys')
 @Index(
-  'UQ_integration_idempotency_keys_organization_key',
-  ['organizationId', 'idempotencyKey'],
+  'UQ_integration_idempotency_keys_api_key_key',
+  ['apiKeyId', 'idempotencyKey'],
   { unique: true },
+)
+@Check(
+  'CHK_integration_idempotency_keys_completed_document',
+  `"status" <> 'COMPLETED' OR "document_id" IS NOT NULL`,
 )
 export class IntegrationIdempotencyKeyEntity {
   @PrimaryGeneratedColumn('uuid', {
@@ -36,17 +51,7 @@ export class IntegrationIdempotencyKeyEntity {
   })
   id: string;
 
-  @Column({ name: 'organization_id', type: 'uuid' })
-  organizationId: string;
-
-  @ManyToOne(() => OrganizationEntity, { onDelete: 'CASCADE' })
-  @JoinColumn({
-    name: 'organization_id',
-    foreignKeyConstraintName: 'FK_integration_idempotency_keys_organization_id',
-  })
-  organization?: OrganizationEntity;
-
-  /** Llave con la que se hizo la primera petición; informativa (la clave es por organización). */
+  /** Llave con la que se usó la clave; la unicidad es por llave. */
   @Column({ name: 'api_key_id', type: 'uuid' })
   apiKeyId: string;
 
@@ -61,20 +66,31 @@ export class IntegrationIdempotencyKeyEntity {
   @Column({ name: 'idempotency_key', type: 'varchar', length: 255 })
   idempotencyKey: string;
 
-  /** SHA-256 hexadecimal del archivo y del payload de la primera petición. */
-  @Column({ name: 'request_fingerprint', type: 'varchar', length: 64 })
-  requestFingerprint: string;
+  /** SHA-256 hexadecimal del archivo y del payload de la petición que reservó la clave. */
+  @Column({ name: 'request_hash', type: 'varchar', length: 64 })
+  requestHash: string;
 
-  @Column({ name: 'document_id', type: 'uuid' })
-  documentId: string;
+  /** Documento creado; `null` mientras la clave está `PROCESSING`. */
+  @Column({ name: 'document_id', type: 'uuid', nullable: true })
+  documentId: string | null;
 
-  @ManyToOne(() => DocumentEntity, { onDelete: 'CASCADE' })
+  @ManyToOne(() => DocumentEntity, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({
     name: 'document_id',
     foreignKeyConstraintName: 'FK_integration_idempotency_keys_document_id',
   })
-  document?: DocumentEntity;
+  document?: DocumentEntity | null;
+
+  @Column({
+    type: 'enum',
+    enum: INTEGRATION_IDEMPOTENCY_STATUS_ENUM,
+  })
+  status: INTEGRATION_IDEMPOTENCY_STATUS_ENUM;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+
+  /** Fin de la reserva (`PROCESSING`) o de la retención (`COMPLETED`); vencida, la clave se libera. */
+  @Column({ name: 'expires_at', type: 'timestamptz' })
+  expiresAt: Date;
 }

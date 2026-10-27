@@ -1,4 +1,4 @@
-import { frontendBaseUrl } from './frontend-url.util';
+import { frontendBaseUrl, publicWebAppBaseUrl } from './frontend-url.util';
 
 describe('frontend-url.util', () => {
   const originalFrontendUrl = process.env.FRONTEND_URL;
@@ -47,5 +47,27 @@ describe('frontend-url.util', () => {
     process.env.FRONTEND_URL = '   ';
 
     expect(frontendBaseUrl()).toBe('http://localhost:3001');
+  });
+
+  describe('publicWebAppBaseUrl', () => {
+    const originalPublicUrl = process.env.PUBLIC_WEB_APP_URL;
+
+    afterEach(() => {
+      process.env.PUBLIC_WEB_APP_URL = originalPublicUrl;
+    });
+
+    it('usa PUBLIC_WEB_APP_URL sin diagonales finales', () => {
+      process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.com//';
+      process.env.FRONTEND_URL = 'https://otra.ejemplo.com';
+
+      expect(publicWebAppBaseUrl()).toBe('https://app.firmalo.com');
+    });
+
+    it('sin PUBLIC_WEB_APP_URL cae en FRONTEND_URL, que es lo que se usaba antes', () => {
+      delete process.env.PUBLIC_WEB_APP_URL;
+      process.env.FRONTEND_URL = 'https://app.ejemplo.com/';
+
+      expect(publicWebAppBaseUrl()).toBe('https://app.ejemplo.com');
+    });
   });
 });

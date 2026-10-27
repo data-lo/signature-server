@@ -13,7 +13,10 @@
 
 // La base del frontend se resuelve en `common/utils/frontend-url.util`: la misma normalización la
 // necesitan Stripe, las invitaciones a organización y el origin de CORS, no solo estos enlaces.
-import { frontendBaseUrl } from 'src/common/utils/frontend-url.util';
+import {
+  frontendBaseUrl,
+  publicWebAppBaseUrl,
+} from 'src/common/utils/frontend-url.util';
 
 /** Enlace al documento para un colaborador concreto (punto de entrada `/access-document`). */
 export function buildDocumentAccessUrl(
@@ -33,9 +36,12 @@ export function buildDocumentAccessUrl(
  * Enlace a la vista pública del documento firmado (sin sesión). Es lo que se codifica en el QR de
  * la hoja de información de firmas: quien reciba el PDF impreso o reenviado puede escanearlo y
  * llegar a la verificación en línea sin tener cuenta.
+ *
+ * Es también la URL pública de consulta que devuelve la API de integración al crear un documento.
+ * Usa `publicWebAppBaseUrl()` (`PUBLIC_WEB_APP_URL`, o `FRONTEND_URL` si falta).
  */
 export function buildPublicDocumentUrl(documentId: string): string {
-  return `${frontendBaseUrl()}/public/documents/${documentId}`;
+  return `${publicWebAppBaseUrl()}/public/documents/${documentId}`;
 }
 
 /**
