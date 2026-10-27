@@ -92,9 +92,12 @@ export class AccountEntity {
   @Column()
   email: string;
 
-  /** Sincronizado desde UserEntity.password (hash bcrypt). */
-  @Column()
-  password: string;
+  /**
+   * Sincronizado desde UserEntity.password (hash bcrypt). `null` en las cuentas de un usuario
+   * `PROVISIONED`, que todavía no tiene contraseña.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  password: string | null;
 
   @Column({ default: true, name: 'is_active' })
   isActive: boolean;

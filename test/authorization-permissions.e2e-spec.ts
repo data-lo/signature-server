@@ -98,6 +98,13 @@ describe('Autorización por permisos (e2e)', () => {
       roleId: SYSTEM_ROLE_NAME_ENUM.MEMBER,
       isActive: true,
     },
+    [SYSTEM_ROLE_NAME_ENUM.INTEGRATION_DOCUMENT_CREATOR]: {
+      id: 'account-integration-creator',
+      userId: USER_ID,
+      organizationId: ORGANIZATION_ID,
+      roleId: SYSTEM_ROLE_NAME_ENUM.INTEGRATION_DOCUMENT_CREATOR,
+      isActive: true,
+    },
   };
 
   let app: INestApplication;

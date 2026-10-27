@@ -1,25 +1,47 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, LessThanOrEqual, Repository } from 'typeorm';
 
-import { IntegrationIdempotencyKeyEntity } from '../entities/integration-idempotency-key.entity';
+import {
+  INTEGRATION_IDEMPOTENCY_STATUS_ENUM,
+  IntegrationIdempotencyKeyEntity,
+} from '../entities/integration-idempotency-key.entity';
+import {
+  IdempotencyKeyInProgressException,
+  IdempotencyKeyMismatchException,
+} from '../exceptions/integration-document.exceptions';
 
-/** Índice único que hace cumplir "una clave, un documento" por organización. */
-const IDEMPOTENCY_UNIQUE_INDEX =
-  'UQ_integration_idempotency_keys_organization_key';
+/** Cuánto vive una reserva sin completarse antes de darla por abandonada. */
+export const IDEMPOTENCY_PROCESSING_LEASE_MS = 10 * 60 * 1000;
 
-/** Lo que se registra al usar una clave. */
-export interface IdempotencyRecord {
-  organizationId: string;
+/** Cuánto se conserva una clave completada: dentro de ese plazo, un reintento no crea nada. */
+export const IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+/** La clave que se pide reservar. */
+export interface IdempotencyRequest {
   apiKeyId: string;
   idempotencyKey: string;
-  requestFingerprint: string;
-  documentId: string;
+  /** SHA-256 del archivo y del payload (`buildRequestFingerprint`). */
+  requestHash: string;
 }
 
+/** Resultado de reservar: la clave quedó para esta petición, o ya tiene documento. */
+export type IdempotencyReservation =
+  | { kind: 'RESERVED'; reservationId: string }
+  | { kind: 'REPLAY'; documentId: string };
+
 /**
- * Acceso a datos de las claves de idempotencia de la API de integración. Sólo lee y escribe: la
- * regla —responder con el documento original o rechazar otro contenido— es del caso de uso.
+ * Las claves de idempotencia de la API de integración: reservar → completar → liberar.
+ *
+ * - `reserve`, ANTES de subir el archivo o crear al creador: inserta la clave `PROCESSING`. Si ya
+ *   existe, decide sin tocar nada más: mismo contenido y completada → repetición; mismo contenido
+ *   en curso → 409; otro contenido → 409. Una clave vencida se libera y se vuelve a reservar.
+ * - `complete`, DENTRO de la transacción del documento: la pasa a `COMPLETED` con su documento.
+ *   Si la reserva ya no es de esta petición (venció y otra la tomó), lanza y el alta se deshace.
+ * - `release`, si el alta falla: borra la reserva para que el cliente pueda reintentar.
+ *
+ * La unicidad la garantiza `UQ_integration_idempotency_keys_api_key_key`; nada de esto depende de
+ * que dos peticiones no lleguen a la vez.
  */
 @Injectable()
 export class IntegrationIdempotencyService {
@@ -29,64 +51,128 @@ export class IntegrationIdempotencyService {
   ) {}
 
   /**
-   * La clave ya usada en la organización, si existe.
+   * Reserva la clave para esta petición, o resuelve qué hacer si ya está usada.
    *
-   * @param organizationId - Organización de la API key.
-   * @param idempotencyKey - Valor del header.
-   * @returns El registro, o `null` si la clave es nueva.
+   * @param request - Llave, clave y huella de la petición.
+   * @returns `RESERVED` con la reserva, o `REPLAY` con el documento ya creado.
+   *
+   * @throws {IdempotencyKeyMismatchException} (409) Si la clave se usó con otro contenido.
+   * @throws {IdempotencyKeyInProgressException} (409) Si otra petición con la misma clave sigue
+   *   en curso.
    *
    * @example
    * ```ts
-   * await idempotencyService.find('org-1', 'erp-pedido-8841');
+   * const reservation = await idempotencyService.reserve({ apiKeyId, idempotencyKey, requestHash });
+   * if (reservation.kind === 'REPLAY') return reservation.documentId;
    * ```
    */
-  find(
-    organizationId: string,
-    idempotencyKey: string,
-  ): Promise<IntegrationIdempotencyKeyEntity | null> {
-    return this.repository.findOneBy({ organizationId, idempotencyKey });
+  async reserve(request: IdempotencyRequest): Promise<IdempotencyReservation> {
+    // Dos vueltas como máximo: la segunda sólo ocurre si la clave existente estaba vencida.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const inserted = await this.repository
+        .createQueryBuilder()
+        .insert()
+        .values({
+          apiKeyId: request.apiKeyId,
+          idempotencyKey: request.idempotencyKey,
+          requestHash: request.requestHash,
+          status: INTEGRATION_IDEMPOTENCY_STATUS_ENUM.PROCESSING,
+          documentId: null,
+          expiresAt: new Date(Date.now() + IDEMPOTENCY_PROCESSING_LEASE_MS),
+        })
+        .orIgnore()
+        .returning(['id'])
+        .execute();
+
+      const reservationId = (inserted.raw as { id: string }[])[0]?.id;
+      if (reservationId) {
+        return { kind: 'RESERVED', reservationId };
+      }
+
+      const existing = await this.repository.findOneBy({
+        apiKeyId: request.apiKeyId,
+        idempotencyKey: request.idempotencyKey,
+      });
+      if (!existing) continue;
+
+      if (existing.expiresAt.getTime() <= Date.now()) {
+        await this.repository.delete({
+          id: existing.id,
+          expiresAt: LessThanOrEqual(new Date()),
+        });
+        continue;
+      }
+
+      if (existing.requestHash !== request.requestHash) {
+        throw new IdempotencyKeyMismatchException();
+      }
+      if (
+        existing.status === INTEGRATION_IDEMPOTENCY_STATUS_ENUM.PROCESSING ||
+        !existing.documentId
+      ) {
+        throw new IdempotencyKeyInProgressException();
+      }
+      return { kind: 'REPLAY', documentId: existing.documentId };
+    }
+
+    throw new IdempotencyKeyInProgressException();
   }
 
   /**
-   * Registra la clave dentro de la transacción que crea el documento.
+   * Marca la reserva como completada con su documento, dentro de la transacción del alta.
    *
-   * @param manager - Transacción del alta.
-   * @param record - Organización, llave, clave, huella y documento.
+   * @param manager - Transacción del documento.
+   * @param reservationId - Reserva devuelta por `reserve`.
+   * @param documentId - Documento recién guardado.
    * @returns Nada.
    *
-   * @throws {QueryFailedError} Con `UQ_integration_idempotency_keys_organization_key` si otra
-   *   petición ya usó la clave; revierte el alta entera.
+   * @throws {IdempotencyKeyInProgressException} (409) Si la reserva ya no está `PROCESSING` (venció
+   *   y la tomó otra petición); revierte el alta.
    *
    * @example
    * ```ts
-   * await idempotencyService.record(manager, { organizationId, apiKeyId, idempotencyKey, requestFingerprint, documentId });
+   * await idempotencyService.complete(manager, reservation.reservationId, document.id);
    * ```
    */
-  async record(
+  async complete(
     manager: EntityManager,
-    record: IdempotencyRecord,
+    reservationId: string,
+    documentId: string,
   ): Promise<void> {
-    await manager.getRepository(IntegrationIdempotencyKeyEntity).insert(record);
+    const result = await manager
+      .getRepository(IntegrationIdempotencyKeyEntity)
+      .update(
+        {
+          id: reservationId,
+          status: INTEGRATION_IDEMPOTENCY_STATUS_ENUM.PROCESSING,
+        },
+        {
+          status: INTEGRATION_IDEMPOTENCY_STATUS_ENUM.COMPLETED,
+          documentId,
+          expiresAt: new Date(Date.now() + IDEMPOTENCY_RETENTION_MS),
+        },
+      );
+
+    if (!result.affected) {
+      throw new IdempotencyKeyInProgressException();
+    }
   }
-}
 
-/**
- * Reconoce el choque contra el índice único de claves de idempotencia.
- *
- * @param error - Lo que haya lanzado el alta.
- * @returns `true` si otra petición ya registró esa clave.
- *
- * @example
- * ```ts
- * if (isIdempotencyKeyConflict(error)) { … }
- * ```
- */
-export function isIdempotencyKeyConflict(error: unknown): boolean {
-  const driverError = (error as { driverError?: Record<string, unknown> })
-    ?.driverError;
-
-  return (
-    driverError?.code === '23505' &&
-    driverError?.constraint === IDEMPOTENCY_UNIQUE_INDEX
-  );
+  /**
+   * Libera una reserva que no llegó a completarse. Nunca borra una clave completada.
+   *
+   * @param reservationId - Reserva devuelta por `reserve`.
+   * @returns Nada.
+   *
+   * @example
+   * ```ts
+   * await idempotencyService.release(reservation.reservationId);
+   * ```
+   */
+  async release(reservationId: string): Promise<void> {
+    await this.repository.delete({
+      id: reservationId,
+      status: INTEGRATION_IDEMPOTENCY_STATUS_ENUM.PROCESSING,
+    });
+  }
 }

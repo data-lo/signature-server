@@ -5,6 +5,7 @@ import { In, Repository } from 'typeorm';
 import { DocumentService } from '../document.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import {
   DOCUMENT_SORT_FIELD_ENUM,
@@ -28,6 +29,14 @@ export interface DocumentSummary {
   signatureType: SIGNATURE_TYPE_ENUM | null;
   createdAt: Date;
   signedAt: Date | null;
+}
+
+/** Un documento recién creado, con lo que ve quien lo creó por integración. */
+export interface CreatedDocumentSummary extends DocumentSummary {
+  /** Correo del creador (`documents.created_by`). */
+  creatorEmail: string;
+  /** Firmantes y testigos; el aprobador, si lo hay, no cuenta. */
+  participantsCount: number;
 }
 
 /** Filtros, orden y paginación del listado por organización. */
@@ -151,6 +160,47 @@ export class DocumentReadService {
     });
 
     return document ? (await this.toSummaries([document]))[0] : null;
+  }
+
+  /**
+   * Un documento de la organización con el correo de su creador y cuántos participantes tiene.
+   *
+   * @param organizationId - Organización a la que debe pertenecer.
+   * @param documentId - Documento pedido.
+   * @returns El resumen ampliado, o `null` si no existe en esa organización.
+   *
+   * @example
+   * ```ts
+   * const created = await documentReadService.findCreatedDocument('org-1', 'doc-1');
+   * created?.participantsCount; // 2
+   * ```
+   */
+  async findCreatedDocument(
+    organizationId: string,
+    documentId: string,
+  ): Promise<CreatedDocumentSummary | null> {
+    const document = await this.documentRepository.findOne({
+      where: { id: documentId, organizationId },
+      relations: { requestedBy: true },
+    });
+    if (!document) return null;
+
+    const participantsCount = await this.collaboratorRepository.count({
+      where: {
+        documentId,
+        colaboratorType: In([
+          COLABORATOR_TYPE_ENUM.SIGNER,
+          COLABORATOR_TYPE_ENUM.WITNESS,
+        ]),
+      },
+    });
+    const [summary] = await this.toSummaries([document]);
+
+    return {
+      ...summary,
+      creatorEmail: document.requestedBy.email,
+      participantsCount,
+    };
   }
 
   /**

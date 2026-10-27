@@ -114,4 +114,37 @@ describe('LoginUseCase', () => {
     await expect(useCase.execute(dto)).rejects.toThrow(ForbiddenException);
     expect(authService.signJwtForUser).not.toHaveBeenCalled();
   });
+  describe('usuario aprovisionado por la API de integración', () => {
+    it('una cuenta sin contraseña responde el mismo 401, sin comparar nada', async () => {
+      accountService.findActiveAccountByEmail.mockResolvedValue({
+        ...account,
+        password: null,
+      });
+
+      await expect(useCase.execute(dto)).rejects.toThrow(UnauthorizedException);
+      expect(passwordService.compare).not.toHaveBeenCalled();
+      expect(authService.signJwtForUser).not.toHaveBeenCalled();
+    });
+
+    it('aunque tenga contraseña, un usuario PROVISIONED no inicia sesión', async () => {
+      userService.findOne.mockResolvedValue({
+        ...user,
+        lifecycleStatus: 'PROVISIONED',
+      });
+
+      await expect(useCase.execute(dto)).rejects.toThrow(ForbiddenException);
+      expect(authService.signJwtForUser).not.toHaveBeenCalled();
+    });
+
+    it('un usuario ACTIVE sigue iniciando sesión', async () => {
+      userService.findOne.mockResolvedValue({
+        ...user,
+        lifecycleStatus: 'ACTIVE',
+      });
+
+      await expect(useCase.execute(dto)).resolves.toMatchObject({
+        success: true,
+      });
+    });
+  });
 });

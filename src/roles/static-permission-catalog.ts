@@ -403,4 +403,13 @@ export const STATIC_ROLE_PERMISSION_MATRIX: Record<
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN,
     STATIC_PERMISSION_KEY_ENUM.DOCUMENT_SIGN_SELF,
   ],
+  /**
+   * Menos que MEMBER a propósito: quien llegó por una integración no eligió unirse a la
+   * organización. Crear y ver lo suyo es lo mínimo para que el documento creado a su nombre tenga
+   * sentido; firmar o cualquier otra cosa se la da un administrador cambiándole el rol.
+   */
+  [SYSTEM_ROLE_NAME_ENUM.INTEGRATION_DOCUMENT_CREATOR]: [
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_CREATE,
+    STATIC_PERMISSION_KEY_ENUM.DOCUMENT_READ_OWN,
+  ],
 };

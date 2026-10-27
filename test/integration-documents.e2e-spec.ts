@@ -12,6 +12,8 @@ import { Client } from 'pg';
 import * as request from 'supertest';
 import { DataSource, EntityManager } from 'typeorm';
 
+import { AccountMemberService } from './../src/account/account-member.service';
+import { AccountService } from './../src/account/account.service';
 import { AccountEntity } from './../src/account/entities/account.entity';
 import { ApiKeySecretService } from './../src/api-key/api-key-secret.service';
 import { ApiKeyModule } from './../src/api-key/api-key.module';
@@ -33,6 +35,10 @@ import { INTEGRATION_API_KEY_SECURITY } from './../src/document/integration/docs
 import { IntegrationIdempotencyKeyEntity } from './../src/document/integration/entities/integration-idempotency-key.entity';
 import { IntegrationDocumentsController } from './../src/document/integration/integration-documents.controller';
 import { IntegrationIdempotencyService } from './../src/document/integration/services/integration-idempotency.service';
+import { IntegrationCreatorService } from './../src/document/integration/services/integration-creator.service';
+import { OrganizationMemberEventsProducer } from './../src/kafka/organization-member.producer';
+import { RolesModule } from './../src/roles/roles.module';
+import { UserEntity } from './../src/user/entities/user.entity';
 import { DocumentReadService } from './../src/document/services/document-read.service';
 
 config({ path: join(__dirname, '..', '.env') });
@@ -86,6 +92,10 @@ describe('API de integración de documentos (e2e)', () => {
   const keys: Record<string, string> = {};
   /** Cuántas veces el doble del flujo "cobró" un crédito. */
   let creditsCharged = 0;
+  /** Cuántas altas siguientes debe hacer fallar el doble del flujo (después del gancho). */
+  let flowFailures = 0;
+  /** Avisos `organization.member.joined` que habría publicado el alta de miembros. */
+  let membersJoined = 0;
 
   let app: INestApplication;
   let dataSource: DataSource;
@@ -266,7 +276,10 @@ describe('API de integración de documentos (e2e)', () => {
     async execute(
       createdBy: string,
       accountId: string,
-      dto: { documentData: { fileName: string } },
+      dto: {
+        documentData: { fileName: string };
+        collaborators: { email: string; collaboratorType: string }[];
+      },
       file: Express.Multer.File,
       ip: string,
       origin?: DocumentCreationOrigin,
@@ -295,6 +308,16 @@ describe('API de integración de documentos (e2e)', () => {
             }),
           );
           await origin?.onDocumentSaved?.(manager, saved);
+          for (const collaborator of dto.collaborators) {
+            await manager.query(
+              `INSERT INTO collaborators (document_id, email, colaborator_type, ip_address) VALUES ($1, $2, $3, $4)`,
+              [saved.id, collaborator.email, collaborator.collaboratorType, ip],
+            );
+          }
+          if (flowFailures > 0) {
+            flowFailures -= 1;
+            throw new Error('fallo simulado del alta (p. ej. sin créditos)');
+          }
           creditsCharged += 1;
           return saved;
         },
@@ -303,43 +326,59 @@ describe('API de integración de documentos (e2e)', () => {
     },
   };
 
-  const collaborators = JSON.stringify([
-    {
-      source: 'MANUAL',
-      addToDirectory: false,
-      collaboratorType: 'SIGNER',
-      firstName: 'Juan',
-      lastName: 'Pérez',
-      email: 'juan.perez@cliente.test',
-      signatures: [
+  const POSITION = {
+    page: 1,
+    xRatio: 0.1,
+    yRatio: 0.1,
+    widthRatio: 0.2,
+    heightRatio: 0.08,
+  };
+
+  /** Payload del contrato de integración; `patch` ajusta lo que la prueba necesita. */
+  function payload(patch: (value: Record<string, any>) => void = () => {}) {
+    const value: Record<string, any> = {
+      creator: {
+        email: 'ana@integration-e2e.test',
+        firstName: 'Ana',
+        lastName: 'E2E',
+      },
+      document: {
+        signatureType: 'SIMPLE',
+        isSequential: true,
+        isIndexable: true,
+      },
+      participants: [
         {
-          page: 1,
-          xRatio: 0.1,
-          yRatio: 0.1,
-          widthRatio: 0.2,
-          heightRatio: 0.08,
+          role: 'SIGNER',
+          firstName: 'Luis',
+          lastName: 'Martínez',
+          email: 'luis@correo.test',
+          order: 1,
+          signaturePositions: [{ ...POSITION }],
+        },
+        {
+          role: 'WITNESS',
+          firstName: 'Eva',
+          lastName: 'Ruiz',
+          email: 'eva@correo.test',
+          order: 2,
         },
       ],
-    },
-  ]);
+    };
+    patch(value);
+    return value;
+  }
 
   function postDocument(
     keyName: string,
     idempotencyKey: string | null,
-    options: { fileName?: string; pdf?: string; documentData?: object } = {},
+    options: { pdf?: string; body?: Record<string, any> | string } = {},
   ) {
+    const body = options.body ?? payload();
     const call = request(app.getHttpServer())
       .post('/api/v1/integration/documents')
       .set(api(keyName))
-      .field(
-        'documentData',
-        JSON.stringify({
-          fileName: options.fileName ?? 'contrato-erp.pdf',
-          signatureType: 'SIMPLE',
-          ...options.documentData,
-        }),
-      )
-      .field('collaborators', collaborators)
+      .field('payload', typeof body === 'string' ? body : JSON.stringify(body))
       .attach('file', Buffer.from(options.pdf ?? '%PDF-1.4 erp'), {
         filename: 'contrato-erp.pdf',
         contentType: 'application/pdf',
@@ -347,16 +386,25 @@ describe('API de integración de documentos (e2e)', () => {
     return idempotencyKey ? call.set('Idempotency-Key', idempotencyKey) : call;
   }
 
-  async function documentsCreatedVia(keyName: string): Promise<number> {
-    const [{ count }] = await dataSource.query(
-      `SELECT count(*)::int AS count FROM documents WHERE created_via_api_key_id = $1`,
-      [ids[`key:${keyName}`]],
+  async function userByEmail(email: string) {
+    const [user] = await dataSource.query(
+      `SELECT id, first_name, lifecycle_status, password, national_id, personal_information_id FROM users WHERE email = $1`,
+      [email],
     );
-    return count;
+    return user;
+  }
+
+  async function accountsOf(userId: string) {
+    return dataSource.query(
+      `SELECT a.id, a.account_type, a.organization_id, a.is_active, a.password, r.name AS role
+       FROM accounts a LEFT JOIN roles r ON r.id = a.role_id WHERE a.user_id = $1 ORDER BY a.account_type`,
+      [userId],
+    );
   }
 
   beforeAll(async () => {
     process.env.API_KEY_PEPPER = API_KEY_PEPPER;
+    process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test/';
     await adminQuery(`CREATE DATABASE "${DATABASE_NAME}"`);
 
     dataSource = new DataSource({
@@ -381,11 +429,13 @@ describe('API de integración de documentos (e2e)', () => {
           DocumentEntity,
           CollaboratorEntity,
           AccountEntity,
+          UserEntity,
           IntegrationIdempotencyKeyEntity,
         ]),
         E2eJwtModule,
         AuthorizationModule,
         ApiKeyModule,
+        RolesModule,
       ],
       controllers: [IntegrationDocumentsController],
       providers: [
@@ -394,6 +444,42 @@ describe('API de integración de documentos (e2e)', () => {
         CreateIntegrationDocumentUseCase,
         DocumentReadService,
         IntegrationIdempotencyService,
+        IntegrationCreatorService,
+        AccountMemberService,
+        {
+          /**
+           * Lo único de `AccountService` que usa el aprovisionamiento: la cuenta personal (con su rol
+           * OWNER, como la real; el perfil Free de facturación queda fuera de esta prueba) y el
+           * catálogo de Redis, que aquí no existe.
+           */
+          provide: AccountService,
+          useValue: {
+            createDefaultPersonalAccount: async (
+              manager: EntityManager,
+              userId: string,
+              email: string,
+              password: string | null,
+            ) => {
+              const [account] = await manager.query(
+                `INSERT INTO accounts (user_id, account_type, organization_id, role_id, email, password)
+                 SELECT $1, 'PERSONAL', NULL, r.id, $2, $3 FROM roles r WHERE r.name = 'OWNER' AND r.is_system_role = true
+                 RETURNING id`,
+                [userId, email, password],
+              );
+              return { account };
+            },
+            appendAccountToCatalog: async () => undefined,
+          },
+        },
+        {
+          provide: OrganizationMemberEventsProducer,
+          useValue: {
+            enqueueJoined: async () => {
+              membersJoined += 1;
+            },
+            flushOutbox: async () => undefined,
+          },
+        },
         { provide: CreateDocumentSignatureFlowUseCase, useValue: fakeFlow },
         {
           provide: DocumentService,
@@ -771,143 +857,453 @@ describe('API de integración de documentos (e2e)', () => {
   });
 
   describe('POST /integration/documents', () => {
-    it('crea el documento a nombre del actor de la llave, en su organización y vía la llave', async () => {
-      const response = await postDocument(
-        'org1-full',
-        `alta-${randomUUID()}`,
-      ).expect(201);
-
-      expect(response.headers['idempotent-replayed']).toBe('false');
-      expect(response.body.data).toMatchObject({
-        fileName: 'contrato-erp.pdf',
-        status: 'PENDING_SIGNATURE',
-        signatureType: 'SIMPLE',
-      });
-      const [row] = await dataSource.query(
-        `SELECT created_by, account_id, organization_id, created_via_api_key_id FROM documents WHERE id = $1`,
-        [response.body.data.id],
-      );
-      expect(row).toEqual({
-        created_by: ids['user:ana'],
-        account_id: ids['account:ana'],
-        organization_id: ids['org:org1'],
-        created_via_api_key_id: ids['key:org1-full'],
-      });
-    });
-
-    it('exige Idempotency-Key', async () => {
-      const response = await postDocument('org1-full', null).expect(400);
-      expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_REQUIRED');
-    });
-
-    it('un reintento con la misma clave y contenido devuelve el mismo documento sin cobrar de nuevo', async () => {
-      const idempotencyKey = `reintento-${randomUUID()}`;
-      const before = creditsCharged;
-
-      const first = await postDocument('org1-full', idempotencyKey).expect(201);
-      const retry = await postDocument('org1-full', idempotencyKey).expect(200);
-
-      expect(retry.headers['idempotent-replayed']).toBe('true');
-      expect(retry.body.data.id).toBe(first.body.data.id);
-      expect(creditsCharged - before).toBe(1);
-    });
-
-    it('la misma clave con otro archivo responde 409 y no crea nada', async () => {
-      const idempotencyKey = `otro-archivo-${randomUUID()}`;
-      await postDocument('org1-full', idempotencyKey).expect(201);
-      const created = await documentsCreatedVia('org1-full');
-
-      const response = await postDocument('org1-full', idempotencyKey, {
-        pdf: '%PDF-1.4 otro contenido',
-      }).expect(409);
-
-      expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_MISMATCH');
-      await expect(documentsCreatedVia('org1-full')).resolves.toBe(created);
-    });
-
-    it('peticiones simultáneas con la misma clave crean un solo documento y cobran una vez', async () => {
-      const idempotencyKey = `simultaneas-${randomUUID()}`;
-      const before = creditsCharged;
-
-      const responses = await Promise.all(
-        Array.from({ length: 5 }, () =>
-          postDocument('org1-full', idempotencyKey),
-        ),
-      );
-
-      expect(responses.map((response) => response.status).sort()).toEqual([
-        200, 200, 200, 200, 201,
-      ]);
-      expect(
-        new Set(responses.map((response) => response.body.data.id)).size,
-      ).toBe(1);
-      expect(creditsCharged - before).toBe(1);
-      const [{ count }] = await dataSource.query(
-        `SELECT count(*)::int AS count FROM integration_idempotency_keys WHERE idempotency_key = $1`,
-        [idempotencyKey],
-      );
-      expect(count).toBe(1);
-    });
-
-    it('la misma clave en otra organización es otra clave', async () => {
-      const idempotencyKey = `compartida-${randomUUID()}`;
-
-      const org1 = await postDocument('org1-full', idempotencyKey).expect(201);
-      const org2 = await postDocument('org2-full', idempotencyKey).expect(201);
-
-      expect(org2.body.data.id).not.toBe(org1.body.data.id);
-    });
-
-    it.each([
-      ['organizationId', { organizationId: 'ORG2' }],
-      ['createdByUserId', { createdByUserId: 'USER_CARLA' }],
-      ['accountId', { accountId: 'ACCOUNT_CARLA' }],
-    ])(
-      'rechaza %s dentro de documentData sin crear nada',
-      async (field, patch) => {
-        const before = await documentsCreatedVia('org1-full');
-        const resolved = Object.fromEntries(
-          Object.entries(patch).map(([key, value]) => [
-            key,
-            value
-              .replace('ORG2', ids['org:org2'])
-              .replace('USER_CARLA', ids['user:carla'])
-              .replace('ACCOUNT_CARLA', ids['account:carla']),
-          ]),
-        );
+    describe('creador', () => {
+      it('un correo nuevo se aprovisiona: usuario PROVISIONED, cuenta personal y membresía mínima', async () => {
+        const email = `nuevo-${randomUUID()}@cliente.test`;
+        const joinedBefore = membersJoined;
 
         const response = await postDocument(
           'org1-full',
-          `tenant-${field}-${randomUUID()}`,
+          `nuevo-${randomUUID()}`,
           {
-            documentData: resolved,
+            body: payload((value) => {
+              value.creator = {
+                email: email.toUpperCase(),
+                firstName: 'nora',
+                lastName: 'nueva',
+              };
+            }),
           },
-        ).expect(400);
+        ).expect(201);
+
+        const user = await userByEmail(email);
+        expect(user).toMatchObject({
+          first_name: 'Nora',
+          lifecycle_status: 'PROVISIONED',
+          password: null,
+          national_id: null,
+          personal_information_id: null,
+        });
+        const accounts = await accountsOf(user.id);
+        expect(accounts).toEqual([
+          expect.objectContaining({
+            account_type: 'PERSONAL',
+            organization_id: null,
+            password: null,
+            role: 'OWNER',
+          }),
+          expect.objectContaining({
+            account_type: 'ORGANIZATION',
+            organization_id: ids['org:org1'],
+            is_active: true,
+            password: null,
+            role: 'INTEGRATION_DOCUMENT_CREATOR',
+          }),
+        ]);
+        expect(membersJoined - joinedBefore).toBe(1);
+
+        const [document] = await dataSource.query(
+          `SELECT created_by, account_id, organization_id, created_via_api_key_id FROM documents WHERE id = $1`,
+          [response.body.data.id],
+        );
+        expect(document).toEqual({
+          created_by: user.id,
+          account_id: accounts[1].id,
+          organization_id: ids['org:org1'],
+          created_via_api_key_id: ids['key:org1-full'],
+        });
+      });
+
+      it('responde con estatus, datos básicos y la URL pública armada con PUBLIC_WEB_APP_URL', async () => {
+        const response = await postDocument(
+          'org1-full',
+          `respuesta-${randomUUID()}`,
+        )
+          .set('Host', 'atacante.example')
+          .expect(201);
+
+        expect(response.headers['idempotent-replayed']).toBe('false');
+        expect(response.body).toEqual({
+          success: true,
+          message: expect.any(String),
+          data: {
+            id: expect.any(String),
+            status: 'PENDING_SIGNATURE',
+            signatureType: 'SIMPLE',
+            fileName: 'contrato-erp.pdf',
+            createdAt: expect.any(String),
+            creator: { email: 'ana@integration-e2e.test' },
+            participantsCount: 2,
+            publicUrl: `https://app.firmalo.test/public/documents/${response.body.data.id}`,
+          },
+        });
+      });
+
+      it('un miembro activo usa su propia cuenta, sin tocar sus datos aunque el payload traiga otro nombre', async () => {
+        const response = await postDocument(
+          'org1-full',
+          `miembro-${randomUUID()}`,
+          {
+            body: payload((value) => {
+              value.creator = {
+                email: '  ANA@integration-e2e.test ',
+                firstName: 'Otro',
+                lastName: 'Nombre',
+              };
+            }),
+          },
+        ).expect(201);
+
+        const [document] = await dataSource.query(
+          `SELECT created_by, account_id FROM documents WHERE id = $1`,
+          [response.body.data.id],
+        );
+        expect(document).toEqual({
+          created_by: ids['user:ana'],
+          account_id: ids['account:ana'],
+        });
+        expect((await userByEmail('ana@integration-e2e.test')).first_name).toBe(
+          'ana',
+        );
+      });
+
+      it('un usuario existente sin membresía recibe una, sin otra cuenta personal ni cambios en sus datos', async () => {
+        // carla existe (es de org2); la llave es de org1.
+        const before = await accountsOf(ids['user:carla']);
+
+        const response = await postDocument(
+          'org1-full',
+          `sin-membresia-${randomUUID()}`,
+          {
+            body: payload((value) => {
+              value.creator = {
+                email: 'carla@integration-e2e.test',
+                firstName: 'Cambiada',
+                lastName: 'X',
+              };
+            }),
+          },
+        ).expect(201);
+
+        const after = await accountsOf(ids['user:carla']);
+        expect(after).toHaveLength(before.length + 1);
+        const created = after.find(
+          (account: { organization_id: string }) =>
+            account.organization_id === ids['org:org1'],
+        );
+        expect(created.role).toBe('INTEGRATION_DOCUMENT_CREATOR');
+        expect(
+          (await userByEmail('carla@integration-e2e.test')).first_name,
+        ).toBe('carla');
+
+        const [document] = await dataSource.query(
+          `SELECT created_by, account_id FROM documents WHERE id = $1`,
+          [response.body.data.id],
+        );
+        expect(document).toEqual({
+          created_by: ids['user:carla'],
+          account_id: created.id,
+        });
+      });
+
+      it('no readmite a un creador dado de baja de la organización', async () => {
+        const response = await postDocument(
+          'org1-full',
+          `baja-${randomUUID()}`,
+          {
+            body: payload((value) => {
+              value.creator.email = 'dario@integration-e2e.test';
+            }),
+          },
+        ).expect(422);
 
         expect(response.body.code).toBe(
-          'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
+          'INTEGRATION_CREATOR_MEMBERSHIP_REVOKED',
         );
-        await expect(documentsCreatedVia('org1-full')).resolves.toBe(before);
-      },
-    );
+        const [{ count }] = await dataSource.query(
+          `SELECT count(*)::int AS count FROM accounts WHERE user_id = $1 AND organization_id = $2 AND is_active`,
+          [ids['user:dario'], ids['org:org1']],
+        );
+        expect(count).toBe(0);
+      });
 
-    it('rechaza createdBy en el body', async () => {
-      const response = await postDocument('org1-full', `body-${randomUUID()}`)
-        .field('createdBy', ids['user:carla'])
-        .expect(400);
-      expect(response.body.code).toBe(
-        'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
-      );
+      it('dos altas simultáneas con el mismo creador nuevo crean un solo usuario y una sola membresía', async () => {
+        const email = `simultaneo-${randomUUID()}@cliente.test`;
+
+        const responses = await Promise.all(
+          Array.from({ length: 4 }, () =>
+            postDocument('org1-full', `simultaneo-${randomUUID()}`, {
+              body: payload((value) => {
+                value.creator.email = email;
+              }),
+            }),
+          ),
+        );
+
+        expect(responses.map((response) => response.status)).toEqual([
+          201, 201, 201, 201,
+        ]);
+        const user = await userByEmail(email);
+        expect(await accountsOf(user.id)).toHaveLength(2);
+      });
     });
 
-    it('responde 403 a una llave sin DOCUMENT.CREATE', async () => {
-      await activateOnly('org1-own');
+    describe('idempotencia', () => {
+      it('un reintento con la misma clave y contenido devuelve el mismo documento sin crear ni cobrar', async () => {
+        const idempotencyKey = `reintento-${randomUUID()}`;
+        const email = `reintento-${randomUUID()}@cliente.test`;
+        const body = payload((value) => {
+          value.creator.email = email;
+        });
+        const charged = creditsCharged;
 
-      const response = await postDocument(
-        'org1-own',
-        `sin-permiso-${randomUUID()}`,
-      ).expect(403);
-      expect(response.body.code).toBe('API_KEY_PERMISSION_DENIED');
+        const first = await postDocument('org1-full', idempotencyKey, {
+          body,
+        }).expect(201);
+        const retry = await postDocument('org1-full', idempotencyKey, {
+          body,
+        }).expect(200);
+
+        expect(retry.headers['idempotent-replayed']).toBe('true');
+        expect(retry.body.data).toEqual(first.body.data);
+        expect(creditsCharged - charged).toBe(1);
+        const [{ count }] = await dataSource.query(
+          `SELECT count(*)::int AS count FROM documents WHERE created_by = $1`,
+          [(await userByEmail(email)).id],
+        );
+        expect(count).toBe(1);
+      });
+
+      it('la misma clave con otro payload responde 409', async () => {
+        const idempotencyKey = `otro-payload-${randomUUID()}`;
+        await postDocument('org1-full', idempotencyKey).expect(201);
+
+        const response = await postDocument('org1-full', idempotencyKey, {
+          body: payload((value) => {
+            value.document.signatureType = 'ADVANCED';
+          }),
+        }).expect(409);
+
+        expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_MISMATCH');
+      });
+
+      it('la misma clave con otro archivo responde 409', async () => {
+        const idempotencyKey = `otro-archivo-${randomUUID()}`;
+        await postDocument('org1-full', idempotencyKey).expect(201);
+
+        const response = await postDocument('org1-full', idempotencyKey, {
+          pdf: '%PDF-1.4 otro contenido',
+        }).expect(409);
+
+        expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_MISMATCH');
+      });
+
+      it('peticiones simultáneas con la misma clave crean un solo documento y cobran una vez', async () => {
+        const idempotencyKey = `simultaneas-${randomUUID()}`;
+        const charged = creditsCharged;
+
+        const responses = await Promise.all(
+          Array.from({ length: 5 }, () =>
+            postDocument('org1-full', idempotencyKey),
+          ),
+        );
+
+        const statuses = responses.map((response) => response.status);
+        expect(statuses.filter((status) => status === 201)).toHaveLength(1);
+        // Las demás: repetición (200) o "en curso" (409), nunca otro documento.
+        for (const response of responses.filter((r) => r.status !== 201)) {
+          expect([200, 409]).toContain(response.status);
+          if (response.status === 409) {
+            expect(response.body.code).toBe(
+              'INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS',
+            );
+          }
+        }
+        expect(creditsCharged - charged).toBe(1);
+        const [{ count }] = await dataSource.query(
+          `SELECT count(*)::int AS count FROM integration_idempotency_keys WHERE idempotency_key = $1`,
+          [idempotencyKey],
+        );
+        expect(count).toBe(1);
+      });
+
+      it('si el alta falla, libera la clave y el reintento crea el documento', async () => {
+        const idempotencyKey = `fallo-${randomUUID()}`;
+        flowFailures = 1;
+
+        await postDocument('org1-full', idempotencyKey).expect(500);
+        const [{ count }] = await dataSource.query(
+          `SELECT count(*)::int AS count FROM integration_idempotency_keys WHERE idempotency_key = $1`,
+          [idempotencyKey],
+        );
+        expect(count).toBe(0);
+
+        await postDocument('org1-full', idempotencyKey).expect(201);
+      });
+
+      it('la unicidad es por llave: la misma clave con otra llave es otra clave', async () => {
+        const idempotencyKey = `compartida-${randomUUID()}`;
+
+        const org1 = await postDocument('org1-full', idempotencyKey).expect(
+          201,
+        );
+        const org2 = await postDocument('org2-full', idempotencyKey, {
+          body: payload((value) => {
+            value.creator.email = 'carla@integration-e2e.test';
+          }),
+        }).expect(201);
+
+        expect(org2.body.data.id).not.toBe(org1.body.data.id);
+      });
+
+      it('una clave vencida se libera y vuelve a crear', async () => {
+        const idempotencyKey = `vencida-${randomUUID()}`;
+        const first = await postDocument('org1-full', idempotencyKey).expect(
+          201,
+        );
+        await dataSource.query(
+          `UPDATE integration_idempotency_keys SET expires_at = now() - interval '1 minute' WHERE idempotency_key = $1`,
+          [idempotencyKey],
+        );
+
+        const again = await postDocument('org1-full', idempotencyKey).expect(
+          201,
+        );
+
+        expect(again.body.data.id).not.toBe(first.body.data.id);
+      });
+    });
+
+    describe('validación del contrato', () => {
+      it('exige Idempotency-Key', async () => {
+        const response = await postDocument('org1-full', null).expect(400);
+        expect(response.body.code).toBe('INTEGRATION_IDEMPOTENCY_KEY_REQUIRED');
+      });
+
+      it('exige el archivo PDF', async () => {
+        await request(app.getHttpServer())
+          .post('/api/v1/integration/documents')
+          .set(api('org1-full'))
+          .set('Idempotency-Key', `sin-archivo-${randomUUID()}`)
+          .field('payload', JSON.stringify(payload()))
+          .expect(400);
+      });
+
+      it.each([
+        ['un payload que no es JSON', '{no es json'],
+        [
+          'sin creador',
+          JSON.stringify(payload((value) => delete value.creator)),
+        ],
+        [
+          'un correo de creador inválido',
+          JSON.stringify(
+            payload((value) => (value.creator.email = 'no-es-correo')),
+          ),
+        ],
+        [
+          'sin participantes',
+          JSON.stringify(payload((value) => (value.participants = []))),
+        ],
+        [
+          'un firmante sin posiciones',
+          JSON.stringify(
+            payload((value) => delete value.participants[0].signaturePositions),
+          ),
+        ],
+        [
+          'una posición fuera de rango',
+          JSON.stringify(
+            payload(
+              (value) =>
+                (value.participants[0].signaturePositions[0].xRatio = 2),
+            ),
+          ),
+        ],
+        [
+          'un rol desconocido',
+          JSON.stringify(
+            payload((value) => (value.participants[0].role = 'VIEWER')),
+          ),
+        ],
+      ])('rechaza con 400 %s', async (_label, body) => {
+        await postDocument('org1-full', `invalido-${randomUUID()}`, {
+          body,
+        }).expect(400);
+      });
+
+      it.each([
+        [
+          'organizationId',
+          (value: Record<string, any>) => (value.organizationId = 'ORG2'),
+        ],
+        [
+          'taxId',
+          (value: Record<string, any>) => (value.document.taxId = 'RFC'),
+        ],
+        [
+          'userId',
+          (value: Record<string, any>) => (value.creator.userId = 'USER'),
+        ],
+        [
+          'accountId',
+          (value: Record<string, any>) => (value.creator.accountId = 'ACC'),
+        ],
+        [
+          'createdBy',
+          (value: Record<string, any>) => (value.document.createdBy = 'USER'),
+        ],
+        [
+          'permissionIds',
+          (value: Record<string, any>) => (value.permissionIds = []),
+        ],
+        [
+          'documentBase64',
+          (value: Record<string, any>) => (value.documentBase64 = 'JVBERi0'),
+        ],
+      ])(
+        'rechaza %s en el payload sin crear ni aprovisionar nada',
+        async (field, patch) => {
+          const email = `prohibido-${field}-${randomUUID()}@cliente.test`;
+
+          const response = await postDocument(
+            'org1-full',
+            `prohibido-${randomUUID()}`,
+            {
+              body: payload((value) => {
+                value.creator.email = email;
+                patch(value);
+              }),
+            },
+          ).expect(400);
+
+          expect(response.body.code).toBe(
+            'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
+          );
+          expect(await userByEmail(email)).toBeUndefined();
+        },
+      );
+
+      it('rechaza requiresApproval: true', async () => {
+        const response = await postDocument(
+          'org1-full',
+          `aprobacion-${randomUUID()}`,
+          {
+            body: payload((value) => (value.document.requiresApproval = true)),
+          },
+        ).expect(400);
+        expect(response.body.code).toBe('INTEGRATION_APPROVAL_NOT_SUPPORTED');
+      });
+
+      it('responde 403 a una llave sin DOCUMENT.CREATE', async () => {
+        await activateOnly('org1-own');
+
+        const response = await postDocument(
+          'org1-own',
+          `sin-permiso-${randomUUID()}`,
+        ).expect(403);
+        expect(response.body.code).toBe('API_KEY_PERMISSION_DENIED');
+      });
     });
   });
 
@@ -922,7 +1318,7 @@ describe('API de integración de documentos (e2e)', () => {
       [
         '/api/v1/integration/documents',
         'post',
-        ['200', '201', '400', '401', '403', '409'],
+        ['200', '201', '400', '401', '402', '403', '409', '422'],
       ],
     ])(
       '%s %s documenta X-API-Key y sus respuestas',

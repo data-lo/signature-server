@@ -77,7 +77,58 @@ export class IntegrationDocumentsPageResponse extends BaseResponse<IntegrationDo
   data: IntegrationDocumentsPage;
 }
 
-export class IntegrationDocumentResponse extends BaseResponse<IntegrationDocumentData> {
-  @ApiProperty({ type: IntegrationDocumentData })
-  data: IntegrationDocumentData;
+/** Creador del documento, tal como se identificó en el payload. */
+export class IntegrationDocumentCreatorData {
+  @ApiProperty({ example: 'ana@cliente.com' })
+  email: string;
+}
+
+/** Documento creado por `POST /integration/documents`. */
+export class IntegrationCreatedDocumentData {
+  @ApiProperty({
+    format: 'uuid',
+    example: '2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
+  })
+  id: string;
+
+  @ApiProperty({
+    enum: DOCUMENT_STATUS_ENUM,
+    example: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+  })
+  status: DOCUMENT_STATUS_ENUM;
+
+  @ApiProperty({
+    enum: SIGNATURE_TYPE_ENUM,
+    nullable: true,
+    example: SIGNATURE_TYPE_ENUM.SIMPLE,
+    description: '`FIEL` es la firma avanzada',
+  })
+  signatureType: SIGNATURE_TYPE_ENUM | null;
+
+  @ApiProperty({ example: 'contrato.pdf' })
+  fileName: string;
+
+  @ApiProperty({ example: '2026-10-26T12:00:00.000Z' })
+  createdAt: Date;
+
+  @ApiProperty({ type: IntegrationDocumentCreatorData })
+  creator: IntegrationDocumentCreatorData;
+
+  @ApiProperty({
+    example: 1,
+    description: 'Firmantes y testigos del documento',
+  })
+  participantsCount: number;
+
+  @ApiProperty({
+    example:
+      'https://app.firmalo.com/public/documents/2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
+    description: 'URL pública de consulta del documento (`PUBLIC_WEB_APP_URL`)',
+  })
+  publicUrl: string;
+}
+
+export class IntegrationCreatedDocumentResponse extends BaseResponse<IntegrationCreatedDocumentData> {
+  @ApiProperty({ type: IntegrationCreatedDocumentData })
+  data: IntegrationCreatedDocumentData;
 }

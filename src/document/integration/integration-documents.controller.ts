@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -129,15 +130,20 @@ export class IntegrationDocumentsController {
   ) {
     assertNoTenantOverrides(request);
     const idempotencyKey = readIdempotencyKey(idempotencyKeyHeader);
+    if (!file) {
+      throw new BadRequestException(
+        'Falta el archivo PDF en el campo multipart `file`',
+      );
+    }
 
     const { replayed, ...result } =
       await this.createIntegrationDocument.execute({
         apiClient,
-        dto,
+        payload: dto.payload,
         file,
         ip,
         idempotencyKey,
-        requestFingerprint: buildRequestFingerprint(file, request.body),
+        requestHash: buildRequestFingerprint(file, request.body),
       });
 
     response.status(replayed ? 200 : 201);

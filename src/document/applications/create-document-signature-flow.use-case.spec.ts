@@ -1106,6 +1106,27 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     });
   });
 
+  describe('validación del PDF (tipo y bytes reales)', () => {
+    it.each([
+      [
+        'otro tipo declarado',
+        { ...file, mimetype: 'image/png' } as Express.Multer.File,
+      ],
+      [
+        'bytes que no son de un PDF',
+        { ...file, buffer: Buffer.from('no soy un pdf') } as Express.Multer.File,
+      ],
+    ])('rechaza %s antes de leer páginas, subir o cobrar', async (_label, badFile) => {
+      await expect(
+        useCase.execute('creator-1', 'account-1', baseDto, badFile, '127.0.0.1'),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(documentSigningService.getPdfPages).not.toHaveBeenCalled();
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+      expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+    });
+  });
+
   it('Escenario 2: si falla la inserción dentro de la transacción, no se publica ningún evento a Kafka', async () => {
     collaboratorRepo.save.mockRejectedValueOnce(new Error('DB caída'));
 

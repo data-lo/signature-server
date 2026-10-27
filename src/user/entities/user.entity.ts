@@ -3,7 +3,9 @@ import { SignatureEntity } from 'src/signature/entities/signature.entity';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { PersonalInformationEntity } from './personal-information.entity';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from '../enums/signing-credential-status.enum';
+import { USER_LIFECYCLE_STATUS_ENUM } from '../enums/user-lifecycle-status.enum';
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -16,6 +18,14 @@ import {
 } from 'typeorm';
 
 @Entity('users')
+/**
+ * Un usuario `ACTIVE` siempre tiene CURP, contraseña y ficha personal; sólo uno `PROVISIONED`
+ * (creado por la API de integración) puede no tenerlos.
+ */
+@Check(
+  'CHK_users_active_has_credentials',
+  `"lifecycle_status" = 'PROVISIONED' OR ("password" IS NOT NULL AND "national_id" IS NOT NULL AND "personal_information_id" IS NOT NULL)`,
+)
 export class UserEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -41,12 +51,26 @@ export class UserEntity {
   @Column({ default: false, name: 'is_email_verified' })
   isEmailVerified: boolean;
 
-  @Index()
-  @Column({ length: 18, name: 'national_id', unique: true })
-  nationalId: string;
+  /**
+   * Si el usuario se registró él mismo (`ACTIVE`) o lo aprovisionó una integración por API key
+   * (`PROVISIONED`, sin CURP ni contraseña). Ver `USER_LIFECYCLE_STATUS_ENUM`.
+   */
+  @Column({
+    type: 'enum',
+    enum: USER_LIFECYCLE_STATUS_ENUM,
+    default: USER_LIFECYCLE_STATUS_ENUM.ACTIVE,
+    name: 'lifecycle_status',
+  })
+  lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM;
 
-  @Column({ name: 'password' })
-  password: string;
+  /** CURP. `null` sólo mientras el usuario está `PROVISIONED`. */
+  @Index()
+  @Column({ length: 18, name: 'national_id', unique: true, nullable: true })
+  nationalId: string | null;
+
+  /** Hash bcrypt. `null` sólo mientras el usuario está `PROVISIONED`: no puede iniciar sesión. */
+  @Column({ name: 'password', type: 'varchar', nullable: true })
+  password: string | null;
 
   @Column({ nullable: true, name: 'signature_id' })
   signatureId: string | null;
@@ -76,8 +100,9 @@ export class UserEntity {
   @Column({ type: 'timestamp', nullable: true, name: 'identity_verified_at' })
   identityVerifiedAt: Date | null;
 
-  @Column({ nullable: false, name: 'personal_information_id' })
-  personalInformationId: string;
+  /** Ficha personal (CURP, RFC). `null` sólo mientras el usuario está `PROVISIONED`. */
+  @Column({ nullable: true, name: 'personal_information_id' })
+  personalInformationId: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
@@ -91,7 +116,7 @@ export class UserEntity {
 
   @OneToOne(() => PersonalInformationEntity)
   @JoinColumn({ name: 'personal_information_id' })
-  personalInformation: PersonalInformationEntity;
+  personalInformation: PersonalInformationEntity | null;
 
   @OneToMany(() => DocumentEntity, (document) => document.requestedBy)
   createdDocuments: DocumentEntity[];
