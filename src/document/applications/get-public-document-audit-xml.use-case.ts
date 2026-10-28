@@ -223,9 +223,6 @@ export class GetPublicDocumentAuditXmlUseCase {
 
     return {
       signatureHash: seal.signatureHash ?? null,
-      // Texto UTF-8 tal cual está en la columna: es la preimagen del hash sellado y no se
-      // recodifica (ver `audit-xml.builder.ts`).
-      canonicalPayload: seal.canonicalPayload ?? null,
       timestampEvidenceBase64: seal.timestampEvidence?.fileBase64 ?? null,
       nom151EvidenceBase64: seal.integrityEvidence?.fileBase64 ?? null,
       nom151CertificatePdfBase64:
