@@ -1,4 +1,5 @@
-import { PickType } from '@nestjs/swagger';
+import { ApiPropertyOptional, PickType } from '@nestjs/swagger';
+import { IsEmail, IsOptional, MaxLength } from 'class-validator';
 
 import { GetDocumentsQueryDto } from '../../dto/get-documents-query.dto';
 
@@ -25,3 +26,20 @@ export class ListIntegrationDocumentsQueryDto extends PickType(
     'signedTo',
   ] as const,
 ) {}
+
+/**
+ * Query de `GET /integration/documents`: la del listado más un filtro opcional por el correo del
+ * creador. Con `creatorEmail`, la llave puede tener `DOCUMENT.READ` con alcance `OWN` (sólo su
+ * propio correo) u `ORGANIZATION`; sin él, sólo `ORGANIZATION`.
+ */
+export class ListIntegrationDocumentsByCreatorQueryDto extends ListIntegrationDocumentsQueryDto {
+  @ApiPropertyOptional({
+    example: 'ana@acme.mx',
+    description:
+      'Correo del creador. Sólo documentos que creó ese miembro de la organización de la API key.',
+  })
+  @IsOptional()
+  @IsEmail({}, { message: 'creatorEmail debe ser un correo válido' })
+  @MaxLength(320)
+  creatorEmail?: string;
+}

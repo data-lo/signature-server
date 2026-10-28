@@ -13,6 +13,7 @@ import {
   Query,
   ParseEnumPipe,
   Res,
+  Headers,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import {
@@ -342,6 +343,7 @@ export class DocumentController {
     files: { key?: Express.Multer.File[]; cer?: Express.Multer.File[] },
     @CurrentAuthorization() authorization: AuthorizationContext,
     @ClientIp() ipAddress: string,
+    @Headers('user-agent') userAgent: string | undefined,
   ) {
     return this.signDocument.execute(
       id,
@@ -354,6 +356,7 @@ export class DocumentController {
       dto?.geolocation,
       authorization,
       ipAddress ?? null,
+      userAgent ?? null,
     );
   }
 

@@ -57,6 +57,9 @@ import { IdentityVerificationsController } from './identity-verifications.contro
     ValidateVerificationAttemptsUseCase,
   ],
   exports: [
+    // Lo usa la sesión pública de firma (`PublicSigningModule`) para verificar la identidad del
+    // usuario provisional antes de la firma simple.
+    StartDiditVerificationUseCase,
     ProcessDiditVerificationResultUseCase,
     UpdateSigningCredentialStatusUseCase,
     /**

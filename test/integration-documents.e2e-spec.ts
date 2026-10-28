@@ -33,6 +33,9 @@ import { DocumentEntity } from './../src/document/entities/document.entity';
 import { CreateIntegrationDocumentUseCase } from './../src/document/integration/applications/create-integration-document.use-case';
 import { ListOrganizationIntegrationDocumentsUseCase } from './../src/document/integration/applications/list-organization-integration-documents.use-case';
 import { ListUserIntegrationDocumentsUseCase } from './../src/document/integration/applications/list-user-integration-documents.use-case';
+import { IssueIntegrationSigningAccessUseCase } from './../src/document/integration/applications/issue-integration-signing-access.use-case';
+import { ResendIntegrationSigningInvitationUseCase } from './../src/document/integration/applications/resend-integration-signing-invitation.use-case';
+import { SigningInvitationDeliveryService } from './../src/signing-invitation/signing-invitation-delivery.service';
 import { INTEGRATION_API_KEY_SECURITY } from './../src/document/integration/docs/api-integration-documents-common.docs';
 import { IntegrationIdempotencyKeyEntity } from './../src/document/integration/entities/integration-idempotency-key.entity';
 import { IntegrationDocumentsController } from './../src/document/integration/integration-documents.controller';
@@ -109,6 +112,12 @@ describe('API de integración de documentos (e2e)', () => {
   let flowFailures = 0;
   /** Avisos `organization.member.joined` que habría publicado el alta de miembros. */
   let membersJoined = 0;
+  /** Reenvíos de invitación que habría emitido y enviado `SigningInvitationDeliveryService`. */
+  const delivered: {
+    documentId: string;
+    collaboratorId: string;
+    apiKeyId?: string;
+  }[] = [];
 
   let app: INestApplication;
   let dataSource: DataSource;
@@ -463,6 +472,31 @@ describe('API de integración de documentos (e2e)', () => {
         ListOrganizationIntegrationDocumentsUseCase,
         ListUserIntegrationDocumentsUseCase,
         CreateIntegrationDocumentUseCase,
+        // Real: la regla de qué se puede reenviar, contra la base. La emisión y el correo, dobles.
+        ResendIntegrationSigningInvitationUseCase,
+        // La emisión de accesos temporales tiene su propia e2e (`signing-access-flow`).
+        { provide: IssueIntegrationSigningAccessUseCase, useValue: {} },
+        {
+          provide: SigningInvitationDeliveryService,
+          useValue: {
+            deliver: async (input: {
+              document: { id: string };
+              collaborator: { id: string };
+              auditActor: { apiKeyId?: string };
+            }) => {
+              delivered.push({
+                documentId: input.document.id,
+                collaboratorId: input.collaborator.id,
+                apiKeyId: input.auditActor.apiKeyId,
+              });
+              return {
+                invitationId: 'inv-e2e',
+                expiresAt: new Date('2026-12-01T00:00:00.000Z'),
+                emailDelivered: true,
+              };
+            },
+          },
+        },
         DocumentReadService,
         IntegrationIdempotencyService,
         IntegrationCreatorService,
@@ -883,6 +917,145 @@ describe('API de integración de documentos (e2e)', () => {
     });
   });
 
+  describe('GET /integration/documents?creatorEmail=', () => {
+    const byEmail = (email: string) =>
+      `/api/v1/integration/documents?creatorEmail=${encodeURIComponent(email)}`;
+
+    it('con ORGANIZATION devuelve sólo los documentos de ese creador', async () => {
+      const response = await request(app.getHttpServer())
+        .get(byEmail('Beto@Integration-E2E.test'))
+        .set(api('org1-full'))
+        .expect(200);
+
+      expect(
+        response.body.data.items.map((item: { id: string }) => item.id),
+      ).toEqual([ids['doc:beto-1']]);
+    });
+
+    it('con sólo OWN admite su propio correo', async () => {
+      await activateOnly('org1-own');
+      const response = await request(app.getHttpServer())
+        .get(byEmail('ana@integration-e2e.test'))
+        .set(api('org1-own'))
+        .expect(200);
+      expect(response.body.data.pagination.total).toBe(2);
+    });
+
+    it('con sólo OWN no puede pedir a otro creador', async () => {
+      await activateOnly('org1-own');
+      const response = await request(app.getHttpServer())
+        .get(byEmail('beto@integration-e2e.test'))
+        .set(api('org1-own'))
+        .expect(403);
+      expect(response.body.error.code).toBe('INTEGRATION_SCOPE_DENIED');
+    });
+
+    it.each([
+      ['de otra organización', 'carla@integration-e2e.test'],
+      ['que no existe', 'nadie@integration-e2e.test'],
+    ])('404 a un correo %s', async (_label, email) => {
+      const response = await request(app.getHttpServer())
+        .get(byEmail(email))
+        .set(api('org1-full'))
+        .expect(404);
+      expect(response.body.error.code).toBe('INTEGRATION_USER_NOT_FOUND');
+    });
+  });
+
+  describe('POST /integration/documents/:documentId/collaborators/:collaboratorId/resend-invitation', () => {
+    const resendUrl = (documentKey: string, collaboratorId: string) =>
+      `/api/v1/integration/documents/${ids[`doc:${documentKey}`] ?? documentKey}/collaborators/${collaboratorId}/resend-invitation`;
+    const signers: Record<string, string> = {};
+
+    beforeAll(async () => {
+      for (const [key, documentKey, order] of [
+        ['beto-fiel', 'beto-1', 1],
+        ['beto-fiel-2', 'beto-1', 2],
+        ['carla-fiel', 'carla-1', 1],
+      ] as const) {
+        const [collaborator] = await dataSource.query(
+          `INSERT INTO collaborators (document_id, email, colaborator_type, signature_type, status, signing_order, ip_address)
+           VALUES ($1, $2, 'SIGNER', 'FIEL', 'PENDING', $3, '127.0.0.1') RETURNING id`,
+          [ids[`doc:${documentKey}`], `${key}@externo.test`, order],
+        );
+        signers[key] = collaborator.id;
+      }
+      await dataSource.query(
+        `UPDATE documents SET is_sequential = true WHERE id = $1`,
+        [ids['doc:beto-1']],
+      );
+    });
+
+    afterAll(async () => {
+      await dataSource.query(`DELETE FROM collaborators WHERE id = ANY($1)`, [
+        Object.values(signers),
+      ]);
+    });
+
+    beforeEach(() => {
+      delivered.length = 0;
+    });
+
+    it('reenvía al firmante en turno, con la llave de la petición en la auditoría', async () => {
+      const response = await request(app.getHttpServer())
+        .post(resendUrl('beto-1', signers['beto-fiel']))
+        .set(api('org1-full'))
+        .expect(200);
+
+      expect(response.body.data).toEqual({
+        collaboratorId: signers['beto-fiel'],
+        invitationExpiresAt: '2026-12-01T00:00:00.000Z',
+        emailDelivered: true,
+      });
+      expect(delivered).toEqual([
+        {
+          documentId: ids['doc:beto-1'],
+          collaboratorId: signers['beto-fiel'],
+          apiKeyId: ids['key:org1-full'],
+        },
+      ]);
+    });
+
+    it('409 a un firmante que todavía no está en turno', async () => {
+      const response = await request(app.getHttpServer())
+        .post(resendUrl('beto-1', signers['beto-fiel-2']))
+        .set(api('org1-full'))
+        .expect(409);
+      expect(response.body.error.code).toBe(
+        'INTEGRATION_INVITATION_NOT_RESENDABLE',
+      );
+      expect(delivered).toEqual([]);
+    });
+
+    it.each([
+      [
+        'un documento de otra organización',
+        () => resendUrl('carla-1', signers['carla-fiel']),
+      ],
+      [
+        'un colaborador que no es de ese documento',
+        () => resendUrl('beto-1', signers['carla-fiel']),
+      ],
+      ['ids que no son UUID', () => resendUrl('no-es-uuid', 'tampoco')],
+    ])('404 a %s, sin revelar nada', async (_label, url) => {
+      const response = await request(app.getHttpServer())
+        .post(url())
+        .set(api('org1-full'))
+        .expect(404);
+      expect(response.body.error.code).toBe('INTEGRATION_SIGNER_NOT_FOUND');
+      expect(delivered).toEqual([]);
+    });
+
+    it('403 a una llave sin DOCUMENT.CREATE', async () => {
+      await activateOnly('org1-own');
+      const response = await request(app.getHttpServer())
+        .post(resendUrl('beto-1', signers['beto-fiel']))
+        .set(api('org1-own'))
+        .expect(403);
+      expect(response.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
+    });
+  });
+
   describe('POST /integration/documents', () => {
     describe('creador', () => {
       it('un correo nuevo se aprovisiona: usuario PROVISIONED, cuenta personal y membresía mínima', async () => {
@@ -962,6 +1135,15 @@ describe('API de integración de documentos (e2e)', () => {
             creator: { email: 'ana@integration-e2e.test' },
             participantsCount: 2,
             publicUrl: `https://app.firmalo.test/public/documents/${response.body.data.id}`,
+            // Firmantes en orden, sin URLs de firma (el doble del flujo no guarda su tipo).
+            participants: [
+              {
+                email: 'luis@correo.test',
+                status: 'PENDING',
+                signatureType: null,
+                order: 1,
+              },
+            ],
           },
         });
       });
@@ -1585,7 +1767,16 @@ describe('API de integración de documentos (e2e)', () => {
 
   describe('documentación Swagger', () => {
     it.each([
-      ['/api/v1/integration/documents', 'get', ['200', '400', '401', '403']],
+      [
+        '/api/v1/integration/documents',
+        'get',
+        ['200', '400', '401', '403', '404'],
+      ],
+      [
+        '/api/v1/integration/documents/{documentId}/collaborators/{collaboratorId}/resend-invitation',
+        'post',
+        ['200', '400', '401', '403', '404', '409', '429'],
+      ],
       [
         '/api/v1/integration/users/{userId}/documents',
         'get',

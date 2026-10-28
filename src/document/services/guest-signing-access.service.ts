@@ -141,6 +141,32 @@ export class GuestSigningAccessService {
   }
 
   /**
+   * Acceso vigente con ese id, aunque ya se haya consumido: sin vencer y sin revocar. Lo usa la
+   * sesión pública de firma, que tiene que seguir respondiendo después de firmar —para el reintento
+   * idempotente de la firma y para mostrar el estado final—. Firmar otra vez con un acceso consumido
+   * no es posible: el claim exige consumirlo (`consume`).
+   *
+   * @param accessId - `jti` del token.
+   * @returns El acceso, o `null` si no existe, venció o se revocó.
+   *
+   * @throws Nada propio; errores de la base.
+   *
+   * @example
+   * ```ts
+   * const access = await accesses.findUsable('a-1');
+   * ```
+   */
+  async findUsable(accessId: string): Promise<GuestSigningAccessEntity | null> {
+    return this.accessRepository.findOne({
+      where: {
+        id: accessId,
+        revokedAt: IsNull(),
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+  }
+
+  /**
    * Acceso activo con ese id: sin vencer, sin consumir y sin revocar.
    *
    * @param accessId - `jti` del token.

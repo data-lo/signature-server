@@ -4,6 +4,8 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
@@ -21,6 +23,7 @@ import { Request, Response } from 'express';
 
 import { CurrentApiClient } from 'src/api-key/decorators/current-api-client.decorator';
 import { RequireApiKeyPermission } from 'src/api-key/decorators/require-api-key-permission.decorator';
+import { ApiKeyPermissionGuard } from 'src/api-key/guards/api-key-permission.guard';
 import { OrganizationApiKeyGuard } from 'src/api-key/guards/organization-api-key.guard';
 import { IntegrationApiClient } from 'src/api-key/interfaces/integration-api-client.interface';
 import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
@@ -34,12 +37,23 @@ import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { CreateIntegrationDocumentUseCase } from './applications/create-integration-document.use-case';
 import { ListOrganizationIntegrationDocumentsUseCase } from './applications/list-organization-integration-documents.use-case';
 import { ListUserIntegrationDocumentsUseCase } from './applications/list-user-integration-documents.use-case';
+import { IssueIntegrationSigningAccessUseCase } from './applications/issue-integration-signing-access.use-case';
+import { ResendIntegrationSigningInvitationUseCase } from './applications/resend-integration-signing-invitation.use-case';
+import { ApiCreateIntegrationSigningAccess } from './docs/api-create-integration-signing-access.docs';
+import { CreateIntegrationSigningAccessDto } from './dto/create-integration-signing-access.dto';
 import { ApiCreateIntegrationDocument } from './docs/api-create-integration-document.docs';
 import { ApiListOrganizationIntegrationDocuments } from './docs/api-list-organization-integration-documents.docs';
 import { ApiListUserIntegrationDocuments } from './docs/api-list-user-integration-documents.docs';
+import { ApiResendIntegrationSigningInvitation } from './docs/api-resend-integration-signing-invitation.docs';
 import { CreateIntegrationDocumentDto } from './dto/create-integration-document.dto';
-import { ListIntegrationDocumentsQueryDto } from './dto/list-integration-documents-query.dto';
-import { IntegrationUserNotFoundException } from './exceptions/integration-document.exceptions';
+import {
+  ListIntegrationDocumentsByCreatorQueryDto,
+  ListIntegrationDocumentsQueryDto,
+} from './dto/list-integration-documents-query.dto';
+import {
+  IntegrationSignerNotFoundException,
+  IntegrationUserNotFoundException,
+} from './exceptions/integration-document.exceptions';
 import { IntegrationErrorFilter } from './filters/integration-error.filter';
 import {
   assertNoTenantOverrides,
@@ -65,7 +79,7 @@ export const IDEMPOTENT_REPLAYED_HEADER = 'Idempotent-Replayed';
  */
 @ApiTags('Integration Documents')
 @SkipJwtAuth()
-@UseGuards(OrganizationApiKeyGuard)
+@UseGuards(OrganizationApiKeyGuard, ApiKeyPermissionGuard)
 @UseFilters(IntegrationErrorFilter)
 @Controller('integration')
 export class IntegrationDocumentsController {
@@ -73,20 +87,30 @@ export class IntegrationDocumentsController {
     private readonly listOrganizationIntegrationDocuments: ListOrganizationIntegrationDocumentsUseCase,
     private readonly listUserIntegrationDocuments: ListUserIntegrationDocumentsUseCase,
     private readonly createIntegrationDocument: CreateIntegrationDocumentUseCase,
+    private readonly resendSigningInvitation: ResendIntegrationSigningInvitationUseCase,
+    private readonly issueSigningAccess: IssueIntegrationSigningAccessUseCase,
   ) {}
 
   @Get('documents')
   @ApiListOrganizationIntegrationDocuments()
   @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ, [
+    PERMISSION_SCOPE_ENUM.OWN,
     PERMISSION_SCOPE_ENUM.ORGANIZATION,
   ])
   listOrganizationDocuments(
     @CurrentApiClient() apiClient: IntegrationApiClient,
-    @Query() query: ListIntegrationDocumentsQueryDto,
+    @Query() query: ListIntegrationDocumentsByCreatorQueryDto,
     @Req() request: Request,
   ) {
     assertNoTenantOverrides(request);
-    return this.listOrganizationIntegrationDocuments.execute(apiClient, query);
+    const { creatorEmail, ...filters } = query;
+    return creatorEmail
+      ? this.listUserIntegrationDocuments.executeByEmail(
+          apiClient,
+          creatorEmail,
+          filters,
+        )
+      : this.listOrganizationIntegrationDocuments.execute(apiClient, filters);
   }
 
   /** Un `userId` que no es UUID no puede ser miembro de la organización: 404, igual que uno ajeno. */
@@ -155,5 +179,69 @@ export class IntegrationDocumentsController {
     response.status(replayed ? 200 : 201);
     response.setHeader(IDEMPOTENT_REPLAYED_HEADER, String(replayed));
     return result;
+  }
+
+  @Post('documents/:documentId/collaborators/:collaboratorId/resend-invitation')
+  @HttpCode(HttpStatus.OK)
+  @ApiResendIntegrationSigningInvitation()
+  @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.CREATE, [
+    PERMISSION_SCOPE_ENUM.ORGANIZATION,
+  ])
+  @UseInterceptors(RequestIpInterceptor)
+  resendInvitation(
+    @CurrentApiClient() apiClient: IntegrationApiClient,
+    @Param(
+      'documentId',
+      new ParseUUIDPipe({
+        exceptionFactory: () => new IntegrationSignerNotFoundException(),
+      }),
+    )
+    documentId: string,
+    @Param(
+      'collaboratorId',
+      new ParseUUIDPipe({
+        exceptionFactory: () => new IntegrationSignerNotFoundException(),
+      }),
+    )
+    collaboratorId: string,
+    @ClientIp() ip: string,
+    @Headers('user-agent') userAgent: string | undefined,
+    @Req() request: Request,
+  ) {
+    assertNoTenantOverrides(request);
+    return this.resendSigningInvitation.execute(
+      apiClient,
+      documentId,
+      collaboratorId,
+      { ipAddress: ip ?? null, userAgent: userAgent ?? null },
+    );
+  }
+
+  @Post('documents/:documentId/signing-access')
+  @HttpCode(HttpStatus.OK)
+  @ApiCreateIntegrationSigningAccess()
+  @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.CREATE, [
+    PERMISSION_SCOPE_ENUM.ORGANIZATION,
+  ])
+  @UseInterceptors(RequestIpInterceptor)
+  createSigningAccess(
+    @CurrentApiClient() apiClient: IntegrationApiClient,
+    @Param(
+      'documentId',
+      new ParseUUIDPipe({
+        exceptionFactory: () => new IntegrationSignerNotFoundException(),
+      }),
+    )
+    documentId: string,
+    @Body() dto: CreateIntegrationSigningAccessDto,
+    @ClientIp() ip: string,
+    @Headers('user-agent') userAgent: string | undefined,
+    @Req() request: Request,
+  ) {
+    assertNoTenantOverrides(request);
+    return this.issueSigningAccess.execute(apiClient, documentId, dto.email, {
+      ipAddress: ip ?? null,
+      userAgent: userAgent ?? null,
+    });
   }
 }

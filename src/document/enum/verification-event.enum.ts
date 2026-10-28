@@ -15,4 +15,6 @@ export enum VERIFICATION_EVENT_ENUM {
    * emite al canjearlo.
    */
   GUEST_ADVANCED_SIGNATURE_ACCESS = 'guest_advanced_signature_access',
+  /** Código con el que el firmante de una invitación individual (`/sign/:token`) abre su sesión pública. */
+  PUBLIC_SIGNING_ACCESS = 'public_signing_access',
 }

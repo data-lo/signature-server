@@ -2,7 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
-import { AuditDocument, AuditAction } from './schema/audit-document';
+import {
+  AuditActorContext,
+  AuditDocument,
+  AuditAction,
+} from './schema/audit-document';
 import { HashService } from '../common/hash/hash.service';
 
 export interface AuditQuery {
@@ -28,6 +32,10 @@ export interface AuditPayload {
    * `DOCUMENT_SIGNED`. Distingue en la bitácora una firma con cuenta de una sin cuenta.
    */
   signingAuthorization?: string;
+  /** Quién hizo la operación, con qué mecanismo y desde qué cliente. Sin tokens ni secretos. */
+  actor?: AuditActorContext;
+  /** `SUCCESS` o `FAILURE`, en las operaciones que pueden fallar después de intentarse. */
+  result?: 'SUCCESS' | 'FAILURE';
 }
 
 /**
@@ -184,6 +192,17 @@ export class AuditService {
       case AuditAction.DOCUMENT_CANCELLATION_REQUESTED:
       case AuditAction.DOCUMENT_CANCELLED:
       case AuditAction.DOCUMENT_REJECTED:
+        break;
+
+      case AuditAction.SIGNING_INVITATION_OTP_SENT:
+      case AuditAction.SIGNING_INVITATION_OTP_VERIFIED:
+      case AuditAction.SIGNING_INVITATION_ISSUED:
+      case AuditAction.SIGNING_LAUNCH_ISSUED:
+      case AuditAction.SIGNING_STARTED:
+      case AuditAction.SIGNING_FAILED:
+        if (!payload.actor) {
+          throw new Error(`actor es requerido para ${payload.operation}`);
+        }
         break;
     }
   }

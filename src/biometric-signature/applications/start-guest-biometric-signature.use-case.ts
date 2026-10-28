@@ -71,4 +71,50 @@ export class StartGuestBiometricSignatureUseCase {
       callbackUrl: `${frontendBaseUrl()}/public/documents/${documentId}/sign`,
     });
   }
+
+  /**
+   * Inicia —o retoma— la firma biométrica del firmante de una sesión pública de firma
+   * (`POST /public/signing-sessions/current/biometric/sign`). Es la misma firma de invitado: cambia
+   * sólo quién acreditó al firmante. Aquí ya lo hizo `PublicSigningSessionGuard` (código del correo
+   * de la invitación), así que el colaborador llega resuelto y no hace falta comparar correos.
+   *
+   * @param documentId - Documento de la sesión.
+   * @param collaboratorId - Colaborador de la invitación.
+   * @param dto - Consentimiento y ubicación.
+   * @param ipAddress - IP de la petición.
+   * @returns La sesión de Didit (URL, QR y estado).
+   *
+   * @throws {GuestInvitationNotFoundException} Si el colaborador ya no es un firmante biométrico
+   *   sin cuenta del documento.
+   * @throws {BadRequestException} Si el documento o el firmante ya no admiten iniciarla.
+   *
+   * @example
+   * ```ts
+   * await startGuest.executeForPublicSession('d-1', 'c-1', dto, '10.0.0.1');
+   * ```
+   */
+  async executeForPublicSession(
+    documentId: string,
+    collaboratorId: string,
+    dto: StartBiometricSignatureDto,
+    ipAddress: string | null,
+  ): Promise<BiometricSignatureSession> {
+    const resolved = await this.signers.resolveGuestSigner(
+      documentId,
+      collaboratorId,
+      undefined,
+    );
+    await this.signers.assertCanStart(resolved, { requireSignCode: false });
+
+    return this.launcher.launch({
+      resolved,
+      kind: 'GUEST',
+      userId: null,
+      identity: null,
+      geolocation: dto.geolocation,
+      ipAddress,
+      // Sin token ni ids en la URL: la pantalla de la invitación retoma con su sesión (cookie).
+      callbackUrl: `${frontendBaseUrl()}/sign/session`,
+    });
+  }
 }

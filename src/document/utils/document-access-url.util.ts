@@ -65,6 +65,24 @@ export function buildSigningInvitationUrl(token: string): string {
 }
 
 /**
+ * Enlace de un acceso temporal desde el portal de un tercero: `/sign/launch/:token`. Como el de la
+ * invitación, sólo lleva el token; el backend lo resuelve a la invitación del firmante.
+ *
+ * @param token - Token de lanzamiento (`sla_…`), tal como lo emitió `SigningLaunchService.issue`.
+ * @returns `${PUBLIC_WEB_APP_URL}/sign/launch/<token>`.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * buildSigningLaunchUrl('sla_q3Vb…'); // 'https://app.firmalo.mx/sign/launch/sla_q3Vb…'
+ * ```
+ */
+export function buildSigningLaunchUrl(token: string): string {
+  return `${publicWebAppBaseUrl()}/sign/launch/${encodeURIComponent(token)}`;
+}
+
+/**
  * Nombre del parámetro que señala de qué firma vino el QR escaneado.
  *
  * Es el id del colaborador, que ya es el identificador con el que la vista pública publica a cada

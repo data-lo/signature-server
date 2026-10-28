@@ -21,6 +21,7 @@ import {
   collaboratorEmail,
 } from 'src/document/utils/collaborator-display.util';
 import { buildDocumentAccessUrl } from 'src/document/utils/document-access-url.util';
+import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 
 import { NotificationEventPayload } from '../notification-events.topics';
@@ -60,6 +61,7 @@ export class SendPendingSignatureNotificationUseCase {
     @InjectRepository(NotificationEntity)
     private readonly notificationRepository: Repository<NotificationEntity>,
     private readonly emailService: EmailService,
+    private readonly signingLinks: SigningLinkService,
   ) {}
 
   async execute(payload: NotificationEventPayload): Promise<void> {
@@ -294,7 +296,11 @@ export class SendPendingSignatureNotificationUseCase {
       collaboratorDisplayName(collaborator),
       creator.email,
       document.fileName,
-      buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
+      await this.signingLinks.signerLink({
+        document,
+        collaboratorId: collaborator.id,
+        email: recipientEmail,
+      }),
     );
 
     this.logger.log(
@@ -362,7 +368,11 @@ export class SendPendingSignatureNotificationUseCase {
         recipientEmail,
         collaboratorDisplayName(collaborator),
         document.fileName,
-        buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
+        await this.signingLinks.signerLink({
+          document,
+          collaboratorId: collaborator.id,
+          email: recipientEmail,
+        }),
       );
     } catch (error) {
       await this.notificationRepository.update(

@@ -17,6 +17,8 @@ export const TENANT_OVERRIDE_FIELDS = [
   'createdBy',
   'createdByUserId',
   'permissionIds',
+  'permissions',
+  'apiKeyId',
   'documentBase64',
 ] as const;
 

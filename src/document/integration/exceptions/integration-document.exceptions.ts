@@ -20,6 +20,10 @@ export enum INTEGRATION_DOCUMENT_ERROR_CODE_ENUM {
   CREATOR_UNAVAILABLE = 'INTEGRATION_CREATOR_UNAVAILABLE',
   CREATOR_MEMBERSHIP_REVOKED = 'INTEGRATION_CREATOR_MEMBERSHIP_REVOKED',
   APPROVAL_NOT_SUPPORTED = 'INTEGRATION_APPROVAL_NOT_SUPPORTED',
+  SIGNER_NOT_FOUND = 'INTEGRATION_SIGNER_NOT_FOUND',
+  INVITATION_NOT_RESENDABLE = 'INTEGRATION_INVITATION_NOT_RESENDABLE',
+  AMBIGUOUS_SIGNER = 'INTEGRATION_AMBIGUOUS_SIGNER',
+  WAITING_FOR_PREVIOUS_SIGNER = 'WAITING_FOR_PREVIOUS_SIGNER',
 }
 
 /**
@@ -158,6 +162,74 @@ export class IntegrationApprovalNotSupportedException extends BadRequestExceptio
         'Bad Request',
         'La API de integración todavía no admite documentos con aprobación previa (requiresApproval: true)',
         INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.APPROVAL_NOT_SUPPORTED,
+      ),
+    );
+  }
+}
+
+/**
+ * El documento no es de la organización de la API key, o el colaborador no es firmante de ese
+ * documento. Un solo error para los dos casos: no confirma qué existe en otra organización.
+ */
+export class IntegrationSignerNotFoundException extends NotFoundException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.NOT_FOUND,
+        'Not Found',
+        'No existe ese firmante en un documento de la organización',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.SIGNER_NOT_FOUND,
+      ),
+    );
+  }
+}
+
+/**
+ * La invitación no se puede reenviar: el documento ya no espera firmas, el firmante ya respondió,
+ * todavía no es su turno o no puede firmar desde la invitación pública.
+ */
+export class IntegrationInvitationNotResendableException extends ConflictException {
+  constructor(reason: string) {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.CONFLICT,
+        'Conflict',
+        reason,
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.INVITATION_NOT_RESENDABLE,
+      ),
+    );
+  }
+}
+
+/**
+ * El correo corresponde a más de un firmante del documento: el acceso no puede saber a cuál se
+ * refiere, así que no se emite.
+ */
+export class IntegrationAmbiguousSignerException extends ConflictException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.CONFLICT,
+        'Conflict',
+        'El correo corresponde a más de un firmante del documento',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.AMBIGUOUS_SIGNER,
+      ),
+    );
+  }
+}
+
+/**
+ * El documento es secuencial y todavía no es el turno de este firmante: no se emite un acceso que
+ * no podría usar.
+ */
+export class IntegrationSignerNotInTurnException extends ConflictException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.CONFLICT,
+        'Conflict',
+        'Todavía no es el turno de este firmante: falta la firma de un firmante anterior',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.WAITING_FOR_PREVIOUS_SIGNER,
       ),
     );
   }

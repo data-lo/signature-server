@@ -71,17 +71,16 @@ import { PublicSigningController } from './public-signing.controller';
 import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
 import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
-import { PublicSigningSessionController } from './public-signing-session.controller';
-import { GetSigningSessionUseCase } from './applications/get-signing-session.use-case';
-import { SigningInvitationEntity } from './entities/signing-invitation.entity';
-import { SigningInvitationService } from './services/signing-invitation.service';
+import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
+
+import { ResendIntegrationSigningInvitationUseCase } from './integration/applications/resend-integration-signing-invitation.use-case';
+import { IssueIntegrationSigningAccessUseCase } from './integration/applications/issue-integration-signing-access.use-case';
 
 @Module({
   controllers: [
     DocumentController,
     DocumentSignaturesController,
     PublicSigningController,
-    PublicSigningSessionController,
     /**
      * API de integración para sistemas externos (`/integration/...`), autenticada con la API key
      * de la organización en vez de JWT. Reutiliza los casos de uso de este módulo.
@@ -140,9 +139,6 @@ import { SigningInvitationService } from './services/signing-invitation.service'
     GuestSigningAccessService,
     /** Valida la invitación de la pantalla pública `/public/documents/:id/sign`. */
     GetPublicSigningInvitationUseCase,
-    /** Invitaciones individuales por token y la sesión de la pantalla pública `/sign/:token`. */
-    SigningInvitationService,
-    GetSigningSessionUseCase,
     DocumentReadService,
     IntegrationIdempotencyService,
     IntegrationCreatorService,
@@ -150,6 +146,8 @@ import { SigningInvitationService } from './services/signing-invitation.service'
     ListOrganizationIntegrationDocumentsUseCase,
     ListUserIntegrationDocumentsUseCase,
     CreateIntegrationDocumentUseCase,
+    ResendIntegrationSigningInvitationUseCase,
+    IssueIntegrationSigningAccessUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -172,13 +170,14 @@ import { SigningInvitationService } from './services/signing-invitation.service'
       // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
       BiometricSignatureAttemptEntity,
       GuestSigningAccessEntity,
-      SigningInvitationEntity,
       IntegrationIdempotencyKeyEntity,
       // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
       // pedido dentro de la organización de la API key.
       AccountEntity,
     ]),
     SharedModule,
+    /** Enlace `/sign/:token` de los firmantes de documentos creados por integración. */
+    SigningInvitationModule,
     UserModule,
     SignatureModule,
     AuditModule,

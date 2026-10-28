@@ -220,8 +220,22 @@ export class UpdateSigningCredentialStatusUseCase {
    * Postgres cuando la key no existe, así que borrar evita duplicar aquí la forma del snapshot
    * (y evita que este módulo dependa de `UserModule`, que importa `SignatureModule`, que a su
    * vez importa este módulo).
+   *
+   * @param nationalId - CURP del usuario, llave del snapshot; `null` en un usuario provisional.
+   * @returns Nada.
+   *
+   * @throws Nada: un fallo de Redis se registra y no se propaga.
+   *
+   * @example
+   * ```ts
+   * await this.invalidateProfileCache(user.nationalId);
+   * ```
    */
-  private async invalidateProfileCache(nationalId: string): Promise<void> {
+  private async invalidateProfileCache(
+    nationalId: string | null,
+  ): Promise<void> {
+    // Un usuario provisional (integración) no tiene CURP ni perfil cacheado: no hay nada que borrar.
+    if (!nationalId) return;
     try {
       await this.redisService.del(nationalId);
     } catch (error) {
