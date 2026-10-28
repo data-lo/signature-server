@@ -22,6 +22,7 @@ import {
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   SignaturePositionDto,
 } from '../../dto/create-document-signatures.dto';
+import { EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD } from '../docs/api-integration-examples.docs';
 import { INTEGRATION_VALIDATION_CODE_ENUM } from '../validation/integration-validation.exception';
 
 /** Largo máximo de nombres y apellidos que se aceptan. */
@@ -257,41 +258,16 @@ export class IntegrationDocumentPayloadDto {
  * alguno llega, se responde 400 en vez de ignorarlo (ver `assertNoTenantOverrides`).
  */
 export class CreateIntegrationDocumentDto {
+  /**
+   * Se declara como el objeto `IntegrationDocumentPayloadDto` y no como `string`: en un cuerpo
+   * multipart, OpenAPI manda las propiedades objeto como `application/json`, así que el contrato
+   * describe su estructura y Swagger UI lo envía como texto JSON, que es lo que espera el servidor.
+   */
   @ApiProperty({
-    type: 'string',
+    type: () => IntegrationDocumentPayloadDto,
     description:
-      'JSON con `creator`, `document` y `participants` (ver `IntegrationDocumentPayloadDto`).',
-    example: JSON.stringify({
-      creator: {
-        email: 'ana@cliente.com',
-        firstName: 'Ana',
-        lastName: 'López',
-      },
-      document: {
-        signatureType: 'SIMPLE',
-        isSequential: true,
-        requiresApproval: false,
-        isIndexable: true,
-      },
-      participants: [
-        {
-          role: 'SIGNER',
-          firstName: 'Luis',
-          lastName: 'Martínez',
-          email: 'luis@correo.com',
-          order: 1,
-          signaturePositions: [
-            {
-              page: 1,
-              xRatio: 0.65,
-              yRatio: 0.8,
-              widthRatio: 0.18,
-              heightRatio: 0.06,
-            },
-          ],
-        },
-      ],
-    }),
+      'Campo de texto con un JSON con `creator`, `document` y `participants`.',
+    example: EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
   })
   @Allow()
   payload: unknown;
