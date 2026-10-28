@@ -14,8 +14,8 @@ export interface IntegrationApiClientPermission {
  * llave y nada más: ni JWT, ni `X-Account-Id`, ni una organización en la URL o el body.
  *
  * `OrganizationApiKeyGuard` lo deja en `request.apiClient` y lo entrega `@CurrentApiClient()`. Es
- * el contexto ya validado: la llave está activa y vigente, la organización está activa y el actor
- * sigue siendo miembro activo de ella. Nunca lleva el secreto ni su hash.
+ * el contexto ya validado: la llave está activa y vigente, la organización está activa y el actor,
+ * si la llave tiene uno, sigue siendo miembro activo de ella. Nunca lleva el secreto ni su hash.
  */
 export interface IntegrationApiClient {
   /** `api_keys.id` de la llave autenticada. */
@@ -27,11 +27,15 @@ export interface IntegrationApiClient {
   /** Organización de la llave: el único tenant sobre el que puede operar. */
   organizationId: string;
 
-  /** Membresía (`accounts.id`) que emitió la llave: en su nombre se actúa. */
-  actorAccountId: string;
+  /**
+   * Membresía (`accounts.id`) que emitió la llave: en su nombre se actúa. `null` si la llave la
+   * emitió la plataforma (aprovisionamiento interno): entonces no hay actor y la llave opera sólo
+   * con sus permisos sobre su organización.
+   */
+  actorAccountId: string | null;
 
-  /** Usuario (`users.id`) dueño de esa membresía. */
-  actorUserId: string;
+  /** Usuario (`users.id`) dueño de esa membresía; `null` con una llave de plataforma. */
+  actorUserId: string | null;
 
   /** Permisos concedidos a la llave, con su alcance. */
   permissions: IntegrationApiClientPermission[];

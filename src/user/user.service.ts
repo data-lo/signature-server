@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 
 // DTOs
 import { CreateUserDto } from './dto/create-user.dto';
@@ -19,6 +19,7 @@ import { PersonalInformationEntity } from './entities/personal-information.entit
 
 // Enums
 import { UserRoles } from './enums/user-roles';
+import { USER_LIFECYCLE_STATUS_ENUM } from './enums/user-lifecycle-status.enum';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from './enums/signing-credential-status.enum';
 
 // Interfaces
@@ -29,6 +30,7 @@ import { RedisService } from 'src/common/redis/redis.service';
 import { AccountService } from 'src/account/account.service';
 import { EmailService } from 'src/common/email/email.service';
 import { maskEmail } from 'src/common/utils/mask-email.util';
+import { AccountEntity } from 'src/account/entities/account.entity';
 import {
   formatOptionalPersonName,
   formatPersonName,
@@ -308,6 +310,85 @@ export class UserService {
 
   async findOneByEmail(email: string): Promise<UserEntity | null> {
     return this.userRepository.findOne({ where: { email, isDeleted: false } });
+  }
+
+  /**
+   * Busca un usuario por su correo dentro de la transacción del llamador, bloqueando la fila
+   * (`FOR UPDATE`) si existe.
+   *
+   * A diferencia de `findOneByEmail`, devuelve también los usuarios borrados o desactivados: quien
+   * aprovisiona necesita distinguir "no existe" de "existe pero no se puede usar", porque el correo
+   * es único en `users` aunque el usuario esté dado de baja.
+   *
+   * @param manager - Transacción en curso.
+   * @param email - Correo ya normalizado (minúsculas, sin espacios).
+   * @returns El usuario, o `null` si el correo no está registrado.
+   *
+   * @example
+   * ```ts
+   * const user = await userService.findByEmailForUpdate(manager, 'ana@acme.test');
+   * ```
+   */
+  findByEmailForUpdate(
+    manager: EntityManager,
+    email: string,
+  ): Promise<UserEntity | null> {
+    return manager.getRepository(UserEntity).findOne({
+      where: { email },
+      lock: { mode: 'pessimistic_write' },
+    });
+  }
+
+  /**
+   * Da de alta un usuario `PROVISIONED` con su cuenta personal, dentro de la transacción del
+   * llamador.
+   *
+   * Es el mismo usuario provisional que crea la API de integración para un creador desconocido:
+   * sólo nombre y correo, sin CURP, contraseña ni ficha personal, así que no puede iniciar sesión
+   * con contraseña (`LoginUseCase`). Su cuenta personal nace como en el registro
+   * (`AccountService.createDefaultPersonalAccount`), con su perfil Free.
+   *
+   * @param manager - Transacción en curso; si se revierte, no queda ni el usuario ni su cuenta.
+   * @param identity - Correo ya normalizado, nombre y apellido.
+   * @returns El usuario creado y su cuenta personal.
+   *
+   * @throws {QueryFailedError} (23505) Si otra transacción registró el mismo correo a la vez.
+   *
+   * @example
+   * ```ts
+   * const { user, personalAccount } = await userService.createProvisionedUser(manager, {
+   *   email: 'ana@acme.test', firstName: 'Ana', lastName: 'López',
+   * });
+   * user.lifecycleStatus; // 'PROVISIONED'
+   * ```
+   */
+  async createProvisionedUser(
+    manager: EntityManager,
+    identity: { email: string; firstName: string; lastName: string },
+  ): Promise<{ user: UserEntity; personalAccount: AccountEntity }> {
+    const repository = manager.getRepository(UserEntity);
+    const user = await repository.save(
+      repository.create({
+        firstName: formatPersonName(identity.firstName),
+        lastName: formatPersonName(identity.lastName),
+        email: identity.email,
+        roles: [UserRoles.SIGNER],
+        lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
+        nationalId: null,
+        password: null,
+        personalInformationId: null,
+        isEmailVerified: false,
+      }),
+    );
+
+    const { account } = await this.accountService.createDefaultPersonalAccount(
+      manager,
+      user.id,
+      user.email,
+      null,
+    );
+
+    return { user, personalAccount: account };
   }
 
   /** Actualiza el hash de contraseña de UserEntity (ver historia "Recuperación de Contraseña mediante Código de Verificación OTP" — AuthService.resetPassword). No sincroniza AccountEntity: ver AccountService.updatePasswordForUser. */

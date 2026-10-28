@@ -169,7 +169,8 @@ export async function resolveAssignablePermissions(
 /** Datos de la llave a emitir que decide el caso de uso. */
 export interface IssueApiKeyParams {
   organizationId: string;
-  createdByAccountId: string;
+  /** Membresía que la emite; `null` para una llave emitida por la plataforma. */
+  createdByAccountId: string | null;
   name: string;
   permissions: PermissionEntity[];
   expiresAt: Date | null;

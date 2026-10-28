@@ -119,7 +119,50 @@ export class RegisterSubscriptionBillingUseCase {
   ): Promise<RegisterSubscriptionBillingResult> {
     this.assertInputIsCoherent(input);
 
-    return this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction((manager) =>
+      this.registerWithin(manager, input),
+    );
+  }
+
+  /**
+   * Registra el periodo dentro de la transacción del llamador, con los mismos pasos y efectos que
+   * `execute`.
+   *
+   * Es para los flujos que crean el perfil y lo facturan en una sola operación (el
+   * aprovisionamiento interno): el lote, el historial y el perfil se confirman o se revierten con
+   * todo lo demás que haga el llamador. El perfil se sigue bloqueando (`pessimistic_write`).
+   *
+   * @param manager - Transacción en curso.
+   * @param input - Periodo cobrado, su origen, el plan concedido y la evidencia del cobro.
+   * @returns El renglón del historial y si el periodo ya estaba registrado de antes.
+   *
+   * @throws {InvalidBillingRegistrationException} Cuando la entrada no es coherente.
+   * @throws {BillingProfileNotFoundForRegistrationException} Cuando el perfil no existe.
+   * @throws {PlanNotFoundForRegistrationException} Cuando el plan no está en el catálogo.
+   *
+   * @example
+   * ```ts
+   * const { history } = await registerSubscriptionBilling.executeWithin(manager, {
+   *   billingProfileId: 'bp-1', source: BILLING_SOURCE_ENUM.MANUAL, planType: 'enterprise',
+   *   amount: 0, currency: 'mxn', periodStart, periodEnd, paidAt: new Date(),
+   *   documentsGranted: 1600, externalReference: 'PROVISION-ACME-TEST-001',
+   * });
+   * ```
+   */
+  async executeWithin(
+    manager: EntityManager,
+    input: RegisterSubscriptionBillingInput,
+  ): Promise<RegisterSubscriptionBillingResult> {
+    this.assertInputIsCoherent(input);
+
+    return this.registerWithin(manager, input);
+  }
+
+  private async registerWithin(
+    manager: EntityManager,
+    input: RegisterSubscriptionBillingInput,
+  ): Promise<RegisterSubscriptionBillingResult> {
+    {
       const profile = await manager.findOne(BillingProfileEntity, {
         where: { id: input.billingProfileId },
         lock: { mode: 'pessimistic_write' },
@@ -176,7 +219,7 @@ export class RegisterSubscriptionBillingUseCase {
       );
 
       return { history, alreadyRegistered: false };
-    });
+    }
   }
 
   /**
