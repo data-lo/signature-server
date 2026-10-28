@@ -5,6 +5,7 @@ import { Model } from 'mongoose';
 import {
   AuditActorContext,
   AuditDocument,
+  AuditEvidence,
   AuditAction,
 } from './schema/audit-document';
 import { HashService } from '../common/hash/hash.service';
@@ -36,6 +37,8 @@ export interface AuditPayload {
   actor?: AuditActorContext;
   /** `SUCCESS` o `FAILURE`, en las operaciones que pueden fallar después de intentarse. */
   result?: 'SUCCESS' | 'FAILURE';
+  /** Evidencia de la validación o de la firma: hashes, ids y códigos, nunca datos sensibles. */
+  evidence?: AuditEvidence;
 }
 
 /**
@@ -200,6 +203,9 @@ export class AuditService {
       case AuditAction.SIGNING_LAUNCH_ISSUED:
       case AuditAction.SIGNING_STARTED:
       case AuditAction.SIGNING_FAILED:
+      case AuditAction.IDENTITY_VERIFICATION_STARTED:
+      case AuditAction.IDENTITY_VERIFICATION_CHECKED:
+      case AuditAction.CERTIFICATE_VALIDATION_FAILED:
         if (!payload.actor) {
           throw new Error(`actor es requerido para ${payload.operation}`);
         }

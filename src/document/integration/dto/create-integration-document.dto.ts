@@ -11,6 +11,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
   ValidateNested,
@@ -56,6 +57,14 @@ function normalizeEmail({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? value.trim().toLowerCase() : value;
 }
 
+/** Recorta y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
+function normalizeRfc({ value }: { value: unknown }): unknown {
+  return typeof value === 'string' ? value.trim().toUpperCase() : value;
+}
+
+/** Forma de un RFC de persona física (13) o moral (12). */
+export const RFC_FORMAT = /^[A-ZÑ&]{3,4}\d{6}[A-Z\d]{3}$/;
+
 /** Recorta los espacios de un nombre. */
 function trimText({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? value.trim() : value;
@@ -72,6 +81,7 @@ const ORDER = coded(INTEGRATION_VALIDATION_CODE_ENUM.INVALID_SIGNING_ORDER);
 const POSITIONS = coded(
   INTEGRATION_VALIDATION_CODE_ENUM.INVALID_SIGNATURE_POSITION,
 );
+const RFC = coded(INTEGRATION_VALIDATION_CODE_ENUM.INVALID_PARTICIPANT_RFC);
 
 /** Quién crea el documento. Se identifica SÓLO por su correo. */
 export class IntegrationCreatorDto {
@@ -197,6 +207,17 @@ export class IntegrationParticipantDto {
   @IsOptional()
   @IsBoolean()
   requiresTwoFactorAuth?: boolean;
+
+  @ApiPropertyOptional({
+    example: 'LOPA800101AB1',
+    description:
+      'RFC del firmante. Sólo para un SIGNER de un documento `ADVANCED`: si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.',
+  })
+  @IsOptional()
+  @Transform(normalizeRfc)
+  @IsString(RFC)
+  @Matches(RFC_FORMAT, RFC)
+  rfc?: string;
 }
 
 /**

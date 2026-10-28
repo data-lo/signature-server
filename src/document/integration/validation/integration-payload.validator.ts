@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { plainToInstance } from 'class-transformer';
 import { validateSync, ValidationError } from 'class-validator';
 
-import { SignaturePositionDto } from '../../dto/create-document-signatures.dto';
+import {
+  PAYLOAD_SIGNATURE_TYPE_ENUM,
+  SignaturePositionDto,
+} from '../../dto/create-document-signatures.dto';
 import { findOverlappingSignaturePositions } from '../../utils/signature-collision.util';
 import { findSignaturePositionOutsideDocument } from '../../utils/signature-position.util';
 import {
@@ -32,6 +35,8 @@ const FIELD_MESSAGES: Partial<Record<CODE, string>> = {
     'El correo del colaborador es obligatorio y debe ser válido.',
   [CODE.INVALID_SIGNING_ORDER]:
     'El orden de firma debe ser un número entero mayor o igual a 1.',
+  [CODE.INVALID_PARTICIPANT_RFC]:
+    'El RFC del firmante no es válido: 12 o 13 caracteres (letras, fecha AAMMDD y homoclave).',
   [CODE.INVALID_SIGNATURE_POSITION]:
     'La posición de firma no es válida: la página debe ser un entero desde 1, los ratios deben estar entre 0 y 1, y el ancho y el alto deben ser mayores que 0.',
 };
@@ -225,10 +230,45 @@ export class IntegrationPayloadValidator {
       firstIndexByEmail.set(participant.email, index);
 
       this.assertPositionsForRole(participant, index);
+      this.assertRfcAllowed(payload, participant, index);
     });
 
     if (payload.document.isSequential !== false) {
       assertSequentialOrder(signers);
+    }
+  }
+
+  /**
+   * El `rfc` sólo tiene sentido para un firmante de firma avanzada: es contra lo que se compara su
+   * certificado. En cualquier otro participante se rechaza en lugar de ignorarlo en silencio.
+   *
+   * @param payload - Payload completo (tipo de firma del documento).
+   * @param participant - Participante.
+   * @param index - Su posición en `participants`.
+   * @returns Nada.
+   *
+   * @throws {IntegrationValidationException} `PARTICIPANT_RFC_NOT_ALLOWED`.
+   *
+   * @example
+   * ```ts
+   * this.assertRfcAllowed(payload, participant, 0);
+   * ```
+   */
+  private assertRfcAllowed(
+    payload: IntegrationDocumentPayloadDto,
+    participant: IntegrationParticipantDto,
+    index: number,
+  ): void {
+    if (participant.rfc === undefined || participant.rfc === null) return;
+    if (
+      participant.role !== INTEGRATION_PARTICIPANT_ROLE_ENUM.SIGNER ||
+      payload.document.signatureType !== PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED
+    ) {
+      throw new IntegrationValidationException(
+        CODE.PARTICIPANT_RFC_NOT_ALLOWED,
+        'El RFC sólo se admite en un firmante de un documento con firma avanzada (ADVANCED).',
+        { field: `participants[${index}].rfc` },
+      );
     }
   }
 

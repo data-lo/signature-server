@@ -24,6 +24,31 @@ export enum AuditAction {
   SIGNING_STARTED = 'SIGNING_STARTED',
   /** La firma de un firmante con sesión pública falló; `result` es `FAILURE`. */
   SIGNING_FAILED = 'SIGNING_FAILED',
+  /** Se abrió (o retomó) la verificación de identidad de Didit de un firmante público. */
+  IDENTITY_VERIFICATION_STARTED = 'IDENTITY_VERIFICATION_STARTED',
+  /** Se comprobó la identidad antes de la firma simple: `result` y `evidence.errorCode`. */
+  IDENTITY_VERIFICATION_CHECKED = 'IDENTITY_VERIFICATION_CHECKED',
+  /** La validación del certificado o de la firma avanzada falló: `evidence.errorCode`. */
+  CERTIFICATE_VALIDATION_FAILED = 'CERTIFICATE_VALIDATION_FAILED',
+}
+
+/**
+ * Evidencia de una validación o de una firma. Sólo identificadores, hashes y códigos: nada de
+ * datos personales, contraseñas, llaves ni tokens.
+ */
+export interface AuditEvidence {
+  /** SHA-256 de la versión del PDF que se firmó. */
+  documentHash?: string;
+  /** Número de serie del certificado de la e.firma. */
+  certificateNumber?: string;
+  /** Resultado de la consulta de revocación (OCSP), si el SAT respondió. */
+  ocspStatus?: string;
+  /** Intento de verificación de identidad (`identity_verifications.id`). */
+  identityVerificationId?: string;
+  /** Proveedor de la verificación de identidad (`DIDIT`). */
+  identityProvider?: string;
+  /** Código del error de validación (ver `SIGNING_VALIDATION_ERROR_CODE_ENUM`). */
+  errorCode?: string;
 }
 
 /** Mecanismo con el que se autenticó quien hizo la operación. */
@@ -87,6 +112,30 @@ class AuditActorRecord {
 
 const AuditActorSchema = SchemaFactory.createForClass(AuditActorRecord);
 
+/** Sub-esquema de `AuditDocument.evidence` (clase propia por el mismo motivo que el actor). */
+@Schema({ _id: false })
+class AuditEvidenceRecord {
+  @Prop({ type: String })
+  documentHash?: string;
+
+  @Prop({ type: String })
+  certificateNumber?: string;
+
+  @Prop({ type: String })
+  ocspStatus?: string;
+
+  @Prop({ type: String })
+  identityVerificationId?: string;
+
+  @Prop({ type: String })
+  identityProvider?: string;
+
+  @Prop({ type: String })
+  errorCode?: string;
+}
+
+const AuditEvidenceSchema = SchemaFactory.createForClass(AuditEvidenceRecord);
+
 @Schema({ collection: 'audits', timestamps: true })
 export class AuditDocument extends Document {
   @Prop({ required: true })
@@ -132,6 +181,10 @@ export class AuditDocument extends Document {
   /** `SUCCESS` o `FAILURE`; sólo en las operaciones que pueden fallar después de intentarse. */
   @Prop()
   result?: string;
+
+  /** Evidencia de la validación o de la firma (ver `AuditEvidence`). */
+  @Prop({ type: AuditEvidenceSchema })
+  evidence?: AuditEvidence;
 
   @Prop({ required: true })
   chainIndex: number;

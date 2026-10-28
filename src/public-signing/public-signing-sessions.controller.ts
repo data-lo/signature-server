@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Post,
   UploadedFiles,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -29,9 +30,11 @@ import {
   ApiGetCurrentSigningSession,
   ApiSignPublicAdvanced,
   ApiSignPublicBiometric,
+  ApiGetPublicSignerIdentityVerification,
   ApiSignPublicSimple,
-  ApiVerifyPublicSignerIdentity,
+  ApiStartPublicSignerIdentityVerification,
 } from './docs/api-public-signing.docs';
+import { PublicSigningErrorFilter } from './filters/public-signing-error.filter';
 import { PublicSigningSessionGuard } from './guards/public-signing-session.guard';
 import { PublicSigningSessionContext } from './interfaces/public-signing-session-context.interface';
 
@@ -43,10 +46,14 @@ import { PublicSigningSessionContext } from './interfaces/public-signing-session
  * (`PublicSigningSessionGuard`); estas rutas no reciben el token de la invitación, ni JWT, ni API
  * key, ni ids del documento o del colaborador. El tipo de firma sale de la invitación: cada ruta
  * de firma rechaza a un firmante de otro tipo.
+ *
+ * Todos los errores salen con la forma `{ statusCode, error, code, message }`
+ * (`PublicSigningErrorFilter`): `code` es el código estable de la validación que falló.
  */
 @ApiTags('Public signing sessions')
 @SkipJwtAuth()
 @UseGuards(ThrottlerGuard, PublicSigningSessionGuard)
+@UseFilters(PublicSigningErrorFilter)
 @Controller('public/signing-sessions/current')
 export class PublicSigningSessionsController {
   constructor(private readonly sessions: PublicSigningSessionUseCases) {}
@@ -71,14 +78,27 @@ export class PublicSigningSessionsController {
     return this.sessions.biometricStatus(session);
   }
 
-  @Post('simple/verify-identity')
+  @Post('simple/identity-verification/start')
   @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @ApiVerifyPublicSignerIdentity()
-  verifyIdentity(
+  @ApiStartPublicSignerIdentityVerification()
+  startIdentityVerification(
     @CurrentSigningSession() session: PublicSigningSessionContext,
     @Body() dto: CreateDiditSessionDto,
+    @ClientIp() ipAddress: string,
+    @Headers('user-agent') userAgent: string | undefined,
   ) {
-    return this.sessions.verifyIdentity(session, dto);
+    return this.sessions.startIdentityVerification(session, dto, {
+      ipAddress,
+      userAgent: userAgent ?? null,
+    });
+  }
+
+  @Get('simple/identity-verification')
+  @ApiGetPublicSignerIdentityVerification()
+  identityVerification(
+    @CurrentSigningSession() session: PublicSigningSessionContext,
+  ) {
+    return this.sessions.identityVerification(session);
   }
 
   @Post('simple/sign')

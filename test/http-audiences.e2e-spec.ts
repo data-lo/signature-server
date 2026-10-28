@@ -177,7 +177,8 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
     sessions: {
       current: jest.fn(async () => ({ document: { name: 'contrato.pdf' } })),
       document: jest.fn(),
-      verifyIdentity: jest.fn(),
+      startIdentityVerification: jest.fn(),
+      identityVerification: jest.fn(),
       signSimple: jest.fn(async () => ({ success: true })),
       signAdvanced: jest.fn(),
       signBiometric: jest.fn(),

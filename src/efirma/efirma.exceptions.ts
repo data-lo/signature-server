@@ -45,7 +45,11 @@ export class CadenaConfianzaInvalidaException extends UnprocessableEntityExcepti
   }
 }
 
-export class CertificadoRevocadoException extends Error {
+/**
+ * El SAT reporta el certificado como revocado. Es un 422 —el firmante tiene que usar otra e.firma—,
+ * no un `Error` plano, que Nest convertía en un 500 genérico sin decirle qué pasó.
+ */
+export class CertificadoRevocadoException extends UnprocessableEntityException {
   constructor(
     public readonly revokedDate?: Date,
     public readonly reason?: string,

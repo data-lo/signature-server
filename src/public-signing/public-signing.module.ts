@@ -6,9 +6,11 @@ import { BiometricSignatureModule } from 'src/biometric-signature/biometric-sign
 import { SharedModule } from 'src/common/shared.module';
 import { DocumentModule } from 'src/document/document.module';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
+import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 import { SignatureModule } from 'src/signature/signature.module';
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
+import { UserEntity } from 'src/user/entities/user.entity';
 
 import { GetSigningInvitationUseCase } from './applications/get-signing-invitation.use-case';
 import { PublicSigningSessionUseCases } from './applications/public-signing-session.use-cases';
@@ -18,10 +20,12 @@ import { SigningInvitationAccessGuard } from './guards/signing-invitation-access
 import { PublicSigningInvitationsController } from './public-signing-invitations.controller';
 import { PublicSigningLaunchesController } from './public-signing-launches.controller';
 import { PublicSigningSessionsController } from './public-signing-sessions.controller';
+import { PublicSignerIdentityService } from './services/public-signer-identity.service';
 import { PublicSigningInvitationResolver } from './services/public-signing-invitation-resolver.service';
 import { PublicSigningSessionTokenService } from './services/public-signing-session-token.service';
 import { SigningIdempotencyService } from './services/signing-idempotency.service';
 import { SigningInvitationAccessTokenService } from './services/signing-invitation-access-token.service';
+import { SigningPolicyResolver } from './services/signing-policy.resolver';
 
 /**
  * Firma pública por invitación individual (`/sign/:token`): la audiencia del colaborador
@@ -39,7 +43,11 @@ import { SigningInvitationAccessTokenService } from './services/signing-invitati
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([CollaboratorEntity]),
+    TypeOrmModule.forFeature([
+      CollaboratorEntity,
+      IdentityVerificationEntity,
+      UserEntity,
+    ]),
     SharedModule,
     AuditModule,
     DocumentModule,
@@ -63,6 +71,8 @@ import { SigningInvitationAccessTokenService } from './services/signing-invitati
     GetSigningInvitationUseCase,
     SigningInvitationAccessUseCases,
     PublicSigningSessionUseCases,
+    SigningPolicyResolver,
+    PublicSignerIdentityService,
   ],
 })
 export class PublicSigningModule {}

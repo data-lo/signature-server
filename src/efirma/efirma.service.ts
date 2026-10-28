@@ -273,12 +273,17 @@ export class EfirmaService implements OnModuleInit {
         certificateNumber: infoCertificado.numeroCertificado,
         certificatePem: infoCertificado.certificadoPem,
       },
-      ocspEvidence: {
-        status: ocspEvidence.status,
-        verifiedAt: ocspEvidence.verifiedAt,
-        ocspResponse: ocspEvidence.ocspResponse,
-        ocspUrl: ocspEvidence.ocspUrl,
-      },
+      // Sin respuesta del SAT no hay evidencia OCSP: la firma sigue (ver arriba) y queda sin ella.
+      ...(ocspEvidence
+        ? {
+            ocspEvidence: {
+              status: ocspEvidence.status,
+              verifiedAt: ocspEvidence.verifiedAt,
+              ocspResponse: ocspEvidence.ocspResponse,
+              ocspUrl: ocspEvidence.ocspUrl,
+            },
+          }
+        : {}),
     };
   }
 

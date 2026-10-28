@@ -686,6 +686,28 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     expect(juanCall[0].taxId).toBeNull();
   });
 
+  it('conserva el RFC que la integración manda para un firmante avanzado (signerTaxId)', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      {
+        ...advancedDto,
+        collaborators: advancedDto.collaborators.map((collaborator) =>
+          collaborator.email === 'juan.perez@mail.com'
+            ? { ...collaborator, signerTaxId: 'LOPA800101AB1' }
+            : collaborator,
+        ),
+      },
+      file,
+      '127.0.0.1',
+    );
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    expect(juanCall[0].taxId).toBe('LOPA800101AB1');
+  });
+
   it('rechaza el payload si requiresDifferentSignatures contradice el tipo de firma del documento', async () => {
     const dtoContradictorio: CreateDocumentSignaturesDto = {
       ...baseDto, // documento SIMPLE
@@ -1033,7 +1055,13 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     const origin = { apiKeyId: 'key-1', apiKeyName: 'Integración ERP' };
 
     it('sin origen, el documento no lleva llave y el evento de creación no menciona ninguna', async () => {
-      await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
 
       expect(documentRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ createdViaApiKeyId: null }),
@@ -1081,7 +1109,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
 
       expect(onDocumentSaved).toHaveBeenCalledWith(
         expect.objectContaining({ getRepository: expect.any(Function) }),
-        expect.objectContaining({ id: expect.any(String), createdViaApiKeyId: 'key-1' }),
+        expect.objectContaining({
+          id: expect.any(String),
+          createdViaApiKeyId: 'key-1',
+        }),
       );
       expect(onDocumentSaved.mock.invocationCallOrder[0]).toBeLessThan(
         consumeDocumentCredit.execute.mock.invocationCallOrder[0],
@@ -1114,17 +1145,29 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       ],
       [
         'bytes que no son de un PDF',
-        { ...file, buffer: Buffer.from('no soy un pdf') } as Express.Multer.File,
+        {
+          ...file,
+          buffer: Buffer.from('no soy un pdf'),
+        } as Express.Multer.File,
       ],
-    ])('rechaza %s antes de leer páginas, subir o cobrar', async (_label, badFile) => {
-      await expect(
-        useCase.execute('creator-1', 'account-1', baseDto, badFile, '127.0.0.1'),
-      ).rejects.toThrow(BadRequestException);
+    ])(
+      'rechaza %s antes de leer páginas, subir o cobrar',
+      async (_label, badFile) => {
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            baseDto,
+            badFile,
+            '127.0.0.1',
+          ),
+        ).rejects.toThrow(BadRequestException);
 
-      expect(documentSigningService.getPdfPages).not.toHaveBeenCalled();
-      expect(minioService.uploadObject).not.toHaveBeenCalled();
-      expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
-    });
+        expect(documentSigningService.getPdfPages).not.toHaveBeenCalled();
+        expect(minioService.uploadObject).not.toHaveBeenCalled();
+        expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it('Escenario 2: si falla la inserción dentro de la transacción, no se publica ningún evento a Kafka', async () => {

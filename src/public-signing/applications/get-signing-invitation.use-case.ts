@@ -10,6 +10,10 @@ import {
   PublicSigningInvitationResolver,
   ResolvedSigningInvitation,
 } from '../services/public-signing-invitation-resolver.service';
+import {
+  PUBLIC_SIGNATURE_TYPE,
+  PublicSignatureType,
+} from '../services/signing-policy.resolver';
 
 /**
  * Contexto mínimo de una invitación: lo necesario para que la pantalla decida qué mostrar antes
@@ -31,11 +35,14 @@ export interface SigningInvitationContext {
   };
   /** Sólo con `ACTIVE`. */
   signature?: {
-    type: SIGNATURE_TYPE_ENUM;
+    /** Vocabulario del contrato público: `FIEL` sale como `ADVANCED`. */
+    type: PublicSignatureType;
     /** Todo firmante acredita su correo con un código antes de ver el documento. */
     requiresEmailVerification: boolean;
     /** Verificación de identidad en Didit: biométrica siempre, y la simple del usuario provisional. */
     requiresIdentityValidation: boolean;
+    /** Firma avanzada: certificado (vigencia, revocación y titular) al firmar. */
+    requiresCertificateValidation: boolean;
   };
   /** Sólo con `ACTIVE`: vencimiento del enlace (ISO 8601). */
   expiresAt?: string;
@@ -80,12 +87,13 @@ export function toSigningInvitationContext({
       publicSigningAllowed: isPublicSigningAllowed(collaborator),
     },
     signature: {
-      type,
+      type: PUBLIC_SIGNATURE_TYPE[type],
       requiresEmailVerification: true,
       requiresIdentityValidation:
         type === SIGNATURE_TYPE_ENUM.BIOMETRIC ||
         (type === SIGNATURE_TYPE_ENUM.SIMPLE &&
           accountStatus === USER_LIFECYCLE_STATUS_ENUM.PROVISIONED),
+      requiresCertificateValidation: type === SIGNATURE_TYPE_ENUM.FIEL,
     },
     expiresAt: invitation.expiresAt.toISOString(),
   };

@@ -52,7 +52,11 @@ import {
 import { PublicSigningSessionsController } from './../src/public-signing/public-signing-sessions.controller';
 import { PublicSigningInvitationResolver } from './../src/public-signing/services/public-signing-invitation-resolver.service';
 import { PublicSigningSessionTokenService } from './../src/public-signing/services/public-signing-session-token.service';
+import { PublicSignerIdentityService } from './../src/public-signing/services/public-signer-identity.service';
 import { SigningIdempotencyService } from './../src/public-signing/services/signing-idempotency.service';
+import { SigningPolicyResolver } from './../src/public-signing/services/signing-policy.resolver';
+import { IdentityVerificationEntity } from './../src/identity-verification/entities/identity-verification.entity';
+import { UserEntity } from './../src/user/entities/user.entity';
 import { SigningInvitationAccessTokenService } from './../src/public-signing/services/signing-invitation-access-token.service';
 import { SigningInvitationEntity } from './../src/signing-invitation/entities/signing-invitation.entity';
 import { SigningLaunchTokenEntity } from './../src/signing-invitation/entities/signing-launch-token.entity';
@@ -193,6 +197,7 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
        VALUES ($1, 'E2E', $2, 'signer', 'PROVISIONED', 'CONFIGURED', NULL, NULL, NULL, false) RETURNING id`,
       [name, email],
     );
+    ids[`user:${name}`] = user.id;
     const [account] = await dataSource.query(
       `INSERT INTO accounts (user_id, account_type, organization_id, role_id, email, password)
        SELECT $1, 'PERSONAL', NULL, r.id, $2, NULL FROM roles r WHERE r.name = 'OWNER' AND r.is_system_role = true
@@ -200,6 +205,18 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
       [user.id, email],
     );
     return account.id as string;
+  }
+
+  /** Verificación de identidad de Didit aprobada, con el nombre que leyó de la identificación. */
+  async function approveIdentity(name: string, fullName: string) {
+    await dataSource.query(
+      `INSERT INTO identity_verifications (user_id, provider, status, decision, completed_at)
+       VALUES ($1, 'DIDIT', 'APPROVED', $2, now())`,
+      [
+        ids[`user:${name}`],
+        JSON.stringify({ id_verifications: [{ full_name: fullName }] }),
+      ],
+    );
   }
 
   /** Documento secuencial creado por integración, con Ana (1) y Juan (2), los dos SIMPLE. */
@@ -223,6 +240,8 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
       );
       ids[name] = collaborator.id;
     }
+    // Ana ya validó su identidad; Juan todavía no (ver su caso).
+    await approveIdentity('ana', 'ANA E2E LOPEZ');
   }
 
   /** Cookie (`nombre=valor`) de una respuesta, o `undefined`. */
@@ -341,6 +360,8 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
           BiometricSignatureAttemptEntity,
           SigningInvitationEntity,
           SigningLaunchTokenEntity,
+          IdentityVerificationEntity,
+          UserEntity,
         ]),
       ],
       controllers: [
@@ -371,6 +392,8 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
         GetSigningInvitationUseCase,
         SigningInvitationAccessUseCases,
         PublicSigningSessionUseCases,
+        SigningPolicyResolver,
+        PublicSignerIdentityService,
         SigningIdempotencyService,
         SignDocumentUseCase,
         VerificationCodeService,
@@ -604,7 +627,18 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
           maskedEmail: 'a***@correo.test',
         }),
       );
-      expect(current.body.signature.type).toBe('SIMPLE');
+      expect(current.body.status).toBe('READY_TO_SIGN');
+      expect(current.body.signature).toEqual(
+        expect.objectContaining({
+          type: 'SIMPLE',
+          requiresIdentityValidation: true,
+          identityProvider: 'DIDIT',
+          requiresCertificateValidation: false,
+        }),
+      );
+      expect(current.body.signature.identityVerification).toEqual(
+        expect.objectContaining({ status: 'APPROVED', satisfied: true }),
+      );
 
       const document = await request(app.getHttpServer())
         .get('/api/v1/public/signing-sessions/current/document')
@@ -636,6 +670,7 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
           'SIGNING_INVITATION_OTP_SENT',
           'SIGNING_INVITATION_OTP_VERIFIED',
           'SIGNING_STARTED',
+          'IDENTITY_VERIFICATION_CHECKED',
           'DOCUMENT_SIGNED',
         ]),
       );
@@ -652,10 +687,13 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
     });
 
     it('con la sesión ya usada no se puede volver a firmar con otra clave', async () => {
-      const again = await signSimple(sessionCookie, 'firma-ana-2').expect(400);
-      expect(again.body.message).toBe(
-        'Ya respondiste a esta solicitud de firma',
-      );
+      const again = await signSimple(sessionCookie, 'firma-ana-2').expect(409);
+      expect(again.body).toEqual({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'SIGNING_NOT_AVAILABLE',
+        message: 'Ya respondiste a esta solicitud de firma.',
+      });
     });
   });
 
@@ -674,6 +712,35 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
         cookieFrom(opened, PUBLIC_SIGNING_INVITATION_COOKIE)!,
         'juan@correo.test',
       );
+
+      // Sin identidad validada no firma: el código lo dice y la sesión lo refleja.
+      const blocked = await signSimple(sessionCookie, 'firma-juan-0').expect(
+        403,
+      );
+      expect(blocked.body).toEqual(
+        expect.objectContaining({
+          statusCode: 403,
+          code: 'IDENTITY_VERIFICATION_REQUIRED',
+        }),
+      );
+      const pending = await request(app.getHttpServer())
+        .get(
+          '/api/v1/public/signing-sessions/current/simple/identity-verification',
+        )
+        .set('Cookie', sessionCookie)
+        .expect(200);
+      expect(pending.body).toEqual(
+        expect.objectContaining({ status: 'NOT_STARTED', satisfied: false }),
+      );
+
+      // Didit aprueba a otra persona: los datos no corresponden.
+      await approveIdentity('juan', 'PEDRO RAMIREZ');
+      const mismatch = await signSimple(sessionCookie, 'firma-juan-m').expect(
+        403,
+      );
+      expect(mismatch.body.code).toBe('IDENTITY_DATA_MISMATCH');
+
+      await approveIdentity('juan', 'JUAN E2E GARCIA');
       const signed = await signSimple(sessionCookie, 'firma-juan-1').expect(
         200,
       );

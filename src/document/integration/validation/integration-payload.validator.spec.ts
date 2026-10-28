@@ -334,6 +334,60 @@ describe('IntegrationPayloadValidator', () => {
     });
   });
 
+  describe('RFC del firmante avanzado', () => {
+    it('acepta el RFC de un firmante ADVANCED, normalizado a mayúsculas', () => {
+      const result = validator().validatePayload(
+        payload((value) => {
+          value.document.signatureType = 'ADVANCED';
+          value.participants[0].rfc = ' lopa800101ab1 ';
+        }),
+      );
+      expect(result.participants[0].rfc).toBe('LOPA800101AB1');
+    });
+
+    it('rechaza un RFC con formato inválido', () => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[0].rfc = 'NO-ES-RFC';
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: CODE.INVALID_PARTICIPANT_RFC });
+    });
+
+    it('rechaza el RFC en un documento que no es ADVANCED', () => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => (value.participants[0].rfc = 'LOPA800101AB1')),
+          ),
+        ),
+      ).toMatchObject({
+        code: CODE.PARTICIPANT_RFC_NOT_ALLOWED,
+        details: { field: 'participants[0].rfc' },
+      });
+    });
+
+    it('rechaza el RFC en un testigo', () => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[1].rfc = 'LOPA800101AB1';
+            }),
+          ),
+        ),
+      ).toMatchObject({
+        code: CODE.PARTICIPANT_RFC_NOT_ALLOWED,
+        details: { field: 'participants[1].rfc' },
+      });
+    });
+  });
+
   describe('orden de firma', () => {
     const signers =
       (...orders: (number | undefined)[]) =>

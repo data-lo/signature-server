@@ -47,6 +47,13 @@ const INVALID_SESSION = ApiResponse({
     'Sin sesión pública, o venció, se consumió o se revocó (mensaje genérico)',
 });
 
+/** Errores de la sesión: `{ statusCode, error, code, message }` (`PublicSigningErrorFilter`). */
+const SIGNING_NOT_AVAILABLE = ApiResponse({
+  status: 409,
+  description:
+    'code SIGNING_NOT_AVAILABLE: el documento ya no espera esta firma o todavía no es su turno',
+});
+
 const IDEMPOTENCY_KEY = ApiHeader({
   name: 'Idempotency-Key',
   required: true,
@@ -180,7 +187,7 @@ export function ApiGetCurrentSigningSession() {
   return applyDecorators(
     ApiOperation({
       summary:
-        'Contexto completo de la sesión pública: documento (nombre, estado, páginas, hash), firmante (correo enmascarado, estado, si puede firmar), tipo de firma con su credencial y posiciones de firma.',
+        'Contexto completo de la sesión pública: status (READY_TO_SIGN, SIGNED, SIGNING_NOT_AVAILABLE, IDENTITY_VERIFICATION_REQUIRED, IDENTITY_VERIFICATION_REJECTED, IDENTITY_DATA_MISMATCH), documento (nombre, estado, páginas, hash), firmante (nombre, correo enmascarado, si es provisional, si puede firmar), requisitos de la firma (type SIMPLE|ADVANCED|BIOMETRIC, requiresEmailVerification, requiresIdentityValidation, identityProvider, requiresCertificateValidation, certificateRequirements) con el estado de la identidad, y posiciones de firma.',
     }),
     SESSION_COOKIE,
     ApiResponse({ status: 200, description: 'CurrentSigningSession' }),
@@ -218,26 +225,61 @@ export function ApiGetCurrentSigningDocument() {
 }
 
 /**
- * `POST /public/signing-sessions/current/simple/verify-identity`.
+ * `POST /public/signing-sessions/current/simple/identity-verification/start`.
  *
  * @returns Los decoradores de Swagger del endpoint.
  *
  * @example
  * ```ts
- * @ApiVerifyPublicSignerIdentity()
+ * @ApiStartPublicSignerIdentityVerification()
  * ```
  */
-export function ApiVerifyPublicSignerIdentity() {
+export function ApiStartPublicSignerIdentityVerification() {
   return applyDecorators(
     ApiOperation({
       summary:
-        'Abre (o retoma) la verificación de identidad de Didit del usuario provisional, previa a la firma simple. Mismo flujo que el onboarding de la plataforma.',
+        'Abre (o retoma) la verificación de identidad de Didit del usuario provisional, previa a la firma simple. Mismo flujo que el onboarding de la plataforma. Cinco inicios por hora por firmante.',
     }),
     SESSION_COOKIE,
     ApiResponse({
       status: 201,
       description:
         '{ verificationId, provider, status, sessionId, url, expiresAt, reused }',
+    }),
+    ApiResponse({
+      status: 400,
+      description: 'El firmante no es de firma simple con usuario provisional',
+    }),
+    INVALID_SESSION,
+    SIGNING_NOT_AVAILABLE,
+    ApiResponse({
+      status: 429,
+      description: 'Demasiadas verificaciones iniciadas',
+    }),
+  );
+}
+
+/**
+ * `GET /public/signing-sessions/current/simple/identity-verification`.
+ *
+ * @returns Los decoradores de Swagger del endpoint.
+ *
+ * @example
+ * ```ts
+ * @ApiGetPublicSignerIdentityVerification()
+ * ```
+ */
+export function ApiGetPublicSignerIdentityVerification() {
+  return applyDecorators(
+    ApiOperation({
+      summary:
+        'Estado de la verificación de identidad del firmante simple contra la política: aprobada, pendiente, en revisión, rechazada o vencida, y si los datos de Didit corresponden al firmante. Para sondear mientras Didit decide.',
+    }),
+    SESSION_COOKIE,
+    ApiResponse({
+      status: 200,
+      description:
+        '{ status: NOT_STARTED|PENDING|IN_PROGRESS|IN_REVIEW|APPROVED|REJECTED|EXPIRED, verificationId, dataMatches, resumeUrl, satisfied, errorCode }',
     }),
     ApiResponse({
       status: 400,
@@ -287,10 +329,19 @@ export function ApiSignPublicSimple() {
     ApiResponse({
       status: 400,
       description:
-        'Falta Idempotency-Key, no es firma simple, falta la rúbrica, el PDF cambió, identidad sin validar o ya respondió',
+        'Falta Idempotency-Key, no es firma simple, falta la rúbrica o el PDF cambió',
+    }),
+    ApiResponse({
+      status: 403,
+      description:
+        'code EMAIL_VERIFICATION_REQUIRED, IDENTITY_VERIFICATION_REQUIRED, IDENTITY_VERIFICATION_REJECTED o IDENTITY_DATA_MISMATCH',
     }),
     INVALID_SESSION,
-    ApiResponse({ status: 409, description: 'La misma clave sigue en curso' }),
+    ApiResponse({
+      status: 409,
+      description:
+        'La misma clave sigue en curso, o code SIGNING_NOT_AVAILABLE (ya respondió o no es su turno)',
+    }),
     ApiResponse({
       status: 422,
       description: 'La clave se usó con otra petición',
@@ -339,14 +390,26 @@ export function ApiSignPublicAdvanced() {
     }),
     ApiResponse({
       status: 400,
-      description:
-        'Falta Idempotency-Key, no es FIEL, el PDF cambió o ya respondió',
+      description: 'Falta Idempotency-Key, no es FIEL o el PDF cambió',
+    }),
+    ApiResponse({
+      status: 403,
+      description: 'code EMAIL_VERIFICATION_REQUIRED',
     }),
     INVALID_SESSION,
-    ApiResponse({ status: 409, description: 'La misma clave sigue en curso' }),
+    ApiResponse({
+      status: 409,
+      description:
+        'La misma clave sigue en curso, o code SIGNING_NOT_AVAILABLE (ya respondió o no es su turno)',
+    }),
     ApiResponse({
       status: 422,
-      description: 'e.firma inválida, o la clave se usó con otra petición',
+      description:
+        'code CERTIFICATE_INVALID (inválido, vencido, cadena no confiable, llave o contraseña), CERTIFICATE_REVOKED, CERTIFICATE_SUBJECT_MISMATCH (RFC o nombre del titular) o SIGNATURE_VALIDATION_FAILED; o la clave se usó con otra petición',
+    }),
+    ApiResponse({
+      status: 429,
+      description: 'Demasiados intentos con certificado',
     }),
   );
 }
