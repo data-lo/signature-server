@@ -28,6 +28,7 @@ import { SummaryDocumentService } from './summary-document/summary-document.serv
 import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './services/signature-qr.service';
 import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
+import { SignatureValidationFailedException } from './exceptions/signing-validation.exceptions';
 
 function createMockRepository() {
   return {
@@ -192,6 +193,12 @@ describe('DocumentService', () => {
           ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
         },
       }),
+      verificar: jest.fn().mockReturnValue({
+        esValida: true,
+        hashCoincide: true,
+        firmaValida: true,
+      }),
+      calcularHashDocumento: jest.fn().mockReturnValue('hash-doc-1'),
     };
     sealDocumentUseCase = {
       create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
@@ -275,6 +282,45 @@ describe('DocumentService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('validateAndSignWithEfirma: verificación de la firma producida', () => {
+    const efirmaFile = (name: string) =>
+      ({ originalname: name, size: 10, buffer: Buffer.from(name) }) as never;
+    const input = {
+      keyFile: efirmaFile('llave.key'),
+      cerFile: efirmaFile('certificado.cer'),
+      password: 'secreta',
+    };
+    const document = {
+      objectKey: 'docs/d-1.pdf',
+      originalHash: 'hash-doc-1',
+    } as DocumentEntity;
+
+    it('verifica la firma contra el hash del documento revisado y devuelve el resultado', async () => {
+      const result = await service.validateAndSignWithEfirma(document, input);
+
+      expect(efirmaService.verificar).toHaveBeenCalledWith(
+        Buffer.from('pdf'),
+        'hash-doc-1',
+        'firma-base64',
+        '-----BEGIN CERTIFICATE-----...',
+        new Date('2026-01-01T00:00:00.000Z'),
+      );
+      expect(result.certificate.rfc).toBe('XAXX010101000');
+    });
+
+    it('rechaza con SIGNATURE_VALIDATION_FAILED si la firma no corresponde al documento', async () => {
+      efirmaService.verificar.mockReturnValueOnce({
+        esValida: false,
+        hashCoincide: false,
+        firmaValida: true,
+      });
+
+      await expect(
+        service.validateAndSignWithEfirma(document, input),
+      ).rejects.toBeInstanceOf(SignatureValidationFailedException);
+    });
   });
 
   describe('resolveStampImage: firmante biométrico', () => {

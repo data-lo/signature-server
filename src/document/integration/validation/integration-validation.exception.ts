@@ -30,6 +30,10 @@ export enum INTEGRATION_VALIDATION_CODE_ENUM {
   INVALID_SIGNATURE_POSITION = 'INVALID_SIGNATURE_POSITION',
   SIGNATURE_POSITION_PAGE_OUT_OF_RANGE = 'SIGNATURE_POSITION_PAGE_OUT_OF_RANGE',
   SIGNATURE_POSITION_OVERLAP = 'SIGNATURE_POSITION_OVERLAP',
+  /** `rfc` no tiene el formato de un RFC. */
+  INVALID_PARTICIPANT_RFC = 'INVALID_PARTICIPANT_RFC',
+  /** `rfc` sólo se admite en un firmante de un documento `ADVANCED`. */
+  PARTICIPANT_RFC_NOT_ALLOWED = 'PARTICIPANT_RFC_NOT_ALLOWED',
 }
 
 /** Detalles del error: el campo afectado (si aplica) y los datos que lo explican. */

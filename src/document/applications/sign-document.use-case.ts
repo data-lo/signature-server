@@ -49,6 +49,11 @@ import {
   SigningRequestMetadata,
   signingActorReference,
 } from '../interfaces/signing-actor.interface';
+import { CertificateSubjectMismatchException } from '../exceptions/signing-validation.exceptions';
+import {
+  certificateSubjectMatches,
+  ExpectedCertificateSubject,
+} from '../utils/certificate-subject.util';
 
 /**
  * Lo que el firmante necesita saber en cuanto su firma queda registrada.
@@ -124,6 +129,11 @@ export interface SignatureCommand {
   geolocation?: GeolocationDto;
   /** Hash del PDF que revisó el firmante; obligatorio para `PUBLIC_INVITATION`. */
   documentHash?: string;
+  /**
+   * Titular que debe tener el certificado (FIEL). Lo manda quien aplica esa política (la sesión
+   * pública); sin él no se compara, como en la firma autenticada de siempre.
+   */
+  expectedCertificateSubject?: ExpectedCertificateSubject;
   metadata: SigningRequestMetadata;
 }
 
@@ -308,6 +318,9 @@ export class SignDocumentUseCase {
    *   `DOCUMENT.SIGN_SELF`.
    * @throws {InvalidGuestSigningAccessException} La sesión pública ya no sirve o la invitación quedó
    *   vinculada a otra cuenta.
+   * @throws {CertificateSubjectMismatchException} (422) Si el comando exige un titular y el del
+   *   certificado no corresponde.
+   * @throws {SignatureValidationFailedException} (422) Si la firma no corresponde al documento.
    *
    * @example
    * ```ts
@@ -370,6 +383,15 @@ export class SignDocumentUseCase {
           document,
           command.advancedSignatureInput,
         );
+      if (
+        command.expectedCertificateSubject &&
+        !certificateSubjectMatches(
+          advancedSignatureResult.certificate,
+          command.expectedCertificateSubject,
+        )
+      ) {
+        throw new CertificateSubjectMismatchException();
+      }
     } else {
       this.documentService.assertCanSignWithSimpleSignature(
         participant.account!.user,
@@ -1075,6 +1097,20 @@ export class SignDocumentUseCase {
       signatureType: myParticipant.signatureType ?? undefined,
       signingAuthorization,
       ...(auditActor ? { actor: auditActor, result: 'SUCCESS' as const } : {}),
+      evidence: {
+        ...(document.originalHash
+          ? { documentHash: document.originalHash }
+          : {}),
+        ...(advancedSignatureResult?.certificate
+          ? {
+              certificateNumber:
+                advancedSignatureResult.certificate.certificateNumber,
+              ...(advancedSignatureResult.ocspEvidence
+                ? { ocspStatus: advancedSignatureResult.ocspEvidence.status }
+                : {}),
+            }
+          : {}),
+      },
     });
 
     if (remainingSigners.length > 0) {

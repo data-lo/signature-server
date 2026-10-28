@@ -402,6 +402,13 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
                 ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
               },
             }),
+            // La firma producida se verifica contra el documento antes de registrarla.
+            verificar: jest.fn().mockReturnValue({
+              esValida: true,
+              hashCoincide: true,
+              firmaValida: true,
+            }),
+            calcularHashDocumento: jest.fn().mockReturnValue('hash-original'),
           },
         },
       ],

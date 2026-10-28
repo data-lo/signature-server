@@ -601,11 +601,13 @@ export class CreateDocumentSignatureFlowUseCase {
             email: identity.email.toLowerCase(),
             firstName: identity.firstName,
             lastName: identity.lastName,
-            // Solo el WITNESS guarda identificador fiscal: para un firmante el dato ya no se
-            // pide al crear el documento, y el del flujo avanzado sale del certificado de
-            // e.firma al firmar (ver `CollaboratorPayloadDto.taxId`). Se descarta explícitamente
-            // lo que mande el cliente.
-            taxId: isSigner ? null : (participant.taxId ?? null),
+            // El WITNESS guarda su identificador fiscal; para un firmante se descarta lo que mande
+            // el cliente en `taxId` (ver `CollaboratorPayloadDto.taxId`). La única excepción es el
+            // RFC que manda la integración para un firmante avanzado (`signerTaxId`): no se
+            // captura por capturar, es contra lo que se compara el titular de su certificado.
+            taxId: isSigner
+              ? (participant.signerTaxId ?? null)
+              : (participant.taxId ?? null),
             colaboratorType:
               COLABORATOR_TYPE_PAYLOAD_TO_DOMAIN[participant.collaboratorType],
             signatureType: isSigner ? documentSignatureType : null,

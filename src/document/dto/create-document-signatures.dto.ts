@@ -523,6 +523,14 @@ export class CollaboratorPayloadDto {
   taxId?: string | null;
 
   /**
+   * RFC esperado del titular del certificado de un firmante de firma avanzada. Sólo lo llena la
+   * API de integración (campo `rfc` del participante, ya validado); no se expone en Swagger ni se
+   * acepta del cliente de la plataforma: sin decoradores, el `ValidationPipe` con `whitelist` lo
+   * descarta.
+   */
+  signerTaxId?: string | null;
+
+  /**
    * Ubicaciones de firma de este colaborador (ver historia "Ubicación de firmas por usuario").
    * Solo aplica a SIGNER; el backend además refuerza requiresTwoFactorAuth=true cuando el
    * documento es de firma SIMPLE, sin importar lo que llegue en el payload (ver

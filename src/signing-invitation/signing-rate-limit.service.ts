@@ -48,6 +48,20 @@ export const LAUNCH_ISSUE: RateLimitRule = {
   windowSeconds: 10 * 60,
 };
 
+/** Verificaciones de identidad (Didit) iniciadas por firmante: cinco por hora. */
+export const IDENTITY_VERIFICATION_START: RateLimitRule = {
+  name: 'identity-verification-start',
+  limit: 5,
+  windowSeconds: 60 * 60,
+};
+
+/** Intentos de firma con certificado por firmante: diez cada 15 minutos. */
+export const CERTIFICATE_ATTEMPTS: RateLimitRule = {
+  name: 'certificate-attempts',
+  limit: 10,
+  windowSeconds: 15 * 60,
+};
+
 /** 429 con un mensaje genérico; no dice qué límite se alcanzó ni sobre qué. */
 export class SigningRateLimitException extends HttpException {
   constructor() {

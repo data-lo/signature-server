@@ -187,7 +187,11 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
   let documentRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
   let sealRepository: ReturnType<typeof createMockRepository>;
-  let efirmaService: { firmar: jest.Mock };
+  let efirmaService: {
+    firmar: jest.Mock;
+    verificar: jest.Mock;
+    calcularHashDocumento: jest.Mock;
+  };
   let auditService: { create: jest.Mock };
   let document: DocumentEntity;
 
@@ -215,7 +219,16 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     documentRepository = createMockRepository();
     collaboratorRepository = createMockRepository();
     sealRepository = createMockRepository();
-    efirmaService = { firmar: jest.fn().mockReturnValue(EFIRMA_RESULT) };
+    efirmaService = {
+      firmar: jest.fn().mockReturnValue(EFIRMA_RESULT),
+      // La firma producida se verifica contra el documento antes de registrarla.
+      verificar: jest.fn().mockReturnValue({
+        esValida: true,
+        hashCoincide: true,
+        firmaValida: true,
+      }),
+      calcularHashDocumento: jest.fn(),
+    };
     auditService = { create: jest.fn() };
 
     document = mockDocument();

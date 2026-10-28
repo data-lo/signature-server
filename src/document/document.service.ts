@@ -58,6 +58,7 @@ import {
   buildAdvancedSignatureUrl,
   buildPublicDocumentUrl,
 } from './utils/document-access-url.util';
+import { SignatureValidationFailedException } from './exceptions/signing-validation.exceptions';
 import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
 import {
   SignatureQrService,
@@ -770,7 +771,21 @@ export class DocumentService {
    * vigencia del certificado, cadena de confianza SAT, correspondencia llave/certificado) a
    * `EfirmaService.firmar` — este servicio nunca se expone como endpoint independiente, solo se
    * invoca aquí. Los errores de `EfirmaService` (422, mensajes claros en español) se propagan
-   * tal cual, sin envolverlos.
+   * tal cual, sin envolverlos. Después verifica la firma producida contra el PDF y su hash.
+   *
+   * @param document - Documento que se firma.
+   * @param input - `.key`, `.cer` y contraseña.
+   * @returns La firma, el certificado y la evidencia OCSP (si el SAT respondió).
+   *
+   * @throws {BadRequestException} Si faltan archivos o no tienen la extensión o el tamaño válidos.
+   * @throws {UnprocessableEntityException} Si la e.firma no es válida o está revocada.
+   * @throws {SignatureValidationFailedException} (422) Si la firma no corresponde al documento o a
+   *   su hash.
+   *
+   * @example
+   * ```ts
+   * const result = await documentService.validateAndSignWithEfirma(document, { keyFile, cerFile, password });
+   * ```
    */
   async validateAndSignWithEfirma(
     document: DocumentEntity,
@@ -815,12 +830,31 @@ export class DocumentService {
       BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
     );
 
-    return (await this.efirmaService.firmar(
+    const result = (await this.efirmaService.firmar(
       documentBuffer,
       cerFile.buffer,
       keyFile.buffer,
       password,
     )) as SignatureResult;
+
+    /**
+     * La firma recién producida se verifica contra el PDF firmado y su hash antes de registrarla:
+     * que corresponda a la llave pública del certificado y que el PDF sea exactamente la versión
+     * que se mostró (`originalHash`). Un documento anterior a esa columna sólo verifica la firma.
+     */
+    const verification = this.efirmaService.verificar(
+      documentBuffer,
+      document.originalHash ??
+        this.efirmaService.calcularHashDocumento(documentBuffer),
+      result.signatureBase64,
+      result.certificate.certificatePem,
+      result.signedAt,
+    );
+    if (!verification.firmaValida || !verification.hashCoincide) {
+      throw new SignatureValidationFailedException();
+    }
+
+    return result;
   }
 
   /**

@@ -62,9 +62,10 @@ describe('GetSigningInvitationUseCase', () => {
         publicSigningAllowed: true,
       },
       signature: {
-        type: SIGNATURE_TYPE_ENUM.FIEL,
+        type: 'ADVANCED',
         requiresEmailVerification: true,
         requiresIdentityValidation: false,
+        requiresCertificateValidation: true,
       },
       expiresAt: '2026-11-01T00:00:00.000Z',
     });

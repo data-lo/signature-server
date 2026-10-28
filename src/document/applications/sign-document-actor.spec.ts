@@ -11,6 +11,7 @@ import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { SIGNING_AUTHORIZATION_ENUM } from '../enum/signing-authorization.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { InvalidGuestSigningAccessException } from '../exceptions/guest-signing-access.exceptions';
+import { CertificateSubjectMismatchException } from '../exceptions/signing-validation.exceptions';
 import {
   PublicInvitationSigningActor,
   signingActorReference,
@@ -184,6 +185,56 @@ describe('SignDocumentUseCase — firma por SigningActor', () => {
           result: 'SUCCESS',
         }),
       );
+    });
+
+    it('firma avanzada: rechaza un certificado cuyo titular no es el colaborador esperado, sin reclamar el turno', async () => {
+      signer.signatureType = SIGNATURE_TYPE_ENUM.FIEL;
+      documentService.validateAndSignWithEfirma.mockResolvedValueOnce({
+        certificate: { rfc: 'MAML900101XY2', name: 'LUIS MARTINEZ' },
+      });
+
+      await expect(
+        useCase.sign(
+          publicActor(),
+          {
+            documentId: 'd-1',
+            geolocation: GEO,
+            documentHash: HASH,
+            advancedSignatureInput: { password: 'x' },
+            metadata: METADATA,
+            expectedCertificateSubject: {
+              taxId: null,
+              fullName: 'Ana López',
+            },
+          },
+          SIGNATURE_TYPE_ENUM.FIEL,
+        ),
+      ).rejects.toBeInstanceOf(CertificateSubjectMismatchException);
+      expect(txCollaborators.update).not.toHaveBeenCalled();
+    });
+
+    it('firma avanzada: acepta el certificado cuyo RFC coincide con el esperado', async () => {
+      signer.signatureType = SIGNATURE_TYPE_ENUM.FIEL;
+      documentService.validateAndSignWithEfirma.mockResolvedValueOnce({
+        certificate: { rfc: 'LOPA800101AB1', name: 'ANA LOPEZ PEREZ' },
+      });
+
+      await useCase.sign(
+        publicActor(),
+        {
+          documentId: 'd-1',
+          geolocation: GEO,
+          documentHash: HASH,
+          advancedSignatureInput: { password: 'x' },
+          metadata: METADATA,
+          expectedCertificateSubject: {
+            taxId: 'LOPA800101AB1',
+            fullName: 'Otro Nombre',
+          },
+        },
+        SIGNATURE_TYPE_ENUM.FIEL,
+      );
+      expect(txCollaborators.update).toHaveBeenCalled();
     });
 
     it('firma avanzada sin cuenta: consume el acceso exigiendo que siga sin cuenta', async () => {
