@@ -45,6 +45,26 @@ export function buildPublicDocumentUrl(documentId: string): string {
 }
 
 /**
+ * Enlace de la invitación individual de un firmante: la pantalla pública `/sign/:token`.
+ *
+ * Lleva sólo el token, nunca el id del documento ni del colaborador: quien tenga el enlace no
+ * aprende de él nada del documento, y el backend lo resuelve con `GetSigningSessionUseCase`.
+ *
+ * @param token - Token de la invitación, tal como lo emitió `SigningInvitationService.issue`.
+ * @returns `${PUBLIC_WEB_APP_URL}/sign/<token>`.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * buildSigningInvitationUrl('q3Vb…'); // 'https://app.firmalo.mx/sign/q3Vb…'
+ * ```
+ */
+export function buildSigningInvitationUrl(token: string): string {
+  return `${publicWebAppBaseUrl()}/sign/${encodeURIComponent(token)}`;
+}
+
+/**
  * Nombre del parámetro que señala de qué firma vino el QR escaneado.
  *
  * Es el id del colaborador, que ya es el identificador con el que la vista pública publica a cada
