@@ -49,6 +49,7 @@ describe('SignDocumentUseCase — firma por SigningActor', () => {
     accountId: 'acc-prov',
     organizationId: 'org-1',
     sessionAccessId: 'session-1',
+    accessChannel: 'THIRD_PARTY_PORTAL',
     verifiedEmail: true,
     ...overrides,
   });
@@ -177,6 +178,7 @@ describe('SignDocumentUseCase — firma por SigningActor', () => {
             authMechanism: AUDIT_AUTH_MECHANISM_ENUM.PUBLIC_SIGNING_SESSION,
             invitationId: 'inv-1',
             collaboratorId: 'c-1',
+            accessChannel: 'THIRD_PARTY_PORTAL',
             userAgent: 'Mozilla/5.0',
           },
           result: 'SUCCESS',

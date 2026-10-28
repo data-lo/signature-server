@@ -82,6 +82,35 @@ export class GetBiometricSignatureStatusUseCase {
   }
 
   /**
+   * Estado del último intento del firmante de una sesión pública de firma
+   * (`GET /public/signing-sessions/current/biometric`). El colaborador ya lo resolvió
+   * `PublicSigningSessionGuard`, así que no se compara correo.
+   *
+   * @param documentId - Documento de la sesión.
+   * @param collaboratorId - Colaborador de la invitación.
+   * @returns La sesión del último intento, o `null` si nunca inició una.
+   *
+   * @throws {GuestInvitationNotFoundException} Si ya no es un firmante biométrico sin cuenta.
+   *
+   * @example
+   * ```ts
+   * await getStatus.forPublicSession('d-1', 'c-1');
+   * ```
+   */
+  async forPublicSession(
+    documentId: string,
+    collaboratorId: string,
+  ): Promise<BiometricSignatureSession | null> {
+    return this.present(
+      await this.signers.resolveGuestSigner(
+        documentId,
+        collaboratorId,
+        undefined,
+      ),
+    );
+  }
+
+  /**
    * Arma el estado a partir del último intento del firmante.
    *
    * @param resolved - Firmante resuelto con su documento.

@@ -18,7 +18,7 @@ describe('PublicSigningSessionGuard', () => {
   } as never);
   let access: Record<string, any> | null;
   let invitation: Record<string, any> | null;
-  let accesses: { findActive: jest.Mock };
+  let accesses: { findUsable: jest.Mock };
   let invitations: { findById: jest.Mock };
   let guard: PublicSigningSessionGuard;
   let cookieToken: string;
@@ -64,14 +64,18 @@ describe('PublicSigningSessionGuard', () => {
         },
       },
     };
-    accesses = { findActive: jest.fn(async () => access) };
+    accesses = { findUsable: jest.fn(async () => access) };
     invitations = { findById: jest.fn(async () => invitation) };
     guard = new PublicSigningSessionGuard(
       tokens,
       accesses as never,
       invitations as never,
     );
-    cookieToken = tokens.issue(access as never, 'inv-1').token;
+    cookieToken = tokens.issue(
+      access as never,
+      'inv-1',
+      'THIRD_PARTY_PORTAL',
+    ).token;
   });
 
   it('resuelve el actor PUBLIC_INVITATION desde la cookie, sin nada del cliente', async () => {
@@ -87,10 +91,11 @@ describe('PublicSigningSessionGuard', () => {
       accountId: 'account-1',
       organizationId: 'org-1',
       sessionAccessId: 'acc-session-1',
+      accessChannel: 'THIRD_PARTY_PORTAL',
       verifiedEmail: true,
     });
     expect(request.signingSession.document.id).toBe('d-1');
-    expect(accesses.findActive).toHaveBeenCalledWith('acc-session-1');
+    expect(accesses.findUsable).toHaveBeenCalledWith('acc-session-1');
     expect(invitations.findById).toHaveBeenCalledWith('inv-1');
   });
 
@@ -123,7 +128,8 @@ describe('PublicSigningSessionGuard', () => {
         withCookie(
           new PublicSigningSessionTokenService({
             get: () => 'otro-secreto',
-          } as never).issue(access as never, 'inv-1').token,
+          } as never).issue(access as never, 'inv-1', 'THIRD_PARTY_PORTAL')
+            .token,
         ),
     ],
   ])('401 %s', async (_case, build) => {

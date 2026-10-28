@@ -74,6 +74,7 @@ import { GuestSigningAccessService } from './services/guest-signing-access.servi
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
 import { ResendIntegrationSigningInvitationUseCase } from './integration/applications/resend-integration-signing-invitation.use-case';
+import { IssueIntegrationSigningAccessUseCase } from './integration/applications/issue-integration-signing-access.use-case';
 
 @Module({
   controllers: [
@@ -146,6 +147,7 @@ import { ResendIntegrationSigningInvitationUseCase } from './integration/applica
     ListUserIntegrationDocumentsUseCase,
     CreateIntegrationDocumentUseCase,
     ResendIntegrationSigningInvitationUseCase,
+    IssueIntegrationSigningAccessUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([

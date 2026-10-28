@@ -7,6 +7,16 @@ export const PUBLIC_SIGNING_SESSION_COOKIE = 'firmalo_signing_session';
 export const PUBLIC_SIGNING_SESSION_TTL_SECONDS = 30 * 60;
 
 /**
+ * Cookie de acceso a una invitación, ANTES de validar el código: la deja el canje del token del
+ * correo (`/sign/:token`) o del portal del tercero (`/sign/launch/:token`), y con ella se pide y se
+ * valida el código. No da acceso al documento ni a la firma: eso sólo lo da la sesión.
+ */
+export const PUBLIC_SIGNING_INVITATION_COOKIE = 'firmalo_signing_invitation';
+
+/** Vigencia del acceso a la invitación: lo que tarda en llegar y escribirse el código. */
+export const PUBLIC_SIGNING_INVITATION_ACCESS_TTL_SECONDS = 30 * 60;
+
+/**
  * Opciones de la cookie de la sesión pública.
  *
  * - `HttpOnly`: el JavaScript de la página no la lee, así que un XSS no se la lleva.

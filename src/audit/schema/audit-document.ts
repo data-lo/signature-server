@@ -18,6 +18,12 @@ export enum AuditAction {
   SIGNING_INVITATION_OTP_VERIFIED = 'SIGNING_INVITATION_OTP_VERIFIED',
   /** Se emitió una invitación nueva: reenvío por integración o renovación de un enlace vencido. */
   SIGNING_INVITATION_ISSUED = 'SIGNING_INVITATION_ISSUED',
+  /** El tercero pidió un acceso temporal (`/sign/launch/:token`) para un firmante. */
+  SIGNING_LAUNCH_ISSUED = 'SIGNING_LAUNCH_ISSUED',
+  /** Un firmante con sesión pública inició su firma (antes de validarla). */
+  SIGNING_STARTED = 'SIGNING_STARTED',
+  /** La firma de un firmante con sesión pública falló; `result` es `FAILURE`. */
+  SIGNING_FAILED = 'SIGNING_FAILED',
 }
 
 /** Mecanismo con el que se autenticó quien hizo la operación. */
@@ -28,6 +34,8 @@ export enum AUDIT_AUTH_MECHANISM_ENUM {
   API_KEY = 'API_KEY',
   /** Token de invitación (`/sign/:token`), antes de validar el código. */
   INVITATION_TOKEN = 'INVITATION_TOKEN',
+  /** Token de lanzamiento del portal de un tercero (`/sign/launch/:token`), antes del código. */
+  LAUNCH_TOKEN = 'LAUNCH_TOKEN',
   /** Sesión pública de firma, abierta al validar el código del correo. */
   PUBLIC_SIGNING_SESSION = 'PUBLIC_SIGNING_SESSION',
 }
@@ -43,6 +51,8 @@ export interface AuditActorContext {
   apiKeyId?: string;
   invitationId?: string;
   collaboratorId?: string;
+  /** Por dónde llegó el firmante a su invitación (`EMAIL` o `THIRD_PARTY_PORTAL`). */
+  accessChannel?: string;
   userAgent?: string;
 }
 
@@ -67,6 +77,9 @@ class AuditActorRecord {
 
   @Prop({ type: String })
   collaboratorId?: string;
+
+  @Prop({ type: String })
+  accessChannel?: string;
 
   @Prop({ type: String })
   userAgent?: string;

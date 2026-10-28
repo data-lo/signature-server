@@ -43,8 +43,16 @@ import { GetSigningInvitationUseCase } from './../src/public-signing/application
 import { PublicSigningSessionUseCases } from './../src/public-signing/applications/public-signing-session.use-cases';
 import { SigningInvitationAccessUseCases } from './../src/public-signing/applications/signing-invitation-access.use-cases';
 import { PublicSigningSessionGuard } from './../src/public-signing/guards/public-signing-session.guard';
-import { PUBLIC_SIGNING_SESSION_COOKIE } from './../src/public-signing/public-signing-session.cookie';
+import {
+  PUBLIC_SIGNING_INVITATION_COOKIE,
+  PUBLIC_SIGNING_SESSION_COOKIE,
+} from './../src/public-signing/public-signing-session.cookie';
 import { PublicSigningInvitationsController } from './../src/public-signing/public-signing-invitations.controller';
+import { PublicSigningLaunchesController } from './../src/public-signing/public-signing-launches.controller';
+import { SigningInvitationAccessGuard } from './../src/public-signing/guards/signing-invitation-access.guard';
+import { PublicSigningInvitationResolver } from './../src/public-signing/services/public-signing-invitation-resolver.service';
+import { SigningInvitationAccessTokenService } from './../src/public-signing/services/signing-invitation-access-token.service';
+import { IssueIntegrationSigningAccessUseCase } from './../src/document/integration/applications/issue-integration-signing-access.use-case';
 import { PublicSigningSessionsController } from './../src/public-signing/public-signing-sessions.controller';
 import { PublicSigningSessionTokenService } from './../src/public-signing/services/public-signing-session-token.service';
 import { SigningInvitationService } from './../src/signing-invitation/signing-invitation.service';
@@ -53,6 +61,7 @@ import { USER_LIFECYCLE_STATUS_ENUM } from './../src/user/enums/user-lifecycle-s
 const JWT_SECRET = 'jwt-secret-e2e-audiencias';
 const PEPPER = 'pepper-de-la-e2e-de-audiencias-con-mas-de-32-caracteres';
 const INVITATION_TOKEN = 'q3VbX7f0_Lr9-ZtKp2NcWm4YhA8sDe1JuGo6BiQk5Rv';
+const LAUNCH_TOKEN = `sla_${INVITATION_TOKEN}`;
 const ORG_ID = '7a1f0c2e-1111-4a5b-8c9d-0123456789ab';
 const DOC_ID = '3c6e2b9a-2222-4c1d-9e8f-0123456789ab';
 const COLLAB_ID = '9d8c7b6a-3333-4e2f-8a1b-0123456789ab';
@@ -99,6 +108,9 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
   const fullKey = secrets.generate();
   const readOnlyKey = secrets.generate();
   const sessionTokens = new PublicSigningSessionTokenService({
+    get: () => JWT_SECRET,
+  } as unknown as ConfigService);
+  const accessTokens = new SigningInvitationAccessTokenService({
     get: () => JWT_SECRET,
   } as unknown as ConfigService);
 
@@ -151,10 +163,13 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
       executeByEmail: jest.fn(async () => ({ success: true })),
     },
     resend: { execute: jest.fn(async () => ({ success: true })) },
+    signingAccess: { execute: jest.fn(async () => ({ success: true })) },
   };
   const publicSigning = {
     invitation: { execute: jest.fn(async () => ({ status: 'ACTIVE' })) },
     access: {
+      openWithInvitationToken: jest.fn(),
+      openWithLaunchToken: jest.fn(),
       requestCode: jest.fn(),
       verifyCode: jest.fn(),
       renew: jest.fn(async () => ({ message: 'ok' })),
@@ -180,9 +195,23 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
   let platformJwt: string;
 
   beforeAll(async () => {
-    publicSigning.access.verifyCode.mockImplementation(async () =>
-      sessionTokens.issue(sessionAccess as never, 'inv-1'),
+    publicSigning.access.verifyCode.mockImplementation(
+      async (_resolved: unknown, channel: 'EMAIL' | 'THIRD_PARTY_PORTAL') =>
+        sessionTokens.issue(sessionAccess as never, 'inv-1', channel),
     );
+    publicSigning.access.openWithInvitationToken.mockImplementation(
+      async () => ({
+        context: { status: 'ACTIVE' },
+        access: accessTokens.issue({ invitationId: 'inv-1', channel: 'EMAIL' }),
+      }),
+    );
+    publicSigning.access.openWithLaunchToken.mockImplementation(async () => ({
+      context: { status: 'ACTIVE' },
+      access: accessTokens.issue({
+        invitationId: 'inv-1',
+        channel: 'THIRD_PARTY_PORTAL',
+      }),
+    }));
 
     @Module({
       imports: [
@@ -193,6 +222,7 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
         OrganizationApiKeysController,
         IntegrationDocumentsController,
         PublicSigningInvitationsController,
+        PublicSigningLaunchesController,
         PublicSigningSessionsController,
       ],
       providers: [
@@ -248,7 +278,7 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
         {
           provide: GuestSigningAccessService,
           useValue: {
-            findActive: async (id: string) =>
+            findUsable: async (id: string) =>
               id === sessionAccess.id ? sessionAccess : null,
           },
         },
@@ -284,6 +314,22 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
           provide: SigningInvitationAccessUseCases,
           useValue: publicSigning.access,
         },
+        // Pasos previos a la sesión: cookie de acceso a la invitación (guard y token reales).
+        SigningInvitationAccessGuard,
+        {
+          provide: SigningInvitationAccessTokenService,
+          useValue: accessTokens,
+        },
+        {
+          provide: PublicSigningInvitationResolver,
+          useValue: {
+            resolveById: async () => ({ invitation: { id: 'inv-1' } }),
+          },
+        },
+        {
+          provide: IssueIntegrationSigningAccessUseCase,
+          useValue: integration.signingAccess,
+        },
         {
           provide: PublicSigningSessionUseCases,
           useValue: publicSigning.sessions,
@@ -313,13 +359,32 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
 
   beforeEach(() => jest.clearAllMocks());
 
-  async function openSessionCookie(): Promise<string> {
+  /** Cookie (`nombre=valor`) que dejó una respuesta, por nombre. */
+  function cookieFrom(response: request.Response, name: string): string {
+    const cookies = response.headers['set-cookie'] as unknown as string[];
+    const cookie = cookies.find((value) => value.startsWith(`${name}=`));
+    if (!cookie) throw new Error(`Sin cookie ${name}`);
+    return cookie.split(';')[0];
+  }
+
+  /**
+   * Canjea el token inicial (correo o portal) y valida el código con la cookie de acceso.
+   *
+   * @param accessRoute - Ruta de canje.
+   * @returns La cookie de la sesión pública.
+   */
+  async function openSessionCookie(
+    accessRoute = `/api/v1/public/signing-invitations/${INVITATION_TOKEN}/access`,
+  ): Promise<string> {
+    const opened = await request(app.getHttpServer())
+      .post(accessRoute)
+      .expect(200);
     const response = await request(app.getHttpServer())
-      .post(`/api/v1/public/signing-invitations/${INVITATION_TOKEN}/otp/verify`)
+      .post('/api/v1/public/signing-invitations/current/otp/verify')
+      .set('Cookie', cookieFrom(opened, PUBLIC_SIGNING_INVITATION_COOKIE))
       .send({ code: '123456' })
       .expect(200);
-    const cookie = (response.headers['set-cookie'] as unknown as string[])[0];
-    return cookie.split(';')[0];
+    return cookieFrom(response, PUBLIC_SIGNING_SESSION_COOKIE);
   }
 
   describe('1. Administración interna de API keys (JWT)', () => {
@@ -341,7 +406,7 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
       [
         'con la cookie de una sesión pública de firma',
         {
-          Cookie: `${PUBLIC_SIGNING_SESSION_COOKIE}=${sessionTokens.issue(sessionAccess as never, 'inv-1').token}`,
+          Cookie: `${PUBLIC_SIGNING_SESSION_COOKIE}=${sessionTokens.issue(sessionAccess as never, 'inv-1', 'EMAIL').token}`,
         },
       ],
     ])('401 %s', async (_case, headers) => {
@@ -386,7 +451,7 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
       [
         'con la cookie de una sesión pública de firma',
         {
-          Cookie: `${PUBLIC_SIGNING_SESSION_COOKIE}=${sessionTokens.issue(sessionAccess as never, 'inv-1').token}`,
+          Cookie: `${PUBLIC_SIGNING_SESSION_COOKIE}=${sessionTokens.issue(sessionAccess as never, 'inv-1', 'EMAIL').token}`,
         },
       ],
     ])('401 %s', async (_case, headers) => {
@@ -457,19 +522,80 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
     });
 
     it('validar el código abre la sesión en una cookie HttpOnly, Secure y SameSite=Strict; el token no va en el cuerpo', async () => {
+      const opened = await request(app.getHttpServer())
+        .post(`/api/v1/public/signing-invitations/${INVITATION_TOKEN}/access`)
+        .expect(200);
       const response = await request(app.getHttpServer())
-        .post(
-          `/api/v1/public/signing-invitations/${INVITATION_TOKEN}/otp/verify`,
-        )
+        .post('/api/v1/public/signing-invitations/current/otp/verify')
+        .set('Cookie', cookieFrom(opened, PUBLIC_SIGNING_INVITATION_COOKIE))
         .send({ code: '123456' })
         .expect(200);
 
-      const cookie = (response.headers['set-cookie'] as unknown as string[])[0];
+      const cookie = (
+        response.headers['set-cookie'] as unknown as string[]
+      ).find((value) => value.startsWith(`${PUBLIC_SIGNING_SESSION_COOKIE}=`))!;
       expect(cookie).toMatch(new RegExp(`^${PUBLIC_SIGNING_SESSION_COOKIE}=`));
       expect(cookie).toMatch(/HttpOnly/);
       expect(cookie).toMatch(/Secure/);
       expect(cookie).toMatch(/SameSite=Strict/);
       expect(Object.keys(response.body)).toEqual(['expiresAt']);
+    });
+
+    it('sin la cookie de acceso a la invitación no se puede validar el código', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/public/signing-invitations/current/otp/verify')
+        .send({ code: '123456' })
+        .expect(401);
+      expect(publicSigning.access.verifyCode).not.toHaveBeenCalled();
+    });
+
+    it('el portal del tercero termina en la MISMA sesión, con el canal THIRD_PARTY_PORTAL', async () => {
+      const cookie = await openSessionCookie(
+        `/api/v1/public/signing-launches/${LAUNCH_TOKEN}/access`,
+      );
+
+      expect(publicSigning.access.openWithLaunchToken).toHaveBeenCalledWith(
+        LAUNCH_TOKEN,
+      );
+      expect(publicSigning.access.verifyCode).toHaveBeenCalledWith(
+        expect.anything(),
+        'THIRD_PARTY_PORTAL',
+        '123456',
+        expect.anything(),
+      );
+      await request(app.getHttpServer())
+        .get('/api/v1/public/signing-sessions/current')
+        .set('Cookie', cookie)
+        .expect(200);
+    });
+
+    it('el acceso temporal se pide con X-API-Key y DOCUMENT.CREATE; el correo sólo localiza', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/v1/integration/documents/${DOC_ID}/signing-access`)
+        .set('X-API-Key', readOnlyKey.key)
+        .send({ email: 'ana@correo.com' })
+        .expect(403);
+      await request(app.getHttpServer())
+        .post(`/api/v1/integration/documents/${DOC_ID}/signing-access`)
+        .set('Authorization', `Bearer ${platformJwt}`)
+        .send({ email: 'ana@correo.com' })
+        .expect(401);
+      expect(integration.signingAccess.execute).not.toHaveBeenCalled();
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/integration/documents/${DOC_ID}/signing-access`)
+        .set('X-API-Key', fullKey.key)
+        .send({ email: 'ana@correo.com' })
+        .expect(200);
+      expect(integration.signingAccess.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          organizationId: ORG_ID,
+          apiKeyId: 'key-full',
+        }),
+        DOC_ID,
+        'ana@correo.com',
+        expect.anything(),
+      );
     });
 
     it('con la cookie, la sesión opera sobre el colaborador de la invitación', async () => {

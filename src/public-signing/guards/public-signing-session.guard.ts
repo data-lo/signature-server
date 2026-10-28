@@ -34,7 +34,8 @@ export class InvalidPublicSigningSessionException extends UnauthorizedException 
  *
  * Comprueba, en orden:
  * 1. Firma, vencimiento y propósito del token de la cookie.
- * 2. Que su acceso (`guest_signing_accesses`) siga activo y sea de esa invitación.
+ * 2. Que su acceso (`guest_signing_accesses`) no haya vencido ni se haya revocado (puede estar
+ *    consumido: la firma ya se registró) y sea de esa invitación.
  * 3. Que la invitación no se haya revocado (vencer el enlace no corta una sesión ya abierta).
  * 4. Que el firmante siga pudiendo firmar desde la invitación pública.
  *
@@ -75,7 +76,9 @@ export class PublicSigningSessionGuard implements CanActivate {
     const claims = token ? this.tokens.verify(token) : null;
     if (!claims) throw new InvalidPublicSigningSessionException();
 
-    const access = await this.accesses.findActive(claims.accessId);
+    // Vigente aunque ya se haya consumido al firmar: el reintento idempotente de la firma y el
+    // estado final siguen respondiendo hasta que la sesión vence (ver `findUsable`).
+    const access = await this.accesses.findUsable(claims.accessId);
     if (
       !access ||
       access.purpose !==
@@ -114,6 +117,7 @@ export class PublicSigningSessionGuard implements CanActivate {
           : {}),
         organizationId: document.organizationId ?? null,
         sessionAccessId: access.id,
+        accessChannel: claims.channel,
         verifiedEmail: true,
       },
       document,

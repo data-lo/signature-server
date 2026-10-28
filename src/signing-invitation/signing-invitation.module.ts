@@ -5,13 +5,16 @@ import { AuditModule } from 'src/audit/audit.module';
 import { SharedModule } from 'src/common/shared.module';
 
 import { SigningInvitationEntity } from './entities/signing-invitation.entity';
+import { SigningLaunchTokenEntity } from './entities/signing-launch-token.entity';
 import { SigningInvitationDeliveryService } from './signing-invitation-delivery.service';
 import { SigningInvitationService } from './signing-invitation.service';
+import { SigningLaunchService } from './signing-launch.service';
 import { SigningLinkService } from './signing-link.service';
 import { SigningRateLimitService } from './signing-rate-limit.service';
 
 /**
- * Invitaciones individuales de firma (`/sign/:token`): emitirlas, encontrarlas por token, decidir
+ * Invitaciones individuales de firma (`/sign/:token`) y sus accesos temporales desde el portal de
+ * un tercero (`/sign/launch/:token`): emitirlas, encontrarlas por token, decidir
  * qué enlace lleva el correo de cada firmante, reenviarlas con sus límites y limitar la frecuencia
  * de lo que se hace con ellas.
  *
@@ -21,19 +24,24 @@ import { SigningRateLimitService } from './signing-rate-limit.service';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([SigningInvitationEntity]),
+    TypeOrmModule.forFeature([
+      SigningInvitationEntity,
+      SigningLaunchTokenEntity,
+    ]),
     SharedModule,
     AuditModule,
   ],
   providers: [
     SigningInvitationService,
     SigningLinkService,
+    SigningLaunchService,
     SigningRateLimitService,
     SigningInvitationDeliveryService,
   ],
   exports: [
     SigningInvitationService,
     SigningLinkService,
+    SigningLaunchService,
     SigningRateLimitService,
     SigningInvitationDeliveryService,
   ],

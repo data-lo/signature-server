@@ -14,6 +14,7 @@ const TOKEN = 'a'.repeat(43);
 describe('GetSigningInvitationUseCase', () => {
   let invitation: Record<string, any> | null;
   let findByToken: jest.Mock;
+  let findSigners: jest.Mock;
   let useCase: GetSigningInvitationUseCase;
 
   beforeEach(() => {
@@ -40,8 +41,12 @@ describe('GetSigningInvitationUseCase', () => {
       },
     };
     findByToken = jest.fn(async () => invitation);
+    findSigners = jest.fn(async () => [invitation?.collaborator]);
     useCase = new GetSigningInvitationUseCase(
-      new PublicSigningInvitationResolver({ findByToken } as never),
+      new PublicSigningInvitationResolver(
+        { findByToken } as never,
+        { find: findSigners } as never,
+      ),
     );
   });
 
@@ -166,6 +171,29 @@ describe('GetSigningInvitationUseCase', () => {
       await expect(useCase.execute(TOKEN, NOW)).resolves.toEqual({ status });
     },
   );
+
+  it('secuencial: Juan (orden 2) abre su invitación antes de que Ana firme → WAITING_FOR_PREVIOUS_SIGNER, sin datos', async () => {
+    invitation!.document.isSequential = true;
+    invitation!.collaborator.signingOrder = 2;
+    const ana = {
+      id: 'c-ana',
+      colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      status: COLLABORATOR_STATUS_ENUM.PENDING,
+      signingOrder: 1,
+    };
+    findSigners.mockResolvedValue([ana, invitation!.collaborator]);
+
+    await expect(useCase.execute(TOKEN, NOW)).resolves.toEqual({
+      status: SIGNING_INVITATION_STATUS_ENUM.WAITING_FOR_PREVIOUS_SIGNER,
+    });
+
+    ana.status = COLLABORATOR_STATUS_ENUM.SIGNED;
+    await expect(useCase.execute(TOKEN, NOW)).resolves.toEqual(
+      expect.objectContaining({
+        status: SIGNING_INVITATION_STATUS_ENUM.ACTIVE,
+      }),
+    );
+  });
 
   it('una invitación revocada y vencida se informa como revocada', async () => {
     invitation!.revokedAt = new Date('2026-10-20T00:00:00.000Z');

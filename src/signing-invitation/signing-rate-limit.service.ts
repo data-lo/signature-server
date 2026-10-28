@@ -41,6 +41,13 @@ export const INVITATION_ISSUE_DAILY: RateLimitRule = {
   windowSeconds: 24 * 60 * 60,
 };
 
+/** Accesos temporales del portal del tercero por firmante: diez cada 10 minutos. */
+export const LAUNCH_ISSUE: RateLimitRule = {
+  name: 'launch-issue',
+  limit: 10,
+  windowSeconds: 10 * 60,
+};
+
 /** 429 con un mensaje genérico; no dice qué límite se alcanzó ni sobre qué. */
 export class SigningRateLimitException extends HttpException {
   constructor() {

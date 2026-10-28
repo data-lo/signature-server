@@ -3,9 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { DocumentService } from '../document.service';
+import { collaboratorEmail } from '../utils/collaborator-display.util';
+import { isSignerTurn } from '../utils/next-signer.util';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import {
   DOCUMENT_SORT_FIELD_ENUM,
@@ -32,11 +35,33 @@ export interface DocumentSummary {
 }
 
 /** Un documento recién creado, con lo que ve quien lo creó por integración. */
+/**
+ * En qué punto está un firmante, visto desde fuera: `PENDING` si puede firmar ya,
+ * `WAITING_FOR_PREVIOUS_SIGNER` si el documento es secuencial y le falta la firma de alguien antes,
+ * o lo que ya respondió (`SIGNED`, `REJECTED`).
+ */
+export type CreatedDocumentParticipantStatus =
+  | 'PENDING'
+  | 'WAITING_FOR_PREVIOUS_SIGNER'
+  | 'SIGNED'
+  | 'REJECTED';
+
+/** Un firmante del documento creado: sin ids internos ni URLs de firma. */
+export interface CreatedDocumentParticipant {
+  email: string;
+  status: CreatedDocumentParticipantStatus;
+  signatureType: SIGNATURE_TYPE_ENUM | null;
+  /** Orden de firma, desde 1. */
+  order: number;
+}
+
 export interface CreatedDocumentSummary extends DocumentSummary {
   /** Correo del creador (`documents.created_by`). */
   creatorEmail: string;
   /** Firmantes y testigos; el aprobador, si lo hay, no cuenta. */
   participantsCount: number;
+  /** Firmantes, en orden de firma. */
+  participants: CreatedDocumentParticipant[];
 }
 
 /** Filtros, orden y paginación del listado por organización. */
@@ -71,6 +96,33 @@ export const MAX_DOCUMENTS_PAGE_SIZE = 100;
  * Devuelve resúmenes sin URL prefirmada y sin colaboradores: el archivo y los datos de los
  * participantes no viajan si nadie los pidió.
  */
+/**
+ * Estado externo de un firmante (ver `CreatedDocumentParticipantStatus`).
+ *
+ * @param document - Documento.
+ * @param signer - Firmante.
+ * @param signers - Firmantes del documento, para el turno.
+ * @returns Su estado.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * participantStatus(document, juan, [ana, juan]); // 'WAITING_FOR_PREVIOUS_SIGNER'
+ * ```
+ */
+export function participantStatus(
+  document: DocumentEntity,
+  signer: CollaboratorEntity,
+  signers: CollaboratorEntity[],
+): CreatedDocumentParticipantStatus {
+  if (signer.status === COLLABORATOR_STATUS_ENUM.SIGNED) return 'SIGNED';
+  if (signer.status === COLLABORATOR_STATUS_ENUM.REJECTED) return 'REJECTED';
+  return isSignerTurn(signer, signers, document.isSequential)
+    ? 'PENDING'
+    : 'WAITING_FOR_PREVIOUS_SIGNER';
+}
+
 @Injectable()
 export class DocumentReadService {
   constructor(
@@ -196,10 +248,22 @@ export class DocumentReadService {
     });
     const [summary] = await this.toSummaries([document]);
 
+    const signers = await this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
+      relations: { account: { user: true } },
+      order: { signingOrder: 'ASC' },
+    });
+
     return {
       ...summary,
       creatorEmail: document.requestedBy.email,
       participantsCount,
+      participants: signers.map((signer, index) => ({
+        email: collaboratorEmail(signer),
+        status: participantStatus(document, signer, signers),
+        signatureType: signer.signatureType ?? null,
+        order: (signer.signingOrder ?? index) + 1,
+      })),
     };
   }
 

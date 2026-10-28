@@ -83,6 +83,30 @@ export class IntegrationDocumentCreatorData {
   email: string;
 }
 
+/** Un firmante del documento creado. Sin ids internos ni URLs de firma. */
+export class IntegrationDocumentParticipantData {
+  @ApiProperty({ example: 'ana@correo.com' })
+  email: string;
+
+  @ApiProperty({
+    enum: ['PENDING', 'WAITING_FOR_PREVIOUS_SIGNER', 'SIGNED', 'REJECTED'],
+    example: 'PENDING',
+    description:
+      '`PENDING` si puede firmar ya; `WAITING_FOR_PREVIOUS_SIGNER` si el documento es secuencial y falta la firma de un firmante anterior',
+  })
+  status: string;
+
+  @ApiProperty({
+    enum: SIGNATURE_TYPE_ENUM,
+    nullable: true,
+    example: SIGNATURE_TYPE_ENUM.SIMPLE,
+  })
+  signatureType: SIGNATURE_TYPE_ENUM | null;
+
+  @ApiProperty({ example: 1, description: 'Orden de firma, desde 1' })
+  order: number;
+}
+
 /** Documento creado por `POST /integration/documents`. */
 export class IntegrationCreatedDocumentData {
   @ApiProperty({
@@ -126,6 +150,13 @@ export class IntegrationCreatedDocumentData {
     description: 'URL pública de consulta del documento (`PUBLIC_WEB_APP_URL`)',
   })
   publicUrl: string;
+
+  @ApiProperty({
+    type: [IntegrationDocumentParticipantData],
+    description:
+      'Firmantes en orden de firma. No incluye URLs de firma: cada uno recibe su invitación por correo, y el portal pide un acceso temporal con `POST /integration/documents/:documentId/signing-access`.',
+  })
+  participants: IntegrationDocumentParticipantData[];
 }
 
 export class IntegrationCreatedDocumentResponse extends BaseResponse<IntegrationCreatedDocumentData> {

@@ -33,6 +33,7 @@ import { DocumentEntity } from './../src/document/entities/document.entity';
 import { CreateIntegrationDocumentUseCase } from './../src/document/integration/applications/create-integration-document.use-case';
 import { ListOrganizationIntegrationDocumentsUseCase } from './../src/document/integration/applications/list-organization-integration-documents.use-case';
 import { ListUserIntegrationDocumentsUseCase } from './../src/document/integration/applications/list-user-integration-documents.use-case';
+import { IssueIntegrationSigningAccessUseCase } from './../src/document/integration/applications/issue-integration-signing-access.use-case';
 import { ResendIntegrationSigningInvitationUseCase } from './../src/document/integration/applications/resend-integration-signing-invitation.use-case';
 import { SigningInvitationDeliveryService } from './../src/signing-invitation/signing-invitation-delivery.service';
 import { INTEGRATION_API_KEY_SECURITY } from './../src/document/integration/docs/api-integration-documents-common.docs';
@@ -473,6 +474,8 @@ describe('API de integración de documentos (e2e)', () => {
         CreateIntegrationDocumentUseCase,
         // Real: la regla de qué se puede reenviar, contra la base. La emisión y el correo, dobles.
         ResendIntegrationSigningInvitationUseCase,
+        // La emisión de accesos temporales tiene su propia e2e (`signing-access-flow`).
+        { provide: IssueIntegrationSigningAccessUseCase, useValue: {} },
         {
           provide: SigningInvitationDeliveryService,
           useValue: {
@@ -1132,6 +1135,15 @@ describe('API de integración de documentos (e2e)', () => {
             creator: { email: 'ana@integration-e2e.test' },
             participantsCount: 2,
             publicUrl: `https://app.firmalo.test/public/documents/${response.body.data.id}`,
+            // Firmantes en orden, sin URLs de firma (el doble del flujo no guarda su tipo).
+            participants: [
+              {
+                email: 'luis@correo.test',
+                status: 'PENDING',
+                signatureType: null,
+                order: 1,
+              },
+            ],
           },
         });
       });

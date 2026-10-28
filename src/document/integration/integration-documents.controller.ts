@@ -37,7 +37,10 @@ import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { CreateIntegrationDocumentUseCase } from './applications/create-integration-document.use-case';
 import { ListOrganizationIntegrationDocumentsUseCase } from './applications/list-organization-integration-documents.use-case';
 import { ListUserIntegrationDocumentsUseCase } from './applications/list-user-integration-documents.use-case';
+import { IssueIntegrationSigningAccessUseCase } from './applications/issue-integration-signing-access.use-case';
 import { ResendIntegrationSigningInvitationUseCase } from './applications/resend-integration-signing-invitation.use-case';
+import { ApiCreateIntegrationSigningAccess } from './docs/api-create-integration-signing-access.docs';
+import { CreateIntegrationSigningAccessDto } from './dto/create-integration-signing-access.dto';
 import { ApiCreateIntegrationDocument } from './docs/api-create-integration-document.docs';
 import { ApiListOrganizationIntegrationDocuments } from './docs/api-list-organization-integration-documents.docs';
 import { ApiListUserIntegrationDocuments } from './docs/api-list-user-integration-documents.docs';
@@ -85,6 +88,7 @@ export class IntegrationDocumentsController {
     private readonly listUserIntegrationDocuments: ListUserIntegrationDocumentsUseCase,
     private readonly createIntegrationDocument: CreateIntegrationDocumentUseCase,
     private readonly resendSigningInvitation: ResendIntegrationSigningInvitationUseCase,
+    private readonly issueSigningAccess: IssueIntegrationSigningAccessUseCase,
   ) {}
 
   @Get('documents')
@@ -211,5 +215,33 @@ export class IntegrationDocumentsController {
       collaboratorId,
       { ipAddress: ip ?? null, userAgent: userAgent ?? null },
     );
+  }
+
+  @Post('documents/:documentId/signing-access')
+  @HttpCode(HttpStatus.OK)
+  @ApiCreateIntegrationSigningAccess()
+  @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.CREATE, [
+    PERMISSION_SCOPE_ENUM.ORGANIZATION,
+  ])
+  @UseInterceptors(RequestIpInterceptor)
+  createSigningAccess(
+    @CurrentApiClient() apiClient: IntegrationApiClient,
+    @Param(
+      'documentId',
+      new ParseUUIDPipe({
+        exceptionFactory: () => new IntegrationSignerNotFoundException(),
+      }),
+    )
+    documentId: string,
+    @Body() dto: CreateIntegrationSigningAccessDto,
+    @ClientIp() ip: string,
+    @Headers('user-agent') userAgent: string | undefined,
+    @Req() request: Request,
+  ) {
+    assertNoTenantOverrides(request);
+    return this.issueSigningAccess.execute(apiClient, documentId, dto.email, {
+      ipAddress: ip ?? null,
+      userAgent: userAgent ?? null,
+    });
   }
 }

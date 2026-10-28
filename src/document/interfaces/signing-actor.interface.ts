@@ -29,6 +29,13 @@ export interface AuthenticatedAccountSigningActor {
   authorization?: AuthorizationContext;
 }
 
+/**
+ * Por dónde llegó el firmante a su invitación: el enlace de su correo (`/sign/:token`) o el portal
+ * del tercero que creó el documento (`/sign/launch/:token`). No cambia nada de la firma; queda como
+ * evidencia.
+ */
+export type SigningAccessChannel = 'EMAIL' | 'THIRD_PARTY_PORTAL';
+
 /** Firmante de una invitación individual, con su correo verificado por código. */
 export interface PublicInvitationSigningActor {
   type: 'PUBLIC_INVITATION';
@@ -45,6 +52,8 @@ export interface PublicInvitationSigningActor {
   organizationId: string | null;
   /** Acceso de la sesión pública (`guest_signing_accesses`), que la firma consume. */
   sessionAccessId: string;
+  /** Por dónde llegó a la invitación. */
+  accessChannel: SigningAccessChannel;
   verifiedEmail: true;
 }
 

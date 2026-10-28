@@ -6,12 +6,16 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { AuditService } from 'src/audit/audit.service';
+import { AuditAction } from 'src/audit/schema/audit-document';
+import { GetBiometricSignatureStatusUseCase } from 'src/biometric-signature/applications/get-biometric-signature-status.use-case';
 import { BiometricSignatureSession } from 'src/biometric-signature/interfaces/biometric-signature-session.interface';
 import { StartBiometricSignatureDto } from 'src/biometric-signature/dto/start-biometric-signature.dto';
 import { StartGuestBiometricSignatureUseCase } from 'src/biometric-signature/applications/start-guest-biometric-signature.use-case';
 import {
   SignDocumentUseCase,
   SignedDocumentData,
+  toAuditActor,
 } from 'src/document/applications/sign-document.use-case';
 import { DocumentService } from 'src/document/document.service';
 import { GeolocationDto } from 'src/document/dto/sign-document.dto';
@@ -147,7 +151,37 @@ export class PublicSigningSessionUseCases {
     private readonly uploadSignatureImage: UploadSignatureImageUseCase,
     private readonly startGuestBiometric: StartGuestBiometricSignatureUseCase,
     private readonly idempotency: SigningIdempotencyService,
+    private readonly getBiometricStatus: GetBiometricSignatureStatusUseCase,
+    private readonly auditService: AuditService,
   ) {}
+
+  /**
+   * Estado del último intento biométrico del firmante de la sesión, para sondear el resultado de
+   * Didit sin token de invitado.
+   *
+   * @param session - Contexto del guard.
+   * @returns La sesión del último intento, o `null` si nunca inició una.
+   *
+   * @throws {BadRequestException} Si el firmante no es biométrico.
+   *
+   * @example
+   * ```ts
+   * const attempt = await sessions.biometricStatus(session);
+   * ```
+   */
+  biometricStatus(
+    session: PublicSigningSessionContext,
+  ): Promise<BiometricSignatureSession | null> {
+    if (session.collaborator.signatureType !== SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+      throw new BadRequestException(
+        'Este documento no se firma con biometría.',
+      );
+    }
+    return this.getBiometricStatus.forPublicSession(
+      session.document.id,
+      session.collaborator.id,
+    );
+  }
 
   /**
    * Contexto completo de la sesión: documento, firmante, tipo de firma con sus pasos y posiciones.
@@ -297,8 +331,9 @@ export class PublicSigningSessionUseCases {
       [signatureImage],
     );
 
-    return this.idempotency.run(
-      session.collaborator.id,
+    return this.runSigning(
+      session,
+      input.metadata,
       idempotencyKey,
       fingerprint,
       async () => {
@@ -364,8 +399,9 @@ export class PublicSigningSessionUseCases {
       [efirma.keyFile, efirma.cerFile],
     );
 
-    return this.idempotency.run(
-      session.collaborator.id,
+    return this.runSigning(
+      session,
+      input.metadata,
       idempotencyKey,
       fingerprint,
       () =>
@@ -411,26 +447,78 @@ export class PublicSigningSessionUseCases {
       geolocation: dto.geolocation,
     });
 
+    return this.runSigning(session, metadata, key, fingerprint, () => {
+      if (
+        session.collaborator.signatureType !== SIGNATURE_TYPE_ENUM.BIOMETRIC
+      ) {
+        throw new BadRequestException(
+          'Este documento no se firma con biometría.',
+        );
+      }
+      return this.startGuestBiometric.executeForPublicSession(
+        session.document.id,
+        session.collaborator.id,
+        dto,
+        metadata.ipAddress,
+      );
+    });
+  }
+
+  /**
+   * Ejecuta una firma una sola vez por `Idempotency-Key` y la audita: `SIGNING_STARTED` al
+   * intentarla y `SIGNING_FAILED` si falla (la firma exitosa ya la audita `SignDocumentUseCase`
+   * como `DOCUMENT_SIGNED`). Un reintento que devuelve la respuesta guardada no vuelve a auditar.
+   *
+   * @param session - Contexto del guard.
+   * @param metadata - IP y user-agent.
+   * @param idempotencyKey - Clave ya validada.
+   * @param fingerprint - Huella de la petición.
+   * @param operation - La firma.
+   * @returns Lo que devuelva la firma (o su respuesta guardada).
+   *
+   * @throws Lo que lance la firma, después de auditar el fallo.
+   *
+   * @example
+   * ```ts
+   * await this.runSigning(session, metadata, key, fingerprint, () => this.signDocument.sign(…));
+   * ```
+   */
+  private runSigning<T>(
+    session: PublicSigningSessionContext,
+    metadata: SigningRequestMetadata,
+    idempotencyKey: string,
+    fingerprint: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     return this.idempotency.run(
       session.collaborator.id,
-      key,
+      idempotencyKey,
       fingerprint,
-      () => {
-        if (
-          session.collaborator.signatureType !== SIGNATURE_TYPE_ENUM.BIOMETRIC
-        ) {
-          throw new BadRequestException(
-            'Este documento no se firma con biometría.',
-          );
+      async () => {
+        this.audit(session, metadata, AuditAction.SIGNING_STARTED, 'SUCCESS');
+        try {
+          return await operation();
+        } catch (error) {
+          this.audit(session, metadata, AuditAction.SIGNING_FAILED, 'FAILURE');
+          throw error;
         }
-        return this.startGuestBiometric.executeForPublicSession(
-          session.document.id,
-          session.collaborator.id,
-          dto,
-          metadata.ipAddress,
-        );
       },
     );
+  }
+
+  private audit(
+    session: PublicSigningSessionContext,
+    metadata: SigningRequestMetadata,
+    operation: AuditAction,
+    result: 'SUCCESS' | 'FAILURE',
+  ): void {
+    void this.auditService.create({
+      documentId: session.document.id,
+      operation,
+      ipAddress: metadata.ipAddress ?? '0.0.0.0',
+      actor: toAuditActor(session.actor, metadata.userAgent),
+      result,
+    });
   }
 
   /**

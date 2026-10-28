@@ -243,6 +243,7 @@ export class CreateIntegrationDocumentUseCase {
       creator: { email: document.creatorEmail },
       participantsCount: document.participantsCount,
       publicUrl: buildPublicDocumentUrl(document.id),
+      participants: document.participants,
     };
   }
 }

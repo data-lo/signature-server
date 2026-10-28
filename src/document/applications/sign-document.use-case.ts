@@ -159,6 +159,7 @@ export function toAuditActor(
     authMechanism: AUDIT_AUTH_MECHANISM_ENUM.PUBLIC_SIGNING_SESSION,
     invitationId: actor.invitationId,
     collaboratorId: actor.collaboratorId,
+    accessChannel: actor.accessChannel,
     ...base,
   };
 }

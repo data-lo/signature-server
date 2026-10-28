@@ -197,6 +197,9 @@ export class AuditService {
       case AuditAction.SIGNING_INVITATION_OTP_SENT:
       case AuditAction.SIGNING_INVITATION_OTP_VERIFIED:
       case AuditAction.SIGNING_INVITATION_ISSUED:
+      case AuditAction.SIGNING_LAUNCH_ISSUED:
+      case AuditAction.SIGNING_STARTED:
+      case AuditAction.SIGNING_FAILED:
         if (!payload.actor) {
           throw new Error(`actor es requerido para ${payload.operation}`);
         }

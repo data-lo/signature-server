@@ -6,7 +6,10 @@ import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status
 
 import { SIGNING_INVITATION_STATUS_ENUM } from '../enums/signing-invitation-status.enum';
 import { isPublicSigningAllowed } from 'src/signing-invitation/public-signing-eligibility';
-import { PublicSigningInvitationResolver } from '../services/public-signing-invitation-resolver.service';
+import {
+  PublicSigningInvitationResolver,
+  ResolvedSigningInvitation,
+} from '../services/public-signing-invitation-resolver.service';
 
 /**
  * Contexto mínimo de una invitación: lo necesario para que la pantalla decida qué mostrar antes
@@ -39,12 +42,59 @@ export interface SigningInvitationContext {
 }
 
 /**
- * `GET /public/signing-invitations/:token`: valida el token de `/sign/:token` y devuelve el
- * contexto mínimo, sin exponer el PDF.
+ * Contexto mínimo de una invitación ya resuelta: completo si está `ACTIVE`, sólo el estado si no.
+ * Lo comparten la consulta por token, los dos canjes (correo y portal del tercero) y la consulta
+ * con la cookie de acceso.
  *
- * Todo sale del backend: el documento, el firmante, su correo (enmascarado), su cuenta y el tipo
- * de firma. Una invitación vencida, revocada, de un documento firmado, cancelado o no disponible
- * responde sólo su estado, sin nombre del documento ni datos del firmante.
+ * @param resolved - Invitación con su estado.
+ * @returns El contexto.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * toSigningInvitationContext(resolved).status; // 'WAITING_FOR_PREVIOUS_SIGNER'
+ * ```
+ */
+export function toSigningInvitationContext({
+  invitation,
+  document,
+  collaborator,
+  status,
+}: ResolvedSigningInvitation): SigningInvitationContext {
+  if (status !== SIGNING_INVITATION_STATUS_ENUM.ACTIVE) return { status };
+
+  const summary = summarizeSigningInvitation(document, collaborator);
+  const accountStatus = collaborator.accountId
+    ? (collaborator.account?.user?.lifecycleStatus ??
+      USER_LIFECYCLE_STATUS_ENUM.ACTIVE)
+    : null;
+  const type = collaborator.signatureType!;
+
+  return {
+    status,
+    document: { name: summary.documentName },
+    signer: {
+      maskedEmail: summary.maskedEmail,
+      accountStatus,
+      publicSigningAllowed: isPublicSigningAllowed(collaborator),
+    },
+    signature: {
+      type,
+      requiresEmailVerification: true,
+      requiresIdentityValidation:
+        type === SIGNATURE_TYPE_ENUM.BIOMETRIC ||
+        (type === SIGNATURE_TYPE_ENUM.SIMPLE &&
+          accountStatus === USER_LIFECYCLE_STATUS_ENUM.PROVISIONED),
+    },
+    expiresAt: invitation.expiresAt.toISOString(),
+  };
+}
+
+/**
+ * `GET /public/signing-invitations/:token`: valida el token de `/sign/:token` y devuelve el
+ * contexto mínimo, sin exponer el PDF. No deja cookie: para pedir el código se canjea el token
+ * (`POST /public/signing-invitations/:token/access`).
  */
 @Injectable()
 export class GetSigningInvitationUseCase {
@@ -63,41 +113,12 @@ export class GetSigningInvitationUseCase {
    * @example
    * ```ts
    * const context = await getSigningInvitation.execute('q3Vb…');
-   * // { status: 'ACTIVE', document: { name }, signer: {…}, signature: {…}, expiresAt }
    * ```
    */
   async execute(
     token: string,
     now: Date = new Date(),
   ): Promise<SigningInvitationContext> {
-    const { invitation, document, collaborator, status } =
-      await this.resolver.resolve(token, now);
-    if (status !== SIGNING_INVITATION_STATUS_ENUM.ACTIVE) return { status };
-
-    const summary = summarizeSigningInvitation(document, collaborator);
-    const accountStatus = collaborator.accountId
-      ? (collaborator.account?.user?.lifecycleStatus ??
-        USER_LIFECYCLE_STATUS_ENUM.ACTIVE)
-      : null;
-    const type = collaborator.signatureType!;
-
-    return {
-      status,
-      document: { name: summary.documentName },
-      signer: {
-        maskedEmail: summary.maskedEmail,
-        accountStatus,
-        publicSigningAllowed: isPublicSigningAllowed(collaborator),
-      },
-      signature: {
-        type,
-        requiresEmailVerification: true,
-        requiresIdentityValidation:
-          type === SIGNATURE_TYPE_ENUM.BIOMETRIC ||
-          (type === SIGNATURE_TYPE_ENUM.SIMPLE &&
-            accountStatus === USER_LIFECYCLE_STATUS_ENUM.PROVISIONED),
-      },
-      expiresAt: invitation.expiresAt.toISOString(),
-    };
+    return toSigningInvitationContext(await this.resolver.resolve(token, now));
   }
 }

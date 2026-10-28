@@ -68,6 +68,8 @@ import { PublicBiometricSignatureController } from './public-biometric-signature
     ProcessBiometricSignatureResultUseCase,
     // Lo usa la sesión pública de firma (`PublicSigningModule`) para `current/biometric/sign`.
     StartGuestBiometricSignatureUseCase,
+    // Y para `current/biometric`: el estado del intento del firmante de la sesión.
+    GetBiometricSignatureStatusUseCase,
   ],
 })
 export class BiometricSignatureModule {}

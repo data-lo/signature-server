@@ -1,14 +1,36 @@
 import { createHash, randomBytes } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, IsNull, Repository } from 'typeorm';
+import { EntityManager, IsNull, MoreThan, Repository } from 'typeorm';
 
 import { buildSigningInvitationUrl } from 'src/document/utils/document-access-url.util';
 
 import { SigningInvitationEntity } from './entities/signing-invitation.entity';
 
-/** Vigencia por omisión de una invitación: 30 días. */
-export const DEFAULT_SIGNING_INVITATION_TTL_SECONDS = 30 * 24 * 60 * 60;
+/** Días que vale una invitación si `SIGNING_INVITATION_TTL_DAYS` no está configurada. */
+export const DEFAULT_SIGNING_INVITATION_TTL_DAYS = 7;
+
+/**
+ * Vigencia de una invitación, en segundos: `SIGNING_INVITATION_TTL_DAYS` (entero positivo) o, si
+ * falta o no es válida, `DEFAULT_SIGNING_INVITATION_TTL_DAYS`.
+ *
+ * @returns Segundos de vigencia.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * signingInvitationTtlSeconds(); // 604800 con el valor por omisión
+ * ```
+ */
+export function signingInvitationTtlSeconds(): number {
+  const configured = Number(process.env.SIGNING_INVITATION_TTL_DAYS);
+  const days =
+    Number.isInteger(configured) && configured > 0
+      ? configured
+      : DEFAULT_SIGNING_INVITATION_TTL_DAYS;
+  return days * 24 * 60 * 60;
+}
 
 /** Bytes aleatorios del token: 32 bytes son 43 caracteres base64url. */
 const TOKEN_BYTES = 32;
@@ -29,7 +51,7 @@ const INVITATION_RELATIONS = {
 export interface IssueSigningInvitationInput {
   documentId: string;
   collaboratorId: string;
-  /** Vigencia en segundos; por omisión `DEFAULT_SIGNING_INVITATION_TTL_SECONDS`. */
+  /** Vigencia en segundos; por omisión `signingInvitationTtlSeconds()`. */
   ttlSeconds?: number;
 }
 
@@ -115,8 +137,7 @@ export class SigningInvitationService {
       manager?.getRepository(SigningInvitationEntity) ??
       this.invitationRepository;
     const issuedAt = new Date();
-    const ttlSeconds =
-      input.ttlSeconds ?? DEFAULT_SIGNING_INVITATION_TTL_SECONDS;
+    const ttlSeconds = input.ttlSeconds ?? signingInvitationTtlSeconds();
 
     await repository.update(
       { collaboratorId: input.collaboratorId, revokedAt: IsNull() },
@@ -136,6 +157,38 @@ export class SigningInvitationService {
     );
 
     return { invitation, token, url: buildSigningInvitationUrl(token) };
+  }
+
+  /**
+   * Invitación vigente de un colaborador: la abierta si todavía no vence, o una nueva si no hay.
+   * La usa el acceso desde el portal del tercero, que necesita una invitación pero no un correo:
+   * emitirla no envía nada, y reutilizar la abierta no invalida el enlace que el firmante ya tiene.
+   *
+   * @param input - Documento y colaborador.
+   * @param now - Instante de referencia.
+   * @returns La invitación vigente (sin token: el de una reutilizada no se conoce).
+   *
+   * @throws {QueryFailedError} (23505) Si otra petición emitió una a la vez.
+   *
+   * @example
+   * ```ts
+   * const invitation = await invitations.ensureOpen({ documentId: 'd-1', collaboratorId: 'c-1' });
+   * ```
+   */
+  async ensureOpen(
+    input: { documentId: string; collaboratorId: string },
+    now: Date = new Date(),
+  ): Promise<SigningInvitationEntity> {
+    const open = await this.invitationRepository.findOne({
+      where: {
+        documentId: input.documentId,
+        collaboratorId: input.collaboratorId,
+        revokedAt: IsNull(),
+        expiresAt: MoreThan(now),
+      },
+    });
+    if (open) return open;
+    return (await this.issue(input)).invitation;
   }
 
   /**

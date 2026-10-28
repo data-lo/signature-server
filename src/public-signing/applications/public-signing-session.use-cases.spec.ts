@@ -22,6 +22,8 @@ describe('PublicSigningSessionUseCases', () => {
   let startDidit: { execute: jest.Mock };
   let uploadSignature: { execute: jest.Mock };
   let startBiometric: { executeForPublicSession: jest.Mock };
+  let biometricStatus: { forPublicSession: jest.Mock };
+  let audit: { create: jest.Mock };
   let useCases: PublicSigningSessionUseCases;
 
   beforeEach(() => {
@@ -34,6 +36,7 @@ describe('PublicSigningSessionUseCases', () => {
         accountId: 'acc-prov',
         organizationId: 'org-1',
         sessionAccessId: 'session-1',
+        accessChannel: 'EMAIL',
         verifiedEmail: true,
       },
       document: {
@@ -93,6 +96,8 @@ describe('PublicSigningSessionUseCases', () => {
     startBiometric = {
       executeForPublicSession: jest.fn(async () => ({ status: 'PENDING' })),
     };
+    biometricStatus = { forPublicSession: jest.fn(async () => null) };
+    audit = { create: jest.fn() };
 
     const store = new Map<string, string>();
     const redis = {
@@ -115,7 +120,43 @@ describe('PublicSigningSessionUseCases', () => {
       uploadSignature as never,
       startBiometric as never,
       new SigningIdempotencyService(redis),
+      biometricStatus as never,
+      audit as never,
     );
+  });
+
+  it('una firma se audita al iniciarla; si falla, también el fallo (con el actor y sin datos sensibles)', async () => {
+    signDocument.sign.mockRejectedValueOnce(new BadRequestException('no'));
+    session.collaborator.account!.user.signingCredentialStatus =
+      SIGNING_CREDENTIAL_STATUS_ENUM.CONFIGURED;
+
+    await expect(
+      useCases.signSimple(
+        session,
+        { documentHash: HASH, idempotencyKey: 'k-f', metadata: METADATA },
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(
+      audit.create.mock.calls.map(([payload]) => payload.operation),
+    ).toEqual(['SIGNING_STARTED', 'SIGNING_FAILED']);
+    expect(audit.create.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        result: 'FAILURE',
+        actor: expect.objectContaining({
+          type: 'PUBLIC_INVITATION',
+          collaboratorId: 'c-1',
+          accessChannel: 'EMAIL',
+        }),
+      }),
+    );
+  });
+
+  it('biometricStatus: el último intento del colaborador de la sesión', async () => {
+    session.collaborator.signatureType = SIGNATURE_TYPE_ENUM.BIOMETRIC;
+    await useCases.biometricStatus(session);
+    expect(biometricStatus.forPublicSession).toHaveBeenCalledWith('d-1', 'c-1');
   });
 
   it('current: contexto completo con posiciones y credencial de la firma simple', async () => {

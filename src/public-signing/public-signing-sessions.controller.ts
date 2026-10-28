@@ -24,6 +24,7 @@ import { CreateDiditSessionDto } from 'src/identity-verification/dto/create-didi
 import { PublicSigningSessionUseCases } from './applications/public-signing-session.use-cases';
 import { CurrentSigningSession } from './decorators/current-signing-session.decorator';
 import {
+  ApiGetCurrentBiometricSession,
   ApiGetCurrentSigningDocument,
   ApiGetCurrentSigningSession,
   ApiSignPublicAdvanced,
@@ -60,6 +61,14 @@ export class PublicSigningSessionsController {
   @ApiGetCurrentSigningDocument()
   document(@CurrentSigningSession() session: PublicSigningSessionContext) {
     return this.sessions.document(session);
+  }
+
+  @Get('biometric')
+  @ApiGetCurrentBiometricSession()
+  biometricStatus(
+    @CurrentSigningSession() session: PublicSigningSessionContext,
+  ) {
+    return this.sessions.biometricStatus(session);
   }
 
   @Post('simple/verify-identity')

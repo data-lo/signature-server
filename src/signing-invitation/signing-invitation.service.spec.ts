@@ -1,6 +1,6 @@
 import { IsNull } from 'typeorm';
 import {
-  DEFAULT_SIGNING_INVITATION_TTL_SECONDS,
+  DEFAULT_SIGNING_INVITATION_TTL_DAYS,
   hashSigningInvitationToken,
   isSigningInvitationTokenFormat,
   SigningInvitationService,
@@ -48,7 +48,7 @@ describe('SigningInvitationService', () => {
     expect(saved.tokenHash).toBe(hashSigningInvitationToken(issued.token));
     expect(JSON.stringify(saved)).not.toContain(issued.token);
     expect(saved.expiresAt.getTime() - saved.issuedAt.getTime()).toBe(
-      DEFAULT_SIGNING_INVITATION_TTL_SECONDS * 1000,
+      DEFAULT_SIGNING_INVITATION_TTL_DAYS * 24 * 60 * 60 * 1000,
     );
     // La revocación va antes de guardar la nueva: el índice parcial admite una sola abierta.
     expect(repository.update.mock.invocationCallOrder[0]).toBeLessThan(

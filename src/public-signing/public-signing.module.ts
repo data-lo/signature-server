@@ -14,17 +14,22 @@ import { GetSigningInvitationUseCase } from './applications/get-signing-invitati
 import { PublicSigningSessionUseCases } from './applications/public-signing-session.use-cases';
 import { SigningInvitationAccessUseCases } from './applications/signing-invitation-access.use-cases';
 import { PublicSigningSessionGuard } from './guards/public-signing-session.guard';
+import { SigningInvitationAccessGuard } from './guards/signing-invitation-access.guard';
 import { PublicSigningInvitationsController } from './public-signing-invitations.controller';
+import { PublicSigningLaunchesController } from './public-signing-launches.controller';
 import { PublicSigningSessionsController } from './public-signing-sessions.controller';
 import { PublicSigningInvitationResolver } from './services/public-signing-invitation-resolver.service';
 import { PublicSigningSessionTokenService } from './services/public-signing-session-token.service';
 import { SigningIdempotencyService } from './services/signing-idempotency.service';
+import { SigningInvitationAccessTokenService } from './services/signing-invitation-access-token.service';
 
 /**
  * Firma pública por invitación individual (`/sign/:token`): la audiencia del colaborador
  * invitado, sin JWT ni API key.
  *
- * - `PublicSigningInvitationsController`: el token de la invitación (validar, código, renovar).
+ * - `PublicSigningInvitationsController`: el token de la invitación del correo (consultar, canjear,
+ *   renovar) y, con la cookie de acceso que deja cualquier canje, el código del correo.
+ * - `PublicSigningLaunchesController`: el canje del acceso temporal del portal del tercero.
  * - `PublicSigningSessionsController`: la sesión abierta con el código, en cookie `HttpOnly`
  *   (`PublicSigningSessionGuard`).
  *
@@ -45,12 +50,15 @@ import { SigningIdempotencyService } from './services/signing-idempotency.servic
   ],
   controllers: [
     PublicSigningInvitationsController,
+    PublicSigningLaunchesController,
     PublicSigningSessionsController,
   ],
   providers: [
     PublicSigningInvitationResolver,
     PublicSigningSessionTokenService,
     PublicSigningSessionGuard,
+    SigningInvitationAccessTokenService,
+    SigningInvitationAccessGuard,
     SigningIdempotencyService,
     GetSigningInvitationUseCase,
     SigningInvitationAccessUseCases,

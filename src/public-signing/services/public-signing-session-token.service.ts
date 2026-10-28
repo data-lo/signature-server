@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 
 import { GuestSigningAccessEntity } from 'src/document/entities/guest-signing-access.entity';
 import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from 'src/document/enum/guest-signing-access-purpose.enum';
+import { SigningAccessChannel } from 'src/document/interfaces/signing-actor.interface';
 
 /** Lo que acredita el token de una sesión pública. El acceso tiene que seguir activo. */
 export interface PublicSigningSessionClaims {
@@ -13,6 +14,8 @@ export interface PublicSigningSessionClaims {
   invitationId: string;
   documentId: string;
   collaboratorId: string;
+  /** Por dónde llegó el firmante a su invitación. */
+  channel: SigningAccessChannel;
 }
 
 /**
@@ -43,18 +46,20 @@ export class PublicSigningSessionTokenService {
    *
    * @param access - Acceso `PUBLIC_SIGNING_SESSION`.
    * @param invitationId - Invitación que abrió la sesión.
+   * @param channel - Por dónde llegó el firmante (correo o portal del tercero).
    * @returns El token y cuándo vence.
    *
    * @throws Nada.
    *
    * @example
    * ```ts
-   * const { token, expiresAt } = tokens.issue(access, 'inv-1');
+   * const { token, expiresAt } = tokens.issue(access, 'inv-1', 'EMAIL');
    * ```
    */
   issue(
     access: GuestSigningAccessEntity,
     invitationId: string,
+    channel: SigningAccessChannel,
   ): { token: string; expiresAt: Date } {
     const expiresInSeconds = Math.max(
       1,
@@ -67,6 +72,7 @@ export class PublicSigningSessionTokenService {
         invitationId,
         documentId: access.documentId,
         collaboratorId: access.collaboratorId,
+        channel,
       },
       { jwtid: access.id, expiresIn: expiresInSeconds },
     );
@@ -95,6 +101,7 @@ export class PublicSigningSessionTokenService {
         invitationId?: string;
         documentId?: string;
         collaboratorId?: string;
+        channel?: string;
       }>(token);
       if (
         payload.purpose !==
@@ -111,6 +118,10 @@ export class PublicSigningSessionTokenService {
         invitationId: payload.invitationId,
         documentId: payload.documentId,
         collaboratorId: payload.collaboratorId,
+        channel:
+          payload.channel === 'THIRD_PARTY_PORTAL'
+            ? 'THIRD_PARTY_PORTAL'
+            : 'EMAIL',
       };
     } catch {
       return null;
