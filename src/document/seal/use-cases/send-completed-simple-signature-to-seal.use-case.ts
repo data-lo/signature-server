@@ -169,7 +169,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
         .leftJoinAndSelect('user.personalInformation', 'personalInformation')
         /**
          * Las llaves de la INE son `select: false` en la entidad: no viajan con la relación salvo que
-         * se pidan, y éste es uno de los dos únicos lugares que las piden.
+         * se pidan, y éste es uno de los pocos lugares que las piden (ver `PersonalInformationEntity`).
          */
         .addSelect([
           'personalInformation.frontImageKey',
