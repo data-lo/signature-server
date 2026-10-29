@@ -131,16 +131,9 @@ function sealNode(seal: AuditXmlSeal | null): XmlNode {
       { name: 'signatureHash', text: seal.signatureHash },
       { name: 'sealedAt', text: seal.sealedAt },
       /*
-       * La cadena canónica va como TEXTO UTF-8 escapado, nunca como Base64 ni como XML anidado:
-       * es la preimagen literal de `signatureHash`, y cualquier recodificación la volvería
-       * inservible para recomputar el hash (ver `SEAL_ARTIFACT_ENUM.CANONICAL`). Para verificarla
-       * hay que desescapar el contenido del nodo y sacarle sha256.
+       * La cadena canónica (`document_seals.canonical_payload`) no viaja en este XML a propósito:
+       * se descarga por separado como artefacto del sello (ver `SEAL_ARTIFACT_ENUM.CANONICAL`).
        */
-      {
-        name: 'canonicalPayload',
-        attributes: { encoding: 'utf-8', hashAlgorithm: 'sha256' },
-        text: seal.canonicalPayload,
-      },
       {
         name: 'timestampEvidence',
         attributes: {

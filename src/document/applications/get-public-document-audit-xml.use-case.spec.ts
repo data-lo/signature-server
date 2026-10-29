@@ -219,7 +219,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
     expect(xml).toContain('available="false"');
   });
 
-  it('incluye el sello con la cadena canónica como texto cuando el documento se selló', async () => {
+  it('incluye el sello sin la cadena canónica cuando el documento se selló', async () => {
     sealDocument.findByDocumentId.mockResolvedValue({
       signatureHash: 'hash-sello',
       canonicalPayload: '12|cadena||34|canonica',
@@ -233,7 +233,8 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
 
     const xml = (await useCase.execute(DOCUMENT_ID)).content.toString('utf-8');
 
-    expect(xml).toContain('>12|cadena||34|canonica</canonicalPayload>');
+    expect(xml).not.toContain('canonicalPayload');
+    expect(xml).not.toContain('12|cadena||34|canonica');
     expect(xml).toContain('>VFNS</timestampEvidence>');
     expect(xml).toContain('>Tk9NMTUx</nom151Evidence>');
     expect(xml).toContain('>hash-sello</signatureHash>');

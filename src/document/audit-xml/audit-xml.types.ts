@@ -29,13 +29,6 @@ export interface AuditXmlDocumentFile {
 export interface AuditXmlSeal {
   /** `document_seals.signature_hash`. */
   signatureHash: string | null;
-  /**
-   * `document_seals.canonical_payload`, TEXTO UTF-8 tal cual se selló.
-   *
-   * No es Base64 ni XML: es la preimagen literal del hash (ver `SEAL_ARTIFACT_ENUM.CANONICAL`).
-   * Viaja escapada dentro de su nodo y hay que desescaparla para recomputar el sha256.
-   */
-  canonicalPayload: string | null;
   /** `document_seals.timestamp_evidence.fileBase64` — TimeStampResp RFC 3161 en Base64. */
   timestampEvidenceBase64: string | null;
   /** `document_seals.integrity_evidence.fileBase64` — evidencia NOM-151 del PSC en Base64. */

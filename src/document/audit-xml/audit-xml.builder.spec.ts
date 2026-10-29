@@ -123,27 +123,55 @@ describe('buildDocumentAuditXml', () => {
     expect(xml).toContain('unavailableReason="El archivo no está disponible."');
   });
 
-  it('escribe la cadena canónica como texto UTF-8 escapado, no como Base64', () => {
-    const xml = buildDocumentAuditXml(
-      buildData({
-        seal: {
-          signatureHash: 'hash-sello',
-          canonicalPayload: '12|doc<uno> & "dos"||34|firma',
-          timestampEvidenceBase64: 'VFNS',
-          nom151EvidenceBase64: 'Tk9NMTUx',
-          nom151CertificatePdfBase64: 'UERG',
-          sealedAt: '2026-01-14T09:05:00.000Z',
-        },
-      }),
-    );
+  /**
+   * La sección `seal` es la misma para firma simple y avanzada, así que se prueba con los dos
+   * tipos de firmante: en ninguno debe aparecer la cadena canónica.
+   */
+  it.each([
+    ['simple', 'SIMPLE'],
+    ['avanzada', 'FIEL'],
+  ])(
+    'incluye la evidencia del sello sin la cadena canónica (firma %s)',
+    (_label, signatureType) => {
+      const xml = buildDocumentAuditXml(
+        buildData({
+          seal: {
+            signatureHash: 'hash-sello',
+            timestampEvidenceBase64: 'VFNS',
+            nom151EvidenceBase64: 'Tk9NMTUx',
+            nom151CertificatePdfBase64: 'UERG',
+            sealedAt: '2026-01-14T09:05:00.000Z',
+          },
+          signers: [
+            {
+              id: 'col-1',
+              email: 'firmante@example.com',
+              curp: 'CURP000000HDFABC01',
+              signedAt: '2026-01-14T08:00:00.000Z',
+              signatureType,
+              status: 'SIGNED',
+              ipAddress: '10.0.0.1',
+              geoLocation: null,
+              advancedSignature:
+                signatureType === 'FIEL' ? { algorithm: 'sha256' } : null,
+              simpleSignature:
+                signatureType === 'FIEL'
+                  ? null
+                  : { objectKey: 'rubrica.png', imageBase64: 'UE5H' },
+            },
+          ],
+        }),
+      );
 
-    expect(xml).toContain(
-      '<canonicalPayload encoding="utf-8" hashAlgorithm="sha256">12|doc&lt;uno&gt; &amp; &quot;dos&quot;||34|firma</canonicalPayload>',
-    );
-    expect(nodeText(xml, 'signatureHash')).toBe('hash-sello');
-    expect(nodeText(xml, 'timestampEvidence')).toBe('VFNS');
-    expect(nodeText(xml, 'nom151Evidence')).toBe('Tk9NMTUx');
-  });
+      expect(xml).toContain('<seal available="true">');
+      expect(xml).not.toContain('canonicalPayload');
+      expect(nodeText(xml, 'signatureHash')).toBe('hash-sello');
+      expect(nodeText(xml, 'sealedAt')).toBe('2026-01-14T09:05:00.000Z');
+      expect(nodeText(xml, 'timestampEvidence')).toBe('VFNS');
+      expect(nodeText(xml, 'nom151Evidence')).toBe('Tk9NMTUx');
+      expect(nodeText(xml, 'nom151Certificate')).toBe('UERG');
+    },
+  );
 
   it('declara el sello ausente cuando el documento no se selló', () => {
     const xml = buildDocumentAuditXml(buildData({ seal: null }));
