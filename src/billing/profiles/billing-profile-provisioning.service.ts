@@ -97,6 +97,97 @@ export class BillingProfileProvisioningService {
   }
 
   /**
+   * Crea el perfil de facturación de un propietario que se va a facturar A MANO, sin Stripe y sin
+   * créditos: nace `INCOMPLETE`, sin plan y con `billing_source = MANUAL`, a la espera del periodo
+   * que le registre `RegisterManualSubscriptionBillingUseCase` en la misma transacción.
+   *
+   * A diferencia de `provisionFreeProfile`, **no concede la bienvenida** ni apunta al plan Free: el
+   * saldo de este perfil es exactamente el que acredite el periodo manual. Tampoco es idempotente:
+   * si el propietario ya tiene perfil, la unicidad de `billing_profiles` lo rechaza, porque quien
+   * llama acaba de crear al propietario y un perfil previo sería un dato roto.
+   *
+   * @param manager - Transacción en curso.
+   * @param owner - Propietario facturable (en el aprovisionamiento, la organización).
+   * @returns El perfil creado.
+   *
+   * @throws {QueryFailedError} (23505) Si el propietario ya tiene perfil.
+   *
+   * @example
+   * ```ts
+   * const profile = await provisioning.createManualProfile(manager, {
+   *   personalAccountId: null, organizationId: 'org-1',
+   * });
+   * profile.status; // 'INCOMPLETE'
+   * ```
+   */
+  async createManualProfile(
+    manager: EntityManager,
+    owner: BillingOwner,
+  ): Promise<BillingProfileEntity> {
+    const profile = await manager.save(
+      manager.create(BillingProfileEntity, {
+        personalAccountId: owner.personalAccountId,
+        organizationId: owner.organizationId,
+        currentPlanType: null,
+        status: BILLING_PROFILE_STATUS_ENUM.INCOMPLETE,
+        billingSource: BILLING_PROFILE_SOURCE_ENUM.MANUAL,
+        // Explícitos: un perfil facturado a mano no tiene cliente ni suscripción en Stripe.
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+      }),
+    );
+
+    this.logger.log(
+      `Perfil de facturación manual ${profile.id} creado para ${describe(owner)}, sin créditos.`,
+    );
+
+    return profile;
+  }
+
+  /**
+   * Asegura que un plan exista en `plans` antes de facturarlo a mano, creándolo `MANUAL` (sin
+   * producto de Stripe) si falta. Si ya existe, no lo toca: ni su nombre, ni sus documentos, ni el
+   * vínculo con Stripe que le haya puesto `CatalogSyncService`.
+   *
+   * Hace falta porque `plans` se alimenta de Stripe y un entorno sin el producto sincronizado
+   * (desarrollo, pruebas) no tiene la fila; `billing_profiles.current_plan_type` es FK a ella. Si
+   * después llega el producto de Stripe con ese `planType`, la sincronización vincula ESTA fila en
+   * vez de crear otra, y como es `MANUAL` no le reescribe los beneficios. Mismo
+   * `ON CONFLICT DO NOTHING` que el plan Free, por la misma carrera entre dos altas.
+   *
+   * @param manager - Transacción en curso.
+   * @param plan - `planType`, nombre y documentos por periodo con los que se crearía.
+   * @returns Nada.
+   *
+   * @example
+   * ```ts
+   * await provisioning.ensureManualPlanExists(manager, {
+   *   planType: 'enterprise', name: 'Enterprise', documentsIncluded: 1,
+   * });
+   * ```
+   */
+  async ensureManualPlanExists(
+    manager: EntityManager,
+    plan: { planType: string; name: string; documentsIncluded: number },
+  ): Promise<void> {
+    await manager
+      .createQueryBuilder()
+      .insert()
+      .into(PlanEntity)
+      .values({
+        planType: plan.planType,
+        name: plan.name,
+        isActive: true,
+        creationSource: PLAN_CREATION_SOURCE_ENUM.MANUAL,
+        stripeProductId: null,
+        catalogItemId: null,
+        documentsIncluded: plan.documentsIncluded,
+      })
+      .orIgnore()
+      .execute();
+  }
+
+  /**
    * Concede el lote de bienvenida del plan gratuito.
    *
    * **Sólo se llama al CREAR el perfil**, nunca sobre uno que ya existía: el `return existing` de

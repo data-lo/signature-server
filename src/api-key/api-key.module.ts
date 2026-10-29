@@ -8,6 +8,7 @@ import { PermissionEntity } from 'src/roles/entities/permission.entity';
 import { ApiKeySecretService } from './api-key-secret.service';
 import { ApiKeyService } from './api-key.service';
 import { CreateOrganizationApiKeyUseCase } from './applications/create-organization-api-key.use-case';
+import { IssuePlatformApiKeyUseCase } from './applications/issue-platform-api-key.use-case';
 import { GetCurrentOrganizationApiKeyUseCase } from './applications/get-current-organization-api-key.use-case';
 import { ListOrganizationApiKeysUseCase } from './applications/list-organization-api-keys.use-case';
 import { RevokeOrganizationApiKeyUseCase } from './applications/revoke-organization-api-key.use-case';
@@ -32,7 +33,8 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
  * `OrganizationEntity` y `PermissionEntity` se registran para validar la organización y los
  * permisos sin importar `AccountModule` ni `RolesModule`; `AccountEntity`, para que
  * `OrganizationApiKeyGuard` compruebe que el actor de la llave sigue activo. Exporta el guard (y lo
- * que necesita para inyectarse) a los módulos que expongan la API de integración.
+ * que necesita para inyectarse) a los módulos que expongan la API de integración, y
+ * `IssuePlatformApiKeyUseCase` al aprovisionamiento interno, que emite llaves sin membresía.
  */
 @Module({
   imports: [
@@ -52,12 +54,14 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
     GetCurrentOrganizationApiKeyUseCase,
     RotateOrganizationApiKeyUseCase,
     RevokeOrganizationApiKeyUseCase,
+    IssuePlatformApiKeyUseCase,
     OrganizationApiKeyGuard,
     ApiKeyPermissionGuard,
   ],
   exports: [
     TypeOrmModule,
     ApiKeySecretService,
+    IssuePlatformApiKeyUseCase,
     OrganizationApiKeyGuard,
     ApiKeyPermissionGuard,
   ],

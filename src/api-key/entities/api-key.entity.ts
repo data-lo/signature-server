@@ -66,9 +66,13 @@ export class ApiKeyEntity {
   })
   organization: OrganizationEntity;
 
-  /** La membresía (`accounts.id`) que emitió la llave. */
-  @Column({ name: 'created_by_account_id', type: 'uuid' })
-  createdByAccountId: string;
+  /**
+   * La membresía (`accounts.id`) que emitió la llave, o `null` si la emitió la plataforma (el
+   * aprovisionamiento interno, `AddPlatformProvisioning1784300000086`). Una llave de plataforma no
+   * actúa en nombre de ninguna membresía: `OrganizationApiKeyGuard` la deja sin actor.
+   */
+  @Column({ name: 'created_by_account_id', type: 'uuid', nullable: true })
+  createdByAccountId: string | null;
 
   /**
    * `NO ACTION`: la membresía que emitió una llave no se puede borrar mientras la llave exista, para
@@ -76,13 +80,14 @@ export class ApiKeyEntity {
    * borrar la organización, la llave cae en la misma cascada.
    */
   @ManyToOne(() => AccountEntity, (account) => account.createdApiKeys, {
+    nullable: true,
     onDelete: 'NO ACTION',
   })
   @JoinColumn({
     name: 'created_by_account_id',
     foreignKeyConstraintName: 'FK_api_keys_created_by_account_id',
   })
-  createdByAccount: AccountEntity;
+  createdByAccount: AccountEntity | null;
 
   /** Identificador público y único de la llave; no contiene el secreto. */
   @Column({ name: 'public_id' })

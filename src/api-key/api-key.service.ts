@@ -4,6 +4,7 @@ import { DataSource, EntityManager, In, Repository } from 'typeorm';
 
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { PermissionEntity } from 'src/roles/entities/permission.entity';
+import { buildPermissionKey } from 'src/roles/permission-catalog.util';
 
 import { ApiKeyEntity } from './entities/api-key.entity';
 import { ApiKeyStatusEnum } from './enums/api-key-status.enum';
@@ -128,6 +129,49 @@ export class ApiKeyService {
       where: { id: In(permissionIds) },
       relations: { resource: true, action: true },
     });
+  }
+
+  /**
+   * Permisos del catálogo identificados por su clave derivada (`RECURSO.ACCION[_ALCANCE]`).
+   *
+   * Lee el catálogo completo y filtra en memoria: la clave no es una columna, se arma con
+   * `buildPermissionKey` a partir del recurso, la acción y el alcance, y el catálogo tiene unas
+   * decenas de filas.
+   *
+   * @param permissionKeys - Claves pedidas, p. ej. `DOCUMENT.CREATE`.
+   * @param manager - Transacción en curso, si la hay.
+   * @returns Los permisos que existan, con recurso y acción cargados; los que no, no vuelven.
+   *
+   * @example
+   * ```ts
+   * const permissions = await apiKeyService.findPermissionsByKeys(['DOCUMENT.CREATE']);
+   * ```
+   */
+  async findPermissionsByKeys(
+    permissionKeys: readonly string[],
+    manager?: EntityManager,
+  ): Promise<PermissionEntity[]> {
+    if (permissionKeys.length === 0) {
+      return [];
+    }
+
+    const wanted = new Set(permissionKeys);
+    const repository = manager
+      ? manager.getRepository(PermissionEntity)
+      : this.permissionRepository;
+    const catalog = await repository.find({
+      relations: { resource: true, action: true },
+    });
+
+    return catalog.filter((permission) =>
+      wanted.has(
+        buildPermissionKey(
+          permission.resource.key,
+          permission.action.key,
+          permission.scope,
+        ),
+      ),
+    );
   }
 
   /**

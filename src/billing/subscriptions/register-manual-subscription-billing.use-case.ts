@@ -1,13 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { InvalidBillingRegistrationException } from '../exceptions/billing.exceptions';
 import {
   RegisterSubscriptionBillingUseCase,
+  type RegisterSubscriptionBillingInput,
   type RegisterSubscriptionBillingResult,
 } from './register-subscription-billing.use-case';
+import { SubscriptionBillingHistoryEntity } from './subscription-billing-history.entity';
 
 export interface RegisterManualSubscriptionBillingInput {
   billingProfileId: string;
@@ -87,34 +89,89 @@ export class RegisterManualSubscriptionBillingUseCase {
   ): Promise<RegisterSubscriptionBillingResult> {
     await this.assertAuthorExists(input.createdByUserId);
 
-    const result = await this.registerSubscriptionBilling.execute({
-      billingProfileId: input.billingProfileId,
-      source: BILLING_SOURCE_ENUM.MANUAL,
-      planType: input.planType,
-      amount: input.amount,
-      currency: input.currency,
-      periodStart: input.periodStart,
-      periodEnd: input.periodEnd,
-      paidAt: input.paidAt ?? new Date(),
-      documentsGranted: input.documentsGranted ?? null,
-      externalReference: input.externalReference ?? null,
-      createdByUserId: input.createdByUserId ?? null,
-      notes: input.notes ?? null,
-      // Explícitos en `null`: heredar los del perfil atribuiría a Stripe un ingreso que no vio.
-      stripeCustomerId: null,
-      stripeSubscriptionId: null,
-      stripeInvoiceId: null,
-      stripePaymentIntentId: null,
-    });
+    const result = await this.registerSubscriptionBilling.execute(
+      toSubscriptionBillingInput(input),
+    );
+    this.warnIfAlreadyRegistered(input, result);
 
+    return result;
+  }
+
+  /**
+   * Registra el periodo manual dentro de la transacción del llamador, con las mismas reglas que
+   * `execute`.
+   *
+   * Para los flujos que crean el perfil y lo facturan en la misma operación (el aprovisionamiento
+   * interno): si algo posterior falla, el periodo y sus créditos se revierten con lo demás.
+   *
+   * @param manager - Transacción en curso.
+   * @param input - Periodo cobrado, plan concedido, importe y evidencia del cobro.
+   * @returns El periodo registrado, con `alreadyRegistered` en `true` si la referencia externa ya
+   *   estaba capturada en ese perfil.
+   *
+   * @throws {InvalidBillingRegistrationException} Cuando el autor no existe o el periodo no es
+   *   válido.
+   * @throws {BillingProfileNotFoundForRegistrationException} Cuando el perfil no existe.
+   * @throws {PlanNotFoundForRegistrationException} Cuando el plan no está en el catálogo.
+   *
+   * @example
+   * ```ts
+   * const { history } = await registerManual.executeWithin(manager, {
+   *   billingProfileId: profile.id, planType: 'enterprise', amount: 0, currency: 'mxn',
+   *   periodStart, periodEnd, documentsGranted: 1600, externalReference: 'PROVISION-ACME-TEST-001',
+   * });
+   * ```
+   */
+  async executeWithin(
+    manager: EntityManager,
+    input: RegisterManualSubscriptionBillingInput,
+  ): Promise<RegisterSubscriptionBillingResult> {
+    await this.assertAuthorExists(input.createdByUserId);
+
+    const result = await this.registerSubscriptionBilling.executeWithin(
+      manager,
+      toSubscriptionBillingInput(input),
+    );
+    this.warnIfAlreadyRegistered(input, result);
+
+    return result;
+  }
+
+  /**
+   * Busca un periodo manual por su referencia externa, en CUALQUIER perfil.
+   *
+   * La unicidad de la base (`UQ_subscription_billing_history_manual_reference`) es por perfil;
+   * esto sirve a quien necesita que el folio sea único en toda la plataforma (el aprovisionamiento
+   * interno, cuyo perfil siempre es nuevo y nunca chocaría contra ese índice).
+   *
+   * @param manager - Transacción en curso.
+   * @param externalReference - Folio buscado.
+   * @returns El periodo que ya usa ese folio, o `null`.
+   *
+   * @example
+   * ```ts
+   * const taken = await registerManual.findByExternalReference(manager, 'PROVISION-ACME-TEST-001');
+   * ```
+   */
+  findByExternalReference(
+    manager: EntityManager,
+    externalReference: string,
+  ): Promise<SubscriptionBillingHistoryEntity | null> {
+    return manager.getRepository(SubscriptionBillingHistoryEntity).findOne({
+      where: { source: BILLING_SOURCE_ENUM.MANUAL, externalReference },
+    });
+  }
+
+  private warnIfAlreadyRegistered(
+    input: RegisterManualSubscriptionBillingInput,
+    result: RegisterSubscriptionBillingResult,
+  ): void {
     if (result.alreadyRegistered) {
       this.logger.warn(
         `La referencia ${input.externalReference} ya estaba registrada en el perfil ` +
           `${input.billingProfileId} (periodo ${result.history.id}); no se acredita dos veces.`,
       );
     }
-
-    return result;
   }
 
   /**
@@ -147,4 +204,40 @@ export class RegisterManualSubscriptionBillingUseCase {
       );
     }
   }
+}
+
+/**
+ * Traduce un cobro manual a la entrada común de `RegisterSubscriptionBillingUseCase`: origen
+ * `MANUAL`, fecha de pago por omisión y los identificadores de Stripe explícitamente en `null`.
+ *
+ * @param input - Cobro manual.
+ * @returns La entrada del registro de periodos.
+ *
+ * @example
+ * ```ts
+ * toSubscriptionBillingInput({ billingProfileId: 'bp-1', planType: 'plus', amount: 0, currency: 'mxn', periodStart, periodEnd });
+ * ```
+ */
+function toSubscriptionBillingInput(
+  input: RegisterManualSubscriptionBillingInput,
+): RegisterSubscriptionBillingInput {
+  return {
+    billingProfileId: input.billingProfileId,
+    source: BILLING_SOURCE_ENUM.MANUAL,
+    planType: input.planType,
+    amount: input.amount,
+    currency: input.currency,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    paidAt: input.paidAt ?? new Date(),
+    documentsGranted: input.documentsGranted ?? null,
+    externalReference: input.externalReference ?? null,
+    createdByUserId: input.createdByUserId ?? null,
+    notes: input.notes ?? null,
+    // Explícitos en `null`: heredar los del perfil atribuiría a Stripe un ingreso que no vio.
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
+    stripeInvoiceId: null,
+    stripePaymentIntentId: null,
+  };
 }

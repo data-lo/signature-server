@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 
 // DTOs
 import { UpdateAccountDto } from './dto/update-account.dto';
@@ -505,6 +505,8 @@ export class AccountService {
    * fallar por algo ajeno a los datos del formulario —el RBAC sin sembrar—, y descubrirlo
    * después de insertar la organización sólo sirve para tener que deshacerla.
    *
+   * La escritura es la de `saveOrganizationWithOwnerAccountWithin`, en una transacción propia.
+   *
    * @param user - Usuario autenticado, que queda como propietario de la organización nueva.
    * @param dto - Datos de la organización: razón social, nombre y perfil opcional.
    * @returns La membresía recién creada, releída con sus relaciones.
@@ -533,38 +535,12 @@ export class AccountService {
     await queryRunner.startTransaction();
 
     try {
-      const organization = await queryRunner.manager.save(
-        queryRunner.manager.create(OrganizationEntity, {
-          name: dto.organizationName,
-          displayName: dto.name,
-          address: dto.address ?? null,
-          taxId: dto.taxId ?? null,
-          domainAllowed: dto.domainAllowed ?? null,
-          phoneNumber: dto.phoneNumber ?? null,
-          indexDocuments: dto.indexDocuments ?? true,
-        }),
+      const account = await this.saveOrganizationWithOwnerAccountWithin(
+        queryRunner.manager,
+        user,
+        dto,
+        ownerRole,
       );
-
-      const account = await queryRunner.manager.save(
-        queryRunner.manager.create(AccountEntity, {
-          userId: user.id,
-          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
-          organizationId: organization.id,
-          roleId: ownerRole.id,
-          status: ACCOUNT_STATUS_ENUM.ACTIVE,
-          email: user.email,
-          password: user.password,
-          isActive: true,
-          joinedAt: new Date(),
-        }),
-      );
-
-      /**
-       * Sin `billing_profile`, a propósito: la organización nace sin plan, sin plan Free y sin
-       * créditos de bienvenida. El perfil se crea cuando contrata (lo abre
-       * `CreateSubscriptionCheckoutUseCase`), y hasta entonces `GetBillingAccessUseCase` le
-       * responde todas las acciones en `false`.
-       */
       await queryRunner.commitTransaction();
 
       return this.findByIdOrFail(account.id);
@@ -574,6 +550,105 @@ export class AccountService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  /**
+   * Crea la organización (activa) y la membresía OWNER de `user` dentro de la transacción del
+   * llamador.
+   *
+   * Es el alta de `saveOrganizationWithOwnerAccount` sin la transacción propia, para los flujos que
+   * crean la organización junto con más cosas que deben confirmarse o revertirse con ella (el
+   * aprovisionamiento interno: usuario, organización, perfil de facturación, créditos y API key).
+   *
+   * **Sin `billing_profile`**, igual que el alta normal: la organización nace sin plan, sin plan
+   * Free y sin créditos de bienvenida. Quien necesite un plan lo registra después, en la misma
+   * transacción si quiere que vayan juntos.
+   *
+   * @param manager - Transacción en curso; si se revierte, no queda ni la organización ni la
+   *   membresía.
+   * @param user - Usuario que queda como propietario. Su `email`/`password` se copian a la
+   *   membresía (credencial única, decisión D6); un usuario `PROVISIONED` no tiene contraseña.
+   * @param dto - Datos de la organización: razón social, nombre y perfil opcional.
+   * @param ownerRole - Rol OWNER ya resuelto; si se omite, se resuelve aquí.
+   * @returns La membresía OWNER recién guardada, con su organización cargada.
+   *
+   * @throws {OrganizationOwnerAssignmentFailedException} (500) Si hay que resolver el rol OWNER y
+   *   no se puede.
+   * @throws {QueryFailedError} Si la base rechaza la organización o la membresía.
+   *
+   * @example
+   * ```ts
+   * const owner = await accountService.saveOrganizationWithOwnerAccountWithin(manager, user, {
+   *   name: 'Acme Pruebas',
+   *   organizationName: 'Acme Pruebas S.A. de C.V.',
+   * });
+   * owner.organization.isActive; // true
+   * ```
+   */
+  async saveOrganizationWithOwnerAccountWithin(
+    manager: EntityManager,
+    user: UserEntity,
+    dto: CreateOrganizationDto,
+    ownerRole?: RoleEntity,
+  ): Promise<AccountEntity> {
+    const role = ownerRole ?? (await this.resolveOwnerRoleOrFail());
+
+    const organization = await manager.save(
+      manager.create(OrganizationEntity, {
+        name: dto.organizationName,
+        displayName: dto.name,
+        address: dto.address ?? null,
+        taxId: dto.taxId ?? null,
+        domainAllowed: dto.domainAllowed ?? null,
+        phoneNumber: dto.phoneNumber ?? null,
+        indexDocuments: dto.indexDocuments ?? true,
+        isActive: true,
+      }),
+    );
+
+    const account = await manager.save(
+      manager.create(AccountEntity, {
+        userId: user.id,
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: organization.id,
+        roleId: role.id,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        email: user.email,
+        password: user.password,
+        isActive: true,
+        joinedAt: new Date(),
+      }),
+    );
+
+    /**
+     * Sin `billing_profile`, a propósito: la organización nace sin plan, sin plan Free y sin
+     * créditos de bienvenida. El perfil se crea cuando contrata (lo abre
+     * `CreateSubscriptionCheckoutUseCase`), y hasta entonces `GetBillingAccessUseCase` le
+     * responde todas las acciones en `false`.
+     */
+    account.organization = organization;
+    return account;
+  }
+
+  /**
+   * La cuenta PERSONAL de un usuario, dentro de la transacción del llamador.
+   *
+   * @param manager - Transacción en curso.
+   * @param userId - Usuario dueño.
+   * @returns Su cuenta personal, o `null` si no tiene (un dato roto: todo usuario nace con una).
+   *
+   * @example
+   * ```ts
+   * const personal = await accountService.findPersonalAccount(manager, 'user-1');
+   * ```
+   */
+  findPersonalAccount(
+    manager: EntityManager,
+    userId: string,
+  ): Promise<AccountEntity | null> {
+    return manager.getRepository(AccountEntity).findOne({
+      where: { userId, organizationId: IsNull() },
+    });
   }
 
   /**

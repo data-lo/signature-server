@@ -192,6 +192,29 @@ describe('OrganizationApiKeyGuard', () => {
     ).rejects.toBeInstanceOf(ApiKeyActorInactiveException);
   });
 
+  /**
+   * Las llaves del aprovisionamiento interno no las emite ninguna membresía. Sin este caso, el guard
+   * buscaría `accounts.id = null` y rechazaría con 403 una llave recién emitida.
+   */
+  it('autentica una llave emitida por la plataforma (sin emisor) y la deja sin actor', async () => {
+    apiKeyRepository.findOne.mockResolvedValue(
+      storedKey({ createdByAccountId: null }),
+    );
+
+    const { request, ctx } = context({ 'x-api-key': issued.key });
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+
+    expect(accountRepository.findOne).not.toHaveBeenCalled();
+    expect(request.apiClient).toEqual(
+      expect.objectContaining({
+        apiKeyId: 'key-1',
+        organizationId: 'org-1',
+        actorAccountId: null,
+        actorUserId: null,
+      }),
+    );
+  });
+
   it('sólo autentica: una llave válida pasa aunque no tenga el permiso del endpoint (eso es de ApiKeyPermissionGuard)', async () => {
     apiKeyRepository.findOne.mockResolvedValue(
       storedKey({

@@ -26,8 +26,11 @@ export interface ResolveIntegrationCreatorParams {
   email: string;
   firstName: string;
   lastName: string;
-  /** Usuario que emitió la llave: queda como actor del aviso de alta en la organización. */
-  actorUserId: string;
+  /**
+   * Usuario que emitió la llave: queda como actor del aviso de alta en la organización. `null` con
+   * una llave emitida por la plataforma, que no tiene emisor.
+   */
+  actorUserId: string | null;
 }
 
 /** Identidad de una persona a la que se puede aprovisionar un usuario. */
