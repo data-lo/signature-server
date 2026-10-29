@@ -1,6 +1,5 @@
 import { EntityManager } from 'typeorm';
 
-import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { PermissionEntity } from 'src/roles/entities/permission.entity';
 import {
   buildPermissionKey,
@@ -23,13 +22,13 @@ import {
   OrganizationApiKeyData,
 } from '../interfaces/response/organization-api-key-response';
 
-/** Quién opera y sobre qué organización: lo que resolvió `PermissionsGuard` más la ruta. */
+/** Quién opera y sobre qué organización. */
 export interface OrganizationApiKeyActor {
-  /** `:organizationId` de la ruta; el guard ya validó la membresía en ella. */
+  /** `:organizationId` de la ruta. */
   organizationId: string;
 
-  /** Contexto autorizado; su `accountId` es la membresía en esa organización. */
-  authorization: AuthorizationContext;
+  /** Cuenta que ejecuta la operación; `null` cuando la ejecuta la plataforma. */
+  accountId: string | null;
 }
 
 /**

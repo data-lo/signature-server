@@ -38,7 +38,7 @@ export class CreateOrganizationApiKeyUseCase {
   /**
    * Emite una llave `ACTIVE` y devuelve su secreto, por única vez.
    *
-   * @param actor - Organización de la ruta y contexto autorizado.
+   * @param actor - Organización de la ruta y cuenta que ejecuta la operación.
    * @param dto - Nombre, permisos y expiración opcional.
    * @returns La llave emitida, con `key` en claro.
    *
@@ -53,14 +53,14 @@ export class CreateOrganizationApiKeyUseCase {
    * @example
    * ```ts
    * const { data } = await createOrganizationApiKey.execute(
-   *   { organizationId: 'org-1', authorization },
+   *   { organizationId: 'org-1', accountId: 'acc-1' },
    *   { name: 'Integración ERP', permissionIds: ['perm-1'] },
    * );
    * data.key; // 'fma_live_…'
    * ```
    */
   async execute(
-    { organizationId, authorization }: OrganizationApiKeyActor,
+    { organizationId, accountId }: OrganizationApiKeyActor,
     dto: CreateOrganizationApiKeyDto,
   ): Promise<BaseResponse<IssuedOrganizationApiKeyData>> {
     const expiresAt = parseExpiresAt(dto.expiresAt, new Date());
@@ -92,7 +92,7 @@ export class CreateOrganizationApiKeyUseCase {
           this.apiKeySecretService,
           {
             organizationId,
-            createdByAccountId: authorization.accountId,
+            createdByAccountId: accountId,
             name: dto.name,
             permissions,
             expiresAt,

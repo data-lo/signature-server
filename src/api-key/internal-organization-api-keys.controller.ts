@@ -48,21 +48,29 @@ export class InternalOrganizationApiKeysController {
     @Body() dto: CreateOrganizationApiKeyDto,
   ) {
     return this.createOrganizationApiKey.execute(
-      { organizationId, createdByAccountId: null },
+      { organizationId, accountId: null },
       dto,
     );
   }
 
   @Get()
-  findAll(@Param('organizationId', new ParseUUIDPipe()) organizationId: string) {
-    return this.listOrganizationApiKeys.execute({ organizationId });
+  findAll(
+    @Param('organizationId', new ParseUUIDPipe()) organizationId: string,
+  ) {
+    return this.listOrganizationApiKeys.execute({
+      organizationId,
+      accountId: null,
+    });
   }
 
   @Get('current')
   findCurrent(
     @Param('organizationId', new ParseUUIDPipe()) organizationId: string,
   ) {
-    return this.getCurrentOrganizationApiKey.execute({ organizationId });
+    return this.getCurrentOrganizationApiKey.execute({
+      organizationId,
+      accountId: null,
+    });
   }
 
   @Post('rotate')
@@ -71,7 +79,7 @@ export class InternalOrganizationApiKeysController {
     @Body() dto: RotateOrganizationApiKeyDto,
   ) {
     return this.rotateOrganizationApiKey.execute(
-      { organizationId, createdByAccountId: null },
+      { organizationId, accountId: null },
       dto,
     );
   }
@@ -82,7 +90,7 @@ export class InternalOrganizationApiKeysController {
     @Param('apiKeyId', new ParseUUIDPipe()) apiKeyId: string,
   ) {
     return this.revokeOrganizationApiKey.execute(
-      { organizationId, createdByAccountId: null },
+      { organizationId, accountId: null },
       apiKeyId,
     );
   }

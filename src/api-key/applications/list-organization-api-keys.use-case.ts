@@ -29,7 +29,7 @@ export class ListOrganizationApiKeysUseCase {
    *
    * @example
    * ```ts
-   * const { data } = await listOrganizationApiKeys.execute({ organizationId: 'org-1', authorization });
+   * const { data } = await listOrganizationApiKeys.execute({ organizationId: 'org-1', accountId: 'acc-1' });
    * data.map((apiKey) => apiKey.status); // ['ACTIVE', 'REVOKED']
    * ```
    */
