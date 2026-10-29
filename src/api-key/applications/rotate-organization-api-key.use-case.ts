@@ -44,7 +44,7 @@ export class RotateOrganizationApiKeyUseCase {
   /**
    * Rota la llave vigente y devuelve el secreto de la nueva, por única vez.
    *
-   * @param actor - Organización de la ruta y contexto autorizado.
+   * @param actor - Organización de la ruta y cuenta que ejecuta la operación.
    * @param dto - Nombre, permisos y expiración de la llave nueva; todo opcional.
    * @returns La llave nueva, con `key` en claro.
    *
@@ -62,14 +62,14 @@ export class RotateOrganizationApiKeyUseCase {
    * @example
    * ```ts
    * const { data } = await rotateOrganizationApiKey.execute(
-   *   { organizationId: 'org-1', authorization },
+   *   { organizationId: 'org-1', accountId: 'acc-1' },
    *   { name: 'Integración ERP - llave 2027' },
    * );
    * data.key; // 'fma_live_…'
    * ```
    */
   async execute(
-    { organizationId, authorization }: OrganizationApiKeyActor,
+    { organizationId, accountId }: OrganizationApiKeyActor,
     dto: RotateOrganizationApiKeyDto = {},
   ): Promise<BaseResponse<IssuedOrganizationApiKeyData>> {
     const now = new Date();
@@ -120,7 +120,7 @@ export class RotateOrganizationApiKeyUseCase {
         await this.apiKeyService.markRevoked(
           manager,
           current.id,
-          authorization.accountId,
+          accountId,
           now,
         );
 
@@ -130,7 +130,7 @@ export class RotateOrganizationApiKeyUseCase {
           this.apiKeySecretService,
           {
             organizationId,
-            createdByAccountId: authorization.accountId,
+            createdByAccountId: accountId,
             name: dto.name ?? current.name,
             permissions,
             expiresAt,

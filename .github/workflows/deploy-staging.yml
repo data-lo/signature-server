@@ -1,0 +1,79 @@
+name: Deploy (Staging)
+
+on:
+  push:
+    branches:
+      - development
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: dataloplatforms/signature-server
+
+jobs:
+  test:
+    name: Test and build application
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Build application
+        run: npm run build
+
+  deploy:
+    name: Build, publish, and deploy
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and publish the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+      - name: Trigger Dokploy deployment
+        env:
+          DOKPLOY_STAGING_WEBHOOK: ${{ secrets.DOKPLOY_STAGING_WEBHOOK }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOKPLOY_STAGING_WEBHOOK" ]]; then
+            echo "DOKPLOY_STAGING_WEBHOOK is missing from the staging environment." >&2
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --request POST "$DOKPLOY_STAGING_WEBHOOK"

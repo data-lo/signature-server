@@ -1,11 +1,7 @@
 import { QueryFailedError } from 'typeorm';
 
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
-import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
 import { PermissionEntity } from 'src/roles/entities/permission.entity';
-import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
-import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
-import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
 import { ApiKeySecretService } from '../api-key-secret.service';
 import { ApiKeyService } from '../api-key.service';
@@ -30,22 +26,12 @@ import { RotateOrganizationApiKeyUseCase } from './rotate-organization-api-key.u
 const ORGANIZATION_ID = 'org-1';
 const FUTURE = '2999-01-01T00:00:00.000Z';
 
-function authorization(accountId = 'account-owner'): AuthorizationContext {
+function actor(
+  accountId: string | null = 'account-owner',
+): OrganizationApiKeyActor {
   return {
-    userId: `user-${accountId}`,
     organizationId: ORGANIZATION_ID,
     accountId,
-    roleId: 'role-owner',
-    resource: RESOURCE_KEY_ENUM.API_KEY,
-    action: ACTION_KEY_ENUM.MANAGE,
-    scopes: [PERMISSION_SCOPE_ENUM.ANY],
-  };
-}
-
-function actor(accountId?: string): OrganizationApiKeyActor {
-  return {
-    organizationId: ORGANIZATION_ID,
-    authorization: authorization(accountId),
   };
 }
 
@@ -174,6 +160,17 @@ describe('casos de uso de API keys de organización', () => {
         ],
       });
       expect(data).not.toHaveProperty('secretHash');
+    });
+
+    it('permite que la plataforma emita una llave sin cuenta emisora', async () => {
+      await useCase().execute(actor(null), {
+        name: 'Integración de plataforma',
+        permissionIds: [documentCreate.id],
+      });
+
+      expect(service.insertApiKey.mock.calls[0][1]).toMatchObject({
+        createdByAccountId: null,
+      });
     });
 
     it('responde 409 si la organización ya tiene una llave activa', async () => {
@@ -350,6 +347,20 @@ describe('casos de uso de API keys de organización', () => {
       });
     });
 
+    it('registra como plataforma la revocación y emisión internas', async () => {
+      await useCase().execute(actor(null));
+
+      expect(service.markRevoked).toHaveBeenCalledWith(
+        manager,
+        'key-1',
+        null,
+        expect.any(Date),
+      );
+      expect(service.insertApiKey.mock.calls[0][1]).toMatchObject({
+        createdByAccountId: null,
+      });
+    });
+
     it('vuelve a validar los permisos heredados contra la política', async () => {
       service.findApiKey.mockResolvedValue(
         apiKey({ permissions: [memberInvite] }),
@@ -426,6 +437,26 @@ describe('casos de uso de API keys de organización', () => {
 
       expect(service.markRevoked).not.toHaveBeenCalled();
       expect(data?.revokedByAccountId).toBe('account-owner');
+    });
+
+    it('permite que la plataforma revoque una llave sin cuenta autora', async () => {
+      service.lockApiKey.mockResolvedValue(apiKey());
+      service.findApiKey.mockResolvedValue(
+        apiKey({
+          status: ApiKeyStatusEnum.REVOKED,
+          revokedAt: new Date(),
+          revokedByAccountId: null,
+        }),
+      );
+
+      await useCase().execute(actor(null), 'key-1');
+
+      expect(service.markRevoked).toHaveBeenCalledWith(
+        manager,
+        'key-1',
+        null,
+        expect.any(Date),
+      );
     });
 
     it('responde 404 si la llave no es de la organización', async () => {

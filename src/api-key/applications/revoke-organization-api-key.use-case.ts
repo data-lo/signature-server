@@ -31,7 +31,7 @@ export class RevokeOrganizationApiKeyUseCase {
   /**
    * Revoca una llave de la organización.
    *
-   * @param actor - Organización de la ruta y contexto autorizado.
+   * @param actor - Organización de la ruta y cuenta que ejecuta la operación.
    * @param apiKeyId - Llave a revocar.
    * @returns La llave revocada.
    *
@@ -42,14 +42,14 @@ export class RevokeOrganizationApiKeyUseCase {
    * @example
    * ```ts
    * const { data } = await revokeOrganizationApiKey.execute(
-   *   { organizationId: 'org-1', authorization },
+   *   { organizationId: 'org-1', accountId: 'acc-1' },
    *   'key-1',
    * );
    * data.status; // 'REVOKED'
    * ```
    */
   async execute(
-    { organizationId, authorization }: OrganizationApiKeyActor,
+    { organizationId, accountId }: OrganizationApiKeyActor,
     apiKeyId: string,
   ): Promise<BaseResponse<OrganizationApiKeyData>> {
     const data = await this.apiKeyService.transaction(async (manager) => {
@@ -75,7 +75,7 @@ export class RevokeOrganizationApiKeyUseCase {
         await this.apiKeyService.markRevoked(
           manager,
           apiKey.id,
-          authorization.accountId,
+          accountId,
           new Date(),
         );
       }

@@ -63,7 +63,7 @@ export class OrganizationApiKeysController {
     @Body() dto: CreateOrganizationApiKeyDto,
   ) {
     return this.createOrganizationApiKey.execute(
-      { organizationId, authorization },
+      { organizationId, accountId: authorization.accountId },
       dto,
     );
   }
@@ -77,7 +77,7 @@ export class OrganizationApiKeysController {
   ) {
     return this.listOrganizationApiKeys.execute({
       organizationId,
-      authorization,
+      accountId: authorization.accountId,
     });
   }
 
@@ -90,7 +90,7 @@ export class OrganizationApiKeysController {
   ) {
     return this.getCurrentOrganizationApiKey.execute({
       organizationId,
-      authorization,
+      accountId: authorization.accountId,
     });
   }
 
@@ -103,7 +103,7 @@ export class OrganizationApiKeysController {
     @Body() dto: RotateOrganizationApiKeyDto,
   ) {
     return this.rotateOrganizationApiKey.execute(
-      { organizationId, authorization },
+      { organizationId, accountId: authorization.accountId },
       dto,
     );
   }
@@ -124,7 +124,7 @@ export class OrganizationApiKeysController {
     @CurrentAuthorization() authorization: AuthorizationContext,
   ) {
     return this.revokeOrganizationApiKey.execute(
-      { organizationId, authorization },
+      { organizationId, accountId: authorization.accountId },
       apiKeyId,
     );
   }

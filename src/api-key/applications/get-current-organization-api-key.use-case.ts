@@ -34,7 +34,7 @@ export class GetCurrentOrganizationApiKeyUseCase {
    *
    * @example
    * ```ts
-   * const { data } = await getCurrentOrganizationApiKey.execute({ organizationId: 'org-1', authorization });
+   * const { data } = await getCurrentOrganizationApiKey.execute({ organizationId: 'org-1', accountId: 'acc-1' });
    * data.prefix; // 'fma_live_3f9a0c1b2d4e5f60'
    * ```
    */
