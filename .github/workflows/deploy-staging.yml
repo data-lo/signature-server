@@ -35,6 +35,9 @@ jobs:
       - name: Run linter
         run: npm run lint
 
+      # - name: Run tests
+      #   run: npm test -- --runInBand --no-watchman
+
       - name: Build application
         run: npm run build
 
@@ -62,6 +65,8 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64
+          no-cache: false
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
