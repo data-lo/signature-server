@@ -29,13 +29,6 @@ export interface AuditXmlDocumentFile {
 export interface AuditXmlSeal {
   /** `document_seals.signature_hash`. */
   signatureHash: string | null;
-  /**
-   * `document_seals.canonical_payload`, TEXTO UTF-8 tal cual se selló.
-   *
-   * No es Base64 ni XML: es la preimagen literal del hash (ver `SEAL_ARTIFACT_ENUM.CANONICAL`).
-   * Viaja escapada dentro de su nodo y hay que desescaparla para recomputar el sha256.
-   */
-  canonicalPayload: string | null;
   /** `document_seals.timestamp_evidence.fileBase64` — TimeStampResp RFC 3161 en Base64. */
   timestampEvidenceBase64: string | null;
   /** `document_seals.integrity_evidence.fileBase64` — evidencia NOM-151 del PSC en Base64. */
@@ -46,13 +39,34 @@ export interface AuditXmlSeal {
   sealedAt: string | null;
 }
 
-/** Rúbrica estampada por un firmante de firma simple. */
+/**
+ * Una cara de la INE del firmante, tal como Didit la entregó al verificar su identidad.
+ *
+ * No lleva la llave de MinIO: a diferencia de la rúbrica, la ubicación de un documento de identidad
+ * es un dato sensible y no se publica.
+ */
+export interface AuditXmlIdentityDocumentImage {
+  /**
+   * Tipo MIME detectado por los bytes del archivo (`image/jpeg`, `image/png` o `image/webp`).
+   * `null` cuando la imagen no está disponible: no se inventa un tipo para un contenido que no hay.
+   */
+  mimeType: string | null;
+  /** Contenido en Base64, sin prefijo `data:`. `null` cuando Didit no entregó esta cara. */
+  contentBase64: string | null;
+  unavailableReason?: string;
+}
+
+/** Evidencia de un firmante de firma simple: la rúbrica que estampó y la INE que verificó Didit. */
 export interface AuditXmlSimpleSignature {
   /** `collaborators.signature_snapshot_object_key`, o la firma vigente del perfil como respaldo. */
   objectKey: string | null;
   /** PNG en Base64. `null` cuando el firmante no tiene rúbrica registrada. */
   imageBase64: string | null;
   unavailableReason?: string;
+  /** Anverso de la INE (`personal_information.front_image_key`). */
+  identityDocumentFrontImage: AuditXmlIdentityDocumentImage;
+  /** Reverso de la INE (`personal_information.back_image_key`). */
+  identityDocumentBackImage: AuditXmlIdentityDocumentImage;
 }
 
 /** Un firmante del documento con toda su evidencia de auditoría. */
