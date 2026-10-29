@@ -1,5 +1,12 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsString, ValidateIf } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsBoolean,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  ValidateIf,
+} from 'class-validator';
 import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
 
 export class CreateAccountDto {
@@ -31,4 +38,36 @@ export class CreateAccountDto {
   @IsString()
   @IsNotEmpty()
   organizationName?: string;
+
+  @ApiPropertyOptional({ example: 'Av. Reforma 123, CDMX' })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional({
+    example: 'ACM010101AAA',
+    description: 'Identificador fiscal de la organización (en México, su RFC)',
+  })
+  @IsOptional()
+  @IsString()
+  taxId?: string;
+
+  @ApiPropertyOptional({ example: 'acme.com' })
+  @IsOptional()
+  @IsString()
+  domainAllowed?: string;
+
+  @ApiPropertyOptional({ example: '5512345678' })
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Sólo en organizaciones: si sus documentos pueden entrar a Búsqueda Inteligente',
+  })
+  @IsOptional()
+  @IsBoolean()
+  indexDocuments?: boolean;
 }

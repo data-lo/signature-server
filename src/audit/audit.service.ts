@@ -1,9 +1,14 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
-import { AuditDocument, AuditAction } from './schema/audit-document';
-import { HashService } from '../shared/hash/hash.service';
+import {
+  AuditActorContext,
+  AuditDocument,
+  AuditEvidence,
+  AuditAction,
+} from './schema/audit-document';
+import { HashService } from '../common/hash/hash.service';
 
 export interface AuditQuery {
   id?: string;
@@ -20,6 +25,33 @@ export interface AuditPayload {
   users?: { userId: string; action: AuditAction }[];
   verificationCodeId?: string;
   signedAt?: Date;
+  geolocation?: { latitude: number; longitude: number; accuracy?: number };
+  /** Tipo de firma del firmante (`SIMPLE`, `FIEL`, `BIOMETRIC`); sólo en `DOCUMENT_SIGNED`. */
+  signatureType?: string;
+  /**
+   * Cómo acreditó el firmante su identidad (`ACCOUNT_SESSION` o `GUEST_EMAIL_OTP`); sólo en
+   * `DOCUMENT_SIGNED`. Distingue en la bitácora una firma con cuenta de una sin cuenta.
+   */
+  signingAuthorization?: string;
+  /** Quién hizo la operación, con qué mecanismo y desde qué cliente. Sin tokens ni secretos. */
+  actor?: AuditActorContext;
+  /** `SUCCESS` o `FAILURE`, en las operaciones que pueden fallar después de intentarse. */
+  result?: 'SUCCESS' | 'FAILURE';
+  /** Evidencia de la validación o de la firma: hashes, ids y códigos, nunca datos sensibles. */
+  evidence?: AuditEvidence;
+}
+
+/**
+ * Forma con la que sale un registro de Mongo vía `.lean()`: el contenido del evento va cifrado
+ * en `cipher` y los hashes viajan en claro para poder verificar la cadena sin descifrar nada.
+ */
+export interface AuditRecord {
+  cipher: string;
+  integrityHash: string;
+  chainHash: string;
+  chainIndex: number;
+  createdAt?: Date;
+  [key: string]: any;
 }
 
 @Injectable()
@@ -50,7 +82,8 @@ export class AuditService {
       const recordData = { ...payload, chainIndex };
 
       // Hash unidireccional del contenido del registro (integridad del propio registro)
-      const integrityHash = await this.hashService.generateRegistryHash(recordData);
+      const integrityHash =
+        await this.hashService.generateRegistryHash(recordData);
 
       // Contenido encadenado: incluye integrityHash y el chainHash previo para encadenamiento
       const chainContent = {
@@ -72,156 +105,75 @@ export class AuditService {
         cipher,
       });
     } catch (error) {
-      this.logger.error(`[AuditService.create] Error registrando auditoría para documentId=${payload.documentId}: ${error}`);
+      this.logger.error(
+        `[AuditService.create] Error registrando auditoría para documentId=${payload.documentId}: ${error}`,
+      );
     }
   }
 
   /**
-   * Retorna todos los registros de auditoría de un documento ordenados por chainIndex ASC.
-   * Descifra el cipher de cada registro para exponer el contenido original verificable.
+   * Registros de un documento, en orden de encadenamiento. Devuelve la lista cruda (cifrada):
+   * quién puede leerla y qué se hace si está vacía lo decide el caso de uso.
    */
-  async findOne(documentId: string) {
-    const records = await this.auditModel
+  async findByDocumentId(documentId: string): Promise<AuditRecord[]> {
+    return this.auditModel
       .find({ documentId })
       .sort({ chainIndex: 1 })
-      .lean();
+      .lean() as unknown as Promise<AuditRecord[]>;
+  }
 
-    if (!records.length) {
-      throw new NotFoundException(`No se encontraron registros de auditoría para el documento ${documentId}`);
-    }
-
-    return Promise.all(
-      records.map(async (record) => {
-        try {
-          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
-          return {
-            ...decryptedContent,
-            integrityHash: record.integrityHash,
-            chainHash: record.chainHash,
-            chainIndex: record.chainIndex,
-          };
-        } catch {
-          return record;
-        }
-      }),
-    );
+  /** Un registro por su `_id` de Mongo, o `null` si no existe. */
+  async findById(id: string): Promise<AuditRecord | null> {
+    return this.auditModel
+      .findById(id)
+      .lean() as unknown as Promise<AuditRecord | null>;
   }
 
   /**
-   * Igual que findAll pero descifra el cipher de cada registro antes de retornarlo.
-   * Permite leer el contenido original de los registros de auditoría almacenados cifrados.
+   * Página de registros más recientes primero, junto con el total que cumple el filtro. El
+   * filtro y el tamaño de página los arma quien llama: acá sólo se ejecuta la consulta.
    */
-  async findAllDecrypted(query: AuditQuery) {
-    const { dateFrom, dateTo } = query;
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
-
-    const filter: Record<string, any> = {};
-
-    if (dateFrom || dateTo) {
-      filter.createdAt = {};
-      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) filter.createdAt.$lte = new Date(dateTo);
-    }
-
-    const skip = (page - 1) * limit;
-
+  async findPage(
+    filter: Record<string, any>,
+    skip: number,
+    limit: number,
+  ): Promise<[AuditRecord[], number]> {
     const [records, total] = await Promise.all([
-      this.auditModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      this.auditModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       this.auditModel.countDocuments(filter),
     ]);
 
-    const data = await Promise.all(
-      records.map(async (record) => {
-        try {
-          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
-          return {
-            ...decryptedContent,
-            integrityHash: record.integrityHash,
-            chainHash: record.chainHash,
-            chainIndex: record.chainIndex,
-            createdAt: record['createdAt'],
-          };
-        } catch {
-          return record;
-        }
-      }),
-    );
-
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return [records as unknown as AuditRecord[], total];
   }
 
   /**
-   * Retorna registros de auditoría descifrados con soporte de filtros y paginación.
-   * Cada registro se descifra usando reverseCiperHash antes de ser retornado.
+   * Descifra el `cipher` de un registro y le vuelve a pegar los hashes de integridad, que son
+   * justamente lo que permite verificar el contenido descifrado desde afuera.
+   *
+   * Si el descifrado falla se devuelve el registro tal cual está guardado, en vez de propagar
+   * el error: un registro ilegible —clave rotada, dato corrupto— no debe hacer desaparecer de
+   * la respuesta a los demás registros de la misma consulta, que sí son verificables.
    */
-  async findAll(query: AuditQuery) {
-    const { id, dateFrom, dateTo } = query;
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
+  async decrypt(record: AuditRecord): Promise<Record<string, any>> {
+    try {
+      const decryptedContent = await this.hashService.reverseCiperHash(
+        record.cipher,
+      );
 
-    if (id) {
-      const record = await this.auditModel.findById(id).lean();
-      if (!record) throw new NotFoundException(`Registro de auditoría ${id} no encontrado`);
-      try {
-        const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
-        return {
-          ...decryptedContent,
-          integrityHash: record.integrityHash,
-          chainHash: record.chainHash,
-          chainIndex: record.chainIndex,
-          createdAt: record['createdAt'],
-        };
-      } catch {
-        return record;
-      }
+      return {
+        ...decryptedContent,
+        integrityHash: record.integrityHash,
+        chainHash: record.chainHash,
+        chainIndex: record.chainIndex,
+      };
+    } catch {
+      return record;
     }
-
-    const filter: Record<string, any> = {};
-
-    if (dateFrom || dateTo) {
-      filter.createdAt = {};
-      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) filter.createdAt.$lte = new Date(dateTo);
-    }
-
-    const skip = (page - 1) * limit;
-
-    const [records, total] = await Promise.all([
-      this.auditModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      this.auditModel.countDocuments(filter),
-    ]);
-
-    const data = await Promise.all(
-      records.map(async (record) => {
-        try {
-          const decryptedContent = await this.hashService.reverseCiperHash(record.cipher);
-          return {
-            ...decryptedContent,
-            integrityHash: record.integrityHash,
-            chainHash: record.chainHash,
-            chainIndex: record.chainIndex,
-            createdAt: record['createdAt'],
-          };
-        } catch {
-          return record;
-        }
-      }),
-    );
-
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
   }
 
   /**
@@ -240,8 +192,23 @@ export class AuditService {
         }
         break;
 
+      case AuditAction.DOCUMENT_CANCELLATION_REQUESTED:
       case AuditAction.DOCUMENT_CANCELLED:
       case AuditAction.DOCUMENT_REJECTED:
+        break;
+
+      case AuditAction.SIGNING_INVITATION_OTP_SENT:
+      case AuditAction.SIGNING_INVITATION_OTP_VERIFIED:
+      case AuditAction.SIGNING_INVITATION_ISSUED:
+      case AuditAction.SIGNING_LAUNCH_ISSUED:
+      case AuditAction.SIGNING_STARTED:
+      case AuditAction.SIGNING_FAILED:
+      case AuditAction.IDENTITY_VERIFICATION_STARTED:
+      case AuditAction.IDENTITY_VERIFICATION_CHECKED:
+      case AuditAction.CERTIFICATE_VALIDATION_FAILED:
+        if (!payload.actor) {
+          throw new Error(`actor es requerido para ${payload.operation}`);
+        }
         break;
     }
   }

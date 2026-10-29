@@ -2,6 +2,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsDefined,
+  IsEmail,
   IsOptional,
   IsUUID,
   ValidateNested,
@@ -36,16 +38,61 @@ export class CreateDocumentDto {
   @ApiPropertyOptional({
     example: ['b2c3d4e5-f6a7-8901-bcde-f12345678901'],
     description:
-      'UUIDs de los usuarios que solo observarán el estado del documento (espectadores)',
+      'UUIDs de los usuarios de la plataforma que serán testigos del documento (witnesses): reciben copia y pueden consultarlo, pero no firman. Se llamaba `watcherIds`.',
     type: [String],
   })
   @Transform(parseJsonArray)
   @IsArray()
   @IsOptional()
   @IsUUID('4', { each: true })
-  spectatorIds?: string[];
+  witnessIds?: string[];
 
+  @ApiPropertyOptional({
+    example: ['invitado@correo.com'],
+    description:
+      'Correos de personas sin cuenta en la plataforma, invitadas como testigos (witnesses). Se llamaba `watcherEmails`.',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @IsOptional()
+  @IsEmail({}, { each: true })
+  witnessEmails?: string[];
+
+  @ApiPropertyOptional({
+    example: ['c3d4e5f6-a7b8-9012-cdef-123456789012'],
+    description:
+      'UUIDs de los usuarios de la plataforma que revisarán el documento (reviewers), sin bloquear el flujo de firma todavía',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @IsOptional()
+  @IsUUID('4', { each: true })
+  reviewerIds?: string[];
+
+  @ApiPropertyOptional({
+    example: ['revisor@correo.com'],
+    description:
+      'Correos de personas sin cuenta en la plataforma, invitadas a revisar (reviewers)',
+    type: [String],
+  })
+  @Transform(parseJsonArray)
+  @IsArray()
+  @IsOptional()
+  @IsEmail({}, { each: true })
+  reviewerEmails?: string[];
+
+  /**
+   * Obligatorio desde la historia "Hacer obligatorias las coordenadas de posición de firma". Antes
+   * era opcional y, sin él, `CreateDocumentUseCase` estampaba en `DEFAULT_COORDINATES`: una
+   * posición que nadie eligió.
+   */
   @ApiProperty({ type: SignatureCoordinatesDto })
+  @IsDefined({
+    message:
+      'Es obligatorio indicar la ubicación de la firma (signatureCoordinates)',
+  })
   @ValidateNested()
   @Type(() => SignatureCoordinatesDto)
   @Transform(({ value }) => {
@@ -59,7 +106,6 @@ export class CreateDocumentDto {
     }
     return plainToInstance(SignatureCoordinatesDto, parsed);
   })
-  @IsOptional()
   signatureCoordinates: SignatureCoordinatesDto;
 
   @ApiProperty({

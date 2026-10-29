@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { describe, beforeEach, it } from 'node:test';
 
 describe('AppController', () => {
   let appController: AppController;
@@ -16,18 +15,12 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('devuelve el estado del andamiaje de la API', () => {
+      expect(appController.getHello()).toEqual({
+        status: 'online',
+        message: 'API de la plataforma de Signature',
+        version: '1.0.0',
+      });
     });
   });
 });
-function expect(received: any) {
-  return {
-    toBe: (expected: any) => {
-      if (received !== expected) {
-        throw new Error(`Expected ${expected}, but received ${received}`);
-      }
-    }
-  };
-}
-

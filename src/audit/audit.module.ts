@@ -3,8 +3,11 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { AuditService } from './audit.service';
 import { AuditController } from './audit.controller';
+import { GetDocumentAuditTrailUseCase } from './applications/get-document-audit-trail.use-case';
+import { GetDecryptedAuditRecordsUseCase } from './applications/get-decrypted-audit-records.use-case';
+import { GetAuditRecordsUseCase } from './applications/get-audit-records.use-case';
 import { AuditDocument, AuditSchema } from './schema/audit-document';
-import { SharedModule } from 'src/shared/shared.module';
+import { SharedModule } from 'src/common/shared.module';
 
 @Module({
   imports: [
@@ -14,7 +17,12 @@ import { SharedModule } from 'src/shared/shared.module';
     SharedModule,
   ],
   controllers: [AuditController],
-  providers: [AuditService],
+  providers: [
+    AuditService,
+    GetDocumentAuditTrailUseCase,
+    GetDecryptedAuditRecordsUseCase,
+    GetAuditRecordsUseCase,
+  ],
   exports: [AuditService],
 })
 export class AuditModule {}

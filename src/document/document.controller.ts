@@ -9,419 +9,478 @@ import {
   Delete,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   Query,
+  ParseEnumPipe,
+  Res,
+  Headers,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import {
-  ApiBearerAuth,
-  ApiBody,
-  ApiTags,
-  ApiQuery,
-  ApiParam,
-  ApiConsumes,
-  ApiResponse,
-  ApiOperation,
-  ApiExcludeEndpoint,
-} from '@nestjs/swagger';
+  FileInterceptor,
+  FileFieldsInterceptor,
+} from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 // DTOs
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import { RejectDocumentApprovalDto } from './dto/reject-document-approval.dto';
+import { VerifyCodeDto } from './dto/verify-code.dto';
+import { SignDocumentDto } from './dto/sign-document.dto';
+import { LinkDocumentCollaboratorDto } from './dto/link-document-collaborator.dto';
+import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
+import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
 
-// Services
-import { DocumentService } from './document.service';
+// Use cases
+import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
+import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
+import { ApiApproveDocument } from './docs/api-approve-document.docs';
+import { ApiRejectDocumentApproval } from './docs/api-reject-document-approval.docs';
+import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
+import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
+import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
+import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
+import { CreateDocumentUseCase } from './applications/create-document.use-case';
+import { GetDocumentsUseCase } from './applications/get-documents.use-case';
+import { GetDocumentUseCase } from './applications/get-document.use-case';
+import { SubmitDocumentForAuthorizationUseCase } from './applications/submit-document-for-authorization.use-case';
+import { SignDocumentUseCase } from './applications/sign-document.use-case';
+import { LinkDocumentCollaboratorUseCase } from './applications/link-document-collaborator.use-case';
+import { RequestDocumentVerificationCodeUseCase } from './applications/request-document-verification-code.use-case';
+import { VerifyDocumentCodeUseCase } from './applications/verify-document-code.use-case';
+import { RejectDocumentUseCase } from './applications/reject-document.use-case';
+import { SubmitDocumentForCancellationUseCase } from './applications/submit-document-for-cancellation.use-case';
+import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
+import { UpdateDocumentUseCase } from './applications/update-document.use-case';
+import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
+import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 
 // Enums
-import { DOCUMENT_STATUS_ENUM } from './enum/document-status.enum';
-import { IpInterceptor } from 'src/ip/ip.interceptor';
-import { ClientIp } from 'src/ip/ip.decorator';
+import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
+import { RequestIpInterceptor } from 'src/common/interceptors/request-ip.interceptor';
+import { ClientIp } from 'src/common/interceptors/request-ip.decorator';
 
 // Decorators
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
+import { ActiveAccountId } from 'src/auth/decorators/active-account-id.decorator';
+import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
+import { RequirePermission } from 'src/authorization/decorators/require-permission.decorator';
+import { CurrentAuthorization } from 'src/authorization/decorators/current-authorization.decorator';
+
+// Authorization
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 
 // Interfaces
-import {
-  BadRequestResponse,
-  NotFoundResponse,
-} from 'src/interfaces/api-response.dto';
-import { DocumentCreateResponse } from './interfaces/responses/document-create-response';
-import { DocumentGetListResponse } from './interfaces/responses/document-get-response';
-import { GetDocumentsQueryDto } from './dto/get-documents-query.dto';
-import { SignatureCoordinatesDto } from './dto/signature-coordinates.dto';
-import { DocumentUpdateResponse } from './interfaces/responses/document-update-response';
-import { SubmitForAuthorizationResponse } from './interfaces/responses/submit-for-authorization-response';
 import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 
+// Docs
+import { ApiGetDocumentFileUrl } from './docs/api-get-document-file-url.docs';
+import { ApiGetPublicDocument } from './docs/api-get-public-document.docs';
+import { ApiGetPublicAdvancedSignature } from './docs/api-get-public-advanced-signature.docs';
+import { ApiCreateDocument } from './docs/api-create-document.docs';
+import { ApiGetDocuments } from './docs/api-get-documents.docs';
+import { ApiGetDocument } from './docs/api-get-document.docs';
+import { ApiSubmitDocumentForAuthorization } from './docs/api-submit-document-for-authorization.docs';
+import { ApiSignDocument } from './docs/api-sign-document.docs';
+import { ApiLinkDocumentCollaborator } from './docs/api-link-document-collaborator.docs';
+import { ApiRequestVerificationCode } from './docs/api-request-verification-code.docs';
+import { ApiVerifyDocumentCode } from './docs/api-verify-document-code.docs';
+import { ApiRejectDocument } from './docs/api-reject-document.docs';
+import { ApiSubmitDocumentForCancellation } from './docs/api-submit-document-for-cancellation.docs';
+import { ApiConfirmDocumentCancellation } from './docs/api-confirm-document-cancellation.docs';
+import { ApiUpdateDocument } from './docs/api-update-document.docs';
+import { ApiDeleteDocument } from './docs/api-delete-document.docs';
+import { ApiArchiveDocument } from './docs/api-archive-document.docs';
+import { ApiRestoreArchivedDocument } from './docs/api-restore-archived-document.docs';
+import { ApiGetPublicSealArtifact } from './docs/api-get-public-seal-artifact.docs';
+import { ApiGetPublicDocumentAuditXml } from './docs/api-get-public-document-audit-xml.docs';
+
+/**
+ * El controller sólo traduce HTTP: cada endpoint delega en un caso de uso de `applications/`.
+ */
 @ApiTags('Document')
 @ApiBearerAuth('access-token')
 @Controller('document')
 export class DocumentController {
-  constructor(private readonly documentService: DocumentService) {}
+  constructor(
+    private readonly getDocumentFileUrl: GetDocumentFileUrlUseCase,
+    private readonly getPublicDocument: GetPublicDocumentUseCase,
+    private readonly getPublicSealArtifactUseCase: GetPublicSealArtifactUseCase,
+    private readonly getPublicDocumentAuditXmlUseCase: GetPublicDocumentAuditXmlUseCase,
+    private readonly getPublicAdvancedSignature: GetPublicAdvancedSignatureUseCase,
+    private readonly createDocument: CreateDocumentUseCase,
+    private readonly getDocuments: GetDocumentsUseCase,
+    private readonly getDocument: GetDocumentUseCase,
+    private readonly submitForAuthorizationUseCase: SubmitDocumentForAuthorizationUseCase,
+    private readonly approveDocumentUseCase: ApproveDocumentUseCase,
+    private readonly rejectDocumentApprovalUseCase: RejectDocumentApprovalUseCase,
+    private readonly signDocument: SignDocumentUseCase,
+    private readonly linkDocumentCollaborator: LinkDocumentCollaboratorUseCase,
+    private readonly requestDocumentVerificationCode: RequestDocumentVerificationCodeUseCase,
+    private readonly verifyDocumentCode: VerifyDocumentCodeUseCase,
+    private readonly rejectDocument: RejectDocumentUseCase,
+    private readonly submitForCancellationUseCase: SubmitDocumentForCancellationUseCase,
+    private readonly confirmCancellationUseCase: ConfirmDocumentCancellationUseCase,
+    private readonly updateDocument: UpdateDocumentUseCase,
+    private readonly deleteDocument: DeleteDocumentUseCase,
+    private readonly archiveCompletedDocument: ArchiveCompletedDocumentUseCase,
+    private readonly restoreArchivedDocument: RestoreArchivedDocumentUseCase,
+  ) {}
 
+  /**
+   * Mismo permiso y misma Policy que `GET /document/:id`: el archivo se deja cargar exactamente
+   * cuando el detalle se deja ver.
+   */
   @Get('file/:id')
-  @ApiExcludeEndpoint()
+  @ApiGetDocumentFileUrl()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
   async getDocumentUrl(
-    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
+    @Query('download') download?: string,
   ) {
-    await this.documentService.assertUserHasAccess(id, user.sub);
-    return this.documentService.getDocumentMinioURL(id);
+    return this.getDocumentFileUrl.execute({
+      documentId: id,
+      authorization,
+      asAttachment: download === 'true',
+    });
+  }
+
+  @Get('public/:id')
+  @SkipJwtAuth()
+  @ApiGetPublicDocument()
+  async getPublicDocumentView(@Param('id') id: string) {
+    return this.getPublicDocument.execute(id);
+  }
+
+  @Get('public/:id/seal/:artifact')
+  @SkipJwtAuth()
+  @ApiGetPublicSealArtifact()
+  async getPublicSealArtifact(
+    @Param('id') id: string,
+    @Param('artifact', new ParseEnumPipe(SEAL_ARTIFACT_ENUM))
+    artifact: SEAL_ARTIFACT_ENUM,
+    @Res() response: Response,
+  ) {
+    const { content, contentType, fileName } =
+      await this.getPublicSealArtifactUseCase.execute(id, artifact);
+
+    response.setHeader('Content-Type', contentType);
+    // `attachment`: son evidencia para guardar y verificar por fuera (openssl ts, un visor de PDF),
+    // no algo que el navegador deba intentar renderizar dentro de la vista pública.
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`,
+    );
+    response.setHeader('Content-Length', String(content.length));
+    response.send(content);
+  }
+
+  /**
+   * Expediente de auditoría completo del documento, armado en el momento de la petición.
+   *
+   * Comparte la forma de respuesta con `getPublicSealArtifact` —un adjunto que el navegador guarda
+   * sin intentar renderizarlo— porque es lo mismo: evidencia para conservar y revisar por fuera.
+   * Lo que cambia es que aquí el archivo no está guardado en ningún lado, se genera al pedirlo.
+   */
+  @Get('public/:id/audit-xml')
+  @SkipJwtAuth()
+  @ApiGetPublicDocumentAuditXml()
+  async getPublicDocumentAuditXml(
+    @Param('id') id: string,
+    @Res() response: Response,
+  ) {
+    const { content, contentType, fileName } =
+      await this.getPublicDocumentAuditXmlUseCase.execute(id);
+
+    response.setHeader('Content-Type', contentType);
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`,
+    );
+    response.setHeader('Content-Length', String(content.length));
+    response.send(content);
+  }
+
+  @Get('public/:id/signatures/:collaboratorId')
+  @SkipJwtAuth()
+  @ApiGetPublicAdvancedSignature()
+  async getAdvancedSignature(
+    @Param('id') id: string,
+    @Param('collaboratorId') collaboratorId: string,
+  ) {
+    return this.getPublicAdvancedSignature.execute(id, collaboratorId);
   }
 
   @Post()
-  @ApiOperation({ summary: 'Registrar nuevo documento para firmar' })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({ type: CreateDocumentDto })
-  @ApiResponse({
-    status: 201,
-    description:
-      'Documento subido y registrado exitosamente en el sistema, pendiente de firma',
-    type: DocumentCreateResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description:
-      'Datos de entrada inválidos, formato de archivo no soportado o documento no proporcionado',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 404,
-    description:
-      'Algún firmante o espectador especificado no existe en el sistema',
-    type: NotFoundResponse,
-  })
-  @UseInterceptors(FileInterceptor('file'), IpInterceptor)
+  @ApiCreateDocument()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.CREATE)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES },
+    }),
+    RequestIpInterceptor,
+  )
   async create(
     @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
     @Body() createDocumentDto: CreateDocumentDto,
     @UploadedFile() file: Express.Multer.File,
     @ClientIp() ip: string,
   ) {
-    return await this.documentService.create(
+    return await this.createDocument.execute(
       user.sub,
+      accountId,
       createDocumentDto,
       file,
       ip,
     );
   }
 
+  /**
+   * El único listado de documentos. El controlador no interpreta nada: toma el usuario y la
+   * cuenta activa del contexto autenticado —nunca de la query— y le pasa al caso de uso los
+   * filtros ya validados por el DTO.
+   */
   @Get()
-  @ApiOperation({ summary: 'Consultar documentos con filtros opcionales' })
-  @ApiQuery({
-    name: 'id',
-    required: false,
-    description: 'UUID del documento',
-    format: 'uuid',
-  })
-  @ApiQuery({
-    name: 'participantEmail',
-    required: false,
-    description: 'Email de un participante (firmante o espectador)',
-  })
-  @ApiQuery({
-    name: 'email',
-    required: false,
-    description: 'Email del propietario o de cualquier participante',
-  })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: DOCUMENT_STATUS_ENUM,
-    description: 'Estatus del documento',
-  })
-  @ApiQuery({
-    name: 'dateFrom',
-    required: false,
-    description: 'Fecha de creación inicio (ISO 8601)',
-    example: '2024-01-01',
-  })
-  @ApiQuery({
-    name: 'dateTo',
-    required: false,
-    description: 'Fecha de creación fin (ISO 8601)',
-    example: '2024-12-31',
-  })
-  @ApiQuery({
-    name: 'signedDateFrom',
-    required: false,
-    description: 'Fecha de firma inicio (ISO 8601)',
-    example: '2024-01-01',
-  })
-  @ApiQuery({
-    name: 'signedDateTo',
-    required: false,
-    description: 'Fecha de firma fin (ISO 8601)',
-    example: '2024-12-31',
-  })
-  @ApiQuery({
-    name: 'fileName',
-    required: false,
-    description: 'Búsqueda parcial por nombre de archivo',
-  })
-  @ApiQuery({
-    name: 'participantName',
-    required: false,
-    description: 'Búsqueda parcial por nombre o correo de un firmante/espectador',
-  })
-  @ApiQuery({
-    name: 'myTurnOnly',
-    required: false,
-    description: 'Requiere participantEmail. Solo documentos donde te toca firmar ahora mismo',
-  })
-  @ApiQuery({
-    name: 'page',
-    required: false,
-    description: 'Página',
-    example: 1,
-  })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    description: 'Resultados por página',
-    example: 10,
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de documentos',
-    type: DocumentGetListResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Parámetros inválidos',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  findAll(@Query() query: GetDocumentsQueryDto) {
-    return this.documentService.findWithFilters(query);
+  @ApiGetDocuments()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
+  findAll(
+    @CurrentUser() user: JwtPayload,
+    @ActiveAccountId() accountId: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
+    @Query() query: GetDocumentsQueryDto,
+  ) {
+    return this.getDocuments.execute({
+      userId: user.sub,
+      accountId,
+      scopes: authorization.scopes,
+      filters: query,
+    });
   }
 
+  /**
+   * El guard sólo comprueba que el rol pueda leer documentos; cuáles de ellos lo decide
+   * `DocumentAuthorizationPolicy` dentro del caso de uso, con el documento ya cargado y contra
+   * los alcances que viajan en el contexto (`OWN`, `ORGANIZATION`).
+   */
   @Get(':id')
-  @ApiOperation({
-    summary: 'Obtener el detalle de un documento para la pantalla de firma',
-  })
-  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({
-    status: 200,
-    description: 'Detalle del documento obtenido correctamente',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'No tienes acceso a este documento',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Documento no encontrado',
-    type: NotFoundResponse,
-  })
-  findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.findDetailForUser(id, user.sub);
+  @ApiGetDocument()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
+  findOne(
+    @Param('id') id: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
+  ) {
+    return this.getDocument.execute({ documentId: id, authorization });
   }
 
   @Patch(':id/submit-for-authorization')
-  @ApiOperation({
-    summary:
-      'Enviar documento a autorización (notifica al primer firmante en turno)',
-  })
-  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({
-    status: 200,
-    description:
-      'Documento enviado a autorización exitosamente, firmante notificado por correo',
-    type: SubmitForAuthorizationResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'El documento no se encuentra en estatus CREATED',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El documento no pertenece al usuario autenticado',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Documento no encontrado',
-    type: NotFoundResponse,
-  })
+  @ApiSubmitDocumentForAuthorization()
   submitForAuthorization(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
   ) {
-    return this.documentService.submitForAuthorization(id, user.sub);
+    return this.submitForAuthorizationUseCase.execute(id, user.sub);
+  }
+
+  /**
+   * Decisión del reviewer sobre un documento que requiere aprobación (historia "Implementar flujo
+   * de aprobación previo al proceso de firma").
+   *
+   * Sin `@RequirePermission(DOCUMENT, APPROVE)`: ese permiso es lo que habilita a alguien a **ser
+   * elegido** aprobador, y ya se comprobó al crear el documento (ver `DocumentReviewerService`).
+   * Lo que autoriza esta petición concreta es ser el reviewer ASIGNADO a este documento, que es
+   * una pregunta sobre el recurso y no sobre el rol — por eso la resuelve el caso de uso, igual
+   * que hacen firmar y rechazar. Exigir además el permiso dejaría fuera al aprobador al que se lo
+   * quitaron después de asignárselo, con un documento atascado y nadie que pueda destrabarlo.
+   */
+  @Post(':documentId/approval/approve')
+  @ApiApproveDocument()
+  approveDocument(
+    @CurrentUser() user: JwtPayload,
+    @Param('documentId') documentId: string,
+  ) {
+    return this.approveDocumentUseCase.execute(documentId, user.sub);
+  }
+
+  @Post(':documentId/approval/reject')
+  @ApiRejectDocumentApproval()
+  rejectDocumentApproval(
+    @CurrentUser() user: JwtPayload,
+    @Param('documentId') documentId: string,
+    @Body() dto?: RejectDocumentApprovalDto,
+  ) {
+    return this.rejectDocumentApprovalUseCase.execute(
+      documentId,
+      user.sub,
+      dto?.resolutionNote,
+    );
   }
 
   @Patch(':id/sign')
-  @ApiOperation({
-    summary: 'Firmar el documento (solo si es tu turno como firmante)',
-  })
-  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Documento firmado correctamente' })
-  @ApiResponse({
-    status: 400,
-    description:
-      'El documento no se encuentra en estatus PENDING o ya respondiste',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'No eres firmante de este documento o no es tu turno',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Documento no encontrado',
-    type: NotFoundResponse,
-  })
-  sign(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.sign(id, user.sub);
+  @ApiSignDocument()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.SIGN)
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'key', maxCount: 1 },
+        { name: 'cer', maxCount: 1 },
+      ],
+      { limits: { fileSize: MAX_UPLOAD_SAFETY_NET_BYTES } },
+    ),
+  )
+  sign(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: SignDocumentDto,
+    @UploadedFiles()
+    files: { key?: Express.Multer.File[]; cer?: Express.Multer.File[] },
+    @CurrentAuthorization() authorization: AuthorizationContext,
+    @ClientIp() ipAddress: string,
+    @Headers('user-agent') userAgent: string | undefined,
+  ) {
+    return this.signDocument.execute(
+      id,
+      user.sub,
+      {
+        password: dto?.password,
+        keyFile: files?.key?.[0],
+        cerFile: files?.cer?.[0],
+      },
+      dto?.geolocation,
+      authorization,
+      ipAddress ?? null,
+      userAgent ?? null,
+    );
+  }
+
+  @Patch(':id/link-collaborator')
+  @ApiLinkDocumentCollaborator()
+  linkCollaborator(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto?: LinkDocumentCollaboratorDto,
+  ) {
+    return this.linkDocumentCollaborator.execute(
+      id,
+      user.sub,
+      dto?.collaboratorId,
+    );
+  }
+
+  @Post(':id/verification-codes')
+  @ApiRequestVerificationCode()
+  @UseInterceptors(RequestIpInterceptor)
+  requestVerificationCode(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @ClientIp() ip: string,
+  ) {
+    return this.requestDocumentVerificationCode.execute(id, user.sub, ip);
+  }
+
+  @Post(':id/verification-codes/verify')
+  @ApiVerifyDocumentCode()
+  verifyCode(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: VerifyCodeDto,
+  ) {
+    return this.verifyDocumentCode.execute(id, user.sub, dto.code);
   }
 
   @Patch(':id/reject')
-  @ApiOperation({
-    summary:
-      'Rechazar el documento con un motivo (solo si es tu turno como firmante)',
-  })
-  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiBody({ type: RejectDocumentDto })
-  @ApiResponse({
-    status: 200,
-    description: 'Documento rechazado correctamente',
-  })
-  @ApiResponse({
-    status: 400,
-    description:
-      'El documento no se encuentra en estatus PENDING o ya respondiste',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'No eres firmante de este documento o no es tu turno',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Documento no encontrado',
-    type: NotFoundResponse,
-  })
+  @ApiRejectDocument()
   reject(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: RejectDocumentDto,
   ) {
-    return this.documentService.reject(id, user.sub, dto.reason);
+    return this.rejectDocument.execute(id, user.sub, dto.reason);
   }
 
   @Patch(':id/submit-for-cancellation')
-  @ApiOperation({ summary: 'Enviar documento a cancelación' })
-  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({
-    status: 200,
-    description:
-      'Solicitud de cancelación enviada exitosamente, firmantes notificados por correo',
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'El documento no se encuentra en estatus SIGNED',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Documento no encontrado',
-    type: NotFoundResponse,
-  })
-  submitForCancellation(@Param('id') id: string) {
-    return this.documentService.requestCancellation(id);
+  @ApiSubmitDocumentForCancellation()
+  submitForCancellation(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.submitForCancellationUseCase.execute(id, user.sub);
+  }
+
+  @Patch(':id/confirm-cancellation')
+  @ApiConfirmDocumentCancellation()
+  confirmCancellation(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.confirmCancellationUseCase.execute(id, user.sub);
+  }
+
+  /**
+   * Va ANTES de `@Patch(':id')`/`@Delete(':id')` por el mismo motivo que el resto de las rutas
+   * con sufijo: Nest resuelve por orden de declaración y `:id` sin sufijo casaría primero.
+   * `POST` y no `PATCH` porque no modifica el documento: crea (o renueva) la preferencia de
+   * archivado de quien llama.
+   *
+   * Mismo permiso y misma Policy que `GET /document/:id`: se archiva lo que se puede ver, con
+   * independencia de quién haya creado el documento (ver `ArchiveCompletedDocumentUseCase`).
+   */
+  @Post(':id/archive')
+  @ApiArchiveDocument()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
+  archive(
+    @Param('id') id: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
+  ) {
+    return this.archiveCompletedDocument.execute({
+      documentId: id,
+      authorization,
+    });
+  }
+
+  /**
+   * El inverso de `archive`: misma ruta, `DELETE` porque retira la marca de archivado de quien
+   * llama. Mismo permiso y misma Policy que archivar y que el detalle (ver
+   * `RestoreArchivedDocumentUseCase`).
+   *
+   * El usuario cuya preferencia se limpia sale del token (`user.sub`) y viaja explícito; el
+   * contexto autorizado sigue haciendo falta porque la Policy decide con sus alcances.
+   */
+  @Delete(':id/archive')
+  @ApiRestoreArchivedDocument()
+  @RequirePermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ)
+  restore(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @CurrentAuthorization() authorization: AuthorizationContext,
+  ) {
+    return this.restoreArchivedDocument.execute({
+      documentId: id,
+      userId: user.sub,
+      authorization,
+    });
   }
 
   @Patch(':id')
-  @ApiOperation({
-    summary: 'Actualizar campos del documento (solo en estatus CREATED)',
-  })
-  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiConsumes('application/json', 'multipart/form-data')
-  @ApiBody({ type: SignatureCoordinatesDto })
-  @ApiResponse({
-    status: 200,
-    description: 'Documento actualizado exitosamente',
-    type: DocumentUpdateResponse,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'El documento no se encuentra en estatus CREATED',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El documento no pertenece al usuario autenticado',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Documento no encontrado',
-    type: NotFoundResponse,
-  })
+  @ApiUpdateDocument()
   update(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() signatureCoordinatesDto: SignatureCoordinatesDto,
   ) {
-    return this.documentService.update(id, user.sub, signatureCoordinatesDto);
+    return this.updateDocument.execute(id, user.sub, signatureCoordinatesDto);
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Eliminar documento (solo estatus CREATED)' })
-  @ApiParam({ name: 'id', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({
-    status: 200,
-    description: 'Documento eliminado correctamente',
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'El documento no está en estatus CREATED',
-    type: BadRequestResponse,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Token de autenticación inválido, expirado o no proporcionado',
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'El documento no pertenece al usuario autenticado',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Documento no encontrado',
-    type: NotFoundResponse,
-  })
+  @ApiDeleteDocument()
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.documentService.remove(id, user.sub);
+    return this.deleteDocument.execute(id, user.sub);
   }
 }

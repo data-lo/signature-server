@@ -1,9 +1,13 @@
-import { UserEntity } from "src/user/entities/user.entity";
-import { Column, CreateDateColumn, Entity, JoinColumn, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity('signatures')
 export class SignatureEntity {
-
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -13,9 +17,6 @@ export class SignatureEntity {
   @Column({ nullable: true, name: 'official_card_object_key' })
   officialCardObjectKey: string | null;
 
-  @Column({ nullable: true, name: 'created_by' })
-  createdBy: string | null;
-
   @Column({ default: true, name: 'is_active' })
   isActive: boolean;
 
@@ -24,11 +25,4 @@ export class SignatureEntity {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
-
-  @Column({ nullable: false, name: 'user_id', unique: true })
-  userId: string;
-
-  @OneToOne(() => UserEntity)
-  @JoinColumn({ name: 'user_id' })
-  user: UserEntity;
 }

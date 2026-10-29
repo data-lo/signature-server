@@ -1,0 +1,241 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, IsNull, Repository } from 'typeorm';
+import { CheckoutOrderEntity } from './checkout-order.entity';
+import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
+import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
+
+/**
+ * Bitácora local de intentos de compra: una fila por sesión de Checkout abierta.
+ *
+ * Existe aparte de `billing_profiles` porque responde otra pregunta. El perfil dice en qué estado
+ * está la suscripción AHORA; esto dice qué se intentó comprar, cuándo, por cuánto y si llegó a
+ * completarse — incluyendo los intentos que el usuario abandonó, de los que el perfil no guarda
+ * ni rastro. Es lo que permite reconciliar contra Stripe y responder "¿por qué le cobraron?".
+ */
+@Injectable()
+export class CheckoutOrderService {
+  private readonly logger = new Logger(CheckoutOrderService.name);
+
+  constructor(
+    @InjectRepository(CheckoutOrderEntity)
+    private readonly checkoutOrderRepository: Repository<CheckoutOrderEntity>,
+  ) {}
+
+  /**
+   * Registra la orden PENDING recién abierta contra Stripe.
+   *
+   * Una orden siempre apunta a un único `catalog_price`; el item de esa oferta decide qué se
+   * compra, sin columnas polimórficas para plan y paquetes.
+   */
+  async registerPendingSubscription(input: {
+    billingProfileId: string;
+    catalogPriceId: string;
+    stripeCheckoutSessionId: string;
+    amount: number;
+    currency: string;
+  }): Promise<CheckoutOrderEntity> {
+    const order = await this.checkoutOrderRepository.save(
+      this.checkoutOrderRepository.create({
+        billingProfileId: input.billingProfileId,
+        catalogPriceId: input.catalogPriceId,
+        kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
+        stripeCheckoutSessionId: input.stripeCheckoutSessionId,
+        stripePaymentIntentId: null,
+        status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
+        amount: input.amount,
+        currency: input.currency,
+      }),
+    );
+
+    this.logger.log(
+      `Orden ${order.id} registrada como PENDING para el perfil ${input.billingProfileId}.`,
+    );
+
+    return order;
+  }
+
+  /**
+   * Registra la orden PENDING de una compra suelta de documentos.
+   *
+   * Es la misma tabla y el mismo ciclo que la suscripción; lo único que cambia es el `kind`, que
+   * es lo que después distingue qué hay que hacer al confirmarse el pago: una suscripción activa
+   * un plan, un ADD_ON acredita un lote de documentos y no toca el plan en absoluto.
+   *
+   * Se escribe ANTES de mandar al usuario a Stripe, a propósito: si se registrara al volver, un
+   * pago cuyo navegador nunca regresó —se cerró la pestaña— quedaría cobrado y sin rastro local
+   * que reconciliar.
+   *
+   * **`quantity` y `amount` llegan juntos y ya calculados**: la orden guarda la cantidad que validó
+   * el servidor y el importe TOTAL esperado (precio unitario del catálogo × `quantity`). Son los
+   * dos datos contra los que el webhook concilia lo que Stripe dice que se cobró antes de acreditar.
+   *
+   * @param input - Perfil que compra, oferta del catálogo, sesión de Stripe recién abierta,
+   *   unidades compradas e importe total esperado.
+   * @returns La orden registrada, en `PENDING`.
+   *
+   * @example
+   * ```ts
+   * await this.checkoutOrderService.registerPendingDocumentCredits({
+   *   billingProfileId: profile.id,
+   *   catalogPriceId: catalogPrice.id,
+   *   stripeCheckoutSessionId: sessionId,
+   *   quantity: 5,
+   *   amount: catalogPrice.amount * 5,
+   *   currency: catalogPrice.currency,
+   * });
+   * ```
+   */
+  async registerPendingDocumentCredits(input: {
+    billingProfileId: string;
+    catalogPriceId: string;
+    stripeCheckoutSessionId: string;
+    quantity: number;
+    amount: number;
+    currency: string;
+  }): Promise<CheckoutOrderEntity> {
+    const order = await this.checkoutOrderRepository.save(
+      this.checkoutOrderRepository.create({
+        billingProfileId: input.billingProfileId,
+        catalogPriceId: input.catalogPriceId,
+        kind: CHECKOUT_KIND_ENUM.ADD_ON,
+        stripeCheckoutSessionId: input.stripeCheckoutSessionId,
+        stripePaymentIntentId: null,
+        status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
+        quantity: input.quantity,
+        amount: input.amount,
+        currency: input.currency,
+      }),
+    );
+
+    this.logger.log(
+      `Orden de créditos ${order.id} registrada como PENDING para el perfil ${input.billingProfileId}: ` +
+        `${input.quantity} unidad(es) por ${input.amount} ${input.currency}.`,
+    );
+
+    return order;
+  }
+
+  /**
+   * Cierra la orden cuando Stripe confirma que la sesión se completó.
+   *
+   * Idempotente por diseño: el `WHERE` exige que siga en PENDING, así que una re-entrega del
+   * mismo `checkout.session.completed` no vuelve a mover `completed_at` (que dejaría de ser la
+   * fecha real del pago) ni los ids de Stripe ya grabados.
+   *
+   * No lanza si no encuentra la orden: la sesión puede haberse creado fuera de este flujo (una
+   * prueba desde el dashboard de Stripe, por ejemplo). El evento en sí sigue siendo válido y su
+   * efecto importante —vincular el perfil con el cliente y la suscripción— ya ocurrió.
+   */
+  async markCompleted(
+    input: {
+      stripeCheckoutSessionId: string;
+      stripePaymentIntentId: string | null;
+      stripeSubscriptionId: string | null;
+    },
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(CheckoutOrderEntity)
+      : this.checkoutOrderRepository;
+
+    const result = await repository.update(
+      {
+        stripeCheckoutSessionId: input.stripeCheckoutSessionId,
+        status: CHECKOUT_ORDER_STATUS_ENUM.PENDING,
+      },
+      {
+        status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
+        completedAt: new Date(),
+        stripePaymentIntentId: input.stripePaymentIntentId,
+        stripeSubscriptionId: input.stripeSubscriptionId,
+      },
+    );
+
+    if (!result.affected) {
+      this.logger.warn(
+        `checkout.session.completed para la sesión ${input.stripeCheckoutSessionId} sin ninguna ` +
+          'orden PENDING que cerrar (ya cerrada por una entrega anterior, o abierta fuera de este flujo).',
+      );
+    }
+  }
+
+  /**
+   * Conecta la orden de alta con el slot que la primera factura de la suscripción emitió, y
+   * devuelve QUÉ orden se vinculó.
+   *
+   * Cubre el orden normal (Checkout → invoice.paid) y sólo alcanza al ALTA: en una renovación el
+   * cliente no vuelve a pasar por Checkout, no hay orden nueva y el filtro `credit_slot_id IS
+   * NULL` hace que no se toque la del periodo anterior.
+   *
+   * **Devuelve el id porque el historial lo necesita.** `subscription_billing_history` guarda en
+   * `checkout_order_id` la compra que originó el periodo, y resolverlo por separado significaría
+   * repetir esta misma consulta arriesgándose a que las dos eligieran órdenes distintas. Se busca
+   * primero y se actualiza por id: así el vínculo que se escribe y el que se reporta son el mismo.
+   *
+   * `manager` opcional: cuando lo recibe, el vínculo se escribe DENTRO de la transacción que
+   * emitió el lote, que es lo que hace que créditos, historial, perfil y orden queden o no queden
+   * los cuatro juntos.
+   */
+  async linkCompletedSubscriptionToCreditSlot(
+    input: {
+      billingProfileId: string;
+      stripeSubscriptionId: string | null;
+      creditSlotId: string;
+    },
+    manager?: EntityManager,
+  ): Promise<string | null> {
+    if (!input.stripeSubscriptionId) {
+      return null;
+    }
+
+    const repository = manager
+      ? manager.getRepository(CheckoutOrderEntity)
+      : this.checkoutOrderRepository;
+
+    const order = await repository.findOne({
+      where: {
+        billingProfileId: input.billingProfileId,
+        stripeSubscriptionId: input.stripeSubscriptionId,
+        kind: CHECKOUT_KIND_ENUM.SUBSCRIPTION,
+        status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
+        creditSlotId: IsNull(),
+      },
+      // La más antigua: es la del alta, la única que puede quedar sin slot.
+      order: { createdAt: 'ASC' },
+    });
+
+    if (!order) {
+      return null;
+    }
+
+    await repository.update(order.id, { creditSlotId: input.creditSlotId });
+
+    return order.id;
+  }
+
+  /**
+   * Cubre el orden inverso: `invoice.paid` pudo crear el slot antes de que llegara Checkout.
+   * Actualiza sólo esa sesión y nunca reemplaza un vínculo que ya existía.
+   */
+  async linkCheckoutSessionToCreditSlot(
+    input: {
+      stripeCheckoutSessionId: string;
+      creditSlotId: string;
+    },
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(CheckoutOrderEntity)
+      : this.checkoutOrderRepository;
+
+    await repository.update(
+      {
+        stripeCheckoutSessionId: input.stripeCheckoutSessionId,
+        status: CHECKOUT_ORDER_STATUS_ENUM.COMPLETED,
+        creditSlotId: IsNull(),
+      },
+      { creditSlotId: input.creditSlotId },
+    );
+  }
+}

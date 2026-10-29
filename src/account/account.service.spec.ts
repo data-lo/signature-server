@@ -1,0 +1,617 @@
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { AccountService } from './account.service';
+import { AccountEntity } from './entities/account.entity';
+import { OrganizationEntity } from './entities/organization.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { RedisService } from 'src/common/redis/redis.service';
+import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
+import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
+import { OrganizationOwnerAssignmentFailedException } from './exceptions/organization.exceptions';
+import { RolesService } from 'src/roles/roles.service';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-profile-provisioning.service';
+
+const OWNER_ROLE = { id: 'owner-role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER };
+const CURRENT_USER = {
+  id: 'user-1',
+  email: 'user1@empresa.com',
+  password: 'hashed-pw',
+};
+
+function createMockRepository() {
+  return {
+    findOne: jest.fn(),
+    find: jest.fn(),
+    create: jest.fn((data) => data),
+    save: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+  };
+}
+
+function createMockQueryRunner() {
+  return {
+    connect: jest.fn(),
+    startTransaction: jest.fn(),
+    commitTransaction: jest.fn(),
+    rollbackTransaction: jest.fn(),
+    release: jest.fn(),
+    manager: {
+      create: jest.fn((_entity, data) => data),
+      save: jest.fn(async (data) => ({ id: 'generated-id', ...data })),
+    },
+  };
+}
+
+describe('AccountService', () => {
+  let service: AccountService;
+  let accountRepository: ReturnType<typeof createMockRepository>;
+  let organizationRepository: ReturnType<typeof createMockRepository>;
+  let userRepository: ReturnType<typeof createMockRepository>;
+  let dataSource: { createQueryRunner: jest.Mock; transaction: jest.Mock };
+  let queryRunner: ReturnType<typeof createMockQueryRunner>;
+  let transactionManager: { create: jest.Mock; save: jest.Mock };
+  let billingProfileProvisioning: { provisionFreeProfile: jest.Mock };
+  let redisService: { set: jest.Mock; get: jest.Mock };
+  let rolesService: {
+    findSystemRoleByName: jest.Mock;
+    findByIdOrFail: jest.Mock;
+    hasPermission: jest.Mock;
+  };
+
+  beforeEach(async () => {
+    accountRepository = createMockRepository();
+    organizationRepository = createMockRepository();
+    userRepository = createMockRepository();
+    userRepository.findOne.mockResolvedValue(CURRENT_USER);
+    queryRunner = createMockQueryRunner();
+    transactionManager = {
+      create: jest.fn((_entity, data) => data),
+      save: jest.fn(async (data) => ({ id: 'generated-id', ...data })),
+    };
+    dataSource = {
+      createQueryRunner: jest.fn(() => queryRunner),
+      // Ejecuta el callback en línea: lo que se comprueba es QUÉ se escribe dentro de la
+      // transacción y con qué manager, no el aislamiento, que es cosa de Postgres.
+      transaction: jest.fn(
+        async (run: (manager: unknown) => Promise<unknown>) =>
+          run(transactionManager),
+      ),
+    };
+    billingProfileProvisioning = {
+      provisionFreeProfile: jest
+        .fn()
+        .mockResolvedValue({ id: 'perfil-free-1' }),
+    };
+    redisService = { set: jest.fn(), get: jest.fn() };
+    rolesService = {
+      findSystemRoleByName: jest.fn().mockResolvedValue(OWNER_ROLE),
+      findByIdOrFail: jest.fn().mockResolvedValue({ id: 'member-role-1' }),
+      // Espeja el seed real: OWNER tiene los 12 permisos (incluye todo ORGANIZATION),
+      // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
+      hasPermission: jest
+        .fn()
+        .mockImplementation(
+          async (roleId: string | null | undefined) => roleId === OWNER_ROLE.id,
+        ),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AccountService,
+        {
+          provide: getRepositoryToken(AccountEntity),
+          useValue: accountRepository,
+        },
+        {
+          provide: getRepositoryToken(OrganizationEntity),
+          useValue: organizationRepository,
+        },
+        {
+          provide: getRepositoryToken(UserEntity),
+          useValue: userRepository,
+        },
+        { provide: getDataSourceToken(), useValue: dataSource },
+        { provide: RedisService, useValue: redisService },
+        { provide: RolesService, useValue: rolesService },
+        {
+          provide: BillingProfileProvisioningService,
+          useValue: billingProfileProvisioning,
+        },
+      ],
+    }).compile();
+
+    service = module.get<AccountService>(AccountService);
+  });
+
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
+
+  describe('createDefaultPersonalAccount', () => {
+    it('crea Account(PERSONAL, rol OWNER) con email/password sincronizados usando el manager del llamador', async () => {
+      const manager = {
+        create: jest.fn((_entity, data) => data),
+        save: jest.fn(async (data) => ({ id: 'personal-account-1', ...data })),
+      };
+
+      const { account } = await service.createDefaultPersonalAccount(
+        manager as any,
+        'user-1',
+        'user1@empresa.com',
+        'hashed-pw',
+      );
+
+      expect(manager.save).toHaveBeenCalledTimes(1);
+      expect(account.accountType).toBe(ACCOUNT_TYPE_ENUM.PERSONAL);
+      expect(account.organizationId).toBeNull();
+      expect(account.email).toBe('user1@empresa.com');
+      expect(account.password).toBe('hashed-pw');
+      expect(rolesService.findSystemRoleByName).toHaveBeenCalledWith(
+        SYSTEM_ROLE_NAME_ENUM.OWNER,
+      );
+      expect(account.roleId).toBe('owner-role-1');
+      expect(account.isActive).toBe(true);
+    });
+  });
+
+  describe('saveOrganizationWithOwnerAccount', () => {
+    const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
+
+    /**
+     * Los dos nombres son distintos y los dos se guardan. Hasta ahora `dto.name` —el rotulado
+     * "Nombre de visualización" en el formulario— se descartaba en silencio y la organización
+     * quedaba con la razón social como único nombre, que es lo que acababa leyéndose en el
+     * selector de cuentas.
+     */
+    it('guarda la razón social y el nombre de visualización por separado', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'org-nueva-1' })
+        .mockResolvedValueOnce({ id: 'cuenta-owner-1' });
+      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-owner-1' });
+
+      await service.saveOrganizationWithOwnerAccount(
+        CURRENT_USER as never,
+        dto as never,
+      );
+
+      const [organization] = queryRunner.manager.create.mock.calls;
+      expect(organization[1]).toMatchObject({
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+      });
+    });
+
+    it('guarda organizacion y cuenta OWNER en una sola transaccion', async () => {
+      accountRepository.findOne.mockResolvedValue({
+        id: 'generated-id',
+        organization: { name: 'Acme Corp S.A. de C.V.' },
+      });
+
+      await service.saveOrganizationWithOwnerAccount(
+        CURRENT_USER as never,
+        dto as never,
+      );
+
+      expect(queryRunner.startTransaction).toHaveBeenCalled();
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(2);
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalled();
+    });
+
+    /**
+     * Lo que hace propietario al creador, campo por campo.
+     *
+     * Hasta acá sólo se comprobaba que hubiera DOS saves y un commit, que es cierto tanto si la
+     * membresía nace con el rol OWNER como si nace sin rol, inactiva o apuntando a otra
+     * organización. Sin esto, perder la asignación del rol no rompe ninguna prueba: rompe el
+     * acceso del propietario en producción, y sólo se nota al abrir la pantalla de miembros.
+     */
+    it('deja al creador vinculado a la organización nueva, activo y con el rol OWNER', async () => {
+      const organization = { id: 'org-nueva-1' };
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce(organization)
+        .mockImplementation(async (data) => ({
+          id: 'cuenta-admin-1',
+          ...data,
+        }));
+      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-admin-1' });
+
+      await service.saveOrganizationWithOwnerAccount(
+        CURRENT_USER as never,
+        dto as never,
+      );
+
+      expect(rolesService.findSystemRoleByName).toHaveBeenCalledWith(
+        SYSTEM_ROLE_NAME_ENUM.OWNER,
+      );
+      const [, membership] = queryRunner.manager.create.mock.calls;
+      expect(membership[0]).toBe(AccountEntity);
+      expect(membership[1]).toMatchObject({
+        userId: CURRENT_USER.id,
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: organization.id,
+        roleId: OWNER_ROLE.id,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        isActive: true,
+        // Credenciales sincronizadas desde el usuario (decisión D6): no hay contraseña aparte
+        // por organización.
+        email: CURRENT_USER.email,
+        password: CURRENT_USER.password,
+      });
+      // `joinedAt` es lo que ordena la tabla de miembros; sin él, el administrador cae al final.
+      expect(membership[1].joinedAt).toBeInstanceOf(Date);
+    });
+
+    /**
+     * El rol se resuelve antes de abrir la transacción: si el RBAC no está sembrado no se llega
+     * a insertar nada, y el mensaje que sale es el del usuario —no "corre npm run seed:roles",
+     * que es una instrucción para quien opera el servidor—.
+     */
+    it('responde un error claro y no crea nada si no puede resolver el rol OWNER', async () => {
+      rolesService.findSystemRoleByName.mockRejectedValue(
+        new InternalServerErrorException(
+          'El rol de sistema OWNER no está sembrado. Corre "npm run seed:roles".',
+        ),
+      );
+
+      await expect(
+        service.saveOrganizationWithOwnerAccount(
+          CURRENT_USER as never,
+          dto as never,
+        ),
+      ).rejects.toThrow(OrganizationOwnerAssignmentFailedException);
+
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Una organización sin ningún administrador no la puede gestionar nadie, y no habría forma
+     * de repararla desde la API.
+     */
+    it('hace rollback si falla el save de la cuenta', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'org-1' })
+        .mockRejectedValueOnce(new Error('duplicate key value'));
+
+      await expect(
+        service.saveOrganizationWithOwnerAccount(
+          CURRENT_USER as never,
+          dto as never,
+        ),
+      ).rejects.toThrow('duplicate key value');
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Sólo la cuenta PERSONAL nace con su `billing_profile` en plan Free, y lo hace DENTRO de la
+   * transacción que la crea. Las organizaciones nacen sin perfil, sin plan Free y sin créditos de
+   * bienvenida: contratan su plan desde Planes.
+   */
+  describe('alta del perfil de facturación en plan Free', () => {
+    it('la cuenta personal lo crea con el MISMO manager de la transacción de registro', async () => {
+      const manager = {
+        create: jest.fn((_entity, data) => data),
+        save: jest.fn(async (data) => ({ id: 'personal-account-1', ...data })),
+      };
+
+      await service.createDefaultPersonalAccount(
+        manager as any,
+        'user-1',
+        'user1@empresa.com',
+        'hashed-pw',
+      );
+
+      expect(
+        billingProfileProvisioning.provisionFreeProfile,
+      ).toHaveBeenCalledWith(manager, {
+        personalAccountId: 'personal-account-1',
+        organizationId: null,
+      });
+    });
+
+    it('la organización nace sin perfil de facturación', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'organizacion-1' })
+        .mockResolvedValueOnce({ id: 'cuenta-admin-1' });
+      accountRepository.findOne.mockResolvedValue({ id: 'cuenta-admin-1' });
+
+      await service.saveOrganizationWithOwnerAccount(
+        CURRENT_USER as any,
+        {
+          organizationName: 'Acme',
+        } as any,
+      );
+
+      expect(
+        billingProfileProvisioning.provisionFreeProfile,
+      ).not.toHaveBeenCalled();
+      // Sólo la organización y la membresía de su administrador.
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(2);
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
+    });
+
+    describe('saveAccount', () => {
+      it('escribe la cuenta personal y su perfil en una sola transacción', async () => {
+        await service.saveAccount({
+          userId: 'user-1',
+          accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+          organizationId: null,
+          roleId: 'admin-role-1',
+          user: CURRENT_USER as any,
+        });
+
+        expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+        expect(
+          billingProfileProvisioning.provisionFreeProfile,
+        ).toHaveBeenCalledWith(transactionManager, {
+          personalAccountId: 'generated-id',
+          organizationId: null,
+        });
+      });
+
+      /** El alta genérica tampoco puede regalarle a una organización el plan Free. */
+      it('una cuenta de organización se guarda sin perfil de facturación', async () => {
+        await service.saveAccount({
+          userId: 'user-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'organizacion-1',
+          roleId: 'admin-role-1',
+          user: CURRENT_USER as any,
+        });
+
+        expect(transactionManager.save).toHaveBeenCalledTimes(1);
+        expect(
+          billingProfileProvisioning.provisionFreeProfile,
+        ).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe('assertHasOrganizationPermission', () => {
+    it('devuelve la cuenta si el llamador es su dueno con rol OWNER', async () => {
+      const account = {
+        id: 'account-1',
+        userId: 'owner-1',
+        roleId: OWNER_ROLE.id,
+        role: OWNER_ROLE,
+        isActive: true,
+      };
+      accountRepository.findOne.mockResolvedValue(account);
+
+      const result = await service.assertHasOrganizationPermission(
+        'owner-1',
+        'account-1',
+        ACTION_KEY_ENUM.READ,
+      );
+
+      expect(result).toBe(account);
+    });
+
+    /**
+     * La búsqueda filtra por `userId`, así que pedir la fila de otro usuario no la encuentra y
+     * da 403 sin revelar nada de ella.
+     */
+    it('lanza ForbiddenException si la cuenta no es del llamador', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.assertHasOrganizationPermission(
+          'intruder',
+          'account-1',
+          ACTION_KEY_ENUM.READ,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('lanza ForbiddenException si el rol no tiene ese permiso', async () => {
+      accountRepository.findOne.mockResolvedValue({
+        id: 'account-1',
+        userId: 'owner-1',
+        roleId: 'member-role-1',
+        isActive: true,
+      });
+
+      await expect(
+        service.assertHasOrganizationPermission(
+          'owner-1',
+          'account-1',
+          ACTION_KEY_ENUM.DELETE,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('findByIdOrFail', () => {
+    it('lanza NotFoundException si la cuenta no existe', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.findByIdOrFail('missing')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('removeAccountFromCatalog', () => {
+    it('quita la cuenta del catálogo cacheado del usuario', async () => {
+      redisService.get.mockResolvedValue(
+        JSON.stringify([{ id: 'account-1' }, { id: 'account-2' }]),
+      );
+
+      await service.removeAccountFromCatalog('user-1', 'account-1');
+
+      const [key, value] = redisService.set.mock.calls[0];
+      expect(key).toBe('accounts:user-1');
+      const saved = JSON.parse(value);
+      expect(saved).toEqual([{ id: 'account-2' }]);
+    });
+
+    it('no escribe en Redis si la cuenta no estaba en el catálogo', async () => {
+      redisService.get.mockResolvedValue(JSON.stringify([{ id: 'account-2' }]));
+
+      await service.removeAccountFromCatalog('user-1', 'account-1');
+
+      expect(redisService.set).not.toHaveBeenCalled();
+    });
+
+    it('no propaga el error si Redis falla', async () => {
+      redisService.get.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(
+        service.removeAccountFromCatalog('user-1', 'account-1'),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('appendAccountToCatalog', () => {
+    const account: AccountEntity = {
+      id: 'account-1',
+      userId: 'user-1',
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      organizationId: 'org-1',
+      roleId: 'admin-role-1',
+      createdAt: new Date('2026-01-01'),
+      isActive: true,
+      organization: { name: 'Acme Corp S.A. de C.V.' } as any,
+    } as AccountEntity;
+
+    it('agrega la cuenta a un catálogo existente', async () => {
+      redisService.get.mockResolvedValue(
+        JSON.stringify([
+          { id: 'personal-1', type: ACCOUNT_TYPE_ENUM.PERSONAL },
+        ]),
+      );
+
+      await service.appendAccountToCatalog('user-1', account);
+
+      const [key, value] = redisService.set.mock.calls[0];
+      expect(key).toBe('accounts:user-1');
+      const saved = JSON.parse(value);
+      expect(saved).toHaveLength(2);
+      expect(saved[1].id).toBe('account-1');
+      expect(saved[1].roleId).toBe('admin-role-1');
+      expect(saved[1].isActive).toBe(true);
+    });
+
+    it('empieza un catálogo nuevo si la key no existe en Redis', async () => {
+      redisService.get.mockResolvedValue(null);
+
+      await service.appendAccountToCatalog('user-1', account);
+
+      const [, value] = redisService.set.mock.calls[0];
+      const saved = JSON.parse(value);
+      expect(saved).toHaveLength(1);
+    });
+
+    it('no propaga el error si Redis falla', async () => {
+      redisService.get.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(
+        service.appendAccountToCatalog('user-1', account),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('getAccountsCatalog', () => {
+    it('retorna el catálogo cacheado en Redis', async () => {
+      redisService.get.mockResolvedValue(
+        JSON.stringify([
+          { id: 'personal-1', type: ACCOUNT_TYPE_ENUM.PERSONAL },
+        ]),
+      );
+
+      const result = await service.getAccountsCatalog('user-1');
+
+      expect(redisService.get).toHaveBeenCalledWith('accounts:user-1');
+      expect(result.data).toHaveLength(1);
+    });
+
+    it('retorna un catálogo vacío si la key no existe en Redis', async () => {
+      redisService.get.mockResolvedValue(null);
+
+      const result = await service.getAccountsCatalog('user-1');
+
+      expect(result.data).toEqual([]);
+    });
+  });
+
+  /**
+   * `toCatalogEntry` es lo que acaba en `/accounts/me` y, de ahí, en el selector de cuentas del
+   * sidebar. Si el nombre de visualización no sale por aquí, el selector no tiene con qué
+   * rotularse por mucho que la columna exista.
+   */
+  describe('toCatalogEntry', () => {
+    it('publica la razón social y el nombre de visualización de la organización', () => {
+      const entry = service.toCatalogEntry({
+        id: 'cuenta-1',
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        createdAt: new Date('2026-07-04T12:00:00.000Z'),
+        organizationId: 'org-1',
+        organization: {
+          name: 'Acme Corp S.A. de C.V.',
+          displayName: 'Acme',
+        },
+        roleId: 'role-1',
+        isActive: true,
+      } as never);
+
+      expect(entry.organizationDetail).toEqual({
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+      });
+    });
+
+    it('una cuenta personal no trae datos de organización', () => {
+      const entry = service.toCatalogEntry({
+        id: 'cuenta-1',
+        accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+        createdAt: new Date('2026-07-04T12:00:00.000Z'),
+        organizationId: null,
+        organization: null,
+        roleId: 'role-1',
+        isActive: true,
+      } as never);
+
+      expect(entry.organizationDetail).toBeNull();
+    });
+  });
+
+  describe('updateOrganizationDetails', () => {
+    it('renombra el nombre de visualización sin tocar la razón social', async () => {
+      await service.updateOrganizationDetails('org-1', {
+        name: 'Acme MX',
+      } as never);
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        displayName: 'Acme MX',
+      });
+    });
+
+    it('escribe los dos nombres cuando llegan los dos', async () => {
+      await service.updateOrganizationDetails('org-1', {
+        name: 'Acme MX',
+        organizationName: 'Acme México S.A. de C.V.',
+      } as never);
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        name: 'Acme México S.A. de C.V.',
+        displayName: 'Acme MX',
+      });
+    });
+  });
+});

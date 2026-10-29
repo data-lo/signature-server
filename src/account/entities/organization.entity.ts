@@ -1,0 +1,80 @@
+import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
+
+/**
+ * Entidad propia (ver plan de migración ER-V2, Fase 5) — reemplaza a
+ * OrganizationDetailEntity, que hasta ahora colgaba de accountId (una fila de "accounts" = un
+ * tenant completo). Con Account pasando a ser una fila por (usuario × contexto), Organization
+ * necesita su propio id: varios `Account` (uno por miembro) comparten un mismo `organizationId`
+ * apuntando aquí.
+ */
+@Entity('organizations')
+export class OrganizationEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  /**
+   * La razón social: el nombre legal completo ("Acme Corp S.A. de C.V.").
+   *
+   * Es el que va en documentos y trámites, no el que se lee en pantalla — para eso está
+   * `displayName`.
+   */
+  @Column()
+  name: string;
+
+  /**
+   * El nombre corto con el que la organización se reconoce en la interfaz ("Acme").
+   *
+   * El formulario de alta lo pide desde siempre —`CreateOrganizationDto.name`, rotulado "Nombre
+   * de visualización"— pero hasta ahora no se guardaba en ningún sitio: el alta escribía la razón
+   * social en `name` y descartaba éste. El resultado era que el selector de cuentas rotulaba cada
+   * organización con su nombre legal, que es justo lo que este campo existía para evitar.
+   *
+   * NOT NULL y sin valor por defecto: una organización sin nombre visible no tiene cómo
+   * presentarse. Las que ya existían lo recibieron copiado de `name`
+   * (`AddDisplayNameToOrganizations1784300000064`), que es lo que sus miembros venían leyendo.
+   */
+  @Column({ name: 'display_name' })
+  displayName: string;
+
+  @Column({ default: true, name: 'is_active' })
+  isActive: boolean;
+
+  @Column({ nullable: true, type: 'text' })
+  address: string | null;
+
+  /**
+   * Identificador fiscal de la organización; en México, su RFC.
+   *
+   * Se llamaba `rfc` hasta `RenameOrganizationRfcToTaxId1784300000067`: el nombre técnico deja de
+   * atarse a un régimen fiscal concreto, como ya había pasado con `collaborators.tax_id`. La
+   * etiqueta que ve el usuario sigue diciendo "RFC", porque es lo que se captura.
+   */
+  @Column({ name: 'tax_id', nullable: true })
+  taxId: string | null;
+
+  @Column({ nullable: true, name: 'domain_allowed' })
+  domainAllowed: string | null;
+
+  @Column({ nullable: true, name: 'phone_number' })
+  phoneNumber: string | null;
+
+  /**
+   * Si los documentos de la organización pueden entrar a Búsqueda Inteligente.
+   *
+   * Es el interruptor general de la organización, por encima de la casilla `isIndexable` de cada
+   * documento: apagado, ningún documento nuevo se ofrece para indexar. Lo edita quien tiene
+   * `ORGANIZATION.UPDATE` desde "Información de la organización".
+   *
+   * Nace encendido desde `IndexDocumentsByDefault1784300000068`: la regla de producto es que todo
+   * sea encontrable salvo que alguien decida lo contrario, la misma que ya seguía `isIndexable`.
+   * Esa migración encendió también las que existían, porque su `false` era el default viejo y no
+   * una decisión de nadie.
+   */
+  @Column({ default: true, name: 'index_documents' })
+  indexDocuments: boolean;
+
+  /** Historial de API keys de la organización: a lo sumo una `ACTIVE`, el resto `REVOKED`. */
+  @OneToMany(() => ApiKeyEntity, (apiKey) => apiKey.organization)
+  apiKeys: ApiKeyEntity[];
+}

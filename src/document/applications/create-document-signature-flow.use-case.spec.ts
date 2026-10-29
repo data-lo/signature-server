@@ -1,0 +1,2050 @@
+import { BadRequestException } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getDataSourceToken } from '@nestjs/typeorm';
+import { CreateDocumentSignatureFlowUseCase } from './create-document-signature-flow.use-case';
+import { DocumentEntity } from '../entities/document.entity';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { CollaboratorEntity } from '../entities/collaborator.entity';
+import { NotificationEntity } from '../entities/notification.entity';
+import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
+import { MinioService } from 'src/common/minio/minio.service';
+import { HashService } from 'src/common/hash/hash.service';
+import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
+import { AccountMemberService } from 'src/account/account-member.service';
+import { VerificationCodeService } from '../verification-code.service';
+import { NotificationEventsProducer } from 'src/kafka/notification-events.producer';
+import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
+import { DocumentTransactionService } from '../document-transaction.service';
+import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
+import { FILE_STATUS_ENUM } from 'src/common/minio/enums/file-status-enum';
+import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
+import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
+import {
+  CreateDocumentSignaturesDto,
+  PAYLOAD_COLABORATOR_TYPE_ENUM,
+  PAYLOAD_SIGNATURE_TYPE_ENUM,
+  REQUIRES_DIFFERENT_SIGNATURES_ENUM,
+} from '../dto/create-document-signatures.dto';
+import { DocumentReviewerService } from '../services/document-reviewer.service';
+import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
+import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
+import { PlanActionNotIncludedException } from 'src/billing/exceptions/billing.exceptions';
+import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
+import { PAYLOAD_COLLABORATOR_SOURCE_ENUM } from '../dto/create-document-signatures.dto';
+import {
+  DIRECTORY_COLLABORATOR_NOT_FOUND_MESSAGE,
+  DirectoryCollaboratorsService,
+} from 'src/directory/directory-collaborators.service';
+
+function createMockRepository() {
+  let seq = 0;
+  return {
+    create: jest.fn((data) => ({ ...data })),
+    save: jest.fn(async (entity) => ({
+      id: entity.id ?? `id-${++seq}`,
+      ...entity,
+    })),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
+  };
+}
+
+describe('CreateDocumentSignatureFlowUseCase', () => {
+  let useCase: CreateDocumentSignatureFlowUseCase;
+  let documentRepo: ReturnType<typeof createMockRepository>;
+  let collaboratorRepo: ReturnType<typeof createMockRepository>;
+  let notificationRepo: ReturnType<typeof createMockRepository>;
+  let simpleSignatureRepo: ReturnType<typeof createMockRepository>;
+  let dataSource: { transaction: jest.Mock; getRepository: jest.Mock };
+  let organizationRepo: { findOne: jest.Mock };
+  let minioService: Record<string, jest.Mock>;
+  let hashService: Record<string, jest.Mock>;
+  let documentSigningService: Record<string, jest.Mock>;
+  let accountMemberService: Record<string, jest.Mock>;
+  let verificationCodeService: Record<string, jest.Mock>;
+  let notificationEventsProducer: Record<string, jest.Mock>;
+  let documentEventsProducer: Record<string, jest.Mock>;
+  let documentTransactionService: Record<string, jest.Mock>;
+  let consumeDocumentCredit: Record<string, jest.Mock>;
+  let documentReviewerService: Record<string, jest.Mock>;
+  let assertPlanAction: Record<string, jest.Mock>;
+  let directoryCollaborators: Record<string, jest.Mock>;
+
+  const file = {
+    buffer: Buffer.from('%PDF-1.4'),
+    originalname: 'contrato.pdf',
+    mimetype: 'application/pdf',
+    size: 1024,
+  } as Express.Multer.File;
+
+  /**
+   * Documento de firma SIMPLE (el tipo lo define `documentData`, no cada colaborador — ver
+   * historia "Selección de tipo de firma al crear documentos"). Juan trae un `taxId` que el backend
+   * debe descartar por ser SIGNER, y María trae requiresTwoFactorAuth:false que el backend debe
+   * forzar a true por ser un documento SIMPLE.
+   */
+  const baseDto: CreateDocumentSignaturesDto = {
+    documentData: {
+      fileName: 'contrato_prestacion_servicios.pdf',
+      signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.SIMPLE,
+    },
+    collaborators: [
+      {
+        source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+        addToDirectory: false,
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+        firstName: 'Juan',
+        lastName: 'Pérez',
+        email: 'juan.perez@mail.com',
+        taxId: 'PEAJ800101XXX',
+        signatures: [
+          {
+            signatureId: 'sig-1',
+            page: 1,
+            xRatio: 0.65,
+            yRatio: 0.8,
+            widthRatio: 0.2,
+            heightRatio: 0.08,
+          },
+        ],
+        requiresTwoFactorAuth: true,
+      },
+      {
+        source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+        addToDirectory: false,
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+        firstName: 'María',
+        lastName: 'Gómez',
+        email: 'maria.gomez@mail.com',
+        taxId: null,
+        // Desde la historia "Hacer obligatorias las coordenadas de posición de firma" todo
+        // firmante trae al menos una posición. En otra página que la de Juan, para no solaparse.
+        signatures: [
+          {
+            signatureId: 'sig-maria',
+            page: 2,
+            xRatio: 0.1,
+            yRatio: 0.1,
+            widthRatio: 0.2,
+            heightRatio: 0.08,
+          },
+        ],
+        requiresTwoFactorAuth: false, // el backend debe forzarlo a true de todos modos (SIMPLE)
+      },
+      {
+        source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+        addToDirectory: false,
+        collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+        firstName: 'Carlos',
+        lastName: 'Solares',
+        email: 'auditor@mail.com',
+        taxId: 'AUDI990101YYY',
+      },
+    ],
+  };
+
+  /** Usuarios vinculados a contactos del Directorio activo, con la identidad que tienen en `users`. */
+  const DIRECTORY_USERS: Record<
+    string,
+    { firstName: string; lastName: string; email: string }
+  > = {
+    'user-ana': {
+      firstName: 'Ana',
+      lastName: 'García',
+      email: 'ana.garcia@example.com',
+    },
+    'user-luis': {
+      firstName: 'Luis',
+      lastName: 'Ramírez',
+      email: 'luis.ramirez@example.com',
+    },
+  };
+
+  /** El mismo documento, pero en el otro (y único) flujo posible: firma electrónica avanzada. */
+  const advancedDto: CreateDocumentSignaturesDto = {
+    ...baseDto,
+    documentData: {
+      ...baseDto.documentData,
+      signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
+    },
+  };
+
+  /** El mismo documento con firma biométrica (Didit). */
+  const biometricDto: CreateDocumentSignaturesDto = {
+    ...baseDto,
+    documentData: {
+      ...baseDto.documentData,
+      signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.BIOMETRIC,
+    },
+  };
+
+  beforeEach(async () => {
+    documentRepo = createMockRepository();
+    collaboratorRepo = createMockRepository();
+    notificationRepo = createMockRepository();
+    simpleSignatureRepo = createMockRepository();
+
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === DocumentEntity) return documentRepo;
+        if (entity === CollaboratorEntity) return collaboratorRepo;
+        if (entity === NotificationEntity) return notificationRepo;
+        if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
+        throw new Error('repositorio no mockeado');
+      }),
+    };
+
+    /** Por omisión la organización deja indexar, como toda organización nueva. */
+    organizationRepo = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ id: 'org-1', indexDocuments: true }),
+    };
+
+    dataSource = {
+      transaction: jest.fn(async (cb: (manager: unknown) => Promise<unknown>) =>
+        cb(manager),
+      ),
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === OrganizationEntity) return organizationRepo;
+        throw new Error('repositorio no mockeado');
+      }),
+    };
+
+    minioService = {
+      uploadObject: jest.fn().mockResolvedValue({
+        status: FILE_STATUS_ENUM.FILE_CREATED,
+        fileId: 'object-key-1.pdf',
+      }),
+    };
+    hashService = { generateFileHash: jest.fn().mockResolvedValue('hash-123') };
+    documentSigningService = { getPdfPages: jest.fn().mockResolvedValue(3) };
+    accountMemberService = {
+      assertIsActiveMember: jest.fn().mockResolvedValue({
+        id: 'account-1',
+        accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+        organizationId: null,
+      }),
+    };
+    verificationCodeService = {
+      issue: jest.fn().mockResolvedValue({ id: 'vc-1' }),
+    };
+    notificationEventsProducer = {
+      emitCreated: jest.fn(),
+      enqueueCreated: jest.fn().mockResolvedValue(undefined),
+    };
+    documentEventsProducer = {
+      emitCreated: jest.fn(),
+      enqueueApprovalEvent: jest.fn().mockResolvedValue({ id: 'event-1' }),
+      flushOutbox: jest.fn().mockResolvedValue(undefined),
+    };
+    documentTransactionService = { createInitial: jest.fn() };
+    consumeDocumentCredit = {
+      execute: jest.fn().mockResolvedValue({ id: 'consumo-1' }),
+    };
+    /**
+     * Devuelve la cuenta PERSONAL del aprobador ya validado: qué hace que un aprobador sea válido
+     * —miembro activo con `DOCUMENT.APPROVE`— tiene su propia suite en
+     * `document-reviewer.service.spec.ts`.
+     */
+    documentReviewerService = {
+      resolveReviewerAccountId: jest.fn().mockResolvedValue('account-reviewer'),
+    };
+    /** Por omisión el plan incluye la acción, como todos los planes contratables hoy. */
+    assertPlanAction = { execute: jest.fn().mockResolvedValue({}) };
+    /**
+     * Qué hace válido a un `linkedUserId` —contacto vigente del Directorio activo, usuario no
+     * borrado— tiene su propia suite (`directory-collaborators.service.spec.ts`). Aquí basta con
+     * que resuelva a los usuarios de `DIRECTORY_USERS` y rechace a cualquier otro.
+     */
+    directoryCollaborators = {
+      resolveLinkedCollaborators: jest.fn(
+        async (_account: unknown, userIds: string[]) => {
+          const missing = userIds.filter((id) => !DIRECTORY_USERS[id]);
+          if (missing.length) {
+            throw new BadRequestException(
+              DIRECTORY_COLLABORATOR_NOT_FOUND_MESSAGE,
+            );
+          }
+          return new Map(userIds.map((id) => [id, DIRECTORY_USERS[id]]));
+        },
+      ),
+      addManualCollaboratorsToDirectory: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CreateDocumentSignatureFlowUseCase,
+        { provide: getDataSourceToken(), useValue: dataSource },
+        { provide: MinioService, useValue: minioService },
+        { provide: HashService, useValue: hashService },
+        { provide: PdfSignatureService, useValue: documentSigningService },
+        { provide: AccountMemberService, useValue: accountMemberService },
+        { provide: VerificationCodeService, useValue: verificationCodeService },
+        {
+          provide: NotificationEventsProducer,
+          useValue: notificationEventsProducer,
+        },
+        {
+          provide: DocumentEventsProducer,
+          useValue: documentEventsProducer,
+        },
+        {
+          provide: DocumentTransactionService,
+          useValue: documentTransactionService,
+        },
+        {
+          provide: ConsumeDocumentCreditUseCase,
+          useValue: consumeDocumentCredit,
+        },
+        {
+          provide: DocumentReviewerService,
+          useValue: documentReviewerService,
+        },
+        { provide: AssertPlanActionUseCase, useValue: assertPlanAction },
+        {
+          provide: DirectoryCollaboratorsService,
+          useValue: directoryCollaborators,
+        },
+      ],
+    }).compile();
+
+    useCase = module.get<CreateDocumentSignatureFlowUseCase>(
+      CreateDocumentSignatureFlowUseCase,
+    );
+  });
+
+  it('Escenario 1: crea Document + N Collaborators + N Notifications + verification_code y publica N eventos Kafka', async () => {
+    const result = await useCase.execute(
+      'creator-1',
+      'account-1',
+      baseDto,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data.status).toBe(DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE);
+    expect(minioService.uploadObject).toHaveBeenCalled();
+    // 2 signers + 1 viewer = 3 colaboradores/notificaciones
+    expect(collaboratorRepo.save).toHaveBeenCalledTimes(3);
+    expect(notificationRepo.save).toHaveBeenCalledTimes(3);
+    expect(result.data.collaboratorsCount).toBe(3);
+    // Documento SIMPLE: 2FA forzado en los 2 firmantes = 2 verification_codes
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
+    expect(result.data.verificationCodesCount).toBe(2);
+    expect(documentRepo.update).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ requiresVerification: true }),
+    );
+    // Una notificación por colaborador, registrada en la outbox con el `manager` de la
+    // transacción (no publicada directo) y publicada por un único flush tras el commit.
+    expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(3);
+    for (const [manager] of notificationEventsProducer.enqueueCreated.mock
+      .calls) {
+      expect(manager).toHaveProperty('getRepository');
+    }
+    expect(notificationEventsProducer.emitCreated).not.toHaveBeenCalled();
+    expect(documentEventsProducer.flushOutbox).toHaveBeenCalledTimes(1);
+    expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(1);
+    expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: 'creator-1' }),
+    );
+    expect(documentTransactionService.createInitial).toHaveBeenCalledWith(
+      expect.any(String),
+      'hash-123',
+      expect.anything(),
+    );
+  });
+
+  it('un documento SIMPLE fuerza verification_code aunque el payload mande requiresTwoFactorAuth:false', async () => {
+    const dtoSoloSimpleSinFlag: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: [
+        {
+          ...baseDto.collaborators[1], // María, requiresTwoFactorAuth: false
+        },
+      ],
+    };
+
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      dtoSoloSimpleSinFlag,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Ver el bug corregido en DocumentService.findWithFilters: mientras el colaborador no tiene
+   * cuenta vinculada, su correo es la única identidad con la que el listado "Por firmar" lo
+   * empareja — se guarda normalizado, igual que `users.email`.
+   */
+  it('guarda el correo del colaborador normalizado en minúsculas, no como se tecleó', async () => {
+    const dtoConMayusculas: CreateDocumentSignaturesDto = {
+      ...advancedDto,
+      collaborators: [
+        {
+          ...advancedDto.collaborators[0],
+          email: 'Juan.Perez@Mail.com',
+        },
+      ],
+    };
+
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      dtoConMayusculas,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(collaboratorRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'juan.perez@mail.com' }),
+    );
+  });
+
+  it('un documento ADVANCED respeta el requiresTwoFactorAuth de cada firmante', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    // Solo Juan lo pidió explícitamente; María mandó false y en ADVANCED esa elección se respeta.
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+  });
+
+  it('historia "Selección de tipo de firma": el tipo del documento se copia a todos los firmantes', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    const signerCalls = collaboratorRepo.create.mock.calls.filter(
+      (call) => call[0].colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER,
+    );
+    expect(signerCalls).toHaveLength(2);
+    expect(
+      signerCalls.every(
+        (call) => call[0].signatureType === SIGNATURE_TYPE_ENUM.FIEL,
+      ),
+    ).toBe(true);
+  });
+
+  describe('firma biométrica', () => {
+    it('guarda BIOMETRIC en el documento y en todos sus firmantes', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signatureType: SIGNATURE_TYPE_ENUM.BIOMETRIC,
+        }),
+      );
+      const signerCalls = collaboratorRepo.create.mock.calls.filter(
+        (call) => call[0].colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER,
+      );
+      expect(signerCalls).toHaveLength(2);
+      expect(
+        signerCalls.every(
+          (call) => call[0].signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC,
+        ),
+      ).toBe(true);
+    });
+
+    it('anota el consumo de crédito como BIOMETRIC', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signatureType: BILLING_SIGNATURE_TYPE_ENUM.BIOMETRIC,
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('respeta el requiresTwoFactorAuth de cada firmante, como en ADVANCED', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+    });
+
+    it('exige graphSignatureBiometrics en el plan de la cuenta activa', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(assertPlanAction.execute).toHaveBeenCalledWith({
+        userId: 'creator-1',
+        accountId: 'account-1',
+        action: PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS,
+      });
+    });
+
+    it('sin la acción en el plan, rechaza antes de subir el archivo o cobrar', async () => {
+      assertPlanAction.execute.mockRejectedValue(
+        new PlanActionNotIncludedException(
+          PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS,
+          null,
+        ),
+      );
+
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          biometricDto,
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(PlanActionNotIncludedException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+      expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+    });
+
+    it('acepta requiresDifferentSignatures=BIOMETRIC y rechaza uno que lo contradiga', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...biometricDto,
+            requiresDifferentSignatures:
+              REQUIRES_DIFFERENT_SIGNATURES_ENUM.BIOMETRIC,
+          },
+          file,
+          '127.0.0.1',
+        ),
+      ).resolves.toBeDefined();
+
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...biometricDto,
+            requiresDifferentSignatures:
+              REQUIRES_DIFFERENT_SIGNATURES_ENUM.SIMPLE,
+          },
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('no consulta el plan para SIMPLE ni ADVANCED', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        advancedDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(assertPlanAction.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  it('guarda el tipo de firma EN el documento, no sólo copiado en los firmantes', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.SIMPLE }),
+    );
+  });
+
+  it('guarda FIEL en el documento cuando la firma es avanzada', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ signatureType: SIGNATURE_TYPE_ENUM.FIEL }),
+    );
+  });
+
+  it('el consumo de crédito de un documento con firma simple se anota como SIMPLE', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureType: BILLING_SIGNATURE_TYPE_ENUM.SIMPLE,
+      }),
+      expect.anything(),
+    );
+  });
+
+  /**
+   * `FIEL` en el dominio de documentos y `ADVANCED` en el comercial son el mismo tipo de firma:
+   * la traducción es el único punto donde se cruza esa frontera y aquí se verifica que no se
+   * escape el vocabulario de documentos al recibo.
+   */
+  it('el consumo de crédito de un documento con firma avanzada se anota como ADVANCED', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureType: BILLING_SIGNATURE_TYPE_ENUM.ADVANCED,
+      }),
+      expect.anything(),
+    );
+  });
+
+  /**
+   * El valor del recibo sale del documento GUARDADO, no del payload: se guarda un documento sin
+   * tipo de firma y el consumo tiene que reflejar eso —`null`— en vez del SIMPLE que traía el
+   * DTO. Si el flujo leyera del payload, esta prueba pasaría a `SIMPLE` y no se notaría.
+   */
+  it('el tipo del recibo proviene del documento guardado, no del payload', async () => {
+    documentRepo.save.mockImplementation(async (entity) => {
+      const { signatureType: _descartado, ...sinTipoDeFirma } = entity;
+      return { id: 'documento-sin-tipo', ...sinTipoDeFirma };
+    });
+
+    const result = await useCase.execute(
+      'creator-1',
+      'account-1',
+      baseDto,
+      file,
+      '127.0.0.1',
+    );
+
+    // El alta no se rompe: el documento se crea y el crédito se cobra igual.
+    expect(result.data.id).toBe('documento-sin-tipo');
+    expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documentId: 'documento-sin-tipo',
+        signatureType: null,
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('historia "Selección de tipo de firma": descarta el taxId que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    // El payload trae taxId: 'PEAJ800101XXX' — un cliente viejo no puede reintroducir el campo.
+    expect(juanCall[0].taxId).toBeNull();
+  });
+
+  it('conserva el RFC que la integración manda para un firmante avanzado (signerTaxId)', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      {
+        ...advancedDto,
+        collaborators: advancedDto.collaborators.map((collaborator) =>
+          collaborator.email === 'juan.perez@mail.com'
+            ? { ...collaborator, signerTaxId: 'LOPA800101AB1' }
+            : collaborator,
+        ),
+      },
+      file,
+      '127.0.0.1',
+    );
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    expect(juanCall[0].taxId).toBe('LOPA800101AB1');
+  });
+
+  it('rechaza el payload si requiresDifferentSignatures contradice el tipo de firma del documento', async () => {
+    const dtoContradictorio: CreateDocumentSignaturesDto = {
+      ...baseDto, // documento SIMPLE
+      requiresDifferentSignatures: REQUIRES_DIFFERENT_SIGNATURES_ENUM.FIEL,
+    };
+
+    await expect(
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoContradictorio,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(minioService.uploadObject).not.toHaveBeenCalled();
+  });
+
+  it('acepta requiresDifferentSignatures cuando coincide con el tipo de firma del documento', async () => {
+    const dtoCoherente: CreateDocumentSignaturesDto = {
+      ...advancedDto,
+      requiresDifferentSignatures: REQUIRES_DIFFERENT_SIGNATURES_ENUM.FIEL,
+    };
+
+    const result = await useCase.execute(
+      'creator-1',
+      'account-1',
+      dtoCoherente,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rechaza un documento sin ningún SIGNER: nadie podría firmarlo nunca', async () => {
+    const dtoSoloViewer: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: [baseDto.collaborators[2]], // Carlos, VIEWER
+    };
+
+    await expect(
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoSoloViewer,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(minioService.uploadObject).not.toHaveBeenCalled();
+  });
+
+  it('bug corregido: asigna signingOrder consecutivo (0,1,2...) solo entre los SIGNER, en el orden del payload; VIEWER queda en null', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    const mariaCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'maria.gomez@mail.com',
+    );
+    const carlosCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'auditor@mail.com',
+    );
+
+    expect(juanCall[0].signingOrder).toBe(0);
+    expect(mariaCall[0].signingOrder).toBe(1);
+    expect(carlosCall[0].signingOrder).toBeNull();
+  });
+
+  it('historia "Habilitar ordenamiento Drag and Drop": cuando todos los colaboradores traen orderIndex, signingOrder respeta ese orden en vez del orden de aparición en el payload', async () => {
+    const dtoConOrderIndexInvertido: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: baseDto.collaborators.map((c, index) => ({
+        ...c,
+        // Invierte el orden visual: María (payload index 1) debe firmar primero,
+        // Juan (payload index 0) segundo — Carlos (VIEWER) no firma, su orderIndex es irrelevante.
+        orderIndex: baseDto.collaborators.length - 1 - index,
+      })),
+    };
+
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      dtoConOrderIndexInvertido,
+      file,
+      '127.0.0.1',
+    );
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    const mariaCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'maria.gomez@mail.com',
+    );
+
+    expect(mariaCall[0].signingOrder).toBe(0);
+    expect(juanCall[0].signingOrder).toBe(1);
+  });
+
+  /**
+   * Historia "Implementar creación transaccional de colaboradores desde Directorio y captura
+   * manual": la invitación inmediata de firma SIMPLE sin orden ya no sale de aquí. Cada
+   * colaborador deja su `notification.created` en la outbox y el correo lo decide
+   * `SendPendingSignatureNotificationUseCase` (ver su spec) tras el commit.
+   */
+  it('documento SIMPLE sin orden: registra en la outbox la notificación de cada colaborador, sin enviar correo', async () => {
+    const dtoSinOrden: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      documentData: { ...baseDto.documentData, isSequential: false },
+    };
+
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      dtoSinOrden,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(documentRepo.save.mock.calls[0][0].isSequential).toBe(false);
+    expect(
+      notificationEventsProducer.enqueueCreated.mock.calls.map(
+        ([, params]) => params,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        collaboratorId: expect.any(String),
+        documentId: expect.any(String),
+        notificationId: expect.any(String),
+        actorUserId: 'creator-1',
+      }),
+      expect.anything(),
+      expect.anything(),
+    ]);
+  });
+
+  it('un fallo al publicar la outbox tras el commit no tumba la creación del documento', async () => {
+    documentEventsProducer.flushOutbox.mockRejectedValue(
+      new Error('Kafka caído'),
+    );
+
+    const result = await useCase.execute(
+      'creator-1',
+      'account-1',
+      baseDto,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(result.success).toBe(true);
+  });
+
+  it('el testigo se crea con colaboratorType WITNESS, sin signatureType ni verification_code', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    const viewerCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'auditor@mail.com',
+    );
+    expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WITNESS);
+    expect(viewerCall[0].signatureType).toBeNull();
+    expect(viewerCall[0].taxId).toBe('AUDI990101YYY');
+    // Solo 2 verification_codes en total (los 2 signers), ninguno para el viewer.
+    expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
+  });
+
+  it('crea una SimpleSignatureEntity por firmante con sus propias posiciones', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    // Juan y María —ambos SIGNER— reciben cada uno su fila, con las posiciones que colocaron
+    // (ver historia "Ubicación de firmas por usuario"). El VIEWER no recibe ninguna.
+    expect(simpleSignatureRepo.save).toHaveBeenCalledTimes(2);
+    expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureCoordinates: [
+          expect.objectContaining({
+            signatureId: 'sig-1',
+            page: 1,
+            xRatio: 0.65,
+            yRatio: 0.8,
+            widthRatio: 0.2,
+            heightRatio: 0.08,
+          }),
+        ],
+      }),
+    );
+    expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signatureCoordinates: [
+          expect.objectContaining({ signatureId: 'sig-maria', page: 2 }),
+        ],
+      }),
+    );
+  });
+
+  /**
+   * Historia "Hacer obligatorias las coordenadas de posición de firma": cada firmante tiene que
+   * traer dónde va su firma, y lo que traiga tiene que caber en el documento. Todo se rechaza
+   * antes de subir el archivo y de cobrar el crédito.
+   */
+  describe('coordenadas de posición de firma', () => {
+    function withMariaSignatures(
+      signatures: CreateDocumentSignaturesDto['collaborators'][number]['signatures'],
+    ): CreateDocumentSignaturesDto {
+      return {
+        ...baseDto,
+        collaborators: baseDto.collaborators.map((collaborator) =>
+          collaborator.email === 'maria.gomez@mail.com'
+            ? { ...collaborator, signatures }
+            : collaborator,
+        ),
+      };
+    }
+
+    function position(overrides: Record<string, number> = {}) {
+      return {
+        signatureId: 'sig-maria',
+        page: 2,
+        xRatio: 0.1,
+        yRatio: 0.1,
+        widthRatio: 0.2,
+        heightRatio: 0.08,
+        ...overrides,
+      };
+    }
+
+    it.each([
+      ['sin el arreglo', undefined],
+      ['con el arreglo vacío', []],
+    ])(
+      'rechaza a un firmante %s de posiciones, nombrándolo, antes de subir el archivo',
+      async (_name, signatures) => {
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            withMariaSignatures(signatures),
+            file,
+            '127.0.0.1',
+          ),
+        ).rejects.toThrow(
+          'Es obligatorio indicar la ubicación de la firma de cada firmante: falta la de maria.gomez@mail.com',
+        );
+        expect(minioService.uploadObject).not.toHaveBeenCalled();
+        expect(documentRepo.save).not.toHaveBeenCalled();
+      },
+    );
+
+    it('no exige posiciones a un VIEWER', async () => {
+      await expect(
+        useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('rechaza una posición en una página que el documento no tiene', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          withMariaSignatures([position({ page: 4 })]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(
+        'La ubicación de firma está en la página 4, pero el documento sólo tiene 3',
+      );
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a lo ancho', { xRatio: 0.9, widthRatio: 0.2 }],
+      ['a lo alto', { yRatio: 0.95, heightRatio: 0.08 }],
+    ])('rechaza una caja que se sale de la página %s', async (_name, box) => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          withMariaSignatures([position(box)]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('acepta una caja pegada al borde, como la deja el frontend al acomodarla', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        withMariaSignatures([position({ xRatio: 1 - 0.2, yRatio: 1 - 0.08 })]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(simpleSignatureRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          signatureCoordinates: [
+            expect.objectContaining({ xRatio: 0.8, yRatio: 1 - 0.08 }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it('bug corregido: rechaza con BadRequestException si dos firmantes colocan una posición que se solapa en la misma página', async () => {
+    const dtoConColision: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      collaborators: baseDto.collaborators.map((collaborator) =>
+        collaborator.email === 'maria.gomez@mail.com'
+          ? {
+              ...collaborator,
+              signatures: [
+                {
+                  signatureId: 'sig-2',
+                  page: 1,
+                  xRatio: 0.7,
+                  yRatio: 0.82,
+                  widthRatio: 0.2,
+                  heightRatio: 0.08,
+                },
+              ],
+            }
+          : collaborator,
+      ),
+    };
+
+    await expect(
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConColision,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(simpleSignatureRepo.save).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Historia "Exponer API de integración para consultar y crear documentos mediante API Key": la
+   * API de integración reutiliza este mismo flujo con un `origin`. Sin él, nada cambia.
+   */
+  describe('origen de la creación (API de integración)', () => {
+    const origin = { apiKeyId: 'key-1', apiKeyName: 'Integración ERP' };
+
+    it('sin origen, el documento no lleva llave y el evento de creación no menciona ninguna', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createdViaApiKeyId: null }),
+      );
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith({
+        documentId: expect.any(String),
+        fileName: baseDto.documentData.fileName,
+        actorUserId: 'creator-1',
+      });
+    });
+
+    it('con origen, guarda la llave en el documento y la anuncia en el evento, sin su secreto', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+        origin,
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ createdViaApiKeyId: 'key-1' }),
+      );
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 'creator-1',
+          createdViaApiKeyId: 'key-1',
+          createdViaApiKeyName: 'Integración ERP',
+        }),
+      );
+    });
+
+    it('el gancho del origen corre dentro de la transacción, con el documento guardado y antes del cobro', async () => {
+      const onDocumentSaved = jest.fn().mockResolvedValue(undefined);
+
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+        { ...origin, onDocumentSaved },
+      );
+
+      expect(onDocumentSaved).toHaveBeenCalledWith(
+        expect.objectContaining({ getRepository: expect.any(Function) }),
+        expect.objectContaining({
+          id: expect.any(String),
+          createdViaApiKeyId: 'key-1',
+        }),
+      );
+      expect(onDocumentSaved.mock.invocationCallOrder[0]).toBeLessThan(
+        consumeDocumentCredit.execute.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('si el gancho falla, no se cobra el crédito ni se publica nada', async () => {
+      const onDocumentSaved = jest
+        .fn()
+        .mockRejectedValue(new Error('clave de idempotencia ya usada'));
+
+      await expect(
+        useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1', {
+          ...origin,
+          onDocumentSaved,
+        }),
+      ).rejects.toThrow('clave de idempotencia ya usada');
+
+      expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+      expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
+      expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('validación del PDF (tipo y bytes reales)', () => {
+    it.each([
+      [
+        'otro tipo declarado',
+        { ...file, mimetype: 'image/png' } as Express.Multer.File,
+      ],
+      [
+        'bytes que no son de un PDF',
+        {
+          ...file,
+          buffer: Buffer.from('no soy un pdf'),
+        } as Express.Multer.File,
+      ],
+    ])(
+      'rechaza %s antes de leer páginas, subir o cobrar',
+      async (_label, badFile) => {
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            baseDto,
+            badFile,
+            '127.0.0.1',
+          ),
+        ).rejects.toThrow(BadRequestException);
+
+        expect(documentSigningService.getPdfPages).not.toHaveBeenCalled();
+        expect(minioService.uploadObject).not.toHaveBeenCalled();
+        expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it('Escenario 2: si falla la inserción dentro de la transacción, no se publica ningún evento a Kafka', async () => {
+    collaboratorRepo.save.mockRejectedValueOnce(new Error('DB caída'));
+
+    await expect(
+      useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+    ).rejects.toThrow('DB caída');
+
+    expect(notificationEventsProducer.enqueueCreated).not.toHaveBeenCalled();
+    expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Las filas de la outbox se escriben con el `manager` de la transacción: si registrar el evento
+   * falla, se revierte todo —documento, colaboradores, contactos y eventos ya escritos— y no se
+   * publica nada.
+   */
+  it('si falla el registro en la outbox, revierte la creación completa y no publica nada', async () => {
+    notificationEventsProducer.enqueueCreated
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('outbox caída'));
+
+    await expect(
+      useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+    ).rejects.toThrow('outbox caída');
+
+    expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
+    expect(
+      directoryCollaborators.addManualCollaboratorsToDirectory,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('si falla el alta en el Directorio, revierte la creación completa y no publica nada', async () => {
+    directoryCollaborators.addManualCollaboratorsToDirectory.mockRejectedValueOnce(
+      new Error('directorio caído'),
+    );
+
+    await expect(
+      useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+    ).rejects.toThrow('directorio caído');
+
+    expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    expect(documentEventsProducer.emitCreated).not.toHaveBeenCalled();
+  });
+
+  it('rechaza con BadRequestException si no se proporciona archivo', async () => {
+    await expect(
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        undefined as unknown as Express.Multer.File,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(minioService.uploadObject).not.toHaveBeenCalled();
+  });
+
+  it('rechaza con BadRequestException si falta el header X-Account-Id', async () => {
+    await expect(
+      useCase.execute(
+        'creator-1',
+        undefined as unknown as string,
+        baseDto,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(accountMemberService.assertIsActiveMember).not.toHaveBeenCalled();
+  });
+
+  it('documentData.requiresApproval se guarda en el documento cuando la cuenta activa es ORGANIZATION', async () => {
+    accountMemberService.assertIsActiveMember.mockResolvedValue({
+      id: 'account-1',
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      organizationId: 'org-1',
+    });
+    const dtoConAprobacion: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      documentData: { ...baseDto.documentData, requiresApproval: true },
+    };
+
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      dtoConAprobacion,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresApproval: true }),
+    );
+  });
+
+  /**
+   * Historia "Implementar flujo de aprobación previo al proceso de firma": con aprobación, el
+   * documento nace esperando al reviewer y nadie más se entera todavía.
+   */
+  describe('flujo de aprobación', () => {
+    /** El mismo payload de siempre, más la aprobación y su aprobador. */
+    function dtoConAprobacion(): CreateDocumentSignaturesDto {
+      return {
+        ...baseDto,
+        documentData: {
+          ...baseDto.documentData,
+          requiresApproval: true,
+          reviewerUserId: 'user-aprobador',
+        },
+      };
+    }
+
+    beforeEach(() => {
+      accountMemberService.assertIsActiveMember.mockResolvedValue({
+        id: 'account-1',
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: 'org-1',
+      });
+    });
+
+    it('el documento nace en PENDING_APPROVAL y no en PENDING_SIGNATURE', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion(),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: DOCUMENT_STATUS_ENUM.PENDING_APPROVAL,
+          requiresApproval: true,
+        }),
+      );
+    });
+
+    it('valida al aprobador antes de escribir nada y crea su colaborador REVIEWER en PENDING', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion(),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        documentReviewerService.resolveReviewerAccountId,
+      ).toHaveBeenCalledWith('user-aprobador', 'org-1');
+      expect(collaboratorRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+          accountId: 'account-reviewer',
+        }),
+      );
+    });
+
+    /**
+     * El evento se registra DENTRO de la transacción (outbox) y sólo se publica al confirmarla:
+     * un documento que no llegue a guardarse no puede haber pedido aprobación a nadie.
+     */
+    it('registra document.approval_requested en la outbox y lo publica tras el commit', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion(),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentEventsProducer.enqueueApprovalEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
+        expect.objectContaining({ documentId: expect.any(String) }),
+      );
+      expect(documentEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    /**
+     * Criterio de aceptación: los firmantes no reciben nada antes de la aprobación. Este flujo
+     * (firma simple sin orden) es el único que manda correo de invitación al crear.
+     */
+    /**
+     * Las notificaciones de firmantes y testigos se registran igual; quien decide no enviar nada
+     * mientras el documento espera aprobación es el consumidor, que lee el estado real.
+     */
+    it('registra en la outbox la notificación de cada colaborador y la del aprobador', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion(),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(
+        baseDto.collaborators.length + 1,
+      );
+    });
+
+    it('rechaza un aprobador enviado junto a requiresApproval=false', async () => {
+      const contradictorio: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: {
+          ...baseDto.documentData,
+          requiresApproval: false,
+          reviewerUserId: 'user-aprobador',
+        },
+      };
+
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          contradictorio,
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(/reviewerUserId/);
+    });
+
+    it('sin aprobación, no se crea ningún REVIEWER ni se consulta al validador', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        documentReviewerService.resolveReviewerAccountId,
+      ).not.toHaveBeenCalled();
+      expect(collaboratorRepo.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          colaboratorType: COLABORATOR_TYPE_ENUM.REVIEWER,
+        }),
+      );
+      expect(
+        documentEventsProducer.enqueueApprovalEvent,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  it('bug corregido: rechaza requiresApproval=true cuando la cuenta activa es PERSONAL', async () => {
+    // El mock por defecto de assertIsActiveMember ya es PERSONAL (ver beforeEach).
+    const dtoConAprobacion: CreateDocumentSignaturesDto = {
+      ...baseDto,
+      documentData: { ...baseDto.documentData, requiresApproval: true },
+    };
+
+    await expect(
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoConAprobacion,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(BadRequestException);
+    expect(documentRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('no rechaza una cuenta PERSONAL cuando requiresApproval no se solicita', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(documentRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresApproval: false }),
+    );
+  });
+
+  describe('Búsqueda Inteligente (isIndexable)', () => {
+    /**
+     * La regla de producto: quien no opina, indexa. El default vive en el backend justamente para
+     * que no dependa de que el cliente mande el campo — un cliente viejo, una integración o un
+     * `curl` obtienen el mismo resultado que el frontend actual.
+     */
+    it('sin el campo en el payload, el documento se crea indexable', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isIndexable: true }),
+      );
+    });
+
+    it('con isIndexable:true explícito, el documento se crea indexable', async () => {
+      const dto: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: { ...baseDto.documentData, isIndexable: true },
+      };
+
+      await useCase.execute('creator-1', 'account-1', dto, file, '127.0.0.1');
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isIndexable: true }),
+      );
+    });
+
+    /**
+     * `false` es una decisión explícita del autor y tiene que sobrevivir al default: si el `??`
+     * se escribiera como `||`, un `false` se convertiría en `true` y la opción "No agregar" no
+     * haría nada. Por eso se afirma el valor guardado y no sólo que el documento se creó.
+     */
+    it('con isIndexable:false, el documento se crea igual pero marcado como no indexable', async () => {
+      const dto: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: { ...baseDto.documentData, isIndexable: false },
+      };
+
+      const response = await useCase.execute(
+        'creator-1',
+        'account-1',
+        dto,
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isIndexable: false }),
+      );
+      // El documento se crea con normalidad: excluirlo de la búsqueda no lo mutila.
+      expect(response.success).toBe(true);
+      expect(response.data.id).toBeDefined();
+    });
+
+    /**
+     * Excluirlo de Búsqueda Inteligente no lo saca de nada más. El evento `CREATED` alimenta la
+     * cadena de auditoría global y las notificaciones a los firmantes: si un documento no
+     * indexable dejara de emitirlo, perdería su ledger y nadie recibiría la invitación.
+     */
+    it('un documento no indexable conserva su evento de creación y sus notificaciones', async () => {
+      const dto: CreateDocumentSignaturesDto = {
+        ...baseDto,
+        documentData: { ...baseDto.documentData, isIndexable: false },
+      };
+
+      await useCase.execute('creator-1', 'account-1', dto, file, '127.0.0.1');
+
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(1);
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalled();
+    });
+
+    /**
+     * El punto de enganche de la indexación está vacío a propósito (todavía no existe el flujo),
+     * así que lo único que se puede afirmar hoy es que NADIE publica nada extra por ser
+     * indexable: los dos casos emiten exactamente los mismos eventos. Cuando se agregue la
+     * llamada real, esta prueba es la que va a fallar y pedir que se distinga.
+     */
+    it('hoy la indexación todavía no emite nada: indexable y no indexable publican lo mismo', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        baseDto,
+        file,
+        '127.0.0.1',
+      );
+      const eventosIndexable =
+        documentEventsProducer.emitCreated.mock.calls.length;
+
+      jest.clearAllMocks();
+      minioService.uploadObject.mockResolvedValue({
+        status: FILE_STATUS_ENUM.FILE_CREATED,
+        fileId: 'object-key-1',
+      });
+
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        {
+          ...baseDto,
+          documentData: { ...baseDto.documentData, isIndexable: false },
+        },
+        file,
+        '127.0.0.1',
+      );
+
+      expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(
+        eventosIndexable,
+      );
+    });
+
+    describe('interruptor de la organización (indexDocuments)', () => {
+      beforeEach(() => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'org-1',
+        });
+      });
+
+      /**
+       * Apagado en la organización manda sobre la casilla: un cliente que no esconda la opción, o
+       * con el catálogo de cuentas viejo, no puede colar un documento a la búsqueda.
+       */
+      it('con la indexación apagada, el documento no es indexable aunque el payload lo pida', async () => {
+        organizationRepo.findOne.mockResolvedValue({
+          id: 'org-1',
+          indexDocuments: false,
+        });
+
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...baseDto,
+            documentData: { ...baseDto.documentData, isIndexable: true },
+          },
+          file,
+          '127.0.0.1',
+        );
+
+        expect(organizationRepo.findOne).toHaveBeenCalledWith({
+          where: { id: 'org-1' },
+          select: { id: true, indexDocuments: true },
+        });
+        expect(documentRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ isIndexable: false }),
+        );
+      });
+
+      it('con la indexación encendida, decide la casilla del documento', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...baseDto,
+            documentData: { ...baseDto.documentData, isIndexable: false },
+          },
+          file,
+          '127.0.0.1',
+        );
+
+        expect(documentRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ isIndexable: false }),
+        );
+      });
+
+      it('una cuenta PERSONAL no consulta ninguna organización', async () => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+          organizationId: null,
+        });
+
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(organizationRepo.findOne).not.toHaveBeenCalled();
+        expect(documentRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ isIndexable: true }),
+        );
+      });
+    });
+  });
+  /**
+   * Historia "Enviar colaboradores desde Directorio mediante usuario vinculado al crear un
+   * documento": la identidad de un colaborador `DIRECTORY` sale del usuario vinculado, nunca del
+   * payload; la de uno `MANUAL`, del payload, y sólo éste puede pedir `addToDirectory`.
+   */
+  describe('origen de los colaboradores (MANUAL / DIRECTORY)', () => {
+    const position = (page: number) => ({
+      signatureId: `sig-${page}`,
+      page,
+      xRatio: 0.1,
+      yRatio: 0.1,
+      widthRatio: 0.2,
+      heightRatio: 0.08,
+    });
+
+    function dtoWith(
+      collaborators: CreateDocumentSignaturesDto['collaborators'],
+    ): CreateDocumentSignaturesDto {
+      return { ...baseDto, collaborators };
+    }
+
+    function savedCollaborators() {
+      return collaboratorRepo.create.mock.calls.map(([data]) => data);
+    }
+
+    it('un colaborador MANUAL se crea con los datos del payload', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'Juan.Perez@Mail.com',
+            addToDirectory: false,
+            signatures: [position(1)],
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(savedCollaborators()[0]).toMatchObject({
+        firstName: 'Juan',
+        lastName: 'Pérez',
+        email: 'juan.perez@mail.com',
+      });
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).toHaveBeenCalledWith(expect.anything(), []);
+      expect(
+        directoryCollaborators.addManualCollaboratorsToDirectory,
+      ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
+    });
+
+    it('un testigo MANUAL se crea con los datos del payload y su RFC', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          { ...baseDto.collaborators[0] },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+            firstName: 'Carlos',
+            lastName: 'Solares',
+            email: 'carlos@mail.com',
+            addToDirectory: false,
+            taxId: 'SOCA800101AAA',
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(savedCollaborators()[1]).toMatchObject({
+        firstName: 'Carlos',
+        lastName: 'Solares',
+        email: 'carlos@mail.com',
+        taxId: 'SOCA800101AAA',
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+      });
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(
+        2,
+      );
+    });
+
+    it('un MANUAL con addToDirectory se registra en el Directorio dentro de la transacción', async () => {
+      const manager = { marker: 'tx' };
+      dataSource.transaction.mockImplementationOnce(
+        async (cb: (m: unknown) => Promise<unknown>) =>
+          cb({
+            ...manager,
+            getRepository: jest.fn((entity: unknown) => {
+              if (entity === DocumentEntity) return documentRepo;
+              if (entity === CollaboratorEntity) return collaboratorRepo;
+              if (entity === NotificationEntity) return notificationRepo;
+              if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
+              throw new Error('repositorio no mockeado');
+            }),
+          }),
+      );
+
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'juan.perez@mail.com',
+            addToDirectory: true,
+            signatures: [position(1)],
+          },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+            firstName: 'Carlos',
+            lastName: 'Solares',
+            email: 'carlos@mail.com',
+            addToDirectory: false,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        directoryCollaborators.addManualCollaboratorsToDirectory,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ marker: 'tx' }),
+        expect.objectContaining({ id: 'account-1' }),
+        [
+          {
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'juan.perez@mail.com',
+          },
+        ],
+      );
+    });
+
+    it('un firmante del Directorio se crea con la identidad del usuario vinculado', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-ana',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            signatures: [position(1)],
+            orderIndex: 0,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      // El alcance (la cuenta activa) viaja siempre junto con el linkedUserId.
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).toHaveBeenCalledWith(expect.objectContaining({ id: 'account-1' }), [
+        'user-ana',
+      ]);
+      expect(savedCollaborators()[0]).toMatchObject({
+        firstName: 'Ana',
+        lastName: 'García',
+        email: 'ana.garcia@example.com',
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        signingOrder: 0,
+      });
+      // Su posición de firma se guarda igual que la de un firmante manual…
+      expect(simpleSignatureRepo.create).toHaveBeenCalledWith({
+        signatureCoordinates: [expect.objectContaining({ page: 1 })],
+      });
+      // …y en firma SIMPLE se le emite su código de verificación.
+      expect(verificationCodeService.issue).toHaveBeenCalledTimes(1);
+      expect(
+        directoryCollaborators.addManualCollaboratorsToDirectory,
+      ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
+    });
+
+    /**
+     * Payload inválido para cada origen: el caso de uso aplica la misma regla que el DTO
+     * (`collaboratorSourceViolations`), así que también se rechaza sin pasar por el
+     * `ValidationPipe`, y antes de subir el archivo o resolver nada en el Directorio.
+     */
+    it.each([
+      [
+        'DIRECTORY con datos de identidad',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+          linkedUserId: 'user-ana',
+          firstName: 'Impostor',
+          email: 'impostor@evil.com',
+        },
+        'Con source DIRECTORY no se aceptan: firstName, email',
+      ],
+      [
+        'DIRECTORY con addToDirectory',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+          linkedUserId: 'user-ana',
+          addToDirectory: true,
+        },
+        'Con source DIRECTORY no se aceptan: addToDirectory',
+      ],
+      [
+        'MANUAL con linkedUserId',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+          firstName: 'Juan',
+          lastName: 'Pérez',
+          email: 'juan@mail.com',
+          addToDirectory: false,
+          linkedUserId: 'user-ana',
+        },
+        'Con source MANUAL no se aceptan: linkedUserId',
+      ],
+      [
+        'MANUAL sin addToDirectory',
+        {
+          source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+          firstName: 'Juan',
+          lastName: 'Pérez',
+          email: 'juan@mail.com',
+        },
+        'Con source MANUAL son obligatorios: addToDirectory',
+      ],
+      [
+        'sin source',
+        { firstName: 'Juan', lastName: 'Pérez', email: 'juan@mail.com' },
+        'source es obligatorio y debe ser DIRECTORY o MANUAL',
+      ],
+    ])('rechaza un colaborador %s', async (_case, fields, message) => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          dtoWith([
+            {
+              collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+              signatures: [position(1)],
+              ...fields,
+            } as CreateDocumentSignaturesDto['collaborators'][number],
+          ]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(message);
+
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).not.toHaveBeenCalled();
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('notifica a cada colaborador del Directorio con su rol (SIGNER o WITNESS)', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-ana',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            signatures: [position(1)],
+          },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-luis',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      const [signer, witness] = savedCollaborators();
+      expect(signer).toMatchObject({
+        email: 'ana.garcia@example.com',
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+      });
+      expect(witness).toMatchObject({
+        email: 'luis.ramirez@example.com',
+        firstName: 'Luis',
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+        signatureType: null,
+        taxId: null,
+      });
+      // Una notificación por colaborador, en la outbox; el correo de Firmante o Testigo lo decide
+      // `SendPendingSignatureNotificationUseCase` a partir del `colaboratorType` guardado.
+      expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(
+        2,
+      );
+    });
+
+    it('respeta el orden de firma mezclando firmantes de ambos orígenes', async () => {
+      await useCase.execute(
+        'creator-1',
+        'account-1',
+        dtoWith([
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            firstName: 'Juan',
+            lastName: 'Pérez',
+            email: 'juan.perez@mail.com',
+            addToDirectory: false,
+            signatures: [position(1)],
+            orderIndex: 1,
+          },
+          {
+            source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+            linkedUserId: 'user-ana',
+            collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+            signatures: [position(2)],
+            orderIndex: 0,
+          },
+        ]),
+        file,
+        '127.0.0.1',
+      );
+
+      expect(
+        savedCollaborators().map((c) => [c.email, c.signingOrder]),
+      ).toEqual([
+        ['ana.garcia@example.com', 0],
+        ['juan.perez@mail.com', 1],
+      ]);
+    });
+
+    it.each([
+      ['inexistente', 'user-inexistente'],
+      ['fuera del Directorio activo', 'user-de-otra-cuenta'],
+    ])(
+      'rechaza un usuario vinculado %s sin subir el archivo ni crear nada',
+      async (_case, linkedUserId) => {
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            dtoWith([
+              {
+                source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+                linkedUserId,
+                collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+                signatures: [position(1)],
+              },
+            ]),
+            file,
+            '127.0.0.1',
+          ),
+        ).rejects.toThrow(DIRECTORY_COLLABORATOR_NOT_FOUND_MESSAGE);
+
+        expect(minioService.uploadObject).not.toHaveBeenCalled();
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rechaza un colaborador del Directorio sin linkedUserId (contacto sin usuario vinculado)', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          dtoWith([
+            {
+              source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.DIRECTORY,
+              collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.WITNESS,
+            },
+            baseDto.collaborators[0],
+          ]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow('Con source DIRECTORY son obligatorios: linkedUserId');
+
+      expect(
+        directoryCollaborators.resolveLinkedCollaborators,
+      ).not.toHaveBeenCalled();
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un colaborador MANUAL sin correo aunque no haya pasado por el ValidationPipe', async () => {
+      await expect(
+        useCase.execute(
+          'creator-1',
+          'account-1',
+          dtoWith([
+            {
+              source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
+              collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+              firstName: 'Juan',
+              lastName: 'Pérez',
+              signatures: [position(1)],
+            },
+          ]),
+          file,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(minioService.uploadObject).not.toHaveBeenCalled();
+    });
+  });
+});

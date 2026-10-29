@@ -1,0 +1,4 @@
+export enum CHECKOUT_KIND_ENUM {
+  SUBSCRIPTION = 'SUBSCRIPTION',
+  ADD_ON = 'ADD_ON',
+}

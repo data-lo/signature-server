@@ -1,0 +1,184 @@
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
+import { TDocumentDefinitions } from 'pdfmake/interfaces';
+import { ConservationRecordInfo } from './conservation-record.util';
+import {
+  SummaryDocumentInfo,
+  SummaryDocumentSigner,
+} from './interfaces/summary-document.interface';
+import {
+  buildInfoTable,
+  buildSheetFooter,
+  buildSheetHeader,
+  dashBanner,
+  formatSheetDate,
+  formatSheetTimestamp,
+  renderSheetPdf,
+  SHEET_DEFAULT_STYLE,
+  SHEET_PAGE_MARGINS,
+  SHEET_STYLES,
+} from './sheet-rendering';
+// Valores fijos de la tabla de cada firmante: describen el mecanismo, no al firmante. Compartidos
+// con la vista pública de verificación, que tiene que decir exactamente lo mismo que esta hoja.
+import {
+  SIMPLE_SIGNATURE_BACKING_LABEL as SIGNATURE_BACKING_LABEL,
+  SIMPLE_SIGNATURE_TYPE_LABEL as SIGNATURE_TYPE_LABEL,
+} from './signature-legal-text';
+
+/** Tipo de firma que rotula el encabezado, en la nomenclatura de la plantilla de referencia. */
+const SIGNATURE_TYPE_HEADING = 'Firma_Electrónica_Simple';
+
+/** Banner de guiones que abre la hoja. */
+const BRAND_BANNER = 'Firmalo_Grafo';
+
+/**
+ * Fundamento legal de la firma simple (plantilla "Firmalo Hoja de Firmas SIMPLE"). La firma
+ * avanzada tiene su propia hoja, con su propio fundamento — ver `AdvancedSummaryDocumentService`.
+ */
+const LEGAL_TEXT =
+  'Este documento fue firmado electrónicamente conforme a lo dispuesto en los artículos 89, 90 y ' +
+  '93 del Código de Comercio en relación con firmas electrónicas y mensajes de datos, gozando de ' +
+  'presunción legal de atribución y conserva plena validez jurídica. La integridad de este ' +
+  'documento está respaldada al integrar una constancia de conservación emitida por un PSC ' +
+  'debidamente acreditado por la Secretaría de Economía. Esta modalidad de firma tiene el ' +
+  'mismo valor legal que una firma autógrafa.';
+
+/** Introducción de la sección "Firmas" (plantilla de referencia). */
+const SIGNATURES_INTRO_TEXT =
+  'Para la generación de estas firmas se implementan mecanismos de verificación de identidad, ' +
+  'incluyendo código de un solo uso (OTP), prueba de vida o comparación biométrica. Estos ' +
+  'elementos permiten acreditar la identidad de los firmantes y sustentan la atribución del ' +
+  'mensaje de datos en términos de los artículos 89, 90 y 93 del Código de Comercio.';
+
+/**
+ * Tabla de la Constancia de Conservación (NOM-151), con los renglones de la plantilla.
+ *
+ * La firma simple también se sella ante el PSC, con su propia evidencia (los datos de identidad y
+ * el OTP de cada firmante, ver `SendCompletedSimpleSignatureToSealUseCase`). Estos renglones
+ * salían siempre vacíos porque ese sellado corría DESPUÉS de armar la hoja, no porque no hubiera
+ * constancia.
+ *
+ * Se imprimen vacíos únicamente cuando el documento no llegó a sellarse —el sellado es
+ * best-effort— porque la tabla es parte de la plantilla de referencia.
+ */
+function buildConservationRecordRows(
+  record: ConservationRecordInfo | null | undefined,
+): string[][] {
+  return [
+    ['Certificado (TSA)', record?.tsaCertificate ?? ''],
+    ['Número de Serie', record?.serialNumber ?? ''],
+    /**
+     * `Emitido` conserva su fecha legible: es la marca del PSC —cuándo emitió la constancia—, no
+     * la fecha de firma, y la historia que pidió el timestamp Unix habla sólo de esta última.
+     */
+    ['Emitido', formatSheetDate(record?.issuedAt)],
+  ];
+}
+
+@Injectable()
+export class SummaryDocumentService {
+  private readonly logger = new Logger(SummaryDocumentService.name);
+
+  /**
+   * Genera la hoja de evidencia de FIRMA SIMPLE (info del documento + constancia de conservación +
+   * detalle de cada firmante), replicando la plantilla de referencia "Firmalo Hoja de Firmas".
+   *
+   * No lee ni escribe nada por sí misma — recibe `document` y `signers` ya resueltos por el caller
+   * (p.ej. `attachSignaturesSheet` en document.service.ts) y retorna el PDF en memoria.
+   */
+  async generateSummaryPdf(
+    document: SummaryDocumentInfo,
+    signers: SummaryDocumentSigner[],
+  ): Promise<Buffer> {
+    try {
+      return await renderSheetPdf(this.buildDocDefinition(document, signers));
+    } catch (error) {
+      this.logger.error(
+        `Error generando la hoja resumen del documento ${document.id}: ${error}`,
+      );
+      throw new InternalServerErrorException(
+        `Error generando la hoja resumen del documento: ${error}`,
+      );
+    }
+  }
+
+  private buildDocDefinition(
+    document: SummaryDocumentInfo,
+    signers: SummaryDocumentSigner[],
+  ): TDocumentDefinitions {
+    return {
+      pageSize: 'LETTER',
+      pageMargins: SHEET_PAGE_MARGINS,
+      defaultStyle: SHEET_DEFAULT_STYLE,
+      styles: SHEET_STYLES,
+      header: () => buildSheetHeader(SIGNATURE_TYPE_HEADING),
+      footer: () => buildSheetFooter(document.verificationUrl ?? document.id),
+      content: [
+        { text: dashBanner(BRAND_BANNER), style: 'mono' },
+        {
+          text: LEGAL_TEXT,
+          style: 'legal',
+          alignment: 'justify',
+          margin: [0, 10, 0, 10],
+        },
+        { text: 'Información del Documento.', style: 'sectionTitle' },
+        buildInfoTable(this.buildDocumentInfoRows(document)),
+        {
+          text: 'Información de la Constancia de Conservación (NOM-151)',
+          style: 'sectionTitle',
+          margin: [0, 14, 0, 6],
+        },
+        buildInfoTable(
+          buildConservationRecordRows(document.conservationRecord),
+        ),
+        {
+          text: dashBanner('Firmas'),
+          style: 'mono',
+          margin: [0, 18, 0, 10],
+        },
+        {
+          text: SIGNATURES_INTRO_TEXT,
+          style: 'legal',
+          alignment: 'justify',
+          margin: [0, 0, 0, 10],
+        },
+        ...signers.map((signer, index) => this.buildSignerTable(signer, index)),
+      ],
+    };
+  }
+
+  /**
+   * Mismos campos y orden que la plantilla de referencia.
+   *
+   * Las etiquetas van en capitalización tipo título, igual que el resto de la hoja: las palabras
+   * con significado propio en mayúscula inicial y las preposiciones en minúscula
+   * (`Nombre del Documento`, `Creado por`). `ID` y `Hash` se quedan como están por ser sigla y
+   * término técnico.
+   */
+  private buildDocumentInfoRows(document: SummaryDocumentInfo): string[][] {
+    return [
+      ['Id del Documento', document.id],
+      ['Nombre del Documento', document.documentName],
+      ['Huella del Documento', document.hash],
+      ['No. de Páginas', String(document.totalPages)],
+      ['Creado por', document.createdBy],
+    ];
+  }
+
+  /** Una tabla por firmante, con los campos de la plantilla de referencia. */
+  private buildSignerTable(signer: SummaryDocumentSigner, index: number) {
+    return buildInfoTable(
+      [
+        ['Nombre', signer.name],
+        ['Tipo de Firma', SIGNATURE_TYPE_LABEL],
+        ['Sustentada', SIGNATURE_BACKING_LABEL],
+        ['Código de Verificación', signer.otpCode ?? ''],
+        ['Fecha de Firma', formatSheetTimestamp(signer.signedAt)],
+      ],
+      index === 0 ? 0 : 12,
+    );
+  }
+}

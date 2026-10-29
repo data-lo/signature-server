@@ -17,8 +17,14 @@ npm install @sendgrid/mail @nestjs/config class-validator class-transformer
 ```env
 SENDGRID_API_KEY=tu_clave_api_de_sendgrid
 SENDGRID_FROM_EMAIL=noreply@tudominio.com
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=http://localhost:3001
 ```
+
+> `FRONTEND_URL` es la base de los enlaces que viajan en los correos, así que debe ser una URL
+> alcanzable desde el navegador del destinatario — nunca un hostname interno de Docker como
+> `http://frontend:3000`, que fuera de la red de contenedores no resuelve y deja el enlace muerto
+> aunque el correo se envíe correctamente. Debe coincidir con el puerto real del frontend (3001
+> por defecto, ver `.env.example`).
 
 2. Obtén tu API Key de SendGrid desde [https://app.sendgrid.com/settings/api_keys](https://app.sendgrid.com/settings/api_keys)
 

@@ -1,0 +1,204 @@
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { DocumentEntity } from './document.entity';
+import { SimpleSignatureEntity } from 'src/signature/entities/simple-signature.entity';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
+import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { SIGNING_AUTHORIZATION_ENUM } from '../enum/signing-authorization.enum';
+import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
+
+/**
+ * Reemplaza a DocumentParticipantEntity (ver plan de migración ER-V2, Fase 3). Generaliza
+ * "participante" a "colaborador": agrega el rol REVIEWER, permite invitar solo por email
+ * (accountId nullable) sin que exista una cuenta de plataforma todavía, y suma geolocation/
+ * cancellationReason/signatureType que no existían antes.
+ *
+ * `comments`, `reminderPeriodicity` y la relación con `fiel_signatures` se eliminaron en la
+ * depuración de modelos deprecados (migración `DropDeprecatedSchema`): ningún flujo las escribía
+ * ni las leía. La firma avanzada vive en `advancedSignature`.
+ *
+ * `accountId` reemplazó a `userId` (ver diagrama ER-V2 más reciente / migración
+ * `RenameCollaboratorUserIdToAccountId`): apunta a la cuenta PERSONAL del colaborador, no
+ * directamente a `UserEntity`, consistente con el resto del modelo multi-tenant.
+ *
+ * `geoLoc` y `rfc` pasaron a `geolocation` y `taxId`, y `visibilityLevel` se eliminó, en la
+ * migración `StandardizeCollaboratorFields`: la primera alinea el nombre con el que ya usaba
+ * todo el flujo de firma y de auditoría, la segunda deja de dar por hecho que el colaborador
+ * tributa en México, y la tercera era un campo sin significado definido que nadie escribía ni
+ * leía. El RFC de `personal_information`, el de `organizations` y el del certificado del SAT no
+ * se tocan: ésos sí son, por definición, un RFC.
+ */
+@Entity('collaborators')
+export class CollaboratorEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'document_id' })
+  documentId: string;
+
+  @ManyToOne(() => DocumentEntity, (document) => document.collaborators, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'document_id' })
+  document: DocumentEntity;
+
+  /**
+   * NULL cuando el colaborador fue invitado solo por email (sin cuenta de plataforma todavía).
+   * Ancla a la cuenta PERSONAL del usuario (no a una membresía de organización específica, ver
+   * `AccountMemberService.findPersonalAccountId`) — evita la ambigüedad de "cuál cuenta" cuando
+   * una persona pertenece a varias organizaciones, y sigue resolviendo 1:1 a `AccountEntity.user`
+   * para todo lo que dependía de la identidad real de la persona (firma/INE, nombre, email).
+   */
+  @Column({ name: 'account_id', nullable: true })
+  accountId: string | null;
+
+  @ManyToOne(() => AccountEntity, { nullable: true })
+  @JoinColumn({ name: 'account_id' })
+  account: AccountEntity | null;
+
+  /** Poblado cuando accountId es null — invitación por email sin cuenta. */
+  @Column({ nullable: true })
+  email: string | null;
+
+  /**
+   * Nombre/apellido capturados al invitar (ver historia "Frontend: Carga de Documentos y
+   * Configuración de Firmantes") — NULL para colaboradores creados antes de esa historia o por
+   * flujos que no los piden. `collaboratorDisplayName()` en document.service.ts los usa como
+   * fallback antes de caer al email crudo.
+   */
+  @Column({ name: 'first_name', nullable: true })
+  firstName: string | null;
+
+  @Column({ name: 'last_name', nullable: true })
+  lastName: string | null;
+
+  /**
+   * Identificador fiscal del colaborador (en México, su RFC). Solo lo guarda el WITNESS: al
+   * firmante no se le pide en ningún flujo, y en firma avanzada el dato real sale del
+   * certificado de e.firma al momento de firmar.
+   */
+  @Column({ name: 'tax_id', nullable: true })
+  taxId: string | null;
+
+  @Column({ name: 'signing_order', nullable: true })
+  signingOrder: number | null;
+
+  /**
+   * Cuándo terminó su participación este colaborador: cuando firma o rechaza si es SIGNER, y
+   * cuando aprueba o rechaza si es REVIEWER. `null` mientras siga en PENDING.
+   *
+   * Se llamaba `signedAt` hasta la historia del flujo de aprobación (ver migración
+   * `AddCollaboratorApprovalFields`). El nombre viejo ya mentía a medias —un firmante que
+   * rechazaba también la escribía— y con el reviewer habría mentido del todo.
+   */
+  @Column({ name: 'resolved_at', nullable: true })
+  resolvedAt: Date | null;
+
+  /**
+   * Comentario con el que el colaborador acompañó su decisión: hoy lo escribe el reviewer al
+   * negar la aprobación (`resolutionNote` del endpoint de rechazo), y es opcional.
+   *
+   * Distinto de `cancellationReason`, que es el motivo de una cancelación del documento entero
+   * y no de la resolución de un colaborador.
+   */
+  @Column({ name: 'resolution_note', type: 'text', nullable: true })
+  resolutionNote: string | null;
+
+  @Column({
+    type: 'enum',
+    enum: COLLABORATOR_STATUS_ENUM,
+    default: COLLABORATOR_STATUS_ENUM.PENDING,
+  })
+  status: COLLABORATOR_STATUS_ENUM;
+
+  @Column({ name: 'ip_address' })
+  ipAddress: string;
+
+  /** Evidencia de ubicación declarada por el dispositivo del firmante al momento de firmar (ver `GeolocationDto`). */
+  @Column({ type: 'jsonb', nullable: true })
+  geolocation: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+  } | null;
+
+  /** Mapea desde el antiguo rejectionReason — aproximación (ver migración de la Fase 3: "rechazo" y "cancelación" no son lo mismo conceptualmente). */
+  @Column({ name: 'cancellation_reason', type: 'text', nullable: true })
+  cancellationReason: string | null;
+
+  /** Coordenadas de firma explícitas de este colaborador (ver Fase 4 del plan). NULL = usa el apilado automático. */
+  @Column({ name: 'simple_signature_id', nullable: true })
+  simpleSignatureId: string | null;
+
+  @ManyToOne(() => SimpleSignatureEntity, { nullable: true })
+  @JoinColumn({ name: 'simple_signature_id' })
+  simpleSignature: SimpleSignatureEntity | null;
+
+  /**
+   * Copia inmutable de la imagen de firma tomada en el momento en que este colaborador firmó
+   * (ver migración `AddSignatureSnapshotToCollaborators`). `finalizeSignedDocument` usa esto en
+   * vez de volver a resolver `user.signatureId` en vivo — si el usuario desactiva o reemplaza
+   * su firma después de firmar este documento, el PDF final no debe verse afectado. NULL hasta
+   * que el colaborador firma. Solo aplica a `signatureType === SIMPLE`.
+   */
+  @Column({ name: 'signature_snapshot_object_key', nullable: true })
+  signatureSnapshotObjectKey: string | null;
+
+  /**
+   * Resultado NO sensible de `EfirmaService.firmar` (hash del documento, firma en base64,
+   * algoritmo, fecha, y datos públicos del certificado) tomado en el momento real de la firma —
+   * nunca contiene la llave privada ni la contraseña, esas nunca se persisten. Solo aplica a
+   * `signatureType === FIEL` (ver historia "Integrar carga y validación de e.firma en el flujo
+   * de firma avanzada"). NULL hasta que el colaborador firma o si firmó con firma simple.
+   */
+  @Column({ name: 'advanced_signature', type: 'jsonb', nullable: true })
+  advancedSignature: SignatureResult | null;
+
+  /**
+   * Cómo acreditó su identidad al firmar: con sesión en su cuenta o, siendo invitado sin cuenta,
+   * con un acceso emitido tras validar un código en su correo (ver migración
+   * `CreateGuestSigningAccesses`). Se escribe junto con la firma y NULL hasta entonces —y en las
+   * firmas anteriores a esa migración—.
+   *
+   * No se deduce de `accountId` porque éste puede cambiar después: un invitado que firmó sin
+   * cuenta y luego se registra deja de verse como invitado, y la evidencia de su firma no puede
+   * cambiar con él.
+   */
+  @Column({
+    name: 'signing_authorization',
+    type: 'enum',
+    enum: SIGNING_AUTHORIZATION_ENUM,
+    nullable: true,
+  })
+  signingAuthorization: SIGNING_AUTHORIZATION_ENUM | null;
+
+  @Column({
+    name: 'signature_type',
+    type: 'enum',
+    enum: SIGNATURE_TYPE_ENUM,
+    nullable: true,
+  })
+  signatureType: SIGNATURE_TYPE_ENUM | null;
+
+  @Column({
+    name: 'colaborator_type',
+    type: 'enum',
+    enum: COLABORATOR_TYPE_ENUM,
+  })
+  colaboratorType: COLABORATOR_TYPE_ENUM;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
+}

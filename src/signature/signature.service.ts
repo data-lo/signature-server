@@ -8,16 +8,21 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { SignatureEntity } from './entities/signature.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { CreateSignatureDto } from './dto/create-signature.dto';
-import { MinioService } from 'src/shared/minio/minio.service';
+import { MinioService } from 'src/common/minio/minio.service';
 import 'multer';
-import { BUCKET_TYPES_ENUM } from 'src/shared/minio/enums/bucket-types.enum';
+import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
+import {
+  MAX_IMAGE_FILE_SIZE_BYTES,
+  MAX_PDF_FILE_SIZE_BYTES,
+} from 'src/common/constants/file-upload.constants';
 import sharp = require('sharp');
+import { UpdateSigningCredentialStatusUseCase } from 'src/identity-verification/applications/update-signing-credential-status.use-case';
 
 @Injectable()
 export class SignatureService {
@@ -29,6 +34,9 @@ export class SignatureService {
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
     private readonly minioService: MinioService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
+    private readonly updateSigningCredentialStatus: UpdateSigningCredentialStatusUseCase,
   ) {}
 
   /**
@@ -44,12 +52,48 @@ export class SignatureService {
   }
 
   /**
+   * Verifica que la firma pertenezca al usuario autenticado consultando
+   * el FK signatureId del lado de User (dueño real de la relación).
+   */
+  async assertOwnership(
+    signatureId: string,
+    currentUserId: string,
+  ): Promise<void> {
+    const user = await this.userRepository.findOne({
+      where: { id: currentUserId },
+    });
+    if (!user || user.signatureId !== signatureId) {
+      throw new ForbiddenException(
+        'La firma no pertenece al usuario autenticado',
+      );
+    }
+  }
+
+  /**
+   * El `limits.fileSize` de multer en el controller ya rechaza cualquier archivo por encima de
+   * `MAX_UPLOAD_SAFETY_NET_BYTES` (25MB) antes de que llegue aquí — ese es solo un techo de
+   * seguridad. Este check aplica el límite real de negocio, más estricto y específico por tipo
+   * de archivo, con un mensaje claro en español en vez del error genérico de multer.
+   */
+  assertWithinSizeLimit(
+    file: Express.Multer.File,
+    maxBytes: number,
+    label: string,
+  ): void {
+    if (file.size > maxBytes) {
+      throw new BadRequestException(
+        `${label} debe pesar menos de ${Math.floor(maxBytes / (1024 * 1024))}MB`,
+      );
+    }
+  }
+
+  /**
    * Elimina un objeto de Minio de forma idempotente: si el archivo ya no existe
    * (por ejemplo, un intento de borrado previo que falló a mitad de camino),
    * no lanza error para permitir que el registro en BD se termine de limpiar.
    * Cualquier otro error (Minio inalcanzable, permisos, etc.) sí se propaga.
    */
-  private async deleteFileIfExists(
+  async deleteFileIfExists(
     objectKey: string,
     bucketType: BUCKET_TYPES_ENUM,
     errorMessage: string,
@@ -90,13 +134,24 @@ export class SignatureService {
       throw new NotFoundException(`Usuario con id ${userId} no encontrado`);
     }
 
-    const signature = await this.signatureRepository.findOne({
-      where: {
-        userId: user.id,
-      },
-    });
+    /**
+     * Se rechaza el alta sólo si el usuario tiene una firma CON IMAGEN, no por el mero hecho de
+     * apuntar a una fila.
+     *
+     * Bug corregido: `deleteSignatureImage` borra la fila —y con ella `users.signature_id`—
+     * únicamente cuando la INE también está vacía (ver `clearFieldOrDeleteRow`); si el usuario
+     * tenía INE, la fila sobrevive con `signature_object_key` en null y el usuario sigue
+     * apuntándole. Este guard leía sólo `signatureId`, así que confundía esa fila sin imagen con
+     * una firma vigente: quien borraba su firma y volvía a dibujarla recibía "ya tiene una firma
+     * registrada" y quedaba bloqueado de forma permanente, sin manera de salir desde la app.
+     */
+    const existingSignature = user.signatureId
+      ? await this.signatureRepository.findOne({
+          where: { id: user.signatureId },
+        })
+      : null;
 
-    if (signature) {
+    if (existingSignature?.signatureObjectKey) {
       throw new ConflictException('El usuario ya tiene una firma registrada');
     }
 
@@ -105,6 +160,21 @@ export class SignatureService {
 
     const signatureFile = files?.signatureImage?.[0];
     const officialFile = files?.officialFile?.[0];
+
+    if (signatureFile) {
+      this.assertWithinSizeLimit(
+        signatureFile,
+        MAX_IMAGE_FILE_SIZE_BYTES,
+        'La imagen de firma',
+      );
+    }
+    if (officialFile) {
+      this.assertWithinSizeLimit(
+        officialFile,
+        MAX_PDF_FILE_SIZE_BYTES,
+        'La identificación oficial',
+      );
+    }
 
     if (signatureFile) {
       signatureObjectKeyResponse = await this.minioService.uploadObject(
@@ -126,23 +196,45 @@ export class SignatureService {
       );
     }
 
-    if (officialCardObjectKeyResponse?.status !== 'FILE_CREATED') {
+    if (
+      officialFile &&
+      officialCardObjectKeyResponse?.status !== 'FILE_CREATED'
+    ) {
       throw new InternalServerErrorException(
         'Error al subir la imagen de identificación oficial a nuestros servidores',
       );
     }
 
-    const newSignature = this.signatureRepository.create({
-      signatureObjectKey: signatureObjectKeyResponse.fileId,
-      officialCardObjectKey: officialCardObjectKeyResponse.fileId,
-      createdBy: userId,
-      isActive: true,
-      userId,
-    });
+    /**
+     * Sobre la fila que sobrevivió al borrado se ESCRIBE, no se inserta otra: el usuario ya
+     * apunta a ella y su INE sigue ahí. Insertar una segunda dejaría la anterior huérfana con la
+     * identificación oficial dentro.
+     *
+     * `officialCardObjectKey` se conserva salvo que esta alta traiga una INE nueva, que es lo
+     * único que puede legítimamente reemplazarla.
+     */
+    const saved = existingSignature
+      ? await this.signatureRepository.save({
+          ...existingSignature,
+          signatureObjectKey: signatureObjectKeyResponse.fileId,
+          officialCardObjectKey:
+            officialCardObjectKeyResponse?.fileId ??
+            existingSignature.officialCardObjectKey,
+          isActive: true,
+        })
+      : await this.signatureRepository.save(
+          this.signatureRepository.create({
+            signatureObjectKey: signatureObjectKeyResponse.fileId,
+            officialCardObjectKey:
+              officialCardObjectKeyResponse?.fileId ?? null,
+            isActive: true,
+          }),
+        );
 
-    const saved = await this.signatureRepository.save(newSignature);
-
-    await this.userRepository.update(userId, { signatureId: saved.id });
+    // Sólo cuando la fila es nueva: al reusar la existente el usuario ya la referencia.
+    if (!existingSignature) {
+      await this.userRepository.update(userId, { signatureId: saved.id });
+    }
 
     return {
       success: true,
@@ -153,97 +245,43 @@ export class SignatureService {
     };
   }
 
+  /** Marca la firma como activa o inactiva. */
+  async setActive(id: string, isActive: boolean): Promise<void> {
+    await this.signatureRepository.update({ id }, { isActive });
+  }
+
   /**
-   * Actualiza la imagen de firma y/o la imagen de INE de una firma existente.
-   * Cada archivo es opcional: solo se actualizan los campos cuyos archivos se envíen.
-   * Sube los nuevos archivos a Minio y actualiza los object keys en la entidad.
+   * Deja un archivo en su bucket y se asegura de que la fila apunte a él.
+   *
+   * Si ya había un object key se reemplaza el contenido en su lugar, en vez de subir uno nuevo
+   * y actualizar la referencia: así no queda el archivo anterior huérfano en MinIO, y las URLs
+   * que ya circulen siguen resolviendo al archivo correcto.
    */
-  async update(
-    id: string,
-    currentUserId: string,
-    files: {
-      signatureImage?: Express.Multer.File;
-      officialFile?: Express.Multer.File;
-    },
-  ): Promise<BaseResponse<{ id: string }>> {
-    const signature = await this.findOne(id);
-
-    if (!signature) {
-      throw new NotFoundException(`Firma con id ${id} no encontrada`);
-    }
-
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
+  async replaceOrUploadFile(
+    signatureId: string,
+    existingObjectKey: string | null,
+    file: Express.Multer.File,
+    bucketType: BUCKET_TYPES_ENUM,
+    field: 'signatureObjectKey' | 'officialCardObjectKey',
+  ): Promise<void> {
+    if (existingObjectKey) {
+      await this.minioService.replaceFile(
+        existingObjectKey,
+        { file, name: file.originalname },
+        bucketType,
       );
+      return;
     }
 
-    let message = 'Firma actualizada correctamente';
+    const uploadResponse = await this.minioService.uploadObject(
+      { file, name: file.originalname },
+      bucketType,
+    );
 
-    if (!signature.isActive) {
-      await this.signatureRepository.update({ id }, { isActive: true });
-
-      message = 'Firma activa y actualizada correctamente';
-    }
-
-    if (files.signatureImage) {
-      let objectKey = signature.signatureObjectKey;
-
-      if (objectKey) {
-        await this.minioService.replaceFile(
-          objectKey,
-          {
-            file: files.signatureImage,
-            name: files.signatureImage.fieldname,
-          },
-          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
-        );
-      } else {
-        const uploadResponse = await this.minioService.uploadObject(
-          {
-            file: files.signatureImage,
-            name: files.signatureImage.originalname,
-          },
-          BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
-        );
-        objectKey = uploadResponse.fileId;
-        await this.signatureRepository.update(
-          { id },
-          { signatureObjectKey: objectKey },
-        );
-      }
-    }
-
-    if (files.officialFile) {
-      let objectKey = signature.officialCardObjectKey;
-
-      if (objectKey) {
-        await this.minioService.replaceFile(
-          objectKey,
-          {
-            file: files.officialFile,
-            name: files.officialFile.filename,
-          },
-          BUCKET_TYPES_ENUM.OFICIAL_CARDS,
-        );
-      } else {
-        const uploadResponse = await this.minioService.uploadObject(
-          { file: files.officialFile, name: files.officialFile.originalname },
-          BUCKET_TYPES_ENUM.OFICIAL_CARDS,
-        );
-        objectKey = uploadResponse.fileId;
-        await this.signatureRepository.update(
-          { id },
-          { officialCardObjectKey: objectKey },
-        );
-      }
-    }
-
-    return {
-      success: true,
-      message: message,
-      data: { id: signature.id },
-    };
+    await this.signatureRepository.update(
+      { id: signatureId },
+      { [field]: uploadResponse.fileId },
+    );
   }
 
   /**
@@ -257,11 +295,7 @@ export class SignatureService {
   ): Promise<BaseResponse<null>> {
     const signature = await this.findOne(id);
 
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
-      );
-    }
+    await this.assertOwnership(id, currentUserId);
 
     if (!signature.signatureObjectKey) {
       throw new BadRequestException(
@@ -275,15 +309,7 @@ export class SignatureService {
       'Error al eliminar la imagen de firma en el almacenamiento',
     );
 
-    if (!signature.officialCardObjectKey) {
-      await this.signatureRepository.delete({ id });
-      await this.userRepository.update(signature.userId, { signatureId: null });
-    } else {
-      await this.signatureRepository.update(
-        { id },
-        { signatureObjectKey: null },
-      );
-    }
+    await this.clearFieldOrDeleteRow(id, currentUserId, 'signatureObjectKey');
 
     return {
       success: true,
@@ -293,70 +319,59 @@ export class SignatureService {
   }
 
   /**
-   * Elimina la identificación oficial (INE) del usuario (Minio + BD).
-   * Si la imagen de firma también estaba vacía, elimina el registro completo
-   * para permitir un registro nuevo desde cero.
+   * Bug corregido: `deleteSignatureImage`/`deleteOfficialFile` cada uno leía `signature` por su
+   * cuenta al inicio del método y decidía "¿el OTRO campo también está vacío?" contra esa
+   * lectura. Si ambos se ejecutaban casi al mismo tiempo (dos pestañas, doble clic en cada
+   * botón), ambas lecturas veían todavía el otro campo presente → ambos tomaban la rama
+   * "solo limpiar mi campo" → los dos archivos quedaban borrados de MinIO pero NINGUNA
+   * limpiaba `user.signatureId`, dejando una fila `signatures` "vacía" a la que el usuario
+   * seguía apuntando — `create()` la rechaza para siempre con "ya tienes una firma registrada",
+   * sin intervención manual en BD.
+   *
+   * El lock pesimista (`SELECT ... FOR UPDATE`) serializa las dos llamadas sobre la misma fila:
+   * la segunda transacción espera a que la primera confirme, y entonces lee el estado YA
+   * actualizado por la primera — así que la decisión "¿limpiar solo mi campo, o borrar toda la
+   * fila?" siempre se toma sobre datos frescos, nunca sobre una lectura obsoleta.
    */
-  async deleteOfficialFile(
+  async clearFieldOrDeleteRow(
     id: string,
     currentUserId: string,
-  ): Promise<BaseResponse<null>> {
-    const signature = await this.findOne(id);
+    clearedField: 'signatureObjectKey' | 'officialCardObjectKey',
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const locked = await manager.findOne(SignatureEntity, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) return;
 
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
-      );
-    }
+      const otherField =
+        clearedField === 'signatureObjectKey'
+          ? 'officialCardObjectKey'
+          : 'signatureObjectKey';
 
-    if (!signature.officialCardObjectKey) {
-      throw new BadRequestException(
-        'No hay una identificación oficial registrada para eliminar',
-      );
-    }
-
-    await this.deleteFileIfExists(
-      signature.officialCardObjectKey,
-      BUCKET_TYPES_ENUM.OFICIAL_CARDS,
-      'Error al eliminar la identificación oficial en el almacenamiento',
-    );
-
-    if (!signature.signatureObjectKey) {
-      await this.signatureRepository.delete({ id });
-      await this.userRepository.update(signature.userId, { signatureId: null });
-    } else {
-      await this.signatureRepository.update(
-        { id },
-        { officialCardObjectKey: null },
-      );
-    }
-
-    return {
-      success: true,
-      message: 'Identificación oficial eliminada correctamente',
-      data: null,
-    };
+      if (!locked[otherField]) {
+        // Bug independiente encontrado de paso: `users.signature_id` tiene una FK
+        // `ON DELETE NO ACTION` hacia `signatures.id` (ver InitialSchema) — hay que limpiar la
+        // referencia en `users` ANTES de borrar la fila de `signatures`, o Postgres rechaza el
+        // delete por violar la constraint. El orden anterior (borrar primero) nunca funcionaba
+        // en este código, en carrera o no.
+        await manager.update(UserEntity, currentUserId, { signatureId: null });
+        await manager.delete(SignatureEntity, { id });
+      } else {
+        await manager.update(SignatureEntity, { id }, { [clearedField]: null });
+      }
+    });
   }
 
-  async deactivate(id: string, currentUserId: string): Promise<BaseResponse> {
-    const signature = await this.signatureRepository.findOne({ where: { id } });
-
-    if (!signature) {
-      throw new NotFoundException(`Firma con ID ${id} no encontrada`);
-    }
-
-    if (signature.userId !== currentUserId) {
-      throw new ForbiddenException(
-        'La firma no pertenece al usuario autenticado',
-      );
-    }
-
-    if (!signature.isActive) {
-      throw new BadRequestException(
-        `La firma con ID ${id} ya está desactivada`,
-      );
-    }
-
+  /**
+   * Sobrescribe el PNG de la firma con una imagen transparente del mismo tamaño.
+   *
+   * Se reemplaza el contenido en lugar de borrar el objeto porque los documentos ya firmados
+   * siguen apuntando a ese object key: borrarlo dejaría esas firmas sin imagen. Una imagen
+   * transparente conserva la referencia y a la vez deja de mostrar el trazo.
+   */
+  async blankOutSignatureImage(objectKey: string): Promise<void> {
     const blankPngBuffer = await sharp({
       create: {
         width: 100,
@@ -369,33 +384,10 @@ export class SignatureService {
       .toBuffer();
 
     await this.minioService.replaceFile(
-      signature.signatureObjectKey,
-      {
-        file: blankPngBuffer,
-        name: 'blank.png',
-        mimetype: 'image/png',
-      },
+      objectKey,
+      { file: blankPngBuffer, name: 'blank.png', mimetype: 'image/png' },
       BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
     );
-
-    signature.isActive = false;
-
-    await this.signatureRepository.save(signature);
-
-    const minio = await this.minioService.getFile(
-      signature.signatureObjectKey,
-      BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
-    );
-
-    return {
-      success: true,
-      message: 'Firma desactivada correctamente',
-      data: {
-        id: signature.id,
-        secureUrl: minio.secureUrl,
-        expiresIn: minio.expiresIn,
-      },
-    };
   }
 
   async getFile(fileId: string, bucketType: BUCKET_TYPES_ENUM) {

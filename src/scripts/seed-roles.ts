@@ -1,0 +1,264 @@
+import 'reflect-metadata';
+import * as dotenv from 'dotenv';
+dotenv.config();
+
+import { join } from 'path';
+import { DataSource } from 'typeorm';
+
+import { RoleEntity } from '../roles/entities/role.entity';
+import { ResourceEntity } from '../roles/entities/resource.entity';
+import { ActionEntity } from '../roles/entities/action.entity';
+import { PermissionEntity } from '../roles/entities/permission.entity';
+import { RolePermissionEntity } from '../roles/entities/role-permission.entity';
+import { SYSTEM_ROLE_NAME_ENUM } from '../roles/enums/system-role-name.enum';
+import { RESOURCE_KEY_ENUM } from '../roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from '../roles/enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from '../roles/enums/permission-scope.enum';
+import { normalizeCatalogDescription } from '../roles/static-permission-catalog';
+
+/**
+ * Puebla las tablas estáticas del RBAC básico (roles, resources, actions,
+ * permissions, role_permissions). Se puede correr varias veces sin duplicar
+ * registros: cada entidad se busca por su clave natural (key/name, o el par
+ * resourceId+actionId+scope / roleId+permissionId para las tablas pivote)
+ * antes de insertarla.
+ *
+ * Es la rejilla CRUD original (3 recursos × 4 acciones, todo con scope ANY) y
+ * lo que consultan hoy los checks de ORGANIZATION en `account` y
+ * `organization-permissions`. El catálogo de permisos de negocio vive aparte,
+ * en `src/roles/static-permission-catalog.ts` (`npm run seed:static-permissions`).
+ */
+
+/**
+ * Las descripciones van en MAYÚSCULAS, igual que las del catálogo estático
+ * (`src/roles/static-permission-catalog.ts`): las dos siembras comparten filas —DOCUMENT,
+ * ORGANIZATION, CREATE, READ...— y si cada una escribiera con su propio criterio, correrlas
+ * alternadas dejaría la descripción cambiando de forma en cada corrida.
+ *
+ * Recursos y acciones que siembra ESTE seed, enumerados a mano en vez de recorrer los enums.
+ * Los enums crecieron con el catálogo estático (MEMBER, SIGN, APPROVE, INVITE...) y recorrerlos
+ * haría que este script sembrara permisos que nunca sembró y que no le corresponden.
+ */
+const LEGACY_RESOURCE_KEYS = [
+  RESOURCE_KEY_ENUM.DOCUMENT,
+  RESOURCE_KEY_ENUM.ORGANIZATION,
+  RESOURCE_KEY_ENUM.USER,
+] as const;
+
+const LEGACY_ACTION_KEYS = [
+  ACTION_KEY_ENUM.CREATE,
+  ACTION_KEY_ENUM.READ,
+  ACTION_KEY_ENUM.UPDATE,
+  ACTION_KEY_ENUM.DELETE,
+] as const;
+
+const RESOURCE_DESCRIPTIONS: Record<
+  (typeof LEGACY_RESOURCE_KEYS)[number],
+  string
+> = {
+  [RESOURCE_KEY_ENUM.DOCUMENT]: 'DOCUMENTOS PARA FIRMA ELECTRÓNICA',
+  [RESOURCE_KEY_ENUM.ORGANIZATION]: 'CUENTAS DE TIPO ORGANIZACIÓN',
+  [RESOURCE_KEY_ENUM.USER]: 'USUARIOS DE LA PLATAFORMA',
+};
+
+const ACTION_DESCRIPTIONS: Record<(typeof LEGACY_ACTION_KEYS)[number], string> =
+  {
+    [ACTION_KEY_ENUM.CREATE]: 'CREAR UN RECURSO NUEVO',
+    [ACTION_KEY_ENUM.READ]: 'CONSULTAR UN RECURSO EXISTENTE',
+    [ACTION_KEY_ENUM.UPDATE]: 'ACTUALIZAR UN RECURSO EXISTENTE',
+    [ACTION_KEY_ENUM.DELETE]: 'ELIMINAR UN RECURSO EXISTENTE',
+  };
+
+async function upsertRole(
+  dataSource: DataSource,
+  name: SYSTEM_ROLE_NAME_ENUM,
+): Promise<RoleEntity> {
+  const roleRepository = dataSource.getRepository(RoleEntity);
+  const existing = await roleRepository.findOne({
+    where: { name, isSystemRole: true },
+  });
+  if (existing) return existing;
+
+  return roleRepository.save(
+    roleRepository.create({ name, isSystemRole: true, organizationId: null }),
+  );
+}
+
+/**
+ * Crea el recurso si falta y, si ya existe, corrige su descripción cuando no coincide.
+ *
+ * Corregirla —y no sólo reutilizar la fila— es lo que mantiene la regla de MAYÚSCULAS: las filas
+ * que sembró una migración en minúsculas (`DELETE`, por ejemplo) se quedaban así para siempre,
+ * porque ningún seed las volvía a tocar.
+ *
+ * @param dataSource - Conexión del seed.
+ * @param key - Clave del recurso.
+ * @returns El recurso persistido.
+ *
+ * @example
+ * ```ts
+ * const document = await upsertResource(dataSource, RESOURCE_KEY_ENUM.DOCUMENT);
+ * ```
+ */
+async function upsertResource(
+  dataSource: DataSource,
+  key: (typeof LEGACY_RESOURCE_KEYS)[number],
+): Promise<ResourceEntity> {
+  const resourceRepository = dataSource.getRepository(ResourceEntity);
+  const description = normalizeCatalogDescription(RESOURCE_DESCRIPTIONS[key]);
+  const existing = await resourceRepository.findOne({ where: { key } });
+
+  if (existing) {
+    if (existing.description === description) return existing;
+
+    return resourceRepository.save({ ...existing, description });
+  }
+
+  return resourceRepository.save(
+    resourceRepository.create({ key, description }),
+  );
+}
+
+/**
+ * Crea la acción si falta y, si ya existe, corrige su descripción cuando no coincide.
+ *
+ * Misma razón que `upsertResource`.
+ *
+ * @param dataSource - Conexión del seed.
+ * @param key - Clave de la acción.
+ * @returns La acción persistida.
+ *
+ * @example
+ * ```ts
+ * const read = await upsertAction(dataSource, ACTION_KEY_ENUM.READ);
+ * ```
+ */
+async function upsertAction(
+  dataSource: DataSource,
+  key: (typeof LEGACY_ACTION_KEYS)[number],
+): Promise<ActionEntity> {
+  const actionRepository = dataSource.getRepository(ActionEntity);
+  const description = normalizeCatalogDescription(ACTION_DESCRIPTIONS[key]);
+  const existing = await actionRepository.findOne({ where: { key } });
+
+  if (existing) {
+    if (existing.description === description) return existing;
+
+    return actionRepository.save({ ...existing, description });
+  }
+
+  return actionRepository.save(actionRepository.create({ key, description }));
+}
+
+async function upsertPermission(
+  dataSource: DataSource,
+  resource: ResourceEntity,
+  action: ActionEntity,
+  scope: PERMISSION_SCOPE_ENUM,
+): Promise<PermissionEntity> {
+  const permissionRepository = dataSource.getRepository(PermissionEntity);
+  const existing = await permissionRepository.findOne({
+    where: { resourceId: resource.id, actionId: action.id, scope },
+  });
+  if (existing) return existing;
+
+  return permissionRepository.save(
+    permissionRepository.create({
+      resourceId: resource.id,
+      actionId: action.id,
+      scope,
+    }),
+  );
+}
+
+async function upsertRolePermission(
+  dataSource: DataSource,
+  role: RoleEntity,
+  permission: PermissionEntity,
+): Promise<void> {
+  const rolePermissionRepository =
+    dataSource.getRepository(RolePermissionEntity);
+  const existing = await rolePermissionRepository.findOne({
+    where: { roleId: role.id, permissionId: permission.id },
+  });
+  if (existing) return;
+
+  await rolePermissionRepository.save(
+    rolePermissionRepository.create({
+      roleId: role.id,
+      permissionId: permission.id,
+    }),
+  );
+}
+
+async function main() {
+  const dataSource = new DataSource({
+    type: 'postgres',
+    url: process.env.POSTGRES_DB_URL,
+    // Glob doble extensión: en dev corre vía ts-node sobre src/**/*.entity.ts, en
+    // Docker/producción corre con `node` directo sobre dist/**/*.entity.js (ver DoD del
+    // ticket de seeding post-build) — __dirname apunta a la carpeta real en ambos casos, así
+    // que un solo glob cubre los dos entornos sin necesidad de una variable de entorno aparte.
+    entities: [join(__dirname, '..', '**', '*.entity{.ts,.js}')],
+    synchronize: false,
+    logging: false,
+  });
+
+  await dataSource.initialize();
+  console.log('Conectado a la base de datos.');
+
+  console.log('Creando/verificando roles del sistema...');
+  const ownerRole = await upsertRole(dataSource, SYSTEM_ROLE_NAME_ENUM.OWNER);
+  const adminRole = await upsertRole(dataSource, SYSTEM_ROLE_NAME_ENUM.ADMIN);
+  const memberRole = await upsertRole(dataSource, SYSTEM_ROLE_NAME_ENUM.MEMBER);
+
+  console.log('Creando/verificando resources...');
+  const resources = new Map<RESOURCE_KEY_ENUM, ResourceEntity>();
+  for (const key of LEGACY_RESOURCE_KEYS) {
+    resources.set(key, await upsertResource(dataSource, key));
+  }
+
+  console.log('Creando/verificando actions...');
+  const actions = new Map<ACTION_KEY_ENUM, ActionEntity>();
+  for (const key of LEGACY_ACTION_KEYS) {
+    actions.set(key, await upsertAction(dataSource, key));
+  }
+
+  console.log('Creando/verificando permissions y role_permissions...');
+
+  // OWNER y ADMIN: todas las acciones sobre todos los recursos.
+  for (const resource of resources.values()) {
+    for (const action of actions.values()) {
+      const permission = await upsertPermission(
+        dataSource,
+        resource,
+        action,
+        PERMISSION_SCOPE_ENUM.ANY,
+      );
+      await upsertRolePermission(dataSource, ownerRole, permission);
+      await upsertRolePermission(dataSource, adminRole, permission);
+    }
+  }
+
+  // MEMBER: solo READ y CREATE sobre DOCUMENT.
+  const documentResource = resources.get(RESOURCE_KEY_ENUM.DOCUMENT)!;
+  for (const actionKey of [ACTION_KEY_ENUM.READ, ACTION_KEY_ENUM.CREATE]) {
+    const permission = await upsertPermission(
+      dataSource,
+      documentResource,
+      actions.get(actionKey)!,
+      PERMISSION_SCOPE_ENUM.ANY,
+    );
+    await upsertRolePermission(dataSource, memberRole, permission);
+  }
+
+  await dataSource.destroy();
+  console.log(
+    'Listo. RBAC básico sembrado (roles, resources, actions, permissions).',
+  );
+}
+
+main().catch((error) => {
+  console.error('Error sembrando el RBAC básico:', error);
+  process.exit(1);
+});

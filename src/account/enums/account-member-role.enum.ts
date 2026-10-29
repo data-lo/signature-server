@@ -1,5 +1,0 @@
-export enum ACCOUNT_MEMBER_ROLE_ENUM {
-  OWNER = 'OWNER',
-  ADMIN = 'ADMIN',
-  SIGNEE = 'SIGNEE',
-}

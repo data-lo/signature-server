@@ -1,20 +1,511 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DocumentController } from './document.controller';
-import { DocumentService } from './document.service';
-import { describe, beforeEach, it } from 'node:test';
+import { JwtPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { SEAL_ARTIFACT_ENUM } from './seal/seal-artifacts';
+import type { Response } from 'express';
+
+import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
+import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
+import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
+import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
+import { CreateDocumentUseCase } from './applications/create-document.use-case';
+import { GetDocumentsUseCase } from './applications/get-documents.use-case';
+import { GetDocumentUseCase } from './applications/get-document.use-case';
+import { SubmitDocumentForAuthorizationUseCase } from './applications/submit-document-for-authorization.use-case';
+import { SignDocumentUseCase } from './applications/sign-document.use-case';
+import { LinkDocumentCollaboratorUseCase } from './applications/link-document-collaborator.use-case';
+import { RequestDocumentVerificationCodeUseCase } from './applications/request-document-verification-code.use-case';
+import { VerifyDocumentCodeUseCase } from './applications/verify-document-code.use-case';
+import { RejectDocumentUseCase } from './applications/reject-document.use-case';
+import { SubmitDocumentForCancellationUseCase } from './applications/submit-document-for-cancellation.use-case';
+import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
+import { UpdateDocumentUseCase } from './applications/update-document.use-case';
+import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
+import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
+import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
+import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
+import { AuthorizationContext } from 'src/authorization/interfaces/authorization-context.interface';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { REQUIRED_PERMISSION_METADATA } from 'src/authorization/constants/permission-metadata.constant';
+
+type Mocked = { execute: jest.Mock };
+
+const USE_CASES = [
+  GetDocumentFileUrlUseCase,
+  GetPublicDocumentUseCase,
+  GetPublicSealArtifactUseCase,
+  GetPublicDocumentAuditXmlUseCase,
+  GetPublicAdvancedSignatureUseCase,
+  CreateDocumentUseCase,
+  GetDocumentsUseCase,
+  GetDocumentUseCase,
+  SubmitDocumentForAuthorizationUseCase,
+  ApproveDocumentUseCase,
+  RejectDocumentApprovalUseCase,
+  SignDocumentUseCase,
+  LinkDocumentCollaboratorUseCase,
+  RequestDocumentVerificationCodeUseCase,
+  VerifyDocumentCodeUseCase,
+  RejectDocumentUseCase,
+  SubmitDocumentForCancellationUseCase,
+  ConfirmDocumentCancellationUseCase,
+  UpdateDocumentUseCase,
+  DeleteDocumentUseCase,
+  ArchiveCompletedDocumentUseCase,
+  RestoreArchivedDocumentUseCase,
+];
 
 describe('DocumentController', () => {
   let controller: DocumentController;
+  let module: TestingModule;
+
+  const useCase = (token: unknown) => module.get(token as never) as Mocked;
+
+  const user: JwtPayload = {
+    sub: 'user-1',
+    email: 'juan@empresa.com',
+    roles: ['signer'],
+    nationalId: 'PELJ850101HDFRNN08',
+    jti: 'jti-1',
+  };
+
+  /**
+   * Lo que `PermissionsGuard` habría dejado en la petición para este usuario. Se construye por
+   * acción porque el contexto la lleva dentro: el de leer y el de firmar no son el mismo objeto,
+   * y afirmar que el controller pasó "un contexto" cualquiera no comprobaría nada.
+   */
+  const authorization = (action: ACTION_KEY_ENUM): AuthorizationContext => ({
+    userId: 'user-1',
+    organizationId: 'org-1',
+    accountId: 'account-1',
+    roleId: 'role-1',
+    resource: RESOURCE_KEY_ENUM.DOCUMENT,
+    action,
+    scopes: [PERMISSION_SCOPE_ENUM.OWN, PERMISSION_SCOPE_ENUM.SELF],
+  });
 
   beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
+    module = await Test.createTestingModule({
       controllers: [DocumentController],
-      providers: [DocumentService],
+      providers: USE_CASES.map((provide) => ({
+        provide,
+        useValue: { execute: jest.fn() },
+      })),
     }).compile();
 
     controller = module.get<DocumentController>(DocumentController);
   });
 
   it('should be defined', () => {
+    expect(controller).toBeDefined();
+  });
+
+  it('create delega en CreateDocumentUseCase con el userId y el X-Account-Id', async () => {
+    const dto = { signerIds: ['user-2'], witnessIds: [] } as any;
+    const file = { originalname: 'contrato.pdf' } as Express.Multer.File;
+
+    await controller.create(user, 'account-1', dto, file, '127.0.0.1');
+
+    expect(useCase(CreateDocumentUseCase).execute).toHaveBeenCalledWith(
+      'user-1',
+      'account-1',
+      dto,
+      file,
+      '127.0.0.1',
+    );
+  });
+
+  /**
+   * El control de acceso a la descarga vive en el caso de uso, con el MISMO contexto autorizado
+   * que el detalle: cuando el archivo se autorizaba con otra regla, el administrador con
+   * `DOCUMENT.READ_ORGANIZATION` veía el detalle y el visor recibía 403.
+   */
+  it('getDocumentUrl delega en GetDocumentFileUrlUseCase el documento y el contexto autorizado', async () => {
+    await controller.getDocumentUrl(
+      'doc-1',
+      authorization(ACTION_KEY_ENUM.READ),
+    );
+
+    expect(useCase(GetDocumentFileUrlUseCase).execute).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      authorization: authorization(ACTION_KEY_ENUM.READ),
+      asAttachment: false,
+    });
+  });
+
+  /**
+   * Historia "Descargar documentos usando el nombre del archivo en lugar del ID": `?download=true`
+   * es lo único que separa bajar el archivo —con el nombre del documento— de mostrarlo en el
+   * visor. Se compara contra la cadena `'true'` y no por presencia: un query sin valor no debe
+   * convertir en descarga la petición del visor.
+   */
+  it.each([
+    ['true', true],
+    ['false', false],
+    [undefined, false],
+    ['', false],
+    ['1', false],
+  ])('con download=%s pide asAttachment=%s', async (download, expected) => {
+    await controller.getDocumentUrl(
+      'doc-1',
+      authorization(ACTION_KEY_ENUM.READ),
+      download,
+    );
+
+    expect(useCase(GetDocumentFileUrlUseCase).execute).toHaveBeenCalledWith(
+      expect.objectContaining({ documentId: 'doc-1', asAttachment: expected }),
+    );
+  });
+
+  // Historia "Visualización pública de documentos firmados mediante MinIO": esta ruta va
+  // marcada @SkipJwtAuth() (sin JWT ni x-api-key) — a diferencia del resto del controller, no
+  // recibe @CurrentUser(), así que el único contrato que le toca verificar a este test es la
+  // delegación directa por id.
+  it('getPublicDocumentView delega en GetPublicDocumentUseCase solo con el id', async () => {
+    const response = {
+      success: true,
+      message: 'Documento obtenido correctamente',
+      data: {
+        id: 'doc-1',
+        fileName: 'contrato.pdf',
+        status: 'signed',
+        secureUrl: 'https://minio/signed-documents/doc-1',
+        expiresIn: 86400,
+      },
+    };
+    useCase(GetPublicDocumentUseCase).execute.mockResolvedValue(response);
+
+    const result = await controller.getPublicDocumentView('doc-1');
+
+    expect(useCase(GetPublicDocumentUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+    );
+    expect(result).toBe(response);
+  });
+
+  /**
+   * Descarga de un artefacto de la constancia (historia "Actualizar vista pública de verificación
+   * de documentos según estado y tipo de firma"). Es de los pocos endpoints que escriben en la
+   * respuesta a mano en vez de devolver un objeto, así que lo que hay que verificar son las
+   * cabeceras: sin `Content-Disposition: attachment` el navegador intentaría renderizar el token
+   * del PSC en vez de guardarlo.
+   */
+  it('getPublicSealArtifact sirve el archivo como adjunto', async () => {
+    const content = Buffer.from('%PDF-1.4 constancia');
+    useCase(GetPublicSealArtifactUseCase).execute.mockResolvedValue({
+      content,
+      contentType: 'application/pdf',
+      fileName: 'constancia-nom151-doc-1.pdf',
+    });
+    const response = { setHeader: jest.fn(), send: jest.fn() };
+
+    await controller.getPublicSealArtifact(
+      'doc-1',
+      SEAL_ARTIFACT_ENUM.NOM151,
+      response as unknown as Response,
+    );
+
+    expect(useCase(GetPublicSealArtifactUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      SEAL_ARTIFACT_ENUM.NOM151,
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'application/pdf',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="constancia-nom151-doc-1.pdf"',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Length',
+      String(content.length),
+    );
+    expect(response.send).toHaveBeenCalledWith(content);
+  });
+
+  /**
+   * El XML de auditoría se genera en el momento y no está guardado en ningún lado, pero se sirve
+   * igual que la constancia: como adjunto. Sin `Content-Disposition` el navegador abriría el XML
+   * en una pestaña —con los PDFs en Base64 dentro— en vez de guardarlo.
+   */
+  it('getPublicDocumentAuditXml sirve el XML como adjunto', async () => {
+    const content = Buffer.from('<?xml version="1.0" encoding="UTF-8"?>');
+    useCase(GetPublicDocumentAuditXmlUseCase).execute.mockResolvedValue({
+      content,
+      contentType: 'application/xml',
+      fileName: 'auditoria-doc-1.xml',
+    });
+    const response = { setHeader: jest.fn(), send: jest.fn() };
+
+    await controller.getPublicDocumentAuditXml(
+      'doc-1',
+      response as unknown as Response,
+    );
+
+    expect(
+      useCase(GetPublicDocumentAuditXmlUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1');
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'application/xml',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="auditoria-doc-1.xml"',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Length',
+      String(content.length),
+    );
+    expect(response.send).toHaveBeenCalledWith(content);
+  });
+
+  /**
+   * El controlador no interpreta los filtros ni deduce de quién es la bandeja: el usuario y la
+   * cuenta activa salen del contexto autenticado —nunca de la query— y todo lo demás viaja tal
+   * cual al caso de uso.
+   */
+  it('findAll delega en GetDocumentsUseCase el usuario, la cuenta activa, sus alcances y los filtros', () => {
+    const query = { page: 1, limit: 25, view: 'all' } as any;
+    const readContext = authorization(ACTION_KEY_ENUM.READ);
+
+    controller.findAll(user, 'account-1', readContext, query);
+
+    expect(useCase(GetDocumentsUseCase).execute).toHaveBeenCalledWith({
+      userId: 'user-1',
+      accountId: 'account-1',
+      scopes: readContext.scopes,
+      filters: query,
+    });
+  });
+
+  /**
+   * El controller ya no le pasa el `userId` suelto: le pasa el contexto entero que dejó
+   * `PermissionsGuard`, que además del usuario trae los alcances con los que la Policy decidirá
+   * si ESTE documento es visible.
+   */
+  it('findOne delega en GetDocumentUseCase el documento y el contexto autorizado', () => {
+    controller.findOne('doc-1', authorization(ACTION_KEY_ENUM.READ));
+
+    expect(useCase(GetDocumentUseCase).execute).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      authorization: authorization(ACTION_KEY_ENUM.READ),
+    });
+  });
+
+  /**
+   * El controller aplana los arreglos de multer: el caso de uso recibe "la llave" y "el
+   * certificado", no la forma que impone el multipart.
+   */
+  it('sign aplana los archivos de e.firma y pasa la geolocalizacion del DTO y la IP de la peticion', () => {
+    const keyFile = { originalname: 'clave.key' } as Express.Multer.File;
+    const cerFile = { originalname: 'cert.cer' } as Express.Multer.File;
+    const geolocation = { latitude: 19.4326, longitude: -99.1332 } as any;
+
+    controller.sign(
+      user,
+      'doc-1',
+      { password: 'secreto', geolocation } as any,
+      {
+        key: [keyFile],
+        cer: [cerFile],
+      },
+      authorization(ACTION_KEY_ENUM.SIGN),
+      '10.0.0.7',
+      'Mozilla/5.0',
+    );
+
+    expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
+      { password: 'secreto', keyFile, cerFile },
+      geolocation,
+      authorization(ACTION_KEY_ENUM.SIGN),
+      '10.0.0.7',
+      'Mozilla/5.0',
+    );
+  });
+
+  it('sign tolera una firma simple, sin archivos ni contrasena', () => {
+    controller.sign(
+      user,
+      'doc-1',
+      {} as any,
+      {},
+      authorization(ACTION_KEY_ENUM.SIGN),
+      undefined as unknown as string,
+      undefined,
+    );
+
+    expect(useCase(SignDocumentUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
+      { password: undefined, keyFile: undefined, cerFile: undefined },
+      undefined,
+      authorization(ACTION_KEY_ENUM.SIGN),
+      null,
+      null,
+    );
+  });
+
+  it('submitForAuthorization delega en su caso de uso con el userId autenticado', () => {
+    controller.submitForAuthorization(user, 'doc-1');
+
+    expect(
+      useCase(SubmitDocumentForAuthorizationUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1');
+  });
+
+  it('linkCollaborator delega en LinkDocumentCollaboratorUseCase con el userId autenticado', async () => {
+    await controller.linkCollaborator(user, 'doc-1');
+
+    expect(
+      useCase(LinkDocumentCollaboratorUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1', undefined);
+  });
+
+  it('linkCollaborator pasa la referencia de la invitación, nunca un correo', async () => {
+    await controller.linkCollaborator(user, 'doc-1', { collaboratorId: 'c-1' });
+
+    expect(
+      useCase(LinkDocumentCollaboratorUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1', 'c-1');
+  });
+
+  it('requestVerificationCode pasa la IP del cliente al caso de uso', () => {
+    controller.requestVerificationCode(user, 'doc-1', '127.0.0.1');
+
+    expect(
+      useCase(RequestDocumentVerificationCodeUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1', '127.0.0.1');
+  });
+
+  it('verifyCode pasa solo el codigo del body', () => {
+    controller.verifyCode(user, 'doc-1', { code: '123456' });
+
+    expect(useCase(VerifyDocumentCodeUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
+      '123456',
+    );
+  });
+
+  it('reject pasa solo el motivo del body', () => {
+    controller.reject(user, 'doc-1', { reason: 'No estoy de acuerdo' } as any);
+
+    expect(useCase(RejectDocumentUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
+      'No estoy de acuerdo',
+    );
+  });
+
+  it('submitForCancellation delega en su caso de uso con el userId autenticado', () => {
+    controller.submitForCancellation(user, 'doc-1');
+
+    expect(
+      useCase(SubmitDocumentForCancellationUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1');
+  });
+
+  it('confirmCancellation delega en su caso de uso con el userId autenticado', () => {
+    controller.confirmCancellation(user, 'doc-1');
+
+    expect(
+      useCase(ConfirmDocumentCancellationUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'user-1');
+  });
+
+  it('update delega en UpdateDocumentUseCase con las coordenadas del body', () => {
+    const dto = { signatures: [] } as any;
+    controller.update(user, 'doc-1', dto);
+
+    expect(useCase(UpdateDocumentUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
+      dto,
+    );
+  });
+
+  /**
+   * Archivar se autoriza por permisos, no por quién creó el documento: el controller pasa el
+   * contexto que dejó el guard y el caso de uso lo confronta con el documento.
+   */
+  it('archive delega en ArchiveCompletedDocumentUseCase con el contexto autorizado', () => {
+    const context = authorization(ACTION_KEY_ENUM.READ);
+
+    controller.archive('doc-1', context);
+
+    expect(
+      useCase(ArchiveCompletedDocumentUseCase).execute,
+    ).toHaveBeenCalledWith({ documentId: 'doc-1', authorization: context });
+  });
+
+  /**
+   * Sin este metadato `PermissionsGuard` dejaría pasar la ruta sin comprobar nada (ver "migración
+   * incremental" en `authorization-permissions.e2e-spec.ts`): un rol sin `DOCUMENT.READ` podría
+   * archivar.
+   */
+  it('restore delega en RestoreArchivedDocumentUseCase el usuario del token y el contexto autorizado', () => {
+    const context = authorization(ACTION_KEY_ENUM.READ);
+
+    controller.restore(user, 'doc-1', context);
+
+    expect(
+      useCase(RestoreArchivedDocumentUseCase).execute,
+    ).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      userId: 'user-1',
+      authorization: context,
+    });
+  });
+
+  /** El mismo permiso que archivar: quien puede esconder un documento puede devolverlo. */
+  it('restore exige DOCUMENT + READ, igual que archive', () => {
+    expect(
+      Reflect.getMetadata(
+        REQUIRED_PERMISSION_METADATA,
+        DocumentController.prototype.restore,
+      ),
+    ).toEqual(
+      Reflect.getMetadata(
+        REQUIRED_PERMISSION_METADATA,
+        DocumentController.prototype.archive,
+      ),
+    );
+  });
+
+  it('archive exige DOCUMENT + READ, el mismo permiso que el detalle', () => {
+    const required: unknown = Reflect.getMetadata(
+      REQUIRED_PERMISSION_METADATA,
+      DocumentController.prototype.archive,
+    );
+
+    expect(required).toEqual({
+      resource: RESOURCE_KEY_ENUM.DOCUMENT,
+      action: ACTION_KEY_ENUM.READ,
+    });
+  });
+
+  it('remove delega en DeleteDocumentUseCase con el userId autenticado', () => {
+    controller.remove(user, 'doc-1');
+
+    expect(useCase(DeleteDocumentUseCase).execute).toHaveBeenCalledWith(
+      'doc-1',
+      'user-1',
+    );
+  });
+
+  it('getAdvancedSignature delega en su caso de uso con el id y el collaboratorId', async () => {
+    await controller.getAdvancedSignature('doc-1', 'collaborator-1');
+
+    expect(
+      useCase(GetPublicAdvancedSignatureUseCase).execute,
+    ).toHaveBeenCalledWith('doc-1', 'collaborator-1');
   });
 });

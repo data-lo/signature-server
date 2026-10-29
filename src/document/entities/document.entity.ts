@@ -1,81 +1,248 @@
-
-import { SignatureCoordinates } from "../interfaces/signature-coordinates";
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
-import { UserEntity } from "src/user/entities/user.entity";
-import { DOCUMENT_STATUS_ENUM } from "../enum/document-status.enum";
-import { DocumentParticipantEntity } from "./document-participant.entity";
+import { SignatureCoordinates } from 'src/common/document-signing/interfaces/signature-coordinates.interface';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
+import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import { CollaboratorEntity } from './collaborator.entity';
 
 // document.entity.ts
 @Entity('documents')
+/** Parcial: casi todos los documentos se crean desde la plataforma y no tienen llave. */
+@Index('IDX_documents_created_via_api_key_id', ['createdViaApiKeyId'], {
+  where: '"created_via_api_key_id" IS NOT NULL',
+})
 export class DocumentEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-    @PrimaryGeneratedColumn('uuid')
-    id: string;
+  @Column({ name: 'object_key' })
+  objectKey: string;
 
-    @Column({ name: 'object_key' })
-    objectKey: string;
+  @Column({ name: 'file_name' })
+  fileName: string;
 
-    @Column({ name: 'file_name' })
-    fileName: string;
+  @Column({ name: 'file_type' })
+  fileType: string;
 
-    @Column({ name: 'file_type' })
-    fileType: string;
+  @Column({ name: 'total_pages' })
+  totalPages: number;
 
-    @Column({ name: 'total_pages' })
-    totalPages: number;
+  @Column({ name: 'document_url', nullable: true })
+  documentUrl: string;
 
-    @Column({ name: 'document_url', nullable:true})
-    documentUrl: string;
+  @Column({ name: 'ip_address' })
+  ipAddress: string;
 
-    @Column({ name: 'ip_address' })
-    ipAddress: string;
+  @Column({ name: 'original_hash' })
+  originalHash: string;
 
-    @Column({ name: 'verification_code_id', nullable: true })
-    verificationCodeId: string;
+  @Column({ name: 'signed_hash', nullable: true })
+  signedHash: string;
 
-    @Column({ name: 'original_hash' })
-    originalHash: string;
+  @Column({ name: 'signed_at', nullable: true })
+  signedAt: Date;
 
-    @Column({ name: 'signed_hash', nullable: true })
-    signedHash: string;
+  @Column({ name: 'cancelled_at', nullable: true })
+  cancelledAt: Date;
 
-    @Column({ name: 'signed_at', nullable: true })
-    signedAt: Date;
+  @Column({ name: 'rejected_at', nullable: true })
+  rejectedAt: Date;
 
-    @Column({ name: 'cancelled_at', nullable: true })
-    cancelledAt: Date;
+  @Column({ name: 'is_notified', default: false })
+  isNotified: boolean;
 
-    @Column({ name: 'rejected_at', nullable: true })
-    rejectedAt: Date;
+  @Column({
+    name: 'status',
+    type: 'enum',
+    enum: DOCUMENT_STATUS_ENUM,
+    default: DOCUMENT_STATUS_ENUM.CREATED,
+  })
+  status: DOCUMENT_STATUS_ENUM;
 
-    @Column({ name: 'is_notified', default: false })
-    isNotified: boolean;
+  @Column({ name: 'signature_coordinates', type: 'jsonb', nullable: true })
+  signatureCoordinates: SignatureCoordinates;
 
-    @Column({
-        name: 'status',
-        type: 'enum',
-        enum: DOCUMENT_STATUS_ENUM,
-        default: DOCUMENT_STATUS_ENUM.CREATED,
-    })
-    status: DOCUMENT_STATUS_ENUM;
+  /**
+   * Con qué tipo de firma se creó el documento: la decisión vale para TODOS sus firmantes.
+   *
+   * Ya era una decisión de documento en el contrato desde la historia "Selección de tipo de firma
+   * al crear documentos" (`documentData.signatureType`), pero sólo se guardaba copiada en cada
+   * `collaborators.signature_type`. **Eso dejaba al documento sin poder responder por sí mismo con
+   * qué se firma**: cualquiera que necesitara el dato —el recibo de crédito de
+   * `ConsumeDocumentCreditUseCase`, el primero en necesitarlo— tenía que ir a buscarlo a los
+   * firmantes y confiar en que todos coincidieran. Aquí la fuente de verdad es una sola fila.
+   *
+   * Nullable, y no por comodidad: `CreateDocumentUseCase` —el flujo viejo, que no pide tipo de
+   * firma— crea documentos sin él, y los que ya existían antes de esta columna tampoco lo tienen.
+   * `null` significa "no se decidió", que es distinto de SIMPLE, y ningún consumidor debe
+   * traducirlo a un tipo por defecto.
+   */
+  @Column({
+    name: 'signature_type',
+    type: 'enum',
+    enum: SIGNATURE_TYPE_ENUM,
+    nullable: true,
+  })
+  signatureType: SIGNATURE_TYPE_ENUM | null;
 
-    @Column({ name: 'signature_coordinates', type: 'jsonb', nullable:true })
-    signatureCoordinates: SignatureCoordinates;
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 
-    @CreateDateColumn({ name: 'created_at' })
-    createdAt: Date;
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
 
-    @UpdateDateColumn({ name: 'updated_at' })
-    updatedAt: Date;
+  @Column({ name: 'created_by' })
+  createdBy: string;
 
-    @Column({ name: 'created_by' })
-    createdBy: string;
+  @ManyToOne(() => UserEntity, (user) => user.createdDocuments)
+  @JoinColumn({ name: 'created_by' })
+  requestedBy: UserEntity;
 
-    @ManyToOne(() => UserEntity, (user) => user.createdDocuments)
-    @JoinColumn({ name: 'created_by' })
-    requestedBy: UserEntity;
+  @Column({ name: 'account_id' })
+  accountId: string;
 
-    @OneToMany(() => DocumentParticipantEntity, (participant) => participant.document, { cascade: true })
-    participants: DocumentParticipantEntity[];
+  @ManyToOne(() => AccountEntity)
+  @JoinColumn({ name: 'account_id' })
+  account: AccountEntity;
 
+  /** Ya es el comportamiento implícito hoy (sign_order siempre se exige en orden) — default true. */
+  @Column({ default: true, name: 'is_sequential' })
+  isSequential: boolean;
+
+  /**
+   * Clave real de aislamiento multi-tenant para documentos en contexto de organización (ver
+   * plan de migración ER-V2, Fase 5, decisión D5). NULL para documentos en contexto personal,
+   * donde `accountId` (única por usuario) ya es suficiente. `Account` es una fila por
+   * (usuario × contexto) desde la fusión de la Fase 5, así que ya no sirve para agrupar a
+   * todos los miembros de una misma organización — `organizationId` sí.
+   */
+  @Column({ nullable: true, name: 'organization_id' })
+  organizationId: string | null;
+
+  @ManyToOne(() => OrganizationEntity, { nullable: true })
+  @JoinColumn({ name: 'organization_id' })
+  organization: OrganizationEntity | null;
+
+  /**
+   * API key de la organización con la que se creó el documento desde la API de integración;
+   * `null` si lo creó una persona desde la plataforma.
+   *
+   * Es trazabilidad, no autoría: el autor sigue siendo `createdBy` (el actor de la llave). Juntos
+   * dicen "Creado por Juan Pérez vía Integración ERP". `SET NULL` porque una llave sólo se borra con
+   * su organización, y el documento no debe impedirlo.
+   */
+  @Column({ name: 'created_via_api_key_id', type: 'uuid', nullable: true })
+  createdViaApiKeyId: string | null;
+
+  @ManyToOne(() => ApiKeyEntity, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({
+    name: 'created_via_api_key_id',
+    foreignKeyConstraintName: 'FK_documents_created_via_api_key_id',
+  })
+  createdViaApiKey?: ApiKeyEntity | null;
+
+  /**
+   * Desde cuándo este documento firmado espera su constancia de conservación NOM-151.
+   *
+   * `null` es lo normal: o ya se selló, o no le corresponde (sólo se sellan los documentos con
+   * firma avanzada). Se marca cuando el sellado no pudo intentarse porque falta la evidencia OCSP
+   * de algún firmante — el respondedor del SAT se cae con frecuencia y bloquear la firma por eso
+   * sería peor que diferir el sellado.
+   *
+   * No es un `status` del documento a propósito: la firma está completa y el documento es válido;
+   * lo que falta es la constancia. Ver la migración `AddSealingPendingAtToDocuments`.
+   */
+  @Column({ name: 'sealing_pending_at', type: 'timestamptz', nullable: true })
+  sealingPendingAt: Date | null;
+
+  @Column({ name: 'total_signers' })
+  totalSigners: number;
+
+  @Column({ default: 0, name: 'completed_signers_count' })
+  completedSignersCount: number;
+
+  @Column({ default: false, name: 'requires_verification' })
+  requiresVerification: boolean;
+
+  /**
+   * Ver historia "Frontend: Carga de Documentos y Configuración de Firmantes" — si true, el
+   * documento debe pasar por un usuario con permisos de revisión antes de notificar a los
+   * firmantes. Solo el flag: el enrutamiento real hacia un aprobador no se construyó en esa
+   * historia (era explícitamente de frontend) — ver sección de pendientes del README.
+   */
+  @Column({ default: false, name: 'requires_approval' })
+  requiresApproval: boolean;
+
+  /**
+   * Si el documento participa en Búsqueda Inteligente.
+   *
+   * **Nace en `true` y sólo el autor puede bajarlo**, al crear el documento: la regla de producto
+   * es que todo documento sea encontrable salvo que alguien decida lo contrario, así que el
+   * default no depende de que el cliente mande el campo — quien lo omite obtiene un documento
+   * indexable.
+   *
+   * `false` sólo excluye de la indexación. El documento sigue en el listado y conserva firma,
+   * descarga y auditoría intactas: no es un estado de visibilidad ni un borrado suave.
+   *
+   * Se llamaba `index_document` y era una columna no-op con `DEFAULT false` desde la Fase 1 del
+   * ER-V2 (ver `AddDocumentAdditiveColumns1784300000002`); la migración `046` la renombró,
+   * invirtió su default y puso en `true` el histórico, porque aquel `false` era el valor de una
+   * columna que nadie escribía y no la decisión de ningún autor.
+   */
+  @Column({ default: true, name: 'is_indexable' })
+  isIndexable: boolean;
+
+  @OneToMany(
+    () => CollaboratorEntity,
+    (collaborator) => collaborator.document,
+    {
+      cascade: true,
+    },
+  )
+  collaborators: CollaboratorEntity[];
+
+  /**
+   * Si el usuario tiene una relación propia con este documento: lo creó, o figura como
+   * colaborador con su cuenta ya enlazada.
+   *
+   * Es la regla que traduce el alcance `OWN` del catálogo ("VER DOCUMENTOS PROPIOS O DONDE
+   * PARTICIPA") y vive en la entidad porque es del documento, no de quien pregunta:
+   * `DocumentAuthorizationPolicy` la usa para leer y para firmar, y ninguna de las dos tendría
+   * por qué reimplementarla.
+   *
+   * **Necesita `collaborators` cargado con su `account`.** Sin esa relación no hay forma de
+   * saber quién participa, así que un documento traído sin ella responde que sólo su creador
+   * tiene acceso. Los colaboradores invitados por correo y todavía sin cuenta (`accountId` nulo)
+   * no cuentan aquí: hasta que se enlazan no hay usuario con el que comparar — de eso se ocupa
+   * `DocumentService.resolveMyCollaborator`, y por eso la Policy acepta recibir la
+   * participación ya resuelta.
+   *
+   * @param userId - Usuario autenticado que pide acceso.
+   * @returns `true` si es el creador o un colaborador enlazado a ese usuario.
+   *
+   * @example
+   * ```ts
+   * document.isAccessibleBy('user-1'); // true si lo creó o si firma en él
+   * ```
+   */
+  isAccessibleBy(userId: string): boolean {
+    if (this.createdBy === userId) return true;
+
+    return (this.collaborators ?? []).some(
+      (collaborator) => collaborator.account?.userId === userId,
+    );
+  }
 }

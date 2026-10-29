@@ -1,24 +1,234 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { DocumentService } from './document.service';
 import { DocumentController } from './document.controller';
+import { DocumentSignaturesController } from './document-signatures.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DocumentEntity } from './entities/document.entity';
-import { DocumentParticipantEntity } from './entities/document-participant.entity';
-import { SharedModule } from 'src/shared/shared.module';
+import { CollaboratorEntity } from './entities/collaborator.entity';
+import { VerificationCodeEntity } from './entities/verification-code.entity';
+import { DocumentUserPreferenceEntity } from './preferences/document-user-preference.entity';
+import { VerificationCodeService } from './verification-code.service';
+import { SharedModule } from 'src/common/shared.module';
 import { UserModule } from 'src/user/user.module';
 import { SignatureModule } from 'src/signature/signature.module';
 import { AuditModule } from 'src/audit/audit.module';
+import { KafkaModule } from 'src/kafka/kafka.module';
+import { AccountModule } from 'src/account/account.module';
+import { AuthorizationModule } from 'src/authorization/authorization.module';
+import { DocumentTransactionModule } from './document-transaction.module';
+import { EfirmaModule } from 'src/efirma/efirma.module';
+import { SealModule } from './seal/seal.module';
+import { SummaryDocumentModule } from './summary-document/summary-document.module';
+import { BillingModule } from 'src/billing/billing.module';
+import { DirectoryModule } from 'src/directory/directory.module';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { ApiKeyModule } from 'src/api-key/api-key.module';
+import { DocumentReadService } from './services/document-read.service';
+import { IntegrationDocumentsController } from './integration/integration-documents.controller';
+import { ListOrganizationIntegrationDocumentsUseCase } from './integration/applications/list-organization-integration-documents.use-case';
+import { ListUserIntegrationDocumentsUseCase } from './integration/applications/list-user-integration-documents.use-case';
+import { CreateIntegrationDocumentUseCase } from './integration/applications/create-integration-document.use-case';
+import { IntegrationIdempotencyService } from './integration/services/integration-idempotency.service';
+import { IntegrationCreatorService } from './integration/services/integration-creator.service';
+import { IntegrationPayloadValidator } from './integration/validation/integration-payload.validator';
+import { RolesModule } from 'src/roles/roles.module';
+import { IntegrationIdempotencyKeyEntity } from './integration/entities/integration-idempotency-key.entity';
+import { SignatureQrService } from './services/signature-qr.service';
+import { DocumentAuthorizationPolicy } from './policies/document-authorization.policy';
+import { DocumentReadAccessService } from './services/document-read-access.service';
+
+// Use cases
+import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.use-case';
+import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
+import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
+import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
+import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
+import { CreateDocumentUseCase } from './applications/create-document.use-case';
+import { GetDocumentsUseCase } from './applications/get-documents.use-case';
+import { GetDocumentUseCase } from './applications/get-document.use-case';
+import { SubmitDocumentForAuthorizationUseCase } from './applications/submit-document-for-authorization.use-case';
+import { SignDocumentUseCase } from './applications/sign-document.use-case';
+import { LinkDocumentCollaboratorUseCase } from './applications/link-document-collaborator.use-case';
+import { RequestDocumentVerificationCodeUseCase } from './applications/request-document-verification-code.use-case';
+import { VerifyDocumentCodeUseCase } from './applications/verify-document-code.use-case';
+import { RejectDocumentUseCase } from './applications/reject-document.use-case';
+import { SubmitDocumentForCancellationUseCase } from './applications/submit-document-for-cancellation.use-case';
+import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
+import { UpdateDocumentUseCase } from './applications/update-document.use-case';
+import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
+import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
+import { GetDocumentApproversUseCase } from './applications/get-document-approvers.use-case';
+import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
+import { DocumentReviewerService } from './services/document-reviewer.service';
+import { WitnessNotificationService } from './services/witness-notification.service';
+import { NotificationEntity } from './entities/notification.entity';
+import { DocumentApprovalService } from './services/document-approval.service';
+import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
+import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
+import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
+import { PublicSigningController } from './public-signing.controller';
+import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
+import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
+import { GuestSigningAccessService } from './services/guest-signing-access.service';
+import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
+
+import { ResendIntegrationSigningInvitationUseCase } from './integration/applications/resend-integration-signing-invitation.use-case';
+import { IssueIntegrationSigningAccessUseCase } from './integration/applications/issue-integration-signing-access.use-case';
 
 @Module({
-  controllers: [DocumentController],
-  providers: [DocumentService],
+  controllers: [
+    DocumentController,
+    DocumentSignaturesController,
+    PublicSigningController,
+    /**
+     * API de integración para sistemas externos (`/integration/...`), autenticada con la API key
+     * de la organización en vez de JWT. Reutiliza los casos de uso de este módulo.
+     */
+    IntegrationDocumentsController,
+  ],
+  providers: [
+    DocumentService,
+    VerificationCodeService,
+    SignatureQrService,
+    /**
+     * Reglas de acceso a UN documento, aplicadas por los casos de uso sobre el contexto que deja
+     * `PermissionsGuard`. No se exporta: quien tenga que decidir sobre un documento pasa por un
+     * caso de uso de este módulo, no por la Policy directamente.
+     */
+    DocumentAuthorizationPolicy,
+    /**
+     * La Policy más la segunda consulta contra la organización del documento (ver el servicio).
+     * La comparten el detalle y el archivo, para que un documento que se deja ver no tenga un
+     * archivo que no se deja cargar.
+     */
+    DocumentReadAccessService,
+    GetDocumentFileUrlUseCase,
+    GetPublicDocumentUseCase,
+    GetPublicSealArtifactUseCase,
+    GetPublicDocumentAuditXmlUseCase,
+    GetPublicAdvancedSignatureUseCase,
+    CreateDocumentUseCase,
+    GetDocumentsUseCase,
+    GetDocumentUseCase,
+    SubmitDocumentForAuthorizationUseCase,
+    SignDocumentUseCase,
+    LinkDocumentCollaboratorUseCase,
+    RequestDocumentVerificationCodeUseCase,
+    VerifyDocumentCodeUseCase,
+    RejectDocumentUseCase,
+    SubmitDocumentForCancellationUseCase,
+    ConfirmDocumentCancellationUseCase,
+    UpdateDocumentUseCase,
+    DeleteDocumentUseCase,
+    CreateDocumentSignatureFlowUseCase,
+    GetDocumentApproversUseCase,
+    ArchiveCompletedDocumentUseCase,
+    RestoreArchivedDocumentUseCase,
+    /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
+    DocumentReviewerService,
+    DocumentApprovalService,
+    /** Avisos por correo a los testigos (ver el servicio para qué recibe el testigo y cuándo). */
+    WitnessNotificationService,
+    ApproveDocumentUseCase,
+    RejectDocumentApprovalUseCase,
+    /**
+     * Accesos temporales de invitado sin cuenta. Vive aquí porque los revocan flujos de este módulo
+     * (vincular cuenta, firmar, rechazar); el módulo de la firma de invitado sólo los emite.
+     */
+    GuestSigningAccessService,
+    /** Valida la invitación de la pantalla pública `/public/documents/:id/sign`. */
+    GetPublicSigningInvitationUseCase,
+    DocumentReadService,
+    IntegrationIdempotencyService,
+    IntegrationCreatorService,
+    IntegrationPayloadValidator,
+    ListOrganizationIntegrationDocumentsUseCase,
+    ListUserIntegrationDocumentsUseCase,
+    CreateIntegrationDocumentUseCase,
+    ResendIntegrationSigningInvitationUseCase,
+    IssueIntegrationSigningAccessUseCase,
+  ],
   imports: [
-    TypeOrmModule.forFeature([DocumentEntity, DocumentParticipantEntity]),
+    TypeOrmModule.forFeature([
+      DocumentEntity,
+      CollaboratorEntity,
+      VerificationCodeEntity,
+      /**
+       * La inyecta `ArchiveCompletedDocumentUseCase`, y además tiene que estar nombrada acá
+       * porque con `autoLoadEntities: true` (ver `app.module.ts`) TypeORM sólo carga el metadata
+       * de una entidad si algún `forFeature()` la menciona: que exista su archivo `.entity.ts`
+       * no basta. Sin esto, `synchronize` no crearía la tabla en desarrollo, las relaciones
+       * hacia `documents` y `users` no se construirían, y el `leftJoin` del listado
+       * (`GetDocumentsUseCase`) no sabría a qué tabla apunta el alias.
+       */
+      DocumentUserPreferenceEntity,
+      // La lee `WitnessNotificationService` para re-publicar el aviso del testigo tras la
+      // aprobación, con la notificación que se creó junto con el documento.
+      NotificationEntity,
+      // La lee `SignDocumentUseCase.executeBiometric` para comprobar el intento aprobado. Sólo la
+      // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
+      BiometricSignatureAttemptEntity,
+      GuestSigningAccessEntity,
+      IntegrationIdempotencyKeyEntity,
+      // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
+      // pedido dentro de la organización de la API key.
+      AccountEntity,
+    ]),
     SharedModule,
+    /** Enlace `/sign/:token` de los firmantes de documentos creados por integración. */
+    SigningInvitationModule,
     UserModule,
     SignatureModule,
     AuditModule,
+    KafkaModule,
+    AccountModule,
+    /** `AuthorizationService`, para resolver el contexto en la organización del documento. */
+    AuthorizationModule,
+    DocumentTransactionModule,
+    EfirmaModule,
+    SealModule,
+    SummaryDocumentModule,
+    /**
+     * `DirectoryCollaboratorsService`: al crear un documento, resuelve a los colaboradores elegidos
+     * del Directorio y da de alta a los manuales con `addToDirectory`. No crea ciclo: el
+     * Directorio no importa nada de documentos.
+     */
+    DirectoryModule,
+    // `OrganizationApiKeyGuard` y lo que necesita para inyectarse en `IntegrationDocumentsController`.
+    ApiKeyModule,
+    // `IntegrationCreatorService` resuelve el rol `INTEGRATION_DOCUMENT_CREATOR` del creador aprovisionado.
+    RolesModule,
+    /**
+     * De aquí sale `ConsumeDocumentCreditUseCase`: crear un documento cuesta un crédito.
+     *
+     * **La dependencia va en un solo sentido** —ningún módulo del grafo de facturación importa
+     * `DocumentModule`— así que este import no crea ningún ciclo por sí mismo. El `forwardRef` es
+     * por el ciclo que YA existe del otro lado: `BillingModule` ⇄ `PaymentsModule` se importan
+     * mutuamente con `forwardRef`, y entrar a un módulo que participa de un ciclo deja el orden
+     * de inicialización a merced de cuál se resuelva primero. Es gratis cuando no hace falta.
+     *
+     * Se importa el módulo entero y no un `BillingProvisioningModule` a medida —como sí hace
+     * `AccountModule`— porque `ConsumeDocumentCreditUseCase` inyecta `BillingOwnerService` y el
+     * `DataSource`; el alta de cuentas no inyecta nada, trabaja con el `EntityManager` que le
+     * pasan.
+     */
+    forwardRef(() => BillingModule),
   ],
-  exports: [DocumentService],
+  /**
+   * Lo demás lo consume `BiometricSignatureModule`: la firma biométrica valida al firmante con las
+   * mismas piezas que la firma normal (`DocumentAuthorizationPolicy`, códigos de verificación) y la
+   * registra por el mismo `SignDocumentUseCase`, sin un camino paralelo que pueda divergir.
+   *
+   * `GuestAdvancedSignatureModule` usa las mismas piezas para la Firma Avanzada del invitado sin
+   * cuenta, más `GuestSigningAccessService` para emitir y comprobar sus accesos temporales.
+   */
+  exports: [
+    DocumentService,
+    SignDocumentUseCase,
+    VerificationCodeService,
+    DocumentAuthorizationPolicy,
+    GuestSigningAccessService,
+  ],
 })
 export class DocumentModule {}

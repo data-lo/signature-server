@@ -1,0 +1,574 @@
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
+
+import { AccountMemberService } from 'src/account/account-member.service';
+import { MinioService } from 'src/common/minio/minio.service';
+import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
+import { UserService } from 'src/user/user.service';
+
+import { GetDocumentsQueryDto } from '../dto/get-documents-query.dto';
+import { DocumentEntity } from '../entities/document.entity';
+import { DocumentUserPreferenceEntity } from '../preferences/document-user-preference.entity';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
+import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
+import {
+  DOCUMENT_SORT_FIELD_ENUM,
+  SORT_DIRECTION_ENUM,
+} from '../enum/document-sort-field.enum';
+import { DOCUMENT_VIEW_ENUM } from '../enum/document-view.enum';
+import { DOCUMENT_PARTICIPATION_ENUM } from '../enum/document-participation.enum';
+import { collaboratorDisplayName } from '../utils/collaborator-display.util';
+import { DocumentService } from '../document.service';
+import {
+  applyDocumentStatusAndDateFilters,
+  assertValidDocumentDateRanges,
+  buildDocumentsPagination,
+  DOCUMENT_SORT_COLUMNS,
+  DocumentsPagination,
+} from '../utils/document-list-query.util';
+
+export type { DocumentsPagination };
+
+/** Lo que el caso de uso necesita: quién pregunta, desde qué cuenta, y qué quiere ver. */
+export interface GetDocumentsParams {
+  /** Usuario autenticado. De él sale también el correo con el que se busca su participación. */
+  userId: string;
+  /** Cuenta activa (`X-Account-Id`): acota lo visible al contexto en el que está trabajando. */
+  accountId: string;
+  /**
+   * Alcances de `DOCUMENT + READ` que `PermissionsGuard` concedió en la cuenta activa. Deciden si
+   * dentro de una organización se ve todo lo suyo (`ORGANIZATION`) o sólo lo propio (`OWN`).
+   */
+  scopes: PERMISSION_SCOPE_ENUM[];
+  /**
+   * Recorte, búsqueda, orden y paginación.
+   *
+   * `view` escoge un subconjunto de lo visible y NUNCA lo amplía; el acceso lo decide la cuenta
+   * activa, no el filtro.
+   */
+  filters: GetDocumentsQueryDto;
+}
+
+/**
+ * Los roles que tienen algo que HACER con un documento.
+ *
+ * `WITNESS` queda fuera: un testigo recibe copia y puede consultarlo, pero no se le pide
+ * nada, así que un documento nunca "requiere su firma o revisión" y meterlo en esa vista sería
+ * darle una tarea que no existe.
+ */
+const ACTING_COLLABORATOR_TYPES = [
+  COLABORATOR_TYPE_ENUM.SIGNER,
+  COLABORATOR_TYPE_ENUM.REVIEWER,
+];
+
+/**
+ * Lista los documentos que la cuenta activa puede ver, con búsqueda, recorte, orden y paginación.
+ *
+ * @remarks
+ * Flujo:
+ *
+ * 1. Exige el header de cuenta activa y comprueba que quien pregunta sea miembro de ella, antes
+ *    de mirar un solo filtro.
+ * 2. Valida los rangos de fecha.
+ * 3. Resuelve el correo del usuario en el servidor, que es con el que se busca su participación.
+ * 4. Aplica la VISIBILIDAD: la cuenta activa (o su organización) y aquello en lo que participa.
+ * 5. Aplica el `view` pedido y el filtro de archivado: excluye lo que este usuario archivó o, con
+ *    `archived=true`, muestra sólo eso.
+ * 6. Suma los filtros opcionales: id, estados, búsqueda, participante y rangos de fecha.
+ * 7. Pagina, ordena con desempate estable y arma la respuesta; opcionalmente firma URLs de MinIO.
+ *
+ * **`view` no decide el acceso.** El orden de los pasos 4 y 5 es la garantía: primero se acota lo
+ * que el usuario puede ver y sólo después se escoge un subconjunto. Un `view` distinto no puede
+ * ampliar lo visible; en el peor caso lo deja vacío.
+ *
+ * Sustituye a las tres consultas que se repartían la bandeja, cada una con su propia receta de
+ * parámetros. Aquello dejaba la definición de cada sección en el cliente —el servidor no sabía
+ * qué era "por firmar"—, hacía las tres incombinables entre sí y ninguna se podía ordenar.
+ */
+@Injectable()
+export class GetDocumentsUseCase {
+  constructor(
+    @InjectRepository(DocumentEntity)
+    private readonly documentRepository: Repository<DocumentEntity>,
+    private readonly minioService: MinioService,
+    private readonly accountMemberService: AccountMemberService,
+    private readonly userService: UserService,
+    private readonly documentService: DocumentService,
+  ) {}
+
+  /**
+   * Ejecuta el caso de uso.
+   *
+   * @param params Quién pregunta, desde qué cuenta y con qué filtros.
+   * @returns La página de documentos con su paginación.
+   * @throws {BadRequestException} Cuando falta el header de cuenta activa o un rango de fechas
+   *   termina antes de empezar.
+   * @throws {ForbiddenException} Cuando el usuario no es miembro activo de la cuenta.
+   */
+  async execute({ userId, accountId, scopes, filters }: GetDocumentsParams) {
+    if (!accountId) {
+      throw new BadRequestException(
+        'Falta el header X-Account-Id de la cuenta activa',
+      );
+    }
+
+    const activeAccount = await this.accountMemberService.assertIsActiveMember(
+      userId,
+      accountId,
+    );
+
+    const {
+      view = DOCUMENT_VIEW_ENUM.REQUIRES_MY_SIGNATURE,
+      search,
+      statuses,
+      participant,
+      createdFrom,
+      createdTo,
+      signedFrom,
+      signedTo,
+      sortBy = DOCUMENT_SORT_FIELD_ENUM.CREATED_AT,
+      sortDirection = SORT_DIRECTION_ENUM.DESC,
+      page = 1,
+      limit = 25,
+      id,
+      withUrl,
+      archived = false,
+    } = filters;
+
+    assertValidDocumentDateRanges({
+      createdFrom,
+      createdTo,
+      signedFrom,
+      signedTo,
+    });
+
+    /**
+     * El correo sale del servidor y no de la query: pedírselo al cliente sería confiarle de quién
+     * es la bandeja. Hace falta porque un firmante invitado por correo no tiene cuenta vinculada
+     * todavía, así que su fila en `collaborators` sólo tiene el email.
+     *
+     * En minúsculas: `users.email` se guarda normalizado, pero `collaborators.email` conserva lo
+     * que tecleó quien invitó.
+     */
+    const caller = await this.userService.findOne(userId);
+    const callerEmail = caller.email?.toLowerCase() ?? null;
+
+    const qb = this.documentRepository
+      .createQueryBuilder('document')
+      .leftJoinAndSelect('document.requestedBy', 'requester')
+      // El RFC vive en `personal_information`, y el listado lo muestra bajo el nombre del creador.
+      .leftJoinAndSelect(
+        'requester.personalInformation',
+        'requesterPersonalInfo',
+      )
+      // La columna "Organización" del listado muestra a qué organización pertenece cada fila.
+      .leftJoinAndSelect('document.organization', 'organization')
+      .leftJoinAndSelect('document.collaborators', 'collaborator')
+      .leftJoinAndSelect('collaborator.account', 'collaboratorAccount')
+      .leftJoinAndSelect('collaboratorAccount.user', 'collaboratorUser')
+      .orderBy(DOCUMENT_SORT_COLUMNS[sortBy], sortDirection)
+      // Desempate estable: sin él, un documento se repite entre páginas mientras otro no sale.
+      .addOrderBy('document.id', sortDirection)
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    this.applyVisibility(qb, {
+      userId,
+      callerEmail,
+      activeAccount,
+      accountId,
+      canReadOrganization: scopes.includes(PERMISSION_SCOPE_ENUM.ORGANIZATION),
+    });
+    this.applyView(qb, view, userId, callerEmail);
+    this.applyArchiveFilter(qb, userId, archived);
+
+    if (id) {
+      qb.andWhere('document.id = :id', { id });
+    }
+
+    applyDocumentStatusAndDateFilters(qb, {
+      statuses,
+      createdFrom,
+      createdTo,
+      signedFrom,
+      signedTo,
+    });
+
+    if (search) {
+      // Una caja para nombre y participantes: es lo que la persona tiene en la cabeza al buscar.
+      qb.andWhere(
+        new Brackets((where) => {
+          where
+            .where('document.fileName ILIKE :search')
+            .orWhere(this.participantMatchSubquery('search'));
+        }),
+        { search: `%${search}%` },
+      );
+    }
+
+    if (participant) {
+      qb.andWhere(this.participantMatchSubquery('participant'), {
+        participant: `%${participant}%`,
+      });
+    }
+
+    const [documents, total] = await qb.getManyAndCount();
+
+    const items = await Promise.all(
+      documents.map(async (doc) => {
+        const byType = (type: COLABORATOR_TYPE_ENUM) =>
+          (doc.collaborators ?? [])
+            .filter((c) => c.colaboratorType === type)
+            .sort((a, b) => (a.signingOrder ?? 0) - (b.signingOrder ?? 0))
+            .map(collaboratorDisplayName);
+
+        const base = {
+          id: doc.id,
+          fileName: doc.fileName,
+          fileType: doc.fileType,
+          signers: byType(COLABORATOR_TYPE_ENUM.SIGNER),
+          witnesses: byType(COLABORATOR_TYPE_ENUM.WITNESS),
+          reviewers: byType(COLABORATOR_TYPE_ENUM.REVIEWER),
+          creator: `${doc.requestedBy.firstName} ${doc.requestedBy.lastName}`,
+          creatorRfc: doc.requestedBy.personalInformation?.rfc ?? null,
+          /**
+           * Nombre visible (`displayName`) de la organización dueña del documento; null en los
+           * documentos de cuenta personal, que no tienen organización. El listado lo presenta
+           * como "Ninguna": el texto es de la interfaz, aquí sólo viaja el dato.
+           */
+          organizationName: doc.organization?.displayName ?? null,
+          totalPages: doc.totalPages,
+          status: doc.status,
+          signatureType: this.documentService.resolveDocumentSignatureType(
+            doc.collaborators,
+          ),
+          /**
+           * Qué papel juega el usuario en ESTE documento, resuelto en el servidor.
+           *
+           * La columna "Participación" del listado unificado lo necesita en cada fila, y antes no
+           * hacía falta porque la sección ya lo decía: en "Por firmar" todo requería mi firma y
+           * en "Enviados para firma" todo lo había mandado yo. Sin secciones, cada fila tiene que
+           * explicarse sola.
+           */
+          participation: this.resolveParticipation(doc, userId, callerEmail),
+          createdAt: doc.createdAt,
+          /**
+           * Fecha en que el documento quedó firmado por completo (`document.signedAt`, que solo
+           * se fija cuando la última firma cierra el flujo), no la de una firma individual. Null
+           * mientras eso no ocurra: el listado lo muestra como "No disponible".
+           */
+          signedAt: doc.signedAt ?? null,
+        };
+
+        if (!withUrl) {
+          return base;
+        }
+
+        const bucket = this.documentService.resolveDocumentBucket(doc);
+        const { secureUrl, expiresIn } = await this.minioService.getFile(
+          doc.objectKey,
+          bucket,
+        );
+
+        return { ...base, secureUrl, expiresIn };
+      }),
+    );
+
+    const pagination: DocumentsPagination = buildDocumentsPagination(
+      page,
+      limit,
+      total,
+    );
+
+    return { items, pagination };
+  }
+
+  /**
+   * Lo que este usuario puede ver, y que ningún filtro puede ensanchar.
+   *
+   * Son dos caminos y basta uno: el documento pertenece a la cuenta desde la que mira (o a su
+   * organización), o participa en él. El segundo no sobra — casi ningún documento que me toca
+   * firmar pertenece a MI cuenta, sino a la de quien lo mandó — y por eso las dos condiciones van
+   * en un `OR` dentro de un mismo paréntesis: sueltas, el `AND` de cualquier filtro posterior se
+   * mezclaría con ellas y el resultado dejaría de significar lo mismo.
+   *
+   * **Había un tercer camino, `document.createdBy = :userId`, y se quitó a propósito.** No
+   * dependía de la cuenta, así que al cambiar de contexto seguía mostrando lo que el usuario
+   * hubiera creado en cualquier otro: los documentos de su cuenta personal aparecían dentro de la
+   * organización, y la lista no cambiaba al cambiar de cuenta (bug "El listado de documentos no
+   * se actualiza al cambiar de cuenta activa"). Quien crea un documento sigue viéndolo desde la
+   * cuenta en la que lo creó —es la dueña del documento— y también si participa en él.
+   *
+   * El `view` `created_by_me` no se ve afectado: filtra por `createdBy` DENTRO de lo ya visible
+   * (ver `applyView`), así que sigue listando lo que el usuario mandó a firmar en esta cuenta.
+   *
+   * **La participación también se acota a la cuenta activa**, por la misma razón que se quitó
+   * `createdBy`. Antes se reconocía por USUARIO —cualquier colaborador enlazado a cualquiera de
+   * sus cuentas, o su correo—, así que quien se incluía como firmante en sus documentos personales
+   * los seguía viendo desde la organización: el listado no cambiaba al cambiar de cuenta (bug
+   * "Corregir documentos persistentes al cambiar de cuenta activa"). Ver
+   * `callerParticipatesFromAccountSubquery`.
+   *
+   * **Dentro de una organización, lo de la organización se acota por alcance.** Con
+   * `ORGANIZATION` (`DOCUMENT.READ_ORGANIZATION`) se ve todo lo de ella; con sólo `OWN`, lo que el
+   * usuario creó en ella. Antes se mostraba todo a cualquier miembro, y quien tenía sólo `OWN`
+   * veía en la lista documentos ajenos que después `DocumentAuthorizationPolicy` le negaba al
+   * abrirlos. En la cuenta personal no cambia nada: todo lo de la cuenta es del propio usuario.
+   */
+  private applyVisibility(
+    qb: SelectQueryBuilder<DocumentEntity>,
+    context: {
+      userId: string;
+      callerEmail: string | null;
+      activeAccount: { organizationId?: string | null };
+      accountId: string;
+      canReadOrganization: boolean;
+    },
+  ): void {
+    const {
+      userId,
+      callerEmail,
+      activeAccount,
+      accountId,
+      canReadOrganization,
+    } = context;
+    const isPersonalAccount = !activeAccount.organizationId;
+
+    qb.andWhere(
+      new Brackets((where) => {
+        if (isPersonalAccount) {
+          where.where('document.accountId = :accountId', { accountId });
+        } else if (canReadOrganization) {
+          where.where('document.organizationId = :organizationId', {
+            organizationId: activeAccount.organizationId,
+          });
+        } else {
+          where.where(
+            'document.organizationId = :organizationId AND document.createdBy = :ownerUserId',
+            {
+              organizationId: activeAccount.organizationId,
+              ownerUserId: userId,
+            },
+          );
+        }
+
+        where.orWhere(
+          this.callerParticipatesFromAccountSubquery(isPersonalAccount),
+          { accountId, callerEmail },
+        );
+      }),
+    );
+  }
+
+  /**
+   * Recorta lo visible al subconjunto que pide `view`. Nunca amplía: sólo agrega condiciones.
+   *
+   * @param qb - Consulta del listado, ya acotada por visibilidad.
+   * @param view - Subconjunto pedido.
+   * @param userId - Usuario en sesión.
+   * @param callerEmail - Su correo en minúsculas, para reconocerlo como invitado por correo.
+   * @returns Nada; agrega condiciones a `qb`.
+   *
+   * @example
+   * ```ts
+   * this.applyView(qb, DOCUMENT_VIEW_ENUM.REQUIRES_MY_SIGNATURE, 'user-1', 'ana@correo.com');
+   * ```
+   */
+  private applyView(
+    qb: SelectQueryBuilder<DocumentEntity>,
+    view: DOCUMENT_VIEW_ENUM,
+    userId: string,
+    callerEmail: string | null,
+  ): void {
+    switch (view) {
+      case DOCUMENT_VIEW_ENUM.REQUIRES_MY_SIGNATURE:
+        /**
+         * Dos condiciones, y las dos hacen falta: el documento sigue abierto Y mi respuesta sigue
+         * pendiente. Sin la primera, un documento cancelado con mi firma sin dar seguiría
+         * pidiéndome algo que ya no se puede hacer; sin la segunda, los que ya firmé volverían a
+         * aparecer como tarea.
+         */
+        qb.andWhere('document.status = :pendingStatus', {
+          pendingStatus: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+        }).andWhere(
+          `document.id IN (
+            SELECT c.document_id FROM collaborators c
+            LEFT JOIN accounts a ON a.id = c.account_id
+            LEFT JOIN users u ON u.id = a.user_id
+            WHERE (u.id = :userId OR LOWER(c.email) = :callerEmail)
+              AND c.colaborator_type IN (:...actingTypes)
+              AND c.status = :pendingSigneeStatus
+          )`,
+          /**
+           * Liga TODOS sus parámetros, incluidos `userId` y `callerEmail`. Bug corregido: los
+           * tomaba prestados de otras condiciones, y desde que `applyVisibility` pasó a ligar
+           * `ownerUserId` en vez de `userId` nadie ligaba `:userId` en esta vista. TypeORM lo
+           * dejaba literal en el SQL y Postgres respondía `syntax error at or near ":"`: el
+           * listado "Por firmar" —la vista por omisión del endpoint— respondía siempre 500.
+           */
+          {
+            userId,
+            callerEmail,
+            actingTypes: ACTING_COLLABORATOR_TYPES,
+            pendingSigneeStatus: COLLABORATOR_STATUS_ENUM.PENDING,
+          },
+        );
+        return;
+
+      case DOCUMENT_VIEW_ENUM.CREATED_BY_ME:
+        qb.andWhere('document.createdBy = :userId', { userId });
+        return;
+
+      case DOCUMENT_VIEW_ENUM.COMPLETED:
+        qb.andWhere('document.status = :signedStatus', {
+          signedStatus: DOCUMENT_STATUS_ENUM.SIGNED,
+        });
+        return;
+
+      case DOCUMENT_VIEW_ENUM.ALL:
+      default:
+        return;
+    }
+  }
+
+  /**
+   * Recorta el listado según lo que ESTE usuario archivó: por omisión lo deja fuera y, con el
+   * filtro "Archivados", deja sólo eso.
+   *
+   * `leftJoin` y no `innerJoin`: la mayoría de los documentos no tienen preferencia de nadie, y
+   * un `INNER JOIN` vaciaría el listado entero. Sin fila, `archivedAt` es `NULL` y el documento
+   * pasa el filtro por omisión — que es exactamente lo que significa "no he dicho nada sobre este
+   * documento". Con `archived`, esa misma fila ausente lo deja fuera.
+   *
+   * El `user_id` va en la condición del JOIN y no en el `WHERE`: puesto abajo, un documento
+   * archivado por OTRO participante traería su fila y desaparecería también de mi listado —o,
+   * con el filtro, aparecería en mis archivados—, con lo que archivar dejaría de ser una decisión
+   * personal.
+   *
+   * No sustituye al acceso: corre después de `applyVisibility` y del `view`, así que un documento
+   * que el usuario archivó y ya no puede ver (perdió el rol, salió de la organización) tampoco
+   * aparece entre sus archivados.
+   *
+   * @param qb - Consulta del listado, con la visibilidad ya aplicada.
+   * @param userId - Usuario que consulta; sólo cuentan SUS preferencias.
+   * @param archived - `true` para listar sólo lo archivado; `false` para excluirlo.
+   * @returns Nada: agrega el `LEFT JOIN` y la condición a `qb`.
+   *
+   * @throws Nada: sólo arma la consulta.
+   *
+   * @example
+   * ```ts
+   * this.applyArchiveFilter(qb, 'user-1', true); // sólo lo que user-1 archivó
+   * ```
+   */
+  private applyArchiveFilter(
+    qb: SelectQueryBuilder<DocumentEntity>,
+    userId: string,
+    archived: boolean,
+  ): void {
+    qb.leftJoin(
+      DocumentUserPreferenceEntity,
+      'myPreference',
+      'myPreference.documentId = document.id AND myPreference.userId = :preferenceUserId',
+      { preferenceUserId: userId },
+    ).andWhere(
+      archived
+        ? 'myPreference.archivedAt IS NOT NULL'
+        : 'myPreference.archivedAt IS NULL',
+    );
+  }
+
+  /**
+   * "Participo en este documento DESDE la cuenta activa".
+   *
+   * La participación pertenece a una cuenta, no a la persona: `CreateDocumentUseCase` ancla cada
+   * colaborador a la cuenta PERSONAL del invitado, y `linkPendingCollaboratorAccount` hace lo
+   * mismo al vincular una invitación por correo. Por eso se empareja por `c.account_id` contra la
+   * cuenta activa y no por el usuario dueño de esa cuenta: emparejar por usuario reconocía la
+   * participación desde CUALQUIERA de sus cuentas, y los documentos personales en los que firma
+   * aparecían también dentro de cada organización a la que pertenece.
+   *
+   * La consecuencia, deliberada: en una organización este camino no aporta nada hoy —ningún
+   * colaborador se ancla a una membresía de organización—, así que ahí se ve exactamente lo de la
+   * organización. Lo que le toca firmar a la persona por invitación de terceros aparece en su
+   * cuenta personal, que es donde se ancló. Si algún día los colaboradores se anclaran a una
+   * membresía de organización, esta misma condición los mostraría en esa organización sin tocar
+   * nada.
+   *
+   * La invitación por correo todavía sin vincular (`account_id` nulo) cuenta SÓLO en la cuenta
+   * personal: es donde va a anclarse en cuanto se vincule, y es necesaria porque la vinculación
+   * ocurre al firmar, rechazar o pedir el código —nunca antes de ver esta lista—, así que sin este
+   * camino el invitado no vería el documento que tiene que firmar.
+   *
+   * @param isPersonalAccount - Si la cuenta activa es la PERSONAL del usuario.
+   * @returns La condición SQL; espera los parámetros `:accountId` y `:callerEmail`.
+   *
+   * @example
+   * ```ts
+   * where.orWhere(this.callerParticipatesFromAccountSubquery(true), { accountId, callerEmail });
+   * ```
+   */
+  private callerParticipatesFromAccountSubquery(
+    isPersonalAccount: boolean,
+  ): string {
+    const pendingEmailInvitation = isPersonalAccount
+      ? 'OR (c.account_id IS NULL AND LOWER(c.email) = :callerEmail)'
+      : '';
+
+    return `document.id IN (
+      SELECT c.document_id FROM collaborators c
+      WHERE c.account_id = :accountId
+      ${pendingEmailInvitation}
+    )`;
+  }
+
+  /** Documentos con algún participante cuyo nombre o correo case con `:<paramName>`. */
+  private participantMatchSubquery(paramName: string): string {
+    return `document.id IN (
+      SELECT c.document_id FROM collaborators c
+      LEFT JOIN accounts a ON a.id = c.account_id
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE u.first_name ILIKE :${paramName}
+         OR u.last_name ILIKE :${paramName}
+         OR u.email ILIKE :${paramName}
+         OR c.email ILIKE :${paramName}
+    )`;
+  }
+
+  /**
+   * Qué es el usuario dentro de este documento, con un solo valor por fila.
+   *
+   * El orden importa cuando alguien es varias cosas a la vez —crear un documento y firmarlo uno
+   * mismo es corriente—: gana lo que le pide una acción, porque es lo que explica por qué esa
+   * fila está en su lista. Se resuelve sobre los colaboradores YA cargados por el join, sin una
+   * consulta extra por documento.
+   */
+  private resolveParticipation(
+    document: DocumentEntity,
+    userId: string,
+    callerEmail: string | null,
+  ): DOCUMENT_PARTICIPATION_ENUM {
+    const mine = (document.collaborators ?? []).filter(
+      (c) =>
+        c.account?.userId === userId ||
+        (Boolean(c.email) && c.email?.toLowerCase() === callerEmail),
+    );
+
+    const owesAnswer = mine.some(
+      (c) =>
+        ACTING_COLLABORATOR_TYPES.includes(c.colaboratorType) &&
+        c.status === COLLABORATOR_STATUS_ENUM.PENDING &&
+        document.status === DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+    );
+    if (owesAnswer) return DOCUMENT_PARTICIPATION_ENUM.REQUIRES_MY_SIGNATURE;
+
+    if (document.createdBy === userId) {
+      return DOCUMENT_PARTICIPATION_ENUM.CREATED_BY_ME;
+    }
+
+    return DOCUMENT_PARTICIPATION_ENUM.PARTICIPANT;
+  }
+
+}

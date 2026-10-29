@@ -1,34 +1,38 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuditService } from './audit.service';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuditQuery } from './audit.service';
+import { GetDocumentAuditTrailUseCase } from './applications/get-document-audit-trail.use-case';
+import { GetDecryptedAuditRecordsUseCase } from './applications/get-decrypted-audit-records.use-case';
+import { GetAuditRecordsUseCase } from './applications/get-audit-records.use-case';
+import { ApiGetDocumentAuditTrail } from './docs/api-get-document-audit-trail.docs';
+import { ApiGetDecryptedAuditRecords } from './docs/api-get-decrypted-audit-records.docs';
+import { ApiGetAuditRecords } from './docs/api-get-audit-records.docs';
 
 @ApiTags('Audit')
 @ApiBearerAuth('access-token')
 @Controller('audit')
 export class AuditController {
-  constructor(private readonly auditService: AuditService) {}
+  constructor(
+    private readonly getDocumentAuditTrail: GetDocumentAuditTrailUseCase,
+    private readonly getDecryptedAuditRecords: GetDecryptedAuditRecordsUseCase,
+    private readonly getAuditRecords: GetAuditRecordsUseCase,
+  ) {}
 
   @Get('document/:documentId')
-  @ApiOperation({ summary: 'Obtener registros de auditoría de un documento descifrados' })
-  @ApiParam({ name: 'documentId', description: 'UUID del documento', format: 'uuid' })
-  @ApiResponse({ status: 200, description: 'Lista de registros de auditoría descifrados, ordenados por chainIndex ASC' })
-  @ApiResponse({ status: 404, description: 'No se encontraron registros para el documento' })
+  @ApiGetDocumentAuditTrail()
   findByDocument(@Param('documentId') documentId: string) {
-    return this.auditService.findOne(documentId);
+    return this.getDocumentAuditTrail.execute(documentId);
   }
 
   @Get('decrypted')
-  @ApiOperation({ summary: 'Obtener todos los registros de auditoría descifrados' })
-  @ApiResponse({ status: 200, description: 'Lista paginada de registros descifrados con sus campos de integridad' })
+  @ApiGetDecryptedAuditRecords()
   findAllDecrypted(@Query() query: AuditQuery) {
-    return this.auditService.findAllDecrypted(query);
+    return this.getDecryptedAuditRecords.execute(query);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Obtener todos los registros de auditoría (cifrados)' })
-  @ApiResponse({ status: 200, description: 'Lista paginada de registros de auditoría' })
+  @ApiGetAuditRecords()
   findAll(@Query() query: AuditQuery) {
-    return this.auditService.findAll(query);
+    return this.getAuditRecords.execute(query);
   }
 }

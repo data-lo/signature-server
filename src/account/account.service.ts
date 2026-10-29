@@ -1,109 +1,329 @@
 // External dependencies
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 
 // DTOs
-import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
+import { CreateOrganizationDto } from './dto/create-organization.dto';
+import { UpdateOrganizationDto } from './dto/update-organization.dto';
 
 // Entities
 import { AccountEntity } from './entities/account.entity';
-import { OrganizationDetailEntity } from './entities/organization-detail.entity';
+import { OrganizationEntity } from './entities/organization.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { RoleEntity } from 'src/roles/entities/role.entity';
+
+// Exceptions
+import { OrganizationOwnerAssignmentFailedException } from './exceptions/organization.exceptions';
 
 // Enums
 import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
+import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+
+// Services
+import { RolesService } from 'src/roles/roles.service';
+import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-profile-provisioning.service';
+import { toBillingOwner } from 'src/billing/profiles/billing-owner.util';
 
 // Interfaces
 import { BaseResponse } from 'src/interfaces/api-response.dto';
+import { RedisService } from 'src/common/redis/redis.service';
+import { AccountData } from './interfaces/response/account-response';
+import { OrganizationProfileData } from './interfaces/response/organization-response';
 
+const ACCOUNTS_CATALOG_KEY_PREFIX = 'accounts:';
+
+/**
+ * AccountEntity fusiona lo que antes eran AccountEntity (el tenant) + AccountMemberEntity (la
+ * membresía) en una sola fila por (usuario × contexto) — ver plan de migración ER-V2, Fase 5.
+ * Este servicio absorbe toda la lógica que antes vivía repartida entre AccountService y
+ * AccountMemberService para las operaciones que ya no distinguen "la cuenta" de "quién
+ * pertenece a ella": ambas cosas son la misma fila ahora.
+ */
 @Injectable()
 export class AccountService {
+  private readonly logger = new Logger(AccountService.name);
+
   constructor(
     @InjectRepository(AccountEntity)
     private accountRepository: Repository<AccountEntity>,
 
-    @InjectRepository(OrganizationDetailEntity)
-    private organizationDetailRepository: Repository<OrganizationDetailEntity>,
+    @InjectRepository(OrganizationEntity)
+    private organizationRepository: Repository<OrganizationEntity>,
+
+    @InjectRepository(UserEntity)
+    private userRepository: Repository<UserEntity>,
+
+    @InjectDataSource()
+    private dataSource: DataSource,
+
+    private redisService: RedisService,
+    private rolesService: RolesService,
+    private billingProfileProvisioning: BillingProfileProvisioningService,
   ) {}
 
-  async create(
-    createAccountDto: CreateAccountDto,
-  ): Promise<BaseResponse<AccountEntity>> {
-    const account = this.accountRepository.create({
-      name: createAccountDto.name,
-      type: createAccountDto.type,
+  /**
+   * Alta directa de una fila de `accounts`, con su organización si hace falta. Quién puede
+   * crearla y con qué rol lo decide el caso de uso; acá sólo se escribe.
+   *
+   * `email`/`password` se copian del usuario porque son la credencial única sincronizada
+   * (decisión D6 del plan ER-V2): el login resuelve contra `accounts`, así que una fila sin
+   * esos campos sería una cuenta con la que su dueño no podría entrar.
+   *
+   * **Sólo la cuenta PERSONAL nace con perfil Free.** Una cuenta de organización se guarda sin
+   * `billing_profile`: las organizaciones nacen sin plan, sin plan Free y sin créditos de
+   * bienvenida, y contratan su plan desde Planes. Aprovisionarla aquí dejaría al alta genérica
+   * (`CreateAccountUseCase`) regalándole el plan Free por la puerta de atrás.
+   */
+  async saveAccount(params: {
+    userId: string;
+    accountType: ACCOUNT_TYPE_ENUM;
+    organizationId: string | null;
+    roleId: string;
+    user: UserEntity;
+  }): Promise<AccountEntity> {
+    /**
+     * Va en transacción porque la cuenta personal nace con su `billing_profile`: guardar la fila
+     * sola dejaría una cuenta sin estado comercial si el perfil fallara.
+     *
+     * Sigue quedando FUERA la organización que el caso de uso crea antes de llamar acá: ese
+     * reparto es el que ya tenía el endpoint (ver `CreateAccountUseCase`) y no lo toca esta
+     * historia.
+     */
+    return this.dataSource.transaction(async (manager) => {
+      const account = await manager.save(
+        manager.create(AccountEntity, {
+          userId: params.userId,
+          accountType: params.accountType,
+          organizationId: params.organizationId,
+          roleId: params.roleId,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          email: params.user.email,
+          password: params.user.password,
+          isActive: true,
+          joinedAt: new Date(),
+        }),
+      );
+
+      if (account.accountType === ACCOUNT_TYPE_ENUM.PERSONAL) {
+        await this.billingProfileProvisioning.provisionFreeProfile(
+          manager,
+          toBillingOwner(account),
+        );
+      }
+
+      return account;
+    });
+  }
+
+  /**
+   * Alta de la fila `organizations` con el perfil que llega del formulario.
+   *
+   * `name` y `displayName` son dos cosas distintas y las dos hacen falta: la razón social es el
+   * nombre legal y el de visualización es el corto con el que la organización aparece en el
+   * selector de cuentas. Antes sólo se escribía el primero y el segundo se perdía, y por eso el
+   * selector rotulaba cada organización con su nombre legal completo.
+   *
+   * `indexDocuments` nace encendido si el alta no opina: todo documento es encontrable salvo que
+   * la organización decida lo contrario.
+   */
+  async saveOrganization(profile: {
+    name: string;
+    displayName: string;
+    address?: string | null;
+    taxId?: string | null;
+    domainAllowed?: string | null;
+    phoneNumber?: string | null;
+    indexDocuments?: boolean;
+  }): Promise<OrganizationEntity> {
+    return this.organizationRepository.save(
+      this.organizationRepository.create({
+        name: profile.name,
+        displayName: profile.displayName,
+        address: profile.address ?? null,
+        taxId: profile.taxId ?? null,
+        domainAllowed: profile.domainAllowed ?? null,
+        phoneNumber: profile.phoneNumber ?? null,
+        indexDocuments: profile.indexDocuments ?? true,
+      }),
+    );
+  }
+
+  /** Usuario por id, exigiendo que exista. */
+  async findUserOrFail(userId: string): Promise<UserEntity> {
+    const currentUser = await this.userRepository.findOne({
+      where: { id: userId },
     });
 
-    const newAccount = await this.accountRepository.save(account);
-
-    if (newAccount.type === ACCOUNT_TYPE_ENUM.ORGANIZATION) {
-      const organizationDetail = this.organizationDetailRepository.create({
-        accountId: newAccount.id,
-        name: createAccountDto.organizationName,
-      });
-      await this.organizationDetailRepository.save(organizationDetail);
+    if (!currentUser) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
     }
 
-    return {
-      success: true,
-      message: 'Cuenta creada correctamente',
-      data: await this.findEntityById(newAccount.id),
-    };
+    return currentUser;
   }
 
-  async findAll(): Promise<BaseResponse<AccountEntity[]>> {
-    const accounts = await this.accountRepository.find({
-      relations: { organizationDetail: true },
+  /**
+   * El perfil completo de una organización, para la pantalla que lo muestra.
+   *
+   * Existe aparte de `toCatalogEntry` porque aquel sirve al selector de cuentas y publica sólo lo
+   * que el selector rotula —razón social y nombre de visualización—. El resto del perfil se podía
+   * ESCRIBIR desde siempre (`PATCH /account/:id`) pero no leér: quien guardaba un domicilio no
+   * volvía a verlo. Ampliar el catálogo en su lugar habría engordado la entrada que viaja
+   * cacheada en Redis para cada miembro, con campos que el selector no usa.
+   *
+   * @param organizationId - Organización cuyo perfil se pide.
+   * @returns La fila de `organizations`.
+   *
+   * @throws {NotFoundException} Si no existe ninguna organización con ese id.
+   *
+   * @example
+   * ```ts
+   * const organization = await accountService.findOrganizationByIdOrFail('org-1');
+   * organization.taxId; // 'ACM010101AAA'
+   * ```
+   */
+  async findOrganizationByIdOrFail(
+    organizationId: string,
+  ): Promise<OrganizationEntity> {
+    const organization = await this.organizationRepository.findOne({
+      where: { id: organizationId },
     });
 
-    return {
-      success: true,
-      message: 'Cuentas obtenidas correctamente',
-      data: accounts,
-    };
-  }
-
-  async findOne(id: string): Promise<BaseResponse<AccountEntity>> {
-    const account = await this.findEntityById(id);
-
-    return {
-      success: true,
-      message: 'Cuenta obtenida correctamente',
-      data: account,
-    };
-  }
-
-  async update(
-    id: string,
-    updateAccountDto: UpdateAccountDto,
-  ): Promise<BaseResponse<AccountEntity>> {
-    const account = await this.findEntityById(id);
-
-    await this.accountRepository.update(id, {
-      ...(updateAccountDto.name && { name: updateAccountDto.name }),
-    });
-
-    if (
-      account.type === ACCOUNT_TYPE_ENUM.ORGANIZATION &&
-      updateAccountDto.organizationName
-    ) {
-      await this.organizationDetailRepository.update(id, {
-        name: updateAccountDto.organizationName,
-      });
+    if (!organization) {
+      throw new NotFoundException(
+        `Organización con ID ${organizationId} no encontrada`,
+      );
     }
 
+    return organization;
+  }
+
+  /**
+   * Escribe los datos de "Información de la organización" que vinieron en el DTO y devuelve la
+   * organización como quedó.
+   *
+   * Hermano de `updateOrganizationDetails`, que sirve a `PATCH /account/:id` con los nombres
+   * cruzados de `UpdateAccountDto` (`name` = visualización, `organizationName` = razón social).
+   * Éste recibe los nombres de la entidad, los mismos que publica el perfil. Un campo ausente no
+   * se toca; uno en `null` se borra. `indexDocuments` viaja solo cuando la pantalla cambia el
+   * interruptor de Búsqueda Inteligente, y entonces es lo único que se escribe.
+   *
+   * @param organizationId - Organización a editar.
+   * @param dto - Campos a escribir; los ausentes se dejan como estaban.
+   * @returns La organización releída después de escribir.
+   *
+   * @throws {NotFoundException} Si no existe ninguna organización con ese id.
+   *
+   * @example
+   * ```ts
+   * const organization = await accountService.updateOrganizationProfile('org-1', {
+   *   indexDocuments: false,
+   * });
+   * organization.indexDocuments; // false
+   * ```
+   */
+  async updateOrganizationProfile(
+    organizationId: string,
+    dto: UpdateOrganizationDto,
+  ): Promise<OrganizationEntity> {
+    await this.findOrganizationByIdOrFail(organizationId);
+
+    const changes: Partial<OrganizationEntity> = {
+      ...(dto.displayName !== undefined && { displayName: dto.displayName }),
+      ...(dto.name !== undefined && { name: dto.name }),
+      ...(dto.taxId !== undefined && { taxId: dto.taxId }),
+      ...(dto.phoneNumber !== undefined && { phoneNumber: dto.phoneNumber }),
+      ...(dto.address !== undefined && { address: dto.address }),
+      ...(dto.domainAllowed !== undefined && {
+        domainAllowed: dto.domainAllowed,
+      }),
+      ...(dto.indexDocuments !== undefined && {
+        indexDocuments: dto.indexDocuments,
+      }),
+    };
+
+    // `update` con un objeto vacío hace que TypeORM lance "UpdateValuesMissingError".
+    if (Object.keys(changes).length > 0) {
+      await this.organizationRepository.update(organizationId, changes);
+    }
+
+    return this.findOrganizationByIdOrFail(organizationId);
+  }
+
+  /**
+   * Convierte la fila de `organizations` en el perfil que publica la API.
+   *
+   * Lo comparten la lectura y la edición del perfil, para que las dos respuestas sean idénticas y
+   * la pantalla pueda pintar lo que devuelve el guardado sin volver a pedirlo. Incluye
+   * `indexDocuments`, con el que la pantalla pinta el interruptor de Búsqueda Inteligente y decide
+   * si ofrecerla al crear un documento.
+   *
+   * @param organization - La fila de `organizations`.
+   * @returns El perfil, con los opcionales en `null` y no ausentes.
+   *
+   * @example
+   * ```ts
+   * const profile = accountService.toOrganizationProfile(organization);
+   * profile.taxId; // 'ACM010101AAA'
+   * profile.indexDocuments; // true
+   * ```
+   */
+  toOrganizationProfile(
+    organization: OrganizationEntity,
+  ): OrganizationProfileData {
     return {
-      success: true,
-      message: 'Cuenta actualizada correctamente',
-      data: await this.findEntityById(id),
+      id: organization.id,
+      name: organization.name,
+      displayName: organization.displayName,
+      taxId: organization.taxId,
+      phoneNumber: organization.phoneNumber,
+      address: organization.address,
+      domainAllowed: organization.domainAllowed,
+      isActive: organization.isActive,
+      indexDocuments: organization.indexDocuments,
     };
   }
 
-  private async findEntityById(id: string): Promise<AccountEntity> {
+  /** Escribe sólo los campos del perfil de organización que vinieron en el DTO. */
+  async updateOrganizationDetails(
+    organizationId: string,
+    dto: UpdateAccountDto,
+  ): Promise<void> {
+    await this.organizationRepository.update(organizationId, {
+      ...(dto.organizationName !== undefined && {
+        name: dto.organizationName,
+      }),
+      ...(dto.name !== undefined && { displayName: dto.name }),
+      ...(dto.address !== undefined && { address: dto.address }),
+      ...(dto.taxId !== undefined && { taxId: dto.taxId }),
+      ...(dto.domainAllowed !== undefined && {
+        domainAllowed: dto.domainAllowed,
+      }),
+      ...(dto.phoneNumber !== undefined && { phoneNumber: dto.phoneNumber }),
+      ...(dto.indexDocuments !== undefined && {
+        indexDocuments: dto.indexDocuments,
+      }),
+    });
+  }
+
+  /** Todas las cuentas con su organización — consulta administrativa, sin filtro de tenant. */
+  async listAll(): Promise<AccountEntity[]> {
+    return this.accountRepository.find({ relations: { organization: true } });
+  }
+
+  async findByIdOrFail(id: string): Promise<AccountEntity> {
     const account = await this.accountRepository.findOne({
       where: { id },
-      relations: { organizationDetail: true },
+      relations: { organization: true },
     });
 
     if (!account) {
@@ -111,5 +331,519 @@ export class AccountService {
     }
 
     return account;
+  }
+
+  /**
+   * Solo el propio dueño de esa fila de Account, con permiso ORGANIZATION:{action}, puede
+   * leer/actualizar la cuenta o invitar miembros. `accountId` siempre se refiere al contexto
+   * propio del llamador (mismo criterio que `X-Account-Id` en el resto de la API) — nunca a la
+   * fila de otro usuario. Retorna la cuenta para que el caller no tenga que volver a
+   * consultarla. Permiso granular vía `RolesService.hasPermission` en vez de comparar
+   * `role.name === 'ADMIN'` a mano — ver docblock de `hasPermission` para el porqué.
+   */
+  async assertHasOrganizationPermission(
+    callerId: string,
+    accountId: string,
+    action: ACTION_KEY_ENUM,
+  ): Promise<AccountEntity> {
+    const account = await this.accountRepository.findOne({
+      where: { id: accountId, userId: callerId, isActive: true },
+      relations: { role: true, organization: true },
+    });
+
+    const allowed = await this.rolesService.hasPermission(
+      account?.roleId,
+      RESOURCE_KEY_ENUM.ORGANIZATION,
+      action,
+    );
+
+    if (!account || !allowed) {
+      throw new ForbiddenException(
+        'No tienes permisos de administrador sobre esta cuenta',
+      );
+    }
+
+    return account;
+  }
+
+  /**
+   * La cuenta activa del llamador, resuelta SIN volver a preguntar por permisos.
+   *
+   * Es la mitad que sigue haciendo falta de `assertHasOrganizationPermission` en los endpoints ya
+   * migrados a `@RequirePermission`: allí `PermissionsGuard` resolvió la misma fila y ya autorizó,
+   * así que repetir la consulta de permisos sólo volvería a exigir el permiso genérico de
+   * organización además del específico del recurso —y dejaría fuera a un rol custom que sí tiene
+   * el específico—. Lo que el caso de uso todavía necesita es la ENTIDAD: su tipo de cuenta y su
+   * `organizationId`.
+   *
+   * El filtro por `userId` se conserva a propósito. No es la autorización —esa ya ocurrió— sino
+   * la garantía de que `X-Account-Id` sigue apuntando a una membresía del usuario autenticado,
+   * que es lo que impide que el identificador de otra cuenta se cuele por el header.
+   *
+   * @param callerId - Usuario autenticado.
+   * @param accountId - Cuenta activa que llegó en `X-Account-Id`.
+   * @returns La membresía, con su rol y su organización cargados.
+   *
+   * @throws {ForbiddenException} (403) Si esa cuenta no existe, no es del llamador o está dada
+   *   de baja.
+   *
+   * @example
+   * ```ts
+   * const account = await accountService.resolveOwnActiveAccountOrFail(callerId, accountId);
+   * account.organizationId; // la organización sobre la que se va a operar
+   * ```
+   */
+  async resolveOwnActiveAccountOrFail(
+    callerId: string,
+    accountId: string,
+  ): Promise<AccountEntity> {
+    const account = await this.accountRepository.findOne({
+      where: { id: accountId, userId: callerId, isActive: true },
+      relations: { role: true, organization: true },
+    });
+
+    if (!account) {
+      throw new ForbiddenException('No tienes acceso a esta cuenta');
+    }
+
+    return account;
+  }
+
+  /**
+   * Crea la cuenta PERSONAL por defecto de un usuario recién registrado. Recibe el
+   * EntityManager del llamador para poder enlistarse en la transacción de registro (no abre su
+   * propia transacción). `email`/`password` sincronizan la credencial única del usuario
+   * (decisión D6, ver plan de migración ER-V2) — se reciben como parámetro en vez de
+   * volver a consultarlas porque el caller (`UserService.createFromSignup`) ya las tiene en
+   * memoria dentro de la misma transacción.
+   */
+  async createDefaultPersonalAccount(
+    manager: EntityManager,
+    userId: string,
+    email: string,
+    password: string,
+  ): Promise<{ account: AccountEntity }> {
+    const ownerRole = await this.rolesService.findSystemRoleByName(
+      SYSTEM_ROLE_NAME_ENUM.OWNER,
+    );
+
+    const account = await manager.save(
+      manager.create(AccountEntity, {
+        userId,
+        accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+        organizationId: null,
+        roleId: ownerRole.id,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        email,
+        password,
+        isActive: true,
+        joinedAt: new Date(),
+      }),
+    );
+
+    /**
+     * Con el MISMO `manager`, es decir dentro de la transacción de registro: un usuario que se
+     * da de alta sale de aquí con cuenta personal y perfil Free, o no sale con ninguna de las
+     * dos. Es el propietario naciendo completo, no un paso posterior que pueda quedarse a medias.
+     */
+    await this.billingProfileProvisioning.provisionFreeProfile(
+      manager,
+      toBillingOwner(account),
+    );
+
+    return { account };
+  }
+
+  /**
+   * Resuelve el rol de sistema OWNER, el que convierte al creador en propietario de la cuenta.
+   *
+   * Envuelve el fallo en un error propio en vez de dejar salir el de `RolesService`, que dice
+   * "el rol de sistema OWNER no está sembrado, corre npm run seed:roles": es la instrucción
+   * correcta para quien opera el servidor y ruido inservible para quien está creando una
+   * organización desde el formulario. El detalle técnico se conserva en el log.
+   *
+   * @returns El rol de sistema OWNER.
+   *
+   * @throws {OrganizationOwnerAssignmentFailedException} (500) Si el RBAC no está sembrado o la
+   *   consulta del rol falla.
+   *
+   * @example
+   * ```ts
+   * const ownerRole = await this.resolveOwnerRoleOrFail();
+   * ```
+   */
+  private async resolveOwnerRoleOrFail(): Promise<RoleEntity> {
+    try {
+      return await this.rolesService.findSystemRoleByName(
+        SYSTEM_ROLE_NAME_ENUM.OWNER,
+      );
+    } catch (error) {
+      this.logger.error(
+        `No se pudo resolver el rol OWNER para asignar al creador de la organización: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      throw new OrganizationOwnerAssignmentFailedException();
+    }
+  }
+
+  /**
+   * Crea la organización y la membresía OWNER de su creador en una sola transacción.
+   *
+   * Van juntas porque una organización sin ningún administrador no la puede gestionar nadie: si
+   * el segundo save fallara con el primero ya confirmado, quedaría una organización inaccesible
+   * y sin forma de repararla desde la API. El creador queda como propietario de inmediato,
+   * igual que en la cuenta personal.
+   *
+   * La membresía nace ACTIVE, con `joinedAt` y con el rol de sistema OWNER, que trae todas las
+   * acciones sobre todos los recursos (las mismas que ADMIN, ver
+   * `IntroduceOwnerSystemRole1784300000055`): de ahí sale el acceso inmediato a gestionar
+   * miembros y permisos, que `assertHasOrganizationPermission` resuelve leyendo exactamente
+   * esta fila. ADMIN queda para los administradores que el propietario nombre después.
+   *
+   * **El rol se resuelve ANTES de abrir la transacción.** Es la única parte del alta que puede
+   * fallar por algo ajeno a los datos del formulario —el RBAC sin sembrar—, y descubrirlo
+   * después de insertar la organización sólo sirve para tener que deshacerla.
+   *
+   * La escritura es la de `saveOrganizationWithOwnerAccountWithin`, en una transacción propia.
+   *
+   * @param user - Usuario autenticado, que queda como propietario de la organización nueva.
+   * @param dto - Datos de la organización: razón social, nombre y perfil opcional.
+   * @returns La membresía recién creada, releída con sus relaciones.
+   *
+   * @throws {OrganizationOwnerAssignmentFailedException} (500) Si no se puede resolver el rol
+   *   OWNER. No se crea nada: se lanza antes de abrir la transacción.
+   * @throws {Error} Cualquier fallo de escritura, tras revertir la transacción entera.
+   *
+   * @example
+   * ```ts
+   * const owner = await accountService.saveOrganizationWithOwnerAccount(user, {
+   *   name: 'Acme',
+   *   organizationName: 'Acme Corp S.A. de C.V.',
+   * });
+   * owner.roleId; // el rol de sistema OWNER
+   * ```
+   */
+  async saveOrganizationWithOwnerAccount(
+    user: UserEntity,
+    dto: CreateOrganizationDto,
+  ): Promise<AccountEntity> {
+    const ownerRole = await this.resolveOwnerRoleOrFail();
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const account = await this.saveOrganizationWithOwnerAccountWithin(
+        queryRunner.manager,
+        user,
+        dto,
+        ownerRole,
+      );
+      await queryRunner.commitTransaction();
+
+      return this.findByIdOrFail(account.id);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Crea la organización (activa) y la membresía OWNER de `user` dentro de la transacción del
+   * llamador.
+   *
+   * Es el alta de `saveOrganizationWithOwnerAccount` sin la transacción propia, para los flujos que
+   * crean la organización junto con más cosas que deben confirmarse o revertirse con ella (el
+   * aprovisionamiento interno: usuario, organización, perfil de facturación, créditos y API key).
+   *
+   * **Sin `billing_profile`**, igual que el alta normal: la organización nace sin plan, sin plan
+   * Free y sin créditos de bienvenida. Quien necesite un plan lo registra después, en la misma
+   * transacción si quiere que vayan juntos.
+   *
+   * @param manager - Transacción en curso; si se revierte, no queda ni la organización ni la
+   *   membresía.
+   * @param user - Usuario que queda como propietario. Su `email`/`password` se copian a la
+   *   membresía (credencial única, decisión D6); un usuario `PROVISIONED` no tiene contraseña.
+   * @param dto - Datos de la organización: razón social, nombre y perfil opcional.
+   * @param ownerRole - Rol OWNER ya resuelto; si se omite, se resuelve aquí.
+   * @returns La membresía OWNER recién guardada, con su organización cargada.
+   *
+   * @throws {OrganizationOwnerAssignmentFailedException} (500) Si hay que resolver el rol OWNER y
+   *   no se puede.
+   * @throws {QueryFailedError} Si la base rechaza la organización o la membresía.
+   *
+   * @example
+   * ```ts
+   * const owner = await accountService.saveOrganizationWithOwnerAccountWithin(manager, user, {
+   *   name: 'Acme Pruebas',
+   *   organizationName: 'Acme Pruebas S.A. de C.V.',
+   * });
+   * owner.organization.isActive; // true
+   * ```
+   */
+  async saveOrganizationWithOwnerAccountWithin(
+    manager: EntityManager,
+    user: UserEntity,
+    dto: CreateOrganizationDto,
+    ownerRole?: RoleEntity,
+  ): Promise<AccountEntity> {
+    const role = ownerRole ?? (await this.resolveOwnerRoleOrFail());
+
+    const organization = await manager.save(
+      manager.create(OrganizationEntity, {
+        name: dto.organizationName,
+        displayName: dto.name,
+        address: dto.address ?? null,
+        taxId: dto.taxId ?? null,
+        domainAllowed: dto.domainAllowed ?? null,
+        phoneNumber: dto.phoneNumber ?? null,
+        indexDocuments: dto.indexDocuments ?? true,
+        isActive: true,
+      }),
+    );
+
+    const account = await manager.save(
+      manager.create(AccountEntity, {
+        userId: user.id,
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: organization.id,
+        roleId: role.id,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        email: user.email,
+        password: user.password,
+        isActive: true,
+        joinedAt: new Date(),
+      }),
+    );
+
+    /**
+     * Sin `billing_profile`, a propósito: la organización nace sin plan, sin plan Free y sin
+     * créditos de bienvenida. El perfil se crea cuando contrata (lo abre
+     * `CreateSubscriptionCheckoutUseCase`), y hasta entonces `GetBillingAccessUseCase` le
+     * responde todas las acciones en `false`.
+     */
+    account.organization = organization;
+    return account;
+  }
+
+  /**
+   * La cuenta PERSONAL de un usuario, dentro de la transacción del llamador.
+   *
+   * @param manager - Transacción en curso.
+   * @param userId - Usuario dueño.
+   * @returns Su cuenta personal, o `null` si no tiene (un dato roto: todo usuario nace con una).
+   *
+   * @example
+   * ```ts
+   * const personal = await accountService.findPersonalAccount(manager, 'user-1');
+   * ```
+   */
+  findPersonalAccount(
+    manager: EntityManager,
+    userId: string,
+  ): Promise<AccountEntity | null> {
+    return manager.getRepository(AccountEntity).findOne({
+      where: { userId, organizationId: IsNull() },
+    });
+  }
+
+  /**
+   * Agrega una cuenta al catálogo cacheado en Redis DB 0 bajo la key
+   * accounts:{userId} (lectura-modificación-escritura). Un fallo de Redis
+   * nunca debe tumbar la operación que lo dispara.
+   */
+  async appendAccountToCatalog(
+    userId: string,
+    account: AccountEntity,
+  ): Promise<void> {
+    try {
+      const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
+      const existingRaw = await this.redisService.get(key);
+      const catalog: AccountData[] = existingRaw ? JSON.parse(existingRaw) : [];
+
+      catalog.push(this.toCatalogEntry(account));
+
+      await this.redisService.set(key, JSON.stringify(catalog));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo refrescar el catálogo de cuentas en Redis para el usuario ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Refresca la entrada de esta organización dentro del catálogo cacheado en Redis de cada
+   * miembro activo. Se usa tras renombrar/actualizar el perfil de una organización
+   * (`update()`) para que el switcher del frontend no muestre datos obsoletos indefinidamente.
+   */
+  async refreshCatalogForOrganizationMembers(
+    organizationId: string,
+  ): Promise<void> {
+    const members = await this.accountRepository.find({
+      where: { organizationId, isActive: true },
+      relations: { organization: true },
+    });
+
+    await Promise.all(
+      members.map((member) =>
+        this.replaceAccountInCatalog(member.userId, member),
+      ),
+    );
+  }
+
+  private async replaceAccountInCatalog(
+    userId: string,
+    account: AccountEntity,
+  ): Promise<void> {
+    try {
+      const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
+      const existingRaw = await this.redisService.get(key);
+      if (!existingRaw) {
+        return;
+      }
+
+      const catalog: AccountData[] = JSON.parse(existingRaw);
+      const index = catalog.findIndex((entry) => entry.id === account.id);
+      if (index === -1) {
+        return;
+      }
+
+      catalog[index] = this.toCatalogEntry(account);
+      await this.redisService.set(key, JSON.stringify(catalog));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo refrescar el catálogo de cuentas en Redis para el usuario ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Quita una cuenta del catálogo cacheado en Redis del usuario. Se usa al
+   * revocar el acceso de un miembro, para que el switcher del frontend no
+   * siga ofreciendo una cuenta a la que el usuario ya no tiene acceso.
+   */
+  async removeAccountFromCatalog(
+    userId: string,
+    accountId: string,
+  ): Promise<void> {
+    try {
+      const key = ACCOUNTS_CATALOG_KEY_PREFIX + userId;
+      const existingRaw = await this.redisService.get(key);
+      if (!existingRaw) {
+        return;
+      }
+
+      const catalog: AccountData[] = JSON.parse(existingRaw);
+      const filtered = catalog.filter((entry) => entry.id !== accountId);
+      if (filtered.length === catalog.length) {
+        return;
+      }
+
+      await this.redisService.set(key, JSON.stringify(filtered));
+    } catch (error) {
+      this.logger.warn(
+        `No se pudo actualizar el catálogo de cuentas en Redis para el usuario ${userId} al revocar la cuenta ${accountId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Lee el catálogo de cuentas del usuario autenticado exclusivamente desde
+   * Redis DB 0 (sin fallback a PostgreSQL). Si la key no existe, retorna un
+   * catálogo vacío.
+   */
+  async getAccountsCatalog(
+    userId: string,
+  ): Promise<BaseResponse<AccountData[]>> {
+    const raw = await this.redisService.get(
+      ACCOUNTS_CATALOG_KEY_PREFIX + userId,
+    );
+    const catalog: AccountData[] = raw ? JSON.parse(raw) : [];
+
+    return {
+      success: true,
+      message: 'Cuentas obtenidas correctamente',
+      data: catalog,
+    };
+  }
+
+  /**
+   * Resuelve una cuenta activa por email — usado por AuthService.login() (ver plan de
+   * migración ER-V2, Fase 5): el login ahora resuelve contra `Account.email` (sincronizado
+   * desde la credencial única del usuario, decisión D6) en vez de `User.email` directamente.
+   * Un usuario puede tener varias filas de Account (una por organización) con el mismo email
+   * sincronizado; cualquiera de ellas sirve para resolver el userId.
+   */
+  async findActiveAccountByEmail(email: string): Promise<AccountEntity | null> {
+    return this.accountRepository.findOne({
+      where: { email, isActive: true },
+    });
+  }
+
+  /**
+   * Resincroniza la contraseña en TODAS las filas AccountEntity del usuario (personal +
+   * memberships de organización) tras un cambio en UserEntity.password. Necesario porque
+   * `login()` autentica contra Account.email/.password (decisión D6), no contra User.password
+   * directamente — sin esto, un reset de contraseña dejaría al usuario sin poder loguearse con
+   * la contraseña nueva (ver historia "Recuperación de Contraseña mediante Código de
+   * Verificación OTP").
+   */
+  async updatePasswordForUser(
+    userId: string,
+    hashedPassword: string,
+  ): Promise<void> {
+    await this.accountRepository.update(
+      { userId },
+      { password: hashedPassword },
+    );
+  }
+
+  /**
+   * Contraparte de `updatePasswordForUser` para el otro campo sincronizado desde UserEntity: el
+   * correo. Se usa al corregir un registro sin verificar (ver UserService.updatePreRegistration);
+   * sin esto `login()`, que resuelve la credencial por Account.email, seguiría buscando el correo
+   * viejo y el usuario no podría entrar con el que acaba de verificar.
+   *
+   * Acepta un EntityManager para poder correr dentro de la misma transacción que actualiza al
+   * usuario, y que credencial y usuario nunca queden desincronizados a medias.
+   */
+  async updateEmailForUser(
+    userId: string,
+    email: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(AccountEntity)
+      : this.accountRepository;
+
+    await repository.update({ userId }, { email });
+  }
+
+  toCatalogEntry(account: AccountEntity): AccountData {
+    return {
+      id: account.id,
+      type: account.accountType,
+      createdAt: account.createdAt,
+      organizationId: account.organizationId,
+      organizationDetail: account.organization
+        ? {
+            name: account.organization.name,
+            displayName: account.organization.displayName,
+            indexDocuments: account.organization.indexDocuments,
+          }
+        : null,
+      roleId: account.roleId,
+      isActive: account.isActive,
+    };
   }
 }

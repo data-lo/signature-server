@@ -1,0 +1,75 @@
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { PersonalInformationEntity } from 'src/user/entities/personal-information.entity';
+import { SharedModule } from 'src/common/shared.module';
+import { IdentityVerificationEntity } from './entities/identity-verification.entity';
+import { DiditApiService } from './didit/didit-api.service';
+import { DiditMediaDownloaderService } from './didit/didit-media-downloader.service';
+import { StoreVerifiedIdentityImagesUseCase } from './applications/store-verified-identity-images.use-case';
+import { StartDiditVerificationUseCase } from './applications/start-didit-verification.use-case';
+import { GetCurrentIdentityVerificationUseCase } from './applications/get-current-identity-verification.use-case';
+import { ProcessDiditVerificationResultUseCase } from './applications/process-didit-verification-result.use-case';
+import { UpdateSigningCredentialStatusUseCase } from './applications/update-signing-credential-status.use-case';
+import { ValidateVerificationAttemptsUseCase } from './applications/validate-verification-attempts.use-case';
+import { IdentityVerificationsController } from './identity-verifications.controller';
+
+/**
+ * Dominio de verificación de identidad: iniciar intentos, consultarlos y aplicar resultados.
+ *
+ * Sin servicio de orquestación: cada operación es un caso de uso en `applications/`, y la única
+ * pieza que no lo es (`DiditApiService`) es un adaptador HTTP, no lógica de dominio.
+ *
+ * **Este módulo no importa `UserModule` ni `SignatureModule` a propósito.** `UserModule` importa
+ * `SignatureModule`, y `SignatureModule` importa este módulo para bloquear el alta de firma sin
+ * identidad aprobada: importar de vuelta cerraría el ciclo. Por eso el acceso a `users` es por
+ * repositorio (`TypeOrmModule.forFeature`) y el cache de perfil se invalida vía `RedisService`
+ * en lugar de llamar a `UserService`.
+ *
+ * `ProcessDiditVerificationResultUseCase` se exporta para que el módulo de webhooks —que recibe
+ * el POST de Didit, valida su firma HMAC y comprueba la forma del payload— lo invoque con el
+ * cuerpo ya autenticado. La dependencia va en un solo sentido: `webhooks` importa este módulo,
+ * nunca al revés. Aquí no hay controller de webhooks ni validación de firma, por diseño.
+ *
+ * `UpdateSigningCredentialStatusUseCase` también se exporta: es el único escritor de
+ * `users.signing_credential_status`, y `SignatureModule` lo necesita para mover al usuario a
+ * CONFIGURED o de vuelta a SIGNATURE_PENDING al dar de alta o eliminar su firma PNG.
+ */
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([
+      IdentityVerificationEntity,
+      UserEntity,
+      // Sólo para escribir las llaves de la INE verificada (ver StoreVerifiedIdentityImagesUseCase).
+      PersonalInformationEntity,
+    ]),
+    SharedModule,
+  ],
+  controllers: [IdentityVerificationsController],
+  providers: [
+    DiditApiService,
+    DiditMediaDownloaderService,
+    StoreVerifiedIdentityImagesUseCase,
+    StartDiditVerificationUseCase,
+    GetCurrentIdentityVerificationUseCase,
+    ProcessDiditVerificationResultUseCase,
+    UpdateSigningCredentialStatusUseCase,
+    ValidateVerificationAttemptsUseCase,
+  ],
+  exports: [
+    // Lo usa la sesión pública de firma (`PublicSigningModule`) para verificar la identidad del
+    // usuario provisional antes de la firma simple.
+    StartDiditVerificationUseCase,
+    ProcessDiditVerificationResultUseCase,
+    UpdateSigningCredentialStatusUseCase,
+    /**
+     * Los usa la firma biométrica (`BiometricSignatureModule`): el adaptador HTTP para abrir sus
+     * sesiones y leer el veredicto de la identidad aprobada, y el descargador para traer el retrato
+     * de referencia por la misma lista de hosts permitidos. Ninguna regla de la identidad del
+     * onboarding sale de este módulo.
+     */
+    DiditApiService,
+    DiditMediaDownloaderService,
+  ],
+})
+export class IdentityVerificationModule {}

@@ -1,0 +1,126 @@
+import { setTestModuleGraphEnv } from 'src/common/testing/module-graph-env';
+import { Global, Module } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { ConfigModule } from '@nestjs/config';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { AccountEntity } from 'src/account/entities/account.entity';
+import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { PersonalInformationEntity } from 'src/user/entities/personal-information.entity';
+import { RedisService } from 'src/common/redis/redis.service';
+import { PlanEntity } from 'src/billing/catalog/plan.entity';
+import { CatalogItemEntity } from 'src/billing/catalog/catalog-item.entity';
+import { CatalogPriceEntity } from 'src/billing/catalog/catalog-price.entity';
+import { CatalogItemScopeEntity } from 'src/billing/catalog/catalog-item-scope.entity';
+import { DocumentCreditPackEntity } from 'src/billing/catalog/document-credit-pack.entity';
+import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entity';
+import { CheckoutOrderEntity } from 'src/billing/checkout/checkout-order.entity';
+import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
+import { DocumentCreditConsumptionEntity } from 'src/billing/credits/document-credit-consumption.entity';
+import { SubscriptionBillingHistoryEntity } from 'src/billing/subscriptions/subscription-billing-history.entity';
+import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
+import { ProcessBiometricSignatureResultUseCase } from 'src/biometric-signature/applications/process-biometric-signature-result.use-case';
+import { BiometricSignatureAttemptService } from 'src/biometric-signature/services/biometric-signature-attempt.service';
+import { WebhooksModule } from './webhooks.module';
+import { WebhookEventEntity } from './entities/webhook-event.entity';
+import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
+import { DiditWebhookController } from './didit-webhook.controller';
+import { StripeWebhookController } from './stripe-webhook.controller';
+
+/**
+ * Vale la pena tenerlo: los errores de cableado de Nest (un provider que dejó de exportarse,
+ * un import que falta) sólo aparecen al arrancar la aplicación contra Postgres y Mongo, así que
+ * sin esta prueba se descubrirían en el despliegue. Fija además que la recepción de Didit
+ * resuelve `ProcessDiditVerificationResultUseCase` de verdad: si `IdentityVerificationModule`
+ * dejara de importarse o de exportarlo, el grafo no compilaría acá y no en producción.
+ */
+beforeAll(() => {
+  setTestModuleGraphEnv();
+});
+
+/**
+ * `overrideProvider` sólo puede sustituir un provider que YA exista, y aquí no hay ningún
+ * `TypeOrmModule.forRoot()` que aporte el `DataSource` que `SubscriptionBillingService` inyecta
+ * para la transacción de `invoice.paid`. Un módulo global de prueba sí lo introduce en todos los
+ * contextos, incluido el de `BillingModule`.
+ */
+@Global()
+@Module({
+  providers: [
+    { provide: getDataSourceToken(), useValue: { transaction: jest.fn() } },
+  ],
+  exports: [getDataSourceToken()],
+})
+class StubDataSourceModule {}
+
+/**
+ * Sustituto de `BiometricSignatureModule`, que arrastra `DocumentModule` (Mongo, Kafka, MinIO, el
+ * sellado): montarlo de verdad aquí obligaría a falsear media aplicación para probar el cableado de
+ * los webhooks. Lo que esta prueba fija es que `WebhooksModule` IMPORTA el módulo que exporta el
+ * procesador de la firma biométrica y la búsqueda de intentos, y que el dispatcher los resuelve; el
+ * grafo real lo prueba el arranque del servidor.
+ */
+@Module({
+  providers: [
+    { provide: ProcessBiometricSignatureResultUseCase, useValue: {} },
+    { provide: BiometricSignatureAttemptService, useValue: {} },
+  ],
+  exports: [
+    ProcessBiometricSignatureResultUseCase,
+    BiometricSignatureAttemptService,
+  ],
+})
+class StubBiometricSignatureModule {}
+
+describe('WebhooksModule', () => {
+  it('resuelve el grafo de dependencias, incluidos los procesadores de Didit', async () => {
+    const repositoryStub = {};
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        StubDataSourceModule,
+        WebhooksModule,
+      ],
+    })
+      .overrideModule(BiometricSignatureModule)
+      .useModule(StubBiometricSignatureModule)
+      .overrideProvider(getRepositoryToken(WebhookEventEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(AccountEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(IdentityVerificationEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(UserEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(PersonalInformationEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(PlanEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CatalogItemEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CatalogPriceEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CatalogItemScopeEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(DocumentCreditPackEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(BillingProfileEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CheckoutOrderEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CreditLotEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(DocumentCreditConsumptionEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(SubscriptionBillingHistoryEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(RedisService)
+      .useValue({ del: jest.fn() })
+      .compile();
+
+    expect(moduleRef.get(DiditWebhookController)).toBeDefined();
+    expect(moduleRef.get(StripeWebhookController)).toBeDefined();
+    expect(moduleRef.get(ReceiveDiditWebhookUseCase)).toBeDefined();
+  });
+});

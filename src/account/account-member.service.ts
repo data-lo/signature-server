@@ -1,125 +1,513 @@
 // External dependencies
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 
 // DTOs
 import { CreateAccountMemberDto } from './dto/create-account-member.dto';
 import { UpdateAccountMemberDto } from './dto/update-account-member.dto';
 
 // Entities
-import { AccountMemberEntity } from './entities/account-member.entity';
+import { AccountEntity } from './entities/account.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
+
+// Services
+import { RolesService } from 'src/roles/roles.service';
+
+// Enums
+import { ACCOUNT_TYPE_ENUM } from './enums/account-type.enum';
+import { ACCOUNT_STATUS_ENUM } from './enums/account-status.enum';
+import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
+import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+
+// Exceptions
+import {
+  DuplicateOrganizationMembershipException,
+  isDuplicateMembershipError,
+} from './exceptions/organization.exceptions';
 
 // Interfaces
-import { BaseResponse } from 'src/interfaces/api-response.dto';
+import { OrganizationMemberData } from './interfaces/response/account-member-response';
 
+/**
+ * Gestiona membresías de organización — desde la fusión Account/AccountMember (ver plan de
+ * migración ER-V2, Fase 5) esto ya no es una entidad separada: una "membresía" es una fila más
+ * de `accounts`, filtrada por `organizationId`. Este servicio queda enfocado en el flujo de
+ * gestión explícita de acceso (otorgar/listar/actualizar/revocar), separado del flujo
+ * transaccional de creación (`AccountService.saveOrganizationWithOwnerAccount`/
+ * `createDefaultPersonalAccount`).
+ *
+ * Los flujos de cada endpoint viven en `applications/`; acá sólo están las piezas que comparten.
+ */
 @Injectable()
 export class AccountMemberService {
   constructor(
-    @InjectRepository(AccountMemberEntity)
-    private accountMemberRepository: Repository<AccountMemberEntity>,
+    @InjectRepository(AccountEntity)
+    private accountRepository: Repository<AccountEntity>,
+
+    @InjectRepository(UserEntity)
+    private userRepository: Repository<UserEntity>,
+
+    private readonly rolesService: RolesService,
   ) {}
 
-  async create(
-    createAccountMemberDto: CreateAccountMemberDto,
-  ): Promise<BaseResponse<AccountMemberEntity>> {
-    const existingMembership = await this.accountMemberRepository.findOne({
+  /**
+   * Resuelve la cuenta PERSONAL (1:1 con el usuario) de un usuario dado — usada donde un
+   * recurso necesita anclarse a "esta persona" sin la ambigüedad de "cuál membresía" (ver
+   * `CollaboratorEntity.accountId`, ER-V2). Mismo patrón que ya usaban `seed-documents.ts` y
+   * varias migraciones para backfill, centralizado acá para no duplicarlo.
+   */
+  async findPersonalAccountId(userId: string): Promise<string> {
+    const personalAccount = await this.accountRepository.findOne({
+      where: { userId, accountType: ACCOUNT_TYPE_ENUM.PERSONAL },
+    });
+
+    if (!personalAccount) {
+      throw new NotFoundException(
+        `No se encontró una cuenta PERSONAL para el usuario ${userId}`,
+      );
+    }
+
+    return personalAccount.id;
+  }
+
+  /**
+   * Membresía existente de un usuario en una organización, activa o no. Se mira sin filtrar
+   * por `isActive` a propósito: quien ya estuvo y fue dado de baja tiene fila, y volver a
+   * insertarla dejaría dos membresías del mismo usuario en la misma organización.
+   */
+  async findExistingMembership(
+    organizationId: string,
+    userId: string,
+  ): Promise<AccountEntity | null> {
+    return this.accountRepository.findOne({
+      where: { organizationId, userId },
+    });
+  }
+
+  /**
+   * Membresía ACTIVA de un usuario en una organización, sólo si su rol concede `resource+action`.
+   *
+   * Es la contraparte de `assertHasOrganizationPermission` para preguntar por OTRO usuario y no
+   * por quien llama: al asignar a alguien una responsabilidad dentro de la organización —hoy, el
+   * reviewer de un documento— hay que comprobar que esa persona pueda ejercerla, y eso son dos
+   * cosas a la vez (que siga siendo miembro y que su rol lo habilite) que no tiene sentido
+   * preguntar por separado.
+   *
+   * Devuelve `null` en vez de lanzar, y a propósito: quien llama sabe qué significa el hueco en
+   * su contexto —"el aprobador elegido ya no está en la organización"— y puede redactar un
+   * mensaje que le sirva a quien lo lea. Aquí ese mensaje sería genérico.
+   *
+   * @param userId - Usuario del que se pregunta.
+   * @param organizationId - Organización en la que debe ser miembro activo.
+   * @param resource - Recurso del catálogo de permisos.
+   * @param action - Acción sobre ese recurso.
+   * @returns La membresía activa, o `null` si no existe, no tiene rol o el rol no concede el permiso.
+   *
+   * @throws {QueryFailedError} Si la consulta contra Postgres falla.
+   *
+   * @example
+   * ```ts
+   * const membership = await accountMemberService.findActiveMembershipWithPermission(
+   *   reviewerUserId,
+   *   organizationId,
+   *   RESOURCE_KEY_ENUM.DOCUMENT,
+   *   ACTION_KEY_ENUM.APPROVE,
+   * );
+   * ```
+   */
+  async findActiveMembershipWithPermission(
+    userId: string,
+    organizationId: string,
+    resource: RESOURCE_KEY_ENUM,
+    action: ACTION_KEY_ENUM,
+  ): Promise<AccountEntity | null> {
+    const membership = await this.accountRepository.findOne({
+      where: { userId, organizationId, isActive: true },
+    });
+
+    if (!membership) return null;
+
+    const hasPermission = await this.rolesService.hasPermission(
+      membership.roleId,
+      resource,
+      action,
+    );
+
+    return hasPermission ? membership : null;
+  }
+
+  /**
+   * Miembros activos de una organización cuyo rol concede `resource + action`, con su usuario
+   * cargado.
+   *
+   * Es la lista de la que sale el selector de aprobadores (historia "Corregir carga de
+   * aprobadores al requerir aprobación"), y el mismo criterio con el que
+   * `findActiveMembershipWithPermission` valida después al elegido: membresía activa y rol con el
+   * permiso. Sólo cuentan las membresías en estado ACTIVE: una invitación pendiente o un miembro
+   * suspendido no pueden iniciar sesión, así que no podrían aprobar nada.
+   *
+   * El permiso se resuelve una vez por rol distinto, no por miembro: en una organización los
+   * miembros se reparten entre pocos roles.
+   *
+   * @param organizationId - Organización cuyos miembros se listan.
+   * @param resource - Recurso del permiso buscado.
+   * @param action - Acción del permiso buscado.
+   * @returns Las membresías que cumplen, por antigüedad en la organización.
+   *
+   * @example
+   * ```ts
+   * const approvers = await accountMemberService.listActiveMembersWithPermission(
+   *   'org-1',
+   *   RESOURCE_KEY_ENUM.DOCUMENT,
+   *   ACTION_KEY_ENUM.APPROVE,
+   * );
+   * ```
+   */
+  async listActiveMembersWithPermission(
+    organizationId: string,
+    resource: RESOURCE_KEY_ENUM,
+    action: ACTION_KEY_ENUM,
+  ): Promise<AccountEntity[]> {
+    const members = await this.accountRepository.find({
       where: {
-        accountId: createAccountMemberDto.accountId,
-        userId: createAccountMemberDto.userId,
+        organizationId,
+        isActive: true,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+      },
+      relations: { user: true },
+      order: { createdAt: 'ASC' },
+    });
+
+    const roleIds = [
+      ...new Set(
+        members
+          .map((member) => member.roleId)
+          .filter((roleId): roleId is string => !!roleId),
+      ),
+    ];
+    const grantingRoleIds = new Set<string>();
+    for (const roleId of roleIds) {
+      if (await this.rolesService.hasPermission(roleId, resource, action)) {
+        grantingRoleIds.add(roleId);
+      }
+    }
+
+    return members.filter(
+      (member) => !!member.roleId && grantingRoleIds.has(member.roleId),
+    );
+  }
+
+  /** Usuario por id, exigiendo que exista. */
+  async findUserOrFail(userId: string): Promise<UserEntity> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID ${userId} no encontrado`);
+    }
+
+    return user;
+  }
+
+  /**
+   * Alta de una fila de membresía. `email`/`password` se copian del invitado porque son la
+   * credencial única sincronizada (decisión D6): el login resuelve contra `accounts`, así que
+   * una membresía sin ellos no serviría para entrar en ese contexto.
+   *
+   * `status` se deriva de `isActive` en vez de recibirse: son dos formas de decir lo mismo y
+   * dejarlas entrar por separado permitiría guardar una membresía activa marcada como
+   * suspendida.
+   *
+   * El choque contra el índice único de la base se traduce al mismo 409 que ya responden las
+   * comprobaciones previas de los casos de uso. Esas comprobaciones leen y después escriben, así
+   * que dos peticiones a la vez —un doble clic, un reintento del cliente— pasan las dos: la
+   * segunda llega hasta acá y tiene que salir como "ya es miembro", no como un 500.
+   *
+   * @param dto - Organización, usuario, rol y puesto de la membresía.
+   * @param invitedUser - Usuario invitado, de donde se copian las credenciales sincronizadas.
+   * @param manager - `EntityManager` de la transacción del llamador, cuando el alta va junto con
+   *   el evento de la outbox que la anuncia (ver `OrganizationMemberEventsProducer`). Sin él se
+   *   escribe con el repositorio propio, como hasta ahora.
+   * @returns La membresía guardada.
+   *
+   * @throws {DuplicateOrganizationMembershipException} (409) Si ese usuario ya tiene una
+   *   membresía en esa organización, activa o dada de baja.
+   *
+   * @example
+   * ```ts
+   * const membership = await accountMemberService.saveMembership(
+   *   { organizationId: 'org-1', userId: 'user-1', roleId: 'role-1' },
+   *   invitedUser,
+   *   manager,
+   * );
+   * ```
+   */
+  async saveMembership(
+    dto: CreateAccountMemberDto,
+    invitedUser: UserEntity,
+    manager?: EntityManager,
+  ): Promise<AccountEntity> {
+    const isActive = dto.isActive ?? true;
+    const repository =
+      manager?.getRepository(AccountEntity) ?? this.accountRepository;
+
+    try {
+      return await repository.save(
+        repository.create({
+          userId: dto.userId,
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: dto.organizationId,
+          roleId: dto.roleId,
+          position: dto.position ?? null,
+          isActive,
+          status: isActive
+            ? ACCOUNT_STATUS_ENUM.ACTIVE
+            : ACCOUNT_STATUS_ENUM.SUSPENDED,
+          email: invitedUser.email,
+          password: invitedUser.password,
+          joinedAt: new Date(),
+        }),
+      );
+    } catch (error) {
+      if (isDuplicateMembershipError(error)) {
+        throw new DuplicateOrganizationMembershipException();
+      }
+      throw error;
+    }
+  }
+
+  /** Miembros activos de una organización, como filas de `accounts`. */
+  async listActiveByOrganization(
+    organizationId: string,
+  ): Promise<AccountEntity[]> {
+    return this.accountRepository.find({
+      where: { organizationId, isActive: true },
+    });
+  }
+
+  /**
+   * Proyecta filas de `accounts` al shape que consume la pantalla de gestión de miembros.
+   *
+   * `email` ya vive en `accounts` (sincronizado desde la credencial única del usuario, decisión
+   * D6 del plan ER-V2); `rfc` sí obliga al join `accounts -> users -> personal_information`.
+   * Los permisos NO se guardan por miembro: se derivan del rol, y se resuelven en una sola
+   * consulta para todos los roles presentes (ver `RolesService.listPermissionsByRoleIds`) en vez
+   * de una por fila.
+   *
+   * @param members - Membresías ya cargadas con sus relaciones `user.personalInformation` y `role`.
+   * @returns Una fila por membresía, con su rol, su estado y los permisos que ese rol otorga hoy.
+   *
+   * @throws {QueryFailedError} Si falla la consulta de permisos.
+   *
+   * @example
+   * ```ts
+   * const rows = await this.toDetailedMembers([membership]);
+   * ```
+   */
+  private async toDetailedMembers(
+    members: AccountEntity[],
+  ): Promise<OrganizationMemberData[]> {
+    const permissionsByRole = await this.rolesService.listPermissionsByRoleIds(
+      members
+        .map((member) => member.roleId)
+        .filter((roleId): roleId is string => !!roleId),
+    );
+
+    return members.map((member) => ({
+      accountId: member.id,
+      userId: member.userId,
+      email: member.email,
+      rfc: member.user?.personalInformation?.rfc ?? null,
+      role: member.role ? { id: member.role.id, name: member.role.name } : null,
+      joinedAt: member.joinedAt,
+      status: member.status,
+      isActive: member.isActive,
+      permissions: member.roleId
+        ? (permissionsByRole.get(member.roleId) ?? [])
+        : [],
+    }));
+  }
+
+  /**
+   * Miembros ACTIVOS de una organización para la pantalla de gestión, con rol, estado y permisos
+   * derivados.
+   *
+   * Sólo los activos: un miembro dado de baja no debe reaparecer en la tabla como si siguiera
+   * dentro. Hubo un `includeInactive` que los traía de vuelta para una vista de administración;
+   * se retiró junto con el conmutador "Mostrar miembros dados de baja", porque esa vista no debe
+   * estar disponible en la interfaz. La membresía dada de baja se sigue pudiendo consultar de a
+   * una con `findDetailedMembership`, que es por donde la necesitan las altas.
+   *
+   * @param organizationId - Organización cuyos miembros se listan.
+   * @returns Los miembros activos, ordenados por fecha de ingreso ascendente.
+   *
+   * @throws {QueryFailedError} Si la consulta contra Postgres falla.
+   *
+   * @example
+   * ```ts
+   * const members = await accountMemberService.listDetailedByOrganization('org-1');
+   * ```
+   */
+  async listDetailedByOrganization(
+    organizationId: string,
+  ): Promise<OrganizationMemberData[]> {
+    const members = await this.accountRepository.find({
+      where: {
+        organizationId,
+        isActive: true,
+      },
+      relations: {
+        user: {
+          personalInformation: true,
+        },
+        role: true,
+      },
+      order: {
+        joinedAt: 'ASC',
       },
     });
 
-    if (existingMembership) {
-      throw new ConflictException('El usuario ya tiene acceso a esta cuenta');
+    return this.toDetailedMembers(members);
+  }
+
+  /**
+   * Una membresía concreta con el mismo shape que la lista.
+   *
+   * Se usa al dar de alta a alguien, para devolver la fila ya lista para pintar en la tabla sin
+   * que el frontend tenga que recargar toda la lista para saber qué acaba de crear.
+   *
+   * @param accountId - Identificador de la membresía.
+   * @returns La membresía con su rol, su estado y los permisos derivados.
+   *
+   * @throws {NotFoundException} Si la membresía no existe o es una cuenta personal.
+   *
+   * @example
+   * ```ts
+   * const member = await accountMemberService.findDetailedMembership(created.id);
+   * ```
+   */
+  async findDetailedMembership(
+    accountId: string,
+  ): Promise<OrganizationMemberData> {
+    const member = await this.accountRepository.findOne({
+      where: { id: accountId },
+      relations: { user: { personalInformation: true }, role: true },
+    });
+
+    if (!member || !member.organizationId) {
+      throw new NotFoundException(
+        `Membresía con ID ${accountId} no encontrada`,
+      );
     }
 
-    const member = this.accountMemberRepository.create({
-      accountId: createAccountMemberDto.accountId,
-      userId: createAccountMemberDto.userId,
-      role: createAccountMemberDto.role,
-      position: createAccountMemberDto.position,
-      isActive: createAccountMemberDto.isActive ?? true,
-    });
+    const [detailed] = await this.toDetailedMembers([member]);
 
-    const newMember = await this.accountMemberRepository.save(member);
-
-    return {
-      success: true,
-      message: 'Acceso otorgado correctamente',
-      data: newMember,
-    };
+    return detailed;
   }
 
-  async findByAccount(
-    accountId: string,
-  ): Promise<BaseResponse<AccountMemberEntity[]>> {
-    const members = await this.accountMemberRepository.find({
-      where: { accountId },
-    });
+  /**
+   * Usuario por correo, exigiendo que ya esté registrado.
+   *
+   * El alta directa de un miembro pide correo y no `userId`: quien administra la organización
+   * conoce el correo de su compañero, no su UUID. Si no hay nadie registrado con ese correo el
+   * camino correcto es la invitación, y el mensaje de error lo dice.
+   *
+   * @param email - Correo del usuario a agregar.
+   * @returns El usuario registrado con ese correo.
+   *
+   * @throws {NotFoundException} Si no existe ningún usuario con ese correo.
+   *
+   * @example
+   * ```ts
+   * const user = await accountMemberService.findUserByEmailOrFail('ana@empresa.com');
+   * ```
+   */
+  async findUserByEmailOrFail(email: string): Promise<UserEntity> {
+    const user = await this.userRepository.findOne({ where: { email } });
 
-    return {
-      success: true,
-      message: 'Miembros obtenidos correctamente',
-      data: members,
-    };
+    if (!user) {
+      throw new NotFoundException(
+        `No existe un usuario registrado con el correo ${email}. Invítalo con "Invitar miembro" para que se registre.`,
+      );
+    }
+
+    return user;
   }
 
-  async findOne(id: string): Promise<BaseResponse<AccountMemberEntity>> {
-    const member = await this.findEntityById(id);
-
-    return {
-      success: true,
-      message: 'Miembro obtenido correctamente',
-      data: member,
-    };
-  }
-
-  async update(
+  /**
+   * Escribe sólo los campos presentes; `status` se mantiene coherente con `isActive`.
+   *
+   * Acepta el `manager` de una transacción porque reactivar a alguien es una incorporación como
+   * cualquier otra y tiene que anunciarse con el mismo evento, dentro de la misma transacción
+   * (ver `OrganizationMemberEventsProducer`).
+   */
+  async applyMembershipUpdate(
     id: string,
-    updateAccountMemberDto: UpdateAccountMemberDto,
-  ): Promise<BaseResponse<AccountMemberEntity>> {
-    await this.findEntityById(id);
+    dto: UpdateAccountMemberDto,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository =
+      manager?.getRepository(AccountEntity) ?? this.accountRepository;
 
-    await this.accountMemberRepository.update(id, {
-      ...(updateAccountMemberDto.role && { role: updateAccountMemberDto.role }),
-      ...(updateAccountMemberDto.position !== undefined && {
-        position: updateAccountMemberDto.position,
-      }),
-      ...(updateAccountMemberDto.isActive !== undefined && {
-        isActive: updateAccountMemberDto.isActive,
+    await repository.update(id, {
+      ...(dto.roleId && { roleId: dto.roleId }),
+      ...(dto.position !== undefined && { position: dto.position }),
+      ...(dto.isActive !== undefined && {
+        isActive: dto.isActive,
+        status: dto.isActive
+          ? ACCOUNT_STATUS_ENUM.ACTIVE
+          : ACCOUNT_STATUS_ENUM.SUSPENDED,
       }),
     });
-
-    return {
-      success: true,
-      message: 'Membresía actualizada correctamente',
-      data: await this.findEntityById(id),
-    };
   }
 
-  async remove(id: string): Promise<BaseResponse> {
-    const result = await this.accountMemberRepository.update(
-      { id, isActive: true },
-      { isActive: false },
-    );
+  /**
+   * Baja lógica de una membresía. La fila se conserva porque su id quedó referenciado desde
+   * los documentos que ese miembro creó o firmó dentro de la organización.
+   */
+  async markMembershipRemoved(id: string): Promise<void> {
+    await this.accountRepository.update(id, {
+      isActive: false,
+      status: ACCOUNT_STATUS_ENUM.REMOVED,
+      leftAt: new Date(),
+    });
+  }
 
-    if (result.affected === 0) {
+  /** Membresía activa por id, exigiendo que exista y que siga activa. */
+  async findActiveMembershipOrFail(id: string): Promise<AccountEntity> {
+    const membership = await this.accountRepository.findOne({
+      where: { id, isActive: true },
+    });
+
+    if (!membership || !membership.organizationId) {
       throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
     }
 
-    return {
-      success: true,
-      message: 'Acceso revocado correctamente',
-    };
+    return membership;
   }
 
-  private async findEntityById(id: string): Promise<AccountMemberEntity> {
-    const member = await this.accountMemberRepository.findOne({
+  /**
+   * Membresía de organización por id. Una cuenta personal se trata como inexistente: no es una
+   * membresía y no se gestiona por estos endpoints.
+   */
+  async findMembershipOrFail(id: string): Promise<AccountEntity> {
+    const member = await this.findByIdOrFail(id);
+
+    if (!member.organizationId) {
+      throw new NotFoundException(`Membresía con ID ${id} no encontrada`);
+    }
+
+    return member;
+  }
+
+  async findByIdOrFail(id: string): Promise<AccountEntity> {
+    const member = await this.accountRepository.findOne({
       where: { id },
     });
 
@@ -128,5 +516,134 @@ export class AccountMemberService {
     }
 
     return member;
+  }
+
+  /**
+   * Solo un miembro activo con permiso ORGANIZATION:{action} puede otorgar/listar/actualizar/
+   * revocar membresías. Permiso granular vía `RolesService.hasPermission` en vez de comparar
+   * `role.name === 'ADMIN'` a mano — mismo criterio que `AccountService`
+   * (`assertHasOrganizationPermission`), duplicado aquí porque este servicio resuelve la
+   * membresía del llamador por `organizationId`, no por `accountId` propio.
+   */
+  async assertHasOrganizationPermission(
+    callerId: string,
+    organizationId: string,
+    action: ACTION_KEY_ENUM,
+  ): Promise<void> {
+    const callerMembership = await this.accountRepository.findOne({
+      where: { userId: callerId, organizationId, isActive: true },
+      relations: { role: true },
+    });
+
+    await this.rolesService.assertHasPermission(
+      callerMembership?.roleId,
+      RESOURCE_KEY_ENUM.ORGANIZATION,
+      action,
+      'No tienes permisos de administrador sobre esta organización',
+    );
+  }
+
+  /**
+   * Rechaza la operación si `target` es el propietario (rol de sistema OWNER) de la organización
+   * (historia "Impedir desactivación de cuentas con perfil Owner").
+   *
+   * Es una regla distinta de `assertNotLastAdmin`, y más estricta: aquélla deja desactivar al
+   * propietario mientras quede otro administrador activo; ésta no lo deja nunca. El propietario
+   * es quien creó la cuenta y no hay flujo para transferir la propiedad, así que quitarlo dejaría
+   * a la organización sin dueño aunque tuviera administradores.
+   *
+   * Se compara contra el id del rol de SISTEMA y no contra el nombre: una organización puede
+   * crear roles propios, y uno llamado igual no debe heredar esta protección.
+   *
+   * @param target - Membresía sobre la que se quiere actuar.
+   * @param message - Qué se intentaba hacer, para que el error lo diga (p. ej. "desactivar").
+   * @returns Nada: validar es no lanzar.
+   *
+   * @throws {ConflictException} (409) Si `target` tiene el rol OWNER.
+   *
+   * @example
+   * ```ts
+   * await this.accountMemberService.assertNotOwner(membership, 'desactivar');
+   * ```
+   */
+  async assertNotOwner(target: AccountEntity, message: string): Promise<void> {
+    if (!target.roleId) return;
+
+    const ownerRole = await this.rolesService.findSystemRoleByName(
+      SYSTEM_ROLE_NAME_ENUM.OWNER,
+    );
+
+    if (target.roleId === ownerRole.id) {
+      throw new ConflictException(
+        `No se puede ${message} una cuenta con perfil de propietario (Owner)`,
+      );
+    }
+  }
+
+  /**
+   * Protección del último administrador (ver historia [STORY] Gestión de Miembros, sección
+   * "Reglas de Negocio y Seguridad"): si `target` es hoy el único miembro activo de la
+   * organización con un rol que permita gestionarla, ni degradar su rol ni desactivar su acceso
+   * está permitido — dejaría la organización sin nadie que pueda administrarla. Se aplica sin
+   * importar si el llamador es el propio `target` u otro administrador, porque el riesgo es el
+   * mismo en ambos casos.
+   *
+   * Cuenta OWNER y ADMIN juntos, no sólo ADMIN: desde
+   * `IntroduceOwnerSystemRole1784300000055` el creador de la organización nace OWNER, así que
+   * mirar únicamente ADMIN dejaría al propietario sin protección —podría degradarse a sí mismo
+   * y dejar la organización huérfana— y a la vez trataría como insustituible al único ADMIN de
+   * una organización que todavía tiene a su propietario dentro. No-op si `target` no tiene hoy
+   * ninguno de los dos roles (nada que proteger).
+   */
+  async assertNotLastAdmin(
+    organizationId: string,
+    target: AccountEntity,
+  ): Promise<void> {
+    const administratorRoles = await Promise.all([
+      this.rolesService.findSystemRoleByName(SYSTEM_ROLE_NAME_ENUM.OWNER),
+      this.rolesService.findSystemRoleByName(SYSTEM_ROLE_NAME_ENUM.ADMIN),
+    ]);
+    const administratorRoleIds = administratorRoles.map((role) => role.id);
+
+    if (!target.roleId || !administratorRoleIds.includes(target.roleId)) {
+      return;
+    }
+
+    const activeAdminCount = await this.accountRepository.count({
+      where: {
+        organizationId,
+        isActive: true,
+        roleId: In(administratorRoleIds),
+      },
+    });
+
+    if (activeAdminCount <= 1) {
+      throw new ConflictException(
+        'No puedes cambiar el rol ni desactivar al único administrador activo de la organización',
+      );
+    }
+  }
+
+  /**
+   * Check de tenant más laxo que assertHasOrganizationPermission: cualquier miembro activo de la
+   * cuenta (sin importar su rol) puede operar dentro de ese contexto — usado por módulos donde
+   * pertenecer a la cuenta basta (p. ej. crear o listar documentos scopeados por la cuenta
+   * activa), a diferencia de gestionar la membresía misma, que sigue siendo solo-ADMIN.
+   * Retorna la cuenta resuelta para que el llamador (p. ej. DocumentService) no tenga que
+   * volver a consultarla para saber su organizationId.
+   */
+  async assertIsActiveMember(
+    userId: string,
+    accountId: string,
+  ): Promise<AccountEntity> {
+    const membership = await this.accountRepository.findOne({
+      where: { id: accountId, userId, isActive: true },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('No perteneces a esta cuenta');
+    }
+
+    return membership;
   }
 }

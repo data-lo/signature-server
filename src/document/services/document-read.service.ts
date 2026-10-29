@@ -1,0 +1,319 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
+
+import { DocumentService } from '../document.service';
+import { collaboratorEmail } from '../utils/collaborator-display.util';
+import { isSignerTurn } from '../utils/next-signer.util';
+import { CollaboratorEntity } from '../entities/collaborator.entity';
+import { DocumentEntity } from '../entities/document.entity';
+import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
+import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
+import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
+import {
+  DOCUMENT_SORT_FIELD_ENUM,
+  SORT_DIRECTION_ENUM,
+} from '../enum/document-sort-field.enum';
+import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
+import {
+  applyDocumentStatusAndDateFilters,
+  assertValidDocumentDateRanges,
+  buildDocumentsPagination,
+  DOCUMENT_SORT_COLUMNS,
+  DocumentStatusAndDateFilters,
+  DocumentsPagination,
+} from '../utils/document-list-query.util';
+
+/** Resumen de un documento sin datos personales de nadie: ni colaboradores, ni creador. */
+export interface DocumentSummary {
+  id: string;
+  fileName: string;
+  status: DOCUMENT_STATUS_ENUM;
+  signatureType: SIGNATURE_TYPE_ENUM | null;
+  createdAt: Date;
+  signedAt: Date | null;
+}
+
+/** Un documento recién creado, con lo que ve quien lo creó por integración. */
+/**
+ * En qué punto está un firmante, visto desde fuera: `PENDING` si puede firmar ya,
+ * `WAITING_FOR_PREVIOUS_SIGNER` si el documento es secuencial y le falta la firma de alguien antes,
+ * o lo que ya respondió (`SIGNED`, `REJECTED`).
+ */
+export type CreatedDocumentParticipantStatus =
+  | 'PENDING'
+  | 'WAITING_FOR_PREVIOUS_SIGNER'
+  | 'SIGNED'
+  | 'REJECTED';
+
+/** Un firmante del documento creado: sin ids internos ni URLs de firma. */
+export interface CreatedDocumentParticipant {
+  email: string;
+  status: CreatedDocumentParticipantStatus;
+  signatureType: SIGNATURE_TYPE_ENUM | null;
+  /** Orden de firma, desde 1. */
+  order: number;
+}
+
+export interface CreatedDocumentSummary extends DocumentSummary {
+  /** Correo del creador (`documents.created_by`). */
+  creatorEmail: string;
+  /** Firmantes y testigos; el aprobador, si lo hay, no cuenta. */
+  participantsCount: number;
+  /** Firmantes, en orden de firma. */
+  participants: CreatedDocumentParticipant[];
+}
+
+/** Filtros, orden y paginación del listado por organización. */
+export interface OrganizationDocumentsFilters extends DocumentStatusAndDateFilters {
+  page?: number;
+  limit?: number;
+  sortBy?: DOCUMENT_SORT_FIELD_ENUM;
+  sortDirection?: SORT_DIRECTION_ENUM;
+}
+
+/** Qué documentos listar: siempre los de UNA organización y, opcionalmente, de un creador. */
+export interface OrganizationDocumentsQuery {
+  organizationId: string;
+  /** `users.id` del creador; omitido, todos los de la organización. */
+  createdBy?: string;
+  filters: OrganizationDocumentsFilters;
+}
+
+/** Tope de documentos por página, el mismo de la bandeja de la plataforma. */
+export const MAX_DOCUMENTS_PAGE_SIZE = 100;
+
+/**
+ * Lectura de documentos por organización, sin el contexto de un usuario: ni bandeja personal, ni
+ * archivado individual, ni `X-Account-Id`. Es lo que necesita quien consulta en nombre de la
+ * organización entera, como la API de integración.
+ *
+ * El filtro `document.organization_id = :organizationId` se aplica SIEMPRE y antes que cualquier
+ * otro: es lo que impide cruzar organizaciones, y no depende de los filtros que mande el cliente.
+ * Los filtros de estatus y fechas, el orden y la paginación son los mismos de la bandeja
+ * (`document-list-query.util.ts`).
+ *
+ * Devuelve resúmenes sin URL prefirmada y sin colaboradores: el archivo y los datos de los
+ * participantes no viajan si nadie los pidió.
+ */
+/**
+ * Estado externo de un firmante (ver `CreatedDocumentParticipantStatus`).
+ *
+ * @param document - Documento.
+ * @param signer - Firmante.
+ * @param signers - Firmantes del documento, para el turno.
+ * @returns Su estado.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * participantStatus(document, juan, [ana, juan]); // 'WAITING_FOR_PREVIOUS_SIGNER'
+ * ```
+ */
+export function participantStatus(
+  document: DocumentEntity,
+  signer: CollaboratorEntity,
+  signers: CollaboratorEntity[],
+): CreatedDocumentParticipantStatus {
+  if (signer.status === COLLABORATOR_STATUS_ENUM.SIGNED) return 'SIGNED';
+  if (signer.status === COLLABORATOR_STATUS_ENUM.REJECTED) return 'REJECTED';
+  return isSignerTurn(signer, signers, document.isSequential)
+    ? 'PENDING'
+    : 'WAITING_FOR_PREVIOUS_SIGNER';
+}
+
+@Injectable()
+export class DocumentReadService {
+  constructor(
+    @InjectRepository(DocumentEntity)
+    private readonly documentRepository: Repository<DocumentEntity>,
+    @InjectRepository(CollaboratorEntity)
+    private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    private readonly documentService: DocumentService,
+  ) {}
+
+  /**
+   * Una página de documentos de la organización.
+   *
+   * @param query - Organización, creador opcional y filtros.
+   * @returns Los resúmenes de la página y su paginación.
+   *
+   * @throws {BadRequestException} (400) Si un rango de fechas está al revés.
+   *
+   * @example
+   * ```ts
+   * const { items, pagination } = await documentReadService.listOrganizationDocuments({
+   *   organizationId: 'org-1',
+   *   filters: { page: 1, limit: 25, statuses: [DOCUMENT_STATUS_ENUM.SIGNED] },
+   * });
+   * ```
+   */
+  async listOrganizationDocuments({
+    organizationId,
+    createdBy,
+    filters,
+  }: OrganizationDocumentsQuery): Promise<{
+    items: DocumentSummary[];
+    pagination: DocumentsPagination;
+  }> {
+    const {
+      page = 1,
+      limit = 25,
+      sortBy = DOCUMENT_SORT_FIELD_ENUM.CREATED_AT,
+      sortDirection = SORT_DIRECTION_ENUM.DESC,
+    } = filters;
+    const pageSize = Math.min(limit, MAX_DOCUMENTS_PAGE_SIZE);
+
+    assertValidDocumentDateRanges(filters);
+
+    const qb = this.documentRepository
+      .createQueryBuilder('document')
+      .where('document.organizationId = :organizationId', { organizationId });
+
+    if (createdBy) {
+      qb.andWhere('document.createdBy = :createdBy', { createdBy });
+    }
+
+    applyDocumentStatusAndDateFilters(qb, filters);
+
+    const [documents, total] = await qb
+      .orderBy(DOCUMENT_SORT_COLUMNS[sortBy], sortDirection)
+      .addOrderBy('document.id', sortDirection)
+      .skip((page - 1) * pageSize)
+      .take(pageSize)
+      .getManyAndCount();
+
+    return {
+      items: await this.toSummaries(documents),
+      pagination: buildDocumentsPagination(page, pageSize, total),
+    };
+  }
+
+  /**
+   * Un documento de la organización, como resumen.
+   *
+   * @param organizationId - Organización a la que debe pertenecer.
+   * @param documentId - Documento pedido.
+   * @returns El resumen, o `null` si no existe en esa organización.
+   *
+   * @example
+   * ```ts
+   * await documentReadService.findOrganizationDocument('org-1', 'doc-1');
+   * ```
+   */
+  async findOrganizationDocument(
+    organizationId: string,
+    documentId: string,
+  ): Promise<DocumentSummary | null> {
+    const document = await this.documentRepository.findOneBy({
+      id: documentId,
+      organizationId,
+    });
+
+    return document ? (await this.toSummaries([document]))[0] : null;
+  }
+
+  /**
+   * Un documento de la organización con el correo de su creador y cuántos participantes tiene.
+   *
+   * @param organizationId - Organización a la que debe pertenecer.
+   * @param documentId - Documento pedido.
+   * @returns El resumen ampliado, o `null` si no existe en esa organización.
+   *
+   * @example
+   * ```ts
+   * const created = await documentReadService.findCreatedDocument('org-1', 'doc-1');
+   * created?.participantsCount; // 2
+   * ```
+   */
+  async findCreatedDocument(
+    organizationId: string,
+    documentId: string,
+  ): Promise<CreatedDocumentSummary | null> {
+    const document = await this.documentRepository.findOne({
+      where: { id: documentId, organizationId },
+      relations: { requestedBy: true },
+    });
+    if (!document) return null;
+
+    const participantsCount = await this.collaboratorRepository.count({
+      where: {
+        documentId,
+        colaboratorType: In([
+          COLABORATOR_TYPE_ENUM.SIGNER,
+          COLABORATOR_TYPE_ENUM.WITNESS,
+        ]),
+      },
+    });
+    const [summary] = await this.toSummaries([document]);
+
+    const signers = await this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
+      relations: { account: { user: true } },
+      order: { signingOrder: 'ASC' },
+    });
+
+    return {
+      ...summary,
+      creatorEmail: document.requestedBy.email,
+      participantsCount,
+      participants: signers.map((signer, index) => ({
+        email: collaboratorEmail(signer),
+        status: participantStatus(document, signer, signers),
+        signatureType: signer.signatureType ?? null,
+        order: (signer.signingOrder ?? index) + 1,
+      })),
+    };
+  }
+
+  /**
+   * Proyecta los documentos a su resumen.
+   *
+   * El tipo de firma sale de la columna del documento; los documentos anteriores a
+   * `AddSignatureTypeToDocuments` no la tienen, y para ésos se deduce de sus firmantes con la
+   * misma regla de la bandeja (`resolveDocumentSignatureType`), en una sola consulta para toda la
+   * página y leyendo sólo tipo y rol —ningún dato personal—.
+   *
+   * @param documents - Documentos de la página.
+   * @returns Sus resúmenes, en el mismo orden.
+   *
+   * @example
+   * ```ts
+   * await this.toSummaries(documents);
+   * ```
+   */
+  private async toSummaries(
+    documents: DocumentEntity[],
+  ): Promise<DocumentSummary[]> {
+    const legacyIds = documents
+      .filter((document) => !document.signatureType)
+      .map((document) => document.id);
+
+    const legacySigners = legacyIds.length
+      ? await this.collaboratorRepository.find({
+          where: { documentId: In(legacyIds) },
+          select: {
+            documentId: true,
+            colaboratorType: true,
+            signatureType: true,
+          },
+        })
+      : [];
+
+    return documents.map((document) => ({
+      id: document.id,
+      fileName: document.fileName,
+      status: document.status,
+      signatureType:
+        document.signatureType ??
+        this.documentService.resolveDocumentSignatureType(
+          legacySigners.filter(
+            (collaborator) => collaborator.documentId === document.id,
+          ),
+        ),
+      createdAt: document.createdAt,
+      signedAt: document.signedAt ?? null,
+    }));
+  }
+}

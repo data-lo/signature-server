@@ -1,0 +1,802 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { AccountService } from '../account.service';
+import { AccountEntity } from '../entities/account.entity';
+import { OrganizationEntity } from '../entities/organization.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { RedisService } from 'src/common/redis/redis.service';
+import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
+import { RolesService } from 'src/roles/roles.service';
+import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-profile-provisioning.service';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+import { OrganizationInvitationService } from '../organization-invitation.service';
+
+import { AccountMemberService } from '../account-member.service';
+
+import { CreateOrganizationUseCase } from './create-organization.use-case';
+import { UpdateAccountUseCase } from './update-account.use-case';
+import { GetAccountUseCase } from './get-account.use-case';
+import { GetOrganizationUseCase } from './get-organization.use-case';
+import { UpdateOrganizationUseCase } from './update-organization.use-case';
+import { InviteOrganizationMemberUseCase } from './invite-organization-member.use-case';
+
+const OWNER_ROLE = { id: 'owner-role-1', name: SYSTEM_ROLE_NAME_ENUM.OWNER };
+const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
+const CURRENT_USER = {
+  id: 'user-1',
+  email: 'user1@empresa.com',
+  password: 'hashed-pw',
+};
+
+function createMockRepository() {
+  return {
+    findOne: jest.fn(),
+    find: jest.fn(),
+    create: jest.fn((data) => data),
+    save: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+  };
+}
+
+function createMockQueryRunner() {
+  return {
+    connect: jest.fn(),
+    startTransaction: jest.fn(),
+    commitTransaction: jest.fn(),
+    rollbackTransaction: jest.fn(),
+    release: jest.fn(),
+    manager: {
+      create: jest.fn((_entity, data) => data),
+      save: jest.fn(async (data) => ({ id: 'generated-id', ...data })),
+    },
+  };
+}
+
+/**
+ * Los casos de uso se montan sobre el `AccountService` real con repositorios simulados: lo que
+ * se prueba acá es la secuencia completa —comprobar permisos, escribir, refrescar el catálogo—
+ * y con el servicio también simulado no quedaría nada de eso bajo prueba.
+ */
+describe('casos de uso de cuentas y organizaciones', () => {
+  let accountRepository: ReturnType<typeof createMockRepository>;
+  let organizationRepository: ReturnType<typeof createMockRepository>;
+  let userRepository: ReturnType<typeof createMockRepository>;
+  let dataSource: { createQueryRunner: jest.Mock };
+  let queryRunner: ReturnType<typeof createMockQueryRunner>;
+  let redisService: { set: jest.Mock; get: jest.Mock };
+  let rolesService: {
+    findSystemRoleByName: jest.Mock;
+    findByIdOrFail: jest.Mock;
+    findAssignableRoleOrFail: jest.Mock;
+    hasPermission: jest.Mock;
+  };
+  let organizationInvitationService: { create: jest.Mock };
+  let billingProfileProvisioning: { provisionFreeProfile: jest.Mock };
+
+  let createOrganization: CreateOrganizationUseCase;
+  let updateAccount: UpdateAccountUseCase;
+  let getAccount: GetAccountUseCase;
+  let getOrganization: GetOrganizationUseCase;
+  let updateOrganization: UpdateOrganizationUseCase;
+  let inviteOrganizationMember: InviteOrganizationMemberUseCase;
+
+  beforeEach(async () => {
+    accountRepository = createMockRepository();
+    organizationRepository = createMockRepository();
+    userRepository = createMockRepository();
+    userRepository.findOne.mockResolvedValue(CURRENT_USER);
+    queryRunner = createMockQueryRunner();
+    dataSource = { createQueryRunner: jest.fn(() => queryRunner) };
+    redisService = { set: jest.fn(), get: jest.fn() };
+    rolesService = {
+      findSystemRoleByName: jest
+        .fn()
+        .mockImplementation(async (name: SYSTEM_ROLE_NAME_ENUM) =>
+          name === SYSTEM_ROLE_NAME_ENUM.OWNER ? OWNER_ROLE : ADMIN_ROLE,
+        ),
+      findByIdOrFail: jest.fn().mockResolvedValue({ id: 'member-role-1' }),
+      findAssignableRoleOrFail: jest.fn().mockResolvedValue({
+        id: 'member-role-1',
+        name: SYSTEM_ROLE_NAME_ENUM.MEMBER,
+        isSystemRole: true,
+      }),
+      // Espeja el seed real: OWNER y ADMIN tienen los 12 permisos (incluye todo ORGANIZATION),
+      // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
+      hasPermission: jest
+        .fn()
+        .mockImplementation(
+          async (roleId: string | null | undefined) =>
+            roleId === OWNER_ROLE.id || roleId === ADMIN_ROLE.id,
+        ),
+    };
+    organizationInvitationService = {
+      create: jest.fn().mockResolvedValue(undefined),
+    };
+    billingProfileProvisioning = {
+      provisionFreeProfile: jest
+        .fn()
+        .mockResolvedValue({ id: 'perfil-free-1' }),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AccountService,
+        CreateOrganizationUseCase,
+        UpdateAccountUseCase,
+        GetAccountUseCase,
+        GetOrganizationUseCase,
+        UpdateOrganizationUseCase,
+        InviteOrganizationMemberUseCase,
+        {
+          provide: getRepositoryToken(AccountEntity),
+          useValue: accountRepository,
+        },
+        {
+          provide: getRepositoryToken(OrganizationEntity),
+          useValue: organizationRepository,
+        },
+        { provide: getRepositoryToken(UserEntity), useValue: userRepository },
+        { provide: getDataSourceToken(), useValue: dataSource },
+        { provide: RedisService, useValue: redisService },
+        { provide: RolesService, useValue: rolesService },
+        {
+          // Sólo la cuenta personal nace con perfil Free; acá se comprueba que la organización no.
+          provide: BillingProfileProvisioningService,
+          useValue: billingProfileProvisioning,
+        },
+        {
+          provide: OrganizationInvitationService,
+          useValue: organizationInvitationService,
+        },
+        {
+          /**
+           * La pertenencia a la cuenta activa se da por concedida: acá se prueba el ALTA. Los casos
+           * de permiso los cubre `create-organization.use-case.spec.ts`.
+           */
+          provide: AccountMemberService,
+          useValue: {
+            assertIsActiveMember: jest
+              .fn()
+              .mockResolvedValue({ id: 'account-activa-1' }),
+          },
+        },
+      ],
+    }).compile();
+
+    createOrganization = module.get(CreateOrganizationUseCase);
+    updateAccount = module.get(UpdateAccountUseCase);
+    getAccount = module.get(GetAccountUseCase);
+    getOrganization = module.get(GetOrganizationUseCase);
+    updateOrganization = module.get(UpdateOrganizationUseCase);
+    inviteOrganizationMember = module.get(InviteOrganizationMemberUseCase);
+  });
+
+  describe('CreateOrganizationUseCase', () => {
+    const dto = { name: 'Acme', organizationName: 'Acme Corp S.A. de C.V.' };
+    /** La cuenta activa desde la que se pide el alta, no la que se está creando. */
+    const ACTIVE_ACCOUNT_ID = 'account-activa-1';
+
+    function mockFullAccountLookup() {
+      accountRepository.findOne.mockResolvedValue({
+        id: 'generated-id',
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: 'generated-id-org',
+        roleId: 'owner-role-1',
+        isActive: true,
+        createdAt: new Date('2026-01-01'),
+        organization: { name: 'Acme Corp S.A. de C.V.' },
+      });
+    }
+
+    it('crea Organization + Account(rol OWNER) dentro de una transaccion y refresca el catalogo en Redis', async () => {
+      mockFullAccountLookup();
+      redisService.get.mockResolvedValue(null);
+
+      const result = await createOrganization.execute(
+        'user-1',
+        ACTIVE_ACCOUNT_ID,
+        dto,
+      );
+
+      expect(dataSource.createQueryRunner).toHaveBeenCalled();
+      expect(queryRunner.startTransaction).toHaveBeenCalled();
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(2);
+      expect(queryRunner.commitTransaction).toHaveBeenCalled();
+      expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
+
+      const accountSaveCall = queryRunner.manager.save.mock.calls[1][0];
+      expect(accountSaveCall.roleId).toBe('owner-role-1');
+      expect(accountSaveCall.userId).toBe('user-1');
+      expect(accountSaveCall.isActive).toBe(true);
+      expect(accountSaveCall.email).toBe('user1@empresa.com');
+      expect(accountSaveCall.password).toBe('hashed-pw');
+
+      const [, cachedValue] = redisService.set.mock.calls[0];
+      const cachedCatalog = JSON.parse(cachedValue);
+      expect(cachedCatalog[0].roleId).toBe('owner-role-1');
+      expect(cachedCatalog[0].isActive).toBe(true);
+      expect(result.success).toBe(true);
+      expect(result.data.roleId).toBe('owner-role-1');
+      expect(result.data.isActive).toBe(true);
+    });
+
+    /**
+     * La organización nace sin estado comercial: ni `billing_profile`, ni plan Free, ni créditos
+     * de bienvenida. La transacción escribe sólo la organización y la membresía de su OWNER.
+     */
+    it('no aprovisiona perfil de facturación ni créditos para la organización nueva', async () => {
+      mockFullAccountLookup();
+      redisService.get.mockResolvedValue(null);
+
+      await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto);
+
+      expect(
+        billingProfileProvisioning.provisionFreeProfile,
+      ).not.toHaveBeenCalled();
+      expect(queryRunner.manager.save).toHaveBeenCalledTimes(2);
+    });
+
+    it('persiste los campos opcionales de perfil de organizacion cuando se envian', async () => {
+      mockFullAccountLookup();
+      redisService.get.mockResolvedValue(null);
+
+      await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, {
+        ...dto,
+        address: 'Av. Reforma 123, CDMX',
+        taxId: 'ACM010101AAA',
+        domainAllowed: 'acme.com',
+        phoneNumber: '5512345678',
+        indexDocuments: false,
+      });
+
+      expect(queryRunner.manager.save.mock.calls[0][0]).toMatchObject({
+        address: 'Av. Reforma 123, CDMX',
+        taxId: 'ACM010101AAA',
+        domainAllowed: 'acme.com',
+        phoneNumber: '5512345678',
+        indexDocuments: false,
+      });
+    });
+
+    /** Búsqueda Inteligente nace encendida: quien no opina, indexa. */
+    it('defaultea los opcionales a null e indexDocuments a true cuando se omiten', async () => {
+      mockFullAccountLookup();
+      redisService.get.mockResolvedValue(null);
+
+      await createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto);
+
+      expect(queryRunner.manager.save.mock.calls[0][0]).toMatchObject({
+        address: null,
+        taxId: null,
+        domainAllowed: null,
+        phoneNumber: null,
+        indexDocuments: true,
+      });
+    });
+
+    it('hace rollback si falla la creacion de la cuenta', async () => {
+      queryRunner.manager.save = jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'org-1' })
+        .mockRejectedValueOnce(new Error('duplicate key value'));
+
+      await expect(
+        createOrganization.execute('user-1', ACTIVE_ACCOUNT_ID, dto),
+      ).rejects.toThrow('duplicate key value');
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalled();
+    });
+
+    it('lanza NotFoundException si el usuario no existe, sin abrir la transaccion', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        createOrganization.execute('missing-user', ACTIVE_ACCOUNT_ID, dto),
+      ).rejects.toThrow(NotFoundException);
+      expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('UpdateAccountUseCase', () => {
+    const adminAccount = {
+      id: 'account-1',
+      userId: 'owner-1',
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      organizationId: 'org-1',
+      roleId: 'admin-role-1',
+      role: ADMIN_ROLE,
+      isActive: true,
+      createdAt: new Date('2026-01-01'),
+      organization: { name: 'Acme Corp S.A. de C.V.' },
+    };
+    const renamedAccount = {
+      ...adminAccount,
+      organization: { name: 'Acme Renombrada S.A. de C.V.' },
+    };
+
+    it('refresca el catalogo de cada miembro activo cuando cambia el nombre de la organizacion', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount)
+        .mockResolvedValueOnce(renamedAccount);
+      accountRepository.find.mockResolvedValue([
+        {
+          id: 'account-1',
+          userId: 'user-1',
+          organizationId: 'org-1',
+          isActive: true,
+        },
+        {
+          id: 'account-2',
+          userId: 'user-2',
+          organizationId: 'org-1',
+          isActive: true,
+        },
+      ]);
+      redisService.get.mockResolvedValue(
+        JSON.stringify([
+          { id: 'account-1', roleId: 'admin-role-1', isActive: true },
+        ]),
+      );
+
+      await updateAccount.execute('owner-1', 'account-1', {
+        organizationName: 'Acme Renombrada S.A. de C.V.',
+      });
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+        relations: { organization: true },
+      });
+      expect(redisService.set).toHaveBeenCalled();
+    });
+
+    /** Editar sólo el identificador fiscal también es un cambio de perfil: se escribe en `tax_id`. */
+    it('escribe taxId en organizations cuando es el unico campo que llega', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount)
+        .mockResolvedValueOnce(adminAccount);
+      accountRepository.find.mockResolvedValue([]);
+
+      await updateAccount.execute('owner-1', 'account-1', {
+        taxId: 'ACM010101AAA',
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        taxId: 'ACM010101AAA',
+      });
+    });
+
+    it('no toca Redis si no se actualizo ningun campo de perfil', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount)
+        .mockResolvedValueOnce(adminAccount);
+
+      await updateAccount.execute('owner-1', 'account-1', {});
+
+      expect(accountRepository.find).not.toHaveBeenCalled();
+      expect(redisService.set).not.toHaveBeenCalled();
+    });
+
+    /** Una cuenta personal no tiene perfil de organizacion que editar. */
+    it('no escribe en organizations si la cuenta es PERSONAL', async () => {
+      const personalAccount = {
+        ...adminAccount,
+        accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+        organizationId: null,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(personalAccount)
+        .mockResolvedValueOnce(personalAccount);
+
+      await updateAccount.execute('owner-1', 'account-1', {
+        organizationName: 'Da igual',
+      });
+
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la cuenta', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        updateAccount.execute('intruder', 'account-1', {
+          organizationName: 'Hackeada',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('GetAccountUseCase', () => {
+    it('retorna la cuenta si el llamador es ADMIN activo (dueno de esa fila)', async () => {
+      accountRepository.findOne.mockResolvedValue({
+        id: 'account-1',
+        userId: 'owner-1',
+        accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+        organizationId: 'org-1',
+        roleId: 'admin-role-1',
+        role: ADMIN_ROLE,
+        isActive: true,
+        createdAt: new Date('2026-01-01'),
+        organization: { name: 'Acme Corp S.A. de C.V.' },
+      });
+
+      const result = await getAccount.execute('owner-1', 'account-1');
+
+      expect(result.data.id).toBe('account-1');
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la cuenta', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(getAccount.execute('intruder', 'account-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+  });
+
+  /**
+   * La lectura que faltaba: estos campos se podían escribir con `PATCH /account/:id` y ninguna
+   * respuesta los devolvía, así que quien guardaba un domicilio no volvía a verlo.
+   */
+  describe('GetOrganizationUseCase', () => {
+    const ORGANIZATION = {
+      id: 'org-1',
+      name: 'Acme Corp S.A. de C.V.',
+      displayName: 'Acme',
+      taxId: 'ACM010101AAA',
+      phoneNumber: '5512345678',
+      address: 'Av. Reforma 123, CDMX',
+      domainAllowed: 'acme.com',
+      isActive: true,
+      indexDocuments: true,
+    };
+
+    it('devuelve el perfil completo, con los campos que el catálogo no publica', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      const result = await getOrganization.execute('org-1');
+
+      expect(organizationRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'org-1' },
+      });
+      expect(result.data).toEqual({
+        id: 'org-1',
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+        taxId: 'ACM010101AAA',
+        phoneNumber: '5512345678',
+        address: 'Av. Reforma 123, CDMX',
+        domainAllowed: 'acme.com',
+        isActive: true,
+        indexDocuments: true,
+      });
+    });
+
+    /**
+     * La tarjeta "Búsqueda inteligente" pinta el interruptor con este valor: tiene que llegar
+     * también cuando está apagado, no sólo cuando es verdadero.
+     */
+    it('publica indexDocuments apagado tal como está guardado', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        indexDocuments: false,
+      });
+
+      const result = await getOrganization.execute('org-1');
+
+      expect(result.data.indexDocuments).toBe(false);
+    });
+
+    /** Los opcionales viajan en `null`, no se omiten: la pantalla distingue vacío de ausente. */
+    it('devuelve en null los campos que la organización todavía no tiene', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        taxId: null,
+        phoneNumber: null,
+        address: null,
+        domainAllowed: null,
+      });
+
+      const result = await getOrganization.execute('org-1');
+
+      expect(result.data).toMatchObject({
+        taxId: null,
+        phoneNumber: null,
+        address: null,
+        domainAllowed: null,
+      });
+    });
+
+    it('lanza NotFoundException si la organización no existe', async () => {
+      organizationRepository.findOne.mockResolvedValue(null);
+
+      await expect(getOrganization.execute('org-fantasma')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  /**
+   * La escritura de "Información de la organización". Responde con el mismo perfil que la
+   * lectura, para que la pantalla pinte lo guardado sin volver a pedirlo.
+   */
+  describe('UpdateOrganizationUseCase', () => {
+    const ORGANIZATION = {
+      id: 'org-1',
+      name: 'Acme Corp S.A. de C.V.',
+      displayName: 'Acme',
+      taxId: 'ACM010101AAA',
+      phoneNumber: '5512345678',
+      address: 'Av. Reforma 123, CDMX',
+      domainAllowed: 'acme.com',
+      isActive: true,
+      indexDocuments: true,
+    };
+
+    const MEMBER = {
+      id: 'account-1',
+      userId: 'user-1',
+      organizationId: 'org-1',
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      isActive: true,
+      organization: ORGANIZATION,
+    };
+
+    it('escribe sólo los campos que vinieron y devuelve el perfil releído', async () => {
+      const updated = { ...ORGANIZATION, phoneNumber: '5587654321' };
+      organizationRepository.findOne
+        .mockResolvedValueOnce(ORGANIZATION)
+        .mockResolvedValueOnce(updated);
+
+      const result = await updateOrganization.execute('org-1', {
+        phoneNumber: '5587654321',
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        phoneNumber: '5587654321',
+      });
+      expect(result.data).toEqual({
+        id: 'org-1',
+        name: 'Acme Corp S.A. de C.V.',
+        displayName: 'Acme',
+        taxId: 'ACM010101AAA',
+        phoneNumber: '5587654321',
+        address: 'Av. Reforma 123, CDMX',
+        domainAllowed: 'acme.com',
+        isActive: true,
+        indexDocuments: true,
+      });
+    });
+
+    /** El interruptor de Búsqueda Inteligente viaja solo y es lo único que se escribe. */
+    it('escribe sólo indexDocuments cuando es lo único que viene', async () => {
+      organizationRepository.findOne
+        .mockResolvedValueOnce(ORGANIZATION)
+        .mockResolvedValueOnce({ ...ORGANIZATION, indexDocuments: false });
+      accountRepository.find.mockResolvedValue([]);
+
+      const result = await updateOrganization.execute('org-1', {
+        indexDocuments: false,
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        indexDocuments: false,
+      });
+      expect(result.data.indexDocuments).toBe(false);
+    });
+
+    /**
+     * La pantalla de crear documento lee el interruptor del catálogo de cuentas, no del perfil
+     * (un miembro sin `ORGANIZATION.READ` no puede pedirlo): sin refrescarlo, los demás seguirían
+     * viendo la opción de Búsqueda Inteligente.
+     */
+    it('refresca el catálogo de los miembros cuando cambia indexDocuments', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        indexDocuments: false,
+      });
+      accountRepository.find.mockResolvedValue([
+        { ...MEMBER, organization: { ...ORGANIZATION, indexDocuments: false } },
+      ]);
+      redisService.get.mockResolvedValue(JSON.stringify([{ id: 'account-1' }]));
+
+      await updateOrganization.execute('org-1', { indexDocuments: false });
+
+      expect(redisService.set).toHaveBeenCalledTimes(1);
+      const [, cached] = redisService.set.mock.calls[0];
+      expect(JSON.parse(cached)[0].organizationDetail).toMatchObject({
+        indexDocuments: false,
+      });
+    });
+
+    /** `null` es "bórralo", distinto de ausente, que es "no lo toques". */
+    it('borra los opcionales que llegan en null', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      await updateOrganization.execute('org-1', {
+        taxId: null,
+        domainAllowed: null,
+      });
+
+      expect(organizationRepository.update).toHaveBeenCalledWith('org-1', {
+        taxId: null,
+        domainAllowed: null,
+      });
+    });
+
+    /**
+     * Los dos nombres rotulan la organización en el selector de cuentas de cada miembro: sin
+     * refrescar el catálogo cacheado, los demás seguirían viendo el nombre viejo.
+     */
+    it('refresca el catálogo de los miembros cuando cambia un nombre', async () => {
+      organizationRepository.findOne.mockResolvedValue({
+        ...ORGANIZATION,
+        displayName: 'Acme MX',
+      });
+      accountRepository.find.mockResolvedValue([MEMBER]);
+      redisService.get.mockResolvedValue(JSON.stringify([{ id: 'account-1' }]));
+
+      await updateOrganization.execute('org-1', { displayName: 'Acme MX' });
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+        relations: { organization: true },
+      });
+      expect(redisService.set).toHaveBeenCalledTimes(1);
+    });
+
+    it('no toca el catálogo si sólo cambian datos que el selector no muestra', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      await updateOrganization.execute('org-1', {
+        address: 'Insurgentes 456, CDMX',
+      });
+
+      expect(accountRepository.find).not.toHaveBeenCalled();
+      expect(redisService.set).not.toHaveBeenCalled();
+    });
+
+    it('no escribe nada si el body viene vacío', async () => {
+      organizationRepository.findOne.mockResolvedValue(ORGANIZATION);
+
+      const result = await updateOrganization.execute('org-1', {});
+
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+      expect(result.data.displayName).toBe('Acme');
+    });
+
+    it('lanza NotFoundException si la organización no existe', async () => {
+      organizationRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        updateOrganization.execute('org-fantasma', { displayName: 'Acme' }),
+      ).rejects.toThrow(NotFoundException);
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('InviteOrganizationMemberUseCase', () => {
+    const dto = { email: 'nuevo@empresa.com', roleId: 'member-role-1' };
+    const adminOrgAccount = {
+      id: 'org-account-1',
+      userId: 'admin-1',
+      accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+      organizationId: 'org-1',
+      roleId: ADMIN_ROLE.id,
+      role: ADMIN_ROLE,
+      isActive: true,
+    };
+    const adminPersonalAccount = {
+      id: 'personal-account-1',
+      userId: 'admin-1',
+      accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+      organizationId: null,
+      roleId: ADMIN_ROLE.id,
+      role: ADMIN_ROLE,
+      isActive: true,
+    };
+
+    /**
+     * La invitación se persiste con el `organizationId` resuelto desde la membresía, no con el
+     * `accountId` del header: son identificadores distintos y confundirlos invitaría a la
+     * organización equivocada.
+     */
+    it('persiste la invitacion con el organizationId resuelto desde la membresia del llamador', async () => {
+      accountRepository.findOne.mockResolvedValue(adminOrgAccount);
+
+      const result = await inviteOrganizationMember.execute(
+        'admin-1',
+        'org-account-1',
+        dto,
+      );
+
+      expect(rolesService.findAssignableRoleOrFail).toHaveBeenCalledWith(
+        'member-role-1',
+        'org-1',
+      );
+      expect(organizationInvitationService.create).toHaveBeenCalledWith({
+        organizationId: 'org-1',
+        roleId: 'member-role-1',
+        invitedBy: 'admin-1',
+        email: 'nuevo@empresa.com',
+      });
+      expect(result).toEqual({
+        success: true,
+        message: 'Invitación enviada correctamente',
+        data: null,
+      });
+    });
+
+    it('lanza BadRequestException si falta accountId (header X-Account-Id)', async () => {
+      await expect(
+        inviteOrganizationMember.execute('admin-1', '', dto),
+      ).rejects.toThrow(BadRequestException);
+      expect(accountRepository.findOne).not.toHaveBeenCalled();
+      expect(organizationInvitationService.create).not.toHaveBeenCalled();
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN de la cuenta', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        inviteOrganizationMember.execute('intruder', 'org-account-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+      expect(organizationInvitationService.create).not.toHaveBeenCalled();
+    });
+
+    it('lanza BadRequestException si la cuenta activa no es de tipo ORGANIZATION', async () => {
+      accountRepository.findOne.mockResolvedValue(adminPersonalAccount);
+
+      await expect(
+        inviteOrganizationMember.execute('admin-1', 'personal-account-1', dto),
+      ).rejects.toThrow(BadRequestException);
+      expect(rolesService.findAssignableRoleOrFail).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Si el rol no existe, la invitación reventaría al canjearse: en ese momento ya no hay
+     * quien corrija el error, porque el invitado no eligió ese rol.
+     */
+    it('no persiste nada si el roleId no es un rol asignable en esta organización', async () => {
+      accountRepository.findOne.mockResolvedValue(adminOrgAccount);
+      rolesService.findAssignableRoleOrFail.mockRejectedValue(
+        new NotFoundException('Rol con ID bad-role no encontrado'),
+      );
+
+      await expect(
+        inviteOrganizationMember.execute('admin-1', 'org-account-1', {
+          ...dto,
+          roleId: 'bad-role',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(organizationInvitationService.create).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Historia "Cargar roles de la organización en el modal Invitar miembro": el modal ya no
+     * ofrece OWNER, pero eso es sólo presentación. El backend rechaza la invitación aunque el
+     * `roleId` de OWNER llegue directo a la API.
+     */
+    it('rechaza invitar con el rol OWNER, sin persistir nada', async () => {
+      accountRepository.findOne.mockResolvedValue(adminOrgAccount);
+      rolesService.findAssignableRoleOrFail.mockResolvedValue({
+        ...OWNER_ROLE,
+        isSystemRole: true,
+      });
+
+      await expect(
+        inviteOrganizationMember.execute('admin-1', 'org-account-1', {
+          ...dto,
+          roleId: OWNER_ROLE.id,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(organizationInvitationService.create).not.toHaveBeenCalled();
+    });
+  });
+});

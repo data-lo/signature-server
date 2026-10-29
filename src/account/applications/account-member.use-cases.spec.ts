@@ -1,0 +1,1223 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { AccountMemberService } from '../account-member.service';
+import { AccountEntity } from '../entities/account.entity';
+import { UserEntity } from 'src/user/entities/user.entity';
+import { AccountService } from '../account.service';
+import { RolesService } from 'src/roles/roles.service';
+import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
+import { ACCOUNT_TYPE_ENUM } from '../enums/account-type.enum';
+import { ACCOUNT_STATUS_ENUM } from '../enums/account-status.enum';
+import { RolePermissionData } from 'src/roles/interfaces/response/permission-response';
+import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
+
+import { AddOrganizationMemberUseCase } from './add-organization-member.use-case';
+import { GrantAccountAccessUseCase } from './grant-account-access.use-case';
+import { GetOrganizationMembersUseCase } from './get-organization-members.use-case';
+import { GetOrganizationMemberListUseCase } from './get-organization-member-list.use-case';
+import { GetAccountMemberUseCase } from './get-account-member.use-case';
+import { UpdateAccountMemberUseCase } from './update-account-member.use-case';
+import { RevokeAccountAccessUseCase } from './revoke-account-access.use-case';
+
+const ADMIN_ROLE = { id: 'admin-role-1', name: SYSTEM_ROLE_NAME_ENUM.ADMIN };
+const MEMBER_ROLE = { id: 'member-role-1', name: SYSTEM_ROLE_NAME_ENUM.MEMBER };
+/**
+ * El rol del dueño de la cuenta. Lleva `isSystemRole` porque la regla que lo protege mira las
+ * dos cosas: que sea de sistema y que se llame OWNER — un rol personalizado que una organización
+ * bautice "OWNER" no es el propietario.
+ */
+const OWNER_ROLE = {
+  id: 'owner-role-1',
+  name: SYSTEM_ROLE_NAME_ENUM.OWNER,
+  isSystemRole: true,
+};
+
+/** Los tres permisos que el catálogo estático le da a MEMBER, tal como los publica la API. */
+const MEMBER_PERMISSIONS: RolePermissionData[] = [
+  {
+    id: 'permission-create',
+    key: 'DOCUMENT.CREATE',
+    resource: 'DOCUMENT',
+    action: 'CREATE',
+    scope: 'ANY',
+    description:
+      'Crear documentos o borradores dentro de la organización activa.',
+    isStaticCatalog: true,
+  },
+  {
+    id: 'permission-read-own',
+    key: 'DOCUMENT.READ_OWN',
+    resource: 'DOCUMENT',
+    action: 'READ',
+    scope: 'OWN',
+    description:
+      'Consultar documentos propios o donde el miembro sea firmante.',
+    isStaticCatalog: true,
+  },
+  {
+    id: 'permission-sign-self',
+    key: 'DOCUMENT.SIGN_SELF',
+    resource: 'DOCUMENT',
+    action: 'SIGN',
+    scope: 'SELF',
+    description: 'Firmar en nombre propio e incluirse como firmante.',
+    isStaticCatalog: true,
+  },
+];
+
+function createMockRepository() {
+  return {
+    findOne: jest.fn(),
+    findOneOrFail: jest.fn(),
+    find: jest.fn(),
+    count: jest.fn(),
+    create: jest.fn((data) => data),
+    save: jest.fn(async (data) => ({ id: 'new-member-1', ...data })),
+    update: jest.fn(),
+  };
+}
+
+/**
+ * `DataSource.transaction` simulado: corre el callback con un manager que devuelve los mismos
+ * repositorios simulados. No prueba el commit ni el rollback —eso es de Postgres—, sí que la
+ * secuencia escriba por el manager de la transacción y no por su repositorio propio.
+ */
+function createMockDataSource(repositoriesByEntity: Map<unknown, unknown>) {
+  const manager = {
+    getRepository: jest.fn((entity: unknown) =>
+      repositoriesByEntity.get(entity),
+    ),
+  };
+
+  return {
+    manager,
+    dataSource: {
+      transaction: jest.fn(async (work: (manager: unknown) => unknown) =>
+        work(manager),
+      ),
+    },
+  };
+}
+
+function adminAccount(overrides: Partial<AccountEntity> = {}) {
+  return {
+    id: 'admin-account-1',
+    userId: 'owner-1',
+    accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+    organizationId: 'org-1',
+    roleId: ADMIN_ROLE.id,
+    role: ADMIN_ROLE,
+    isActive: true,
+    ...overrides,
+  };
+}
+
+/**
+ * Los casos de uso se montan sobre el `AccountMemberService` real con repositorios simulados:
+ * lo que importa acá es la secuencia —comprobar permisos, proteger al último administrador,
+ * escribir— y con el servicio simulado no quedaría nada de eso bajo prueba.
+ */
+describe('casos de uso de miembros de organización', () => {
+  let addOrganizationMember: AddOrganizationMemberUseCase;
+  let grantAccountAccess: GrantAccountAccessUseCase;
+  let getOrganizationMembers: GetOrganizationMembersUseCase;
+  let getOrganizationMemberList: GetOrganizationMemberListUseCase;
+  let getAccountMember: GetAccountMemberUseCase;
+  let updateAccountMember: UpdateAccountMemberUseCase;
+  let revokeAccountAccess: RevokeAccountAccessUseCase;
+  let accountRepository: ReturnType<typeof createMockRepository>;
+  let userRepository: ReturnType<typeof createMockRepository>;
+  let accountService: {
+    removeAccountFromCatalog: jest.Mock;
+    appendAccountToCatalog: jest.Mock;
+    findByIdOrFail: jest.Mock;
+    assertHasOrganizationPermission: jest.Mock;
+    resolveOwnActiveAccountOrFail: jest.Mock;
+  };
+  let rolesService: {
+    findByIdOrFail: jest.Mock;
+    findAssignableRoleOrFail: jest.Mock;
+    listPermissionsByRoleIds: jest.Mock;
+    assertHasPermission: jest.Mock;
+    findSystemRoleByName: jest.Mock;
+  };
+  let memberEventsProducer: {
+    enqueueJoined: jest.Mock;
+    flushOutbox: jest.Mock;
+  };
+
+  beforeEach(async () => {
+    accountRepository = createMockRepository();
+    userRepository = createMockRepository();
+    memberEventsProducer = {
+      enqueueJoined: jest.fn(),
+      flushOutbox: jest.fn(),
+    };
+    accountRepository.count.mockResolvedValue(2); // por defecto: hay más de un ADMIN activo, nada que proteger
+    accountService = {
+      removeAccountFromCatalog: jest.fn(),
+      appendAccountToCatalog: jest.fn(),
+      /**
+       * Espeja al real: recarga la cuenta CON su organización. El alta la usa para que la entrada
+       * del catálogo en Redis lleve el nombre de la organización — la fila que devuelve la
+       * transacción no trae la relación, y sin esto el nuevo miembro veía "Organización" a secas
+       * en el selector de cuentas.
+       */
+      findByIdOrFail: jest.fn(),
+      // Espeja al real: devuelve la cuenta ACTIVA del llamador, de la que sale el organizationId.
+      assertHasOrganizationPermission: jest
+        .fn()
+        .mockResolvedValue(adminAccount()),
+      /**
+       * La misma cuenta, resuelta sin volver a preguntar por permisos: es lo que usan los casos
+       * de uso ya migrados a `@RequirePermission`, donde `PermissionsGuard` autorizó antes.
+       */
+      resolveOwnActiveAccountOrFail: jest
+        .fn()
+        .mockResolvedValue(adminAccount()),
+    };
+    rolesService = {
+      findByIdOrFail: jest.fn().mockResolvedValue(MEMBER_ROLE),
+      findAssignableRoleOrFail: jest.fn().mockResolvedValue(MEMBER_ROLE),
+      listPermissionsByRoleIds: jest
+        .fn()
+        .mockResolvedValue(new Map([[MEMBER_ROLE.id, MEMBER_PERMISSIONS]])),
+      // Cada rol de sistema con su propio id: la protección del propietario compara contra el
+      // id de OWNER, y devolver ADMIN para todo haría pasar por propietario a cualquier ADMIN.
+      findSystemRoleByName: jest.fn(async (name: SYSTEM_ROLE_NAME_ENUM) =>
+        name === SYSTEM_ROLE_NAME_ENUM.OWNER ? OWNER_ROLE : ADMIN_ROLE,
+      ),
+      // Espeja el seed real: ADMIN tiene los 12 permisos (incluye todo ORGANIZATION),
+      // cualquier otro rol (o su ausencia) no tiene ninguno — ver RolesService.hasPermission.
+      assertHasPermission: jest
+        .fn()
+        .mockImplementation(
+          async (
+            roleId: string | null | undefined,
+            _resource,
+            _action,
+            message,
+          ) => {
+            if (roleId !== ADMIN_ROLE.id) {
+              throw new ForbiddenException(
+                message ??
+                  'No tienes permisos suficientes para realizar esta acción',
+              );
+            }
+          },
+        ),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AccountMemberService,
+        AddOrganizationMemberUseCase,
+        GrantAccountAccessUseCase,
+        GetOrganizationMembersUseCase,
+        GetOrganizationMemberListUseCase,
+        GetAccountMemberUseCase,
+        UpdateAccountMemberUseCase,
+        RevokeAccountAccessUseCase,
+        {
+          provide: getRepositoryToken(AccountEntity),
+          useValue: accountRepository,
+        },
+        {
+          provide: getRepositoryToken(UserEntity),
+          useValue: userRepository,
+        },
+        { provide: AccountService, useValue: accountService },
+        { provide: RolesService, useValue: rolesService },
+        {
+          provide: OrganizationMemberEventsProducer,
+          useValue: memberEventsProducer,
+        },
+        {
+          provide: getDataSourceToken(),
+          useValue: createMockDataSource(
+            new Map<unknown, unknown>([[AccountEntity, accountRepository]]),
+          ).dataSource,
+        },
+      ],
+    }).compile();
+
+    addOrganizationMember = module.get(AddOrganizationMemberUseCase);
+    grantAccountAccess = module.get(GrantAccountAccessUseCase);
+    getOrganizationMembers = module.get(GetOrganizationMembersUseCase);
+    getOrganizationMemberList = module.get(GetOrganizationMemberListUseCase);
+    getAccountMember = module.get(GetAccountMemberUseCase);
+    updateAccountMember = module.get(UpdateAccountMemberUseCase);
+    revokeAccountAccess = module.get(RevokeAccountAccessUseCase);
+  });
+
+  describe('GrantAccountAccessUseCase', () => {
+    const dto = {
+      organizationId: 'org-1',
+      userId: 'user-1',
+      roleId: MEMBER_ROLE.id,
+    };
+
+    it('rechaza con ConflictException si el usuario ya tiene acceso a la organización', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount()) // ownership check del llamador
+        .mockResolvedValueOnce({ id: 'existing' }); // ya existe la membresía a crear
+
+      await expect(grantAccountAccess.execute('owner-1', dto)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        grantAccountAccess.execute('not-owner', dto),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('lanza NotFoundException si el roleId no corresponde a un rol existente', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      rolesService.findAssignableRoleOrFail.mockRejectedValue(
+        new NotFoundException('Rol con ID bad-role no encontrado'),
+      );
+
+      await expect(
+        grantAccountAccess.execute('owner-1', { ...dto, roleId: 'bad-role' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('sincroniza email/password del usuario invitado (decisión D6, credencial única)', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(null); // no existe membresía previa
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'invitado@empresa.com',
+        password: 'hashed-pw',
+      });
+
+      await grantAccountAccess.execute('owner-1', dto);
+
+      expect(accountRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'invitado@empresa.com',
+          password: 'hashed-pw',
+          organizationId: 'org-1',
+          userId: 'user-1',
+        }),
+      );
+    });
+
+    it('registra el aviso a propietarios y administradores y lo publica tras confirmar', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(null);
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'invitado@empresa.com',
+        password: 'hashed-pw',
+      });
+
+      await grantAccountAccess.execute('owner-1', dto);
+
+      expect(memberEventsProducer.enqueueJoined).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          membership: expect.objectContaining({ id: 'new-member-1' }),
+          actorUserId: 'owner-1',
+        },
+      );
+      expect(memberEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    /**
+     * El alta puede pedirse inactiva. Nadie ha quedado dentro todavía, así que no hay
+     * incorporación que anunciar: el aviso saldrá cuando se le reactive.
+     */
+    it('no anuncia nada si la membresía se da de alta inactiva', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(null);
+      userRepository.findOne.mockResolvedValue({
+        id: 'user-1',
+        email: 'invitado@empresa.com',
+        password: 'hashed-pw',
+      });
+
+      await grantAccountAccess.execute('owner-1', { ...dto, isActive: false });
+
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GetOrganizationMembersUseCase', () => {
+    it('retorna los miembros si el llamador es ADMIN activo de la organización', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      accountRepository.find.mockResolvedValue([adminAccount()]);
+
+      const result = await getOrganizationMembers.execute('owner-1', 'org-1');
+
+      expect(result.data).toHaveLength(1);
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN activo de la organización', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        getOrganizationMembers.execute('not-owner', 'org-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(accountRepository.find).not.toHaveBeenCalled();
+    });
+
+    it('solo consulta miembros activos (un miembro eliminado no debe reaparecer)', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      accountRepository.find.mockResolvedValue([]);
+
+      await getOrganizationMembers.execute('owner-1', 'org-1');
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+      });
+    });
+  });
+
+  describe('GetOrganizationMemberListUseCase', () => {
+    it('mapea email/rfc/rol/fecha de ingreso desde el join a user.personalInformation y role', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      accountRepository.find.mockResolvedValue([
+        {
+          id: 'account-1',
+          userId: 'user-1',
+          email: 'miembro@empresa.com',
+          roleId: MEMBER_ROLE.id,
+          role: { id: 'member-role-1', name: 'MEMBER' },
+          joinedAt: new Date('2023-10-25T10:00:00Z'),
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          isActive: true,
+          user: { personalInformation: { rfc: 'XAXX010101000' } },
+        },
+        {
+          id: 'account-2',
+          userId: 'user-2',
+          email: 'sin-rfc@empresa.com',
+          roleId: null,
+          role: null,
+          joinedAt: null,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          isActive: true,
+          user: { personalInformation: { rfc: null } },
+        },
+      ]);
+
+      const result = await getOrganizationMemberList.execute('org-1');
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+        relations: { user: { personalInformation: true }, role: true },
+        order: { joinedAt: 'ASC' },
+      });
+      expect(result.data).toEqual([
+        {
+          accountId: 'account-1',
+          userId: 'user-1',
+          email: 'miembro@empresa.com',
+          rfc: 'XAXX010101000',
+          role: { id: 'member-role-1', name: 'MEMBER' },
+          joinedAt: new Date('2023-10-25T10:00:00Z'),
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          isActive: true,
+          permissions: MEMBER_PERMISSIONS,
+        },
+        {
+          accountId: 'account-2',
+          userId: 'user-2',
+          email: 'sin-rfc@empresa.com',
+          rfc: null,
+          role: null,
+          joinedAt: null,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          isActive: true,
+          permissions: [],
+        },
+      ]);
+    });
+
+    /**
+     * Los permisos son los del rol y se resuelven en UNA consulta para toda la tabla: si se
+     * pidieran por fila, una organización de treinta personas dispararía treinta consultas.
+     */
+    it('resuelve los permisos de todos los miembros con una sola consulta de roles', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      accountRepository.find.mockResolvedValue([
+        {
+          id: 'account-1',
+          userId: 'user-1',
+          email: 'uno@empresa.com',
+          roleId: MEMBER_ROLE.id,
+          role: MEMBER_ROLE,
+          isActive: true,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          user: { personalInformation: { rfc: null } },
+        },
+        {
+          id: 'account-2',
+          userId: 'user-2',
+          email: 'dos@empresa.com',
+          roleId: MEMBER_ROLE.id,
+          role: MEMBER_ROLE,
+          isActive: true,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+          user: { personalInformation: { rfc: null } },
+        },
+      ]);
+
+      await getOrganizationMemberList.execute('org-1');
+
+      expect(rolesService.listPermissionsByRoleIds).toHaveBeenCalledTimes(1);
+      expect(rolesService.listPermissionsByRoleIds).toHaveBeenCalledWith([
+        MEMBER_ROLE.id,
+        MEMBER_ROLE.id,
+      ]);
+    });
+
+    /**
+     * La tabla nunca muestra a quien fue dado de baja. Hubo un `includeInactive` que los traía
+     * de vuelta; se retiró con el conmutador "Mostrar miembros dados de baja", así que ya no hay
+     * forma de pedirlos por esta vía y el filtro no depende de ningún argumento.
+     */
+    it('lista únicamente las membresías activas, sin forma de pedir las dadas de baja', async () => {
+      accountRepository.findOne.mockResolvedValue(adminAccount());
+      accountRepository.find.mockResolvedValue([]);
+
+      await getOrganizationMemberList.execute('org-1');
+
+      expect(accountRepository.find).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', isActive: true },
+        relations: { user: { personalInformation: true }, role: true },
+        order: { joinedAt: 'ASC' },
+      });
+    });
+  });
+
+  describe('GetAccountMemberUseCase y UpdateAccountMemberUseCase', () => {
+    it('findOne permite al ADMIN de la organización ver la membresía', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'member-2',
+          organizationId: 'org-1',
+          userId: 'user-2',
+          isActive: true,
+        }) // findEntityById
+        .mockResolvedValueOnce(adminAccount()); // ownership check
+
+      const result = await getAccountMember.execute('owner-1', 'member-2');
+
+      expect(result.data.id).toBe('member-2');
+    });
+
+    it('findOne lanza ForbiddenException si el llamador no es ADMIN de esa organización', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'member-2',
+          organizationId: 'org-1',
+          userId: 'user-2',
+          isActive: true,
+        })
+        .mockResolvedValueOnce(null);
+
+      await expect(
+        getAccountMember.execute('intruder', 'member-2'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('update lanza ForbiddenException si el llamador no es ADMIN de esa organización', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'member-2',
+          organizationId: 'org-1',
+          userId: 'user-2',
+          isActive: true,
+        })
+        .mockResolvedValueOnce(null);
+
+      await expect(
+        updateAccountMember.execute('intruder', 'member-2', {
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('update lanza NotFoundException si el nuevo roleId no existe', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'member-2',
+          organizationId: 'org-1',
+          userId: 'user-2',
+          isActive: true,
+        })
+        .mockResolvedValueOnce(adminAccount());
+      rolesService.findAssignableRoleOrFail.mockRejectedValue(
+        new NotFoundException('Rol con ID bad-role no encontrado'),
+      );
+
+      await expect(
+        updateAccountMember.execute('owner-1', 'member-2', {
+          roleId: 'bad-role',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('update lanza ConflictException al degradar el rol del único ADMIN activo de la organización', async () => {
+      const targetAdmin = adminAccount({ id: 'admin-account-1' });
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetAdmin) // findEntityById: el objetivo es ADMIN
+        .mockResolvedValueOnce(adminAccount()); // ownership check del llamador
+      accountRepository.count.mockResolvedValue(1); // es el único ADMIN activo
+
+      await expect(
+        updateAccountMember.execute('owner-1', 'admin-account-1', {
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('update permite degradar a un ADMIN si hay otro ADMIN activo en la organización', async () => {
+      const targetAdmin = adminAccount({ id: 'admin-account-2' });
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetAdmin) // findEntityById
+        .mockResolvedValueOnce(adminAccount()) // ownership check del llamador
+        .mockResolvedValueOnce(targetAdmin); // findEntityById final, para retornar la data actualizada
+      accountRepository.count.mockResolvedValue(2); // hay otro ADMIN activo además del objetivo
+
+      await updateAccountMember.execute('owner-1', 'admin-account-2', {
+        roleId: MEMBER_ROLE.id,
+      });
+
+      expect(accountRepository.update).toHaveBeenCalled();
+    });
+
+    /**
+     * El rol se valida contra la organización de la membresía: un rol custom de otra organización
+     * existe en la tabla, y aceptarlo movería permisos de un tenant a otro.
+     */
+    it('update valida el rol nuevo contra la organización de la membresía', async () => {
+      const targetMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetMember)
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(targetMember);
+
+      await updateAccountMember.execute('owner-1', 'member-2', {
+        roleId: 'other-role',
+      });
+
+      expect(rolesService.findAssignableRoleOrFail).toHaveBeenCalledWith(
+        'other-role',
+        'org-1',
+      );
+    });
+
+    /**
+     * OWNER no se reparte: lo recibe quien crea la cuenta. El modal ya no lo ofrece, pero eso es
+     * presentación — sin esta regla bastaba mandar su `roleId` a la API para hacer propietario a
+     * cualquier miembro.
+     */
+    it('update rechaza asignarle a un miembro el rol de propietario', async () => {
+      const targetMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetMember)
+        .mockResolvedValueOnce(adminAccount());
+      rolesService.findAssignableRoleOrFail.mockResolvedValue(OWNER_ROLE);
+
+      await expect(
+        updateAccountMember.execute('owner-1', 'member-2', {
+          roleId: OWNER_ROLE.id,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+    });
+
+    /**
+     * La regla mira el CAMBIO, no el rol: guardar sobre el propietario el rol que ya tiene no
+     * reparte nada, y rechazarlo convertiría en error abrir su edición y confirmar sin tocar el
+     * selector.
+     */
+    it('update deja guardar al propietario su propio rol sin cambios', async () => {
+      const owner = {
+        id: 'owner-account-1',
+        organizationId: 'org-1',
+        userId: 'user-owner',
+        roleId: OWNER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(owner)
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(owner);
+      rolesService.findAssignableRoleOrFail.mockResolvedValue(OWNER_ROLE);
+
+      await updateAccountMember.execute('owner-1', 'owner-account-1', {
+        roleId: OWNER_ROLE.id,
+      });
+
+      expect(accountRepository.update).toHaveBeenCalled();
+    });
+    /** Historia "Impedir desactivación de cuentas con perfil Owner". */
+    describe('propietario (OWNER)', () => {
+      const owner = {
+        id: 'owner-account-1',
+        organizationId: 'org-1',
+        userId: 'user-owner',
+        roleId: OWNER_ROLE.id,
+        isActive: true,
+      };
+
+      it('rechaza desactivarlo aunque haya otros administradores activos', async () => {
+        accountRepository.findOne
+          .mockResolvedValueOnce(owner)
+          .mockResolvedValueOnce(adminAccount());
+        accountRepository.count.mockResolvedValue(3);
+
+        await expect(
+          updateAccountMember.execute('admin-1', 'owner-account-1', {
+            isActive: false,
+          }),
+        ).rejects.toThrow(
+          new ConflictException(
+            'No se puede desactivar una cuenta con perfil de propietario (Owner)',
+          ),
+        );
+        expect(accountRepository.update).not.toHaveBeenCalled();
+      });
+
+      /** Sin esto bastaba degradarlo primero y desactivarlo después. */
+      it('rechaza cambiarle el rol', async () => {
+        accountRepository.findOne
+          .mockResolvedValueOnce(owner)
+          .mockResolvedValueOnce(adminAccount());
+        accountRepository.count.mockResolvedValue(3);
+
+        await expect(
+          updateAccountMember.execute('admin-1', 'owner-account-1', {
+            roleId: ADMIN_ROLE.id,
+          }),
+        ).rejects.toThrow(
+          'No se puede cambiar el rol de una cuenta con perfil de propietario (Owner)',
+        );
+        expect(accountRepository.update).not.toHaveBeenCalled();
+      });
+
+      it('sí deja cambiarle el puesto', async () => {
+        accountRepository.findOne
+          .mockResolvedValueOnce(owner)
+          .mockResolvedValueOnce(adminAccount())
+          .mockResolvedValueOnce(owner);
+
+        await updateAccountMember.execute('admin-1', 'owner-account-1', {
+          position: 'Dirección general',
+        });
+
+        expect(accountRepository.update).toHaveBeenCalledWith(
+          'owner-account-1',
+          { position: 'Dirección general' },
+        );
+      });
+    });
+
+    it('update permite desactivar (isActive:false) a un MEMBER sin pasar por la protección de último ADMIN', async () => {
+      const targetMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(targetMember) // findEntityById
+        .mockResolvedValueOnce(adminAccount()) // ownership check del llamador
+        .mockResolvedValueOnce(targetMember); // findEntityById final, para retornar la data actualizada
+
+      await updateAccountMember.execute('owner-1', 'member-2', {
+        isActive: false,
+      });
+
+      expect(accountRepository.count).not.toHaveBeenCalled();
+      expect(accountRepository.update).toHaveBeenCalled();
+    });
+
+    /**
+     * Reactivar es una incorporación: quien fue dado de baja y vuelve hoy está dentro y ayer no,
+     * y eso es justo lo que los administradores tienen que saber.
+     */
+    it('update anuncia la incorporación al reactivar a alguien dado de baja', async () => {
+      const removedMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: false,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(removedMember)
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.findOneOrFail.mockResolvedValue({
+        ...removedMember,
+        isActive: true,
+      });
+
+      await updateAccountMember.execute('owner-1', 'member-2', {
+        isActive: true,
+      });
+
+      expect(memberEventsProducer.enqueueJoined).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          membership: expect.objectContaining({
+            id: 'member-2',
+            isActive: true,
+          }),
+          actorUserId: 'owner-1',
+        },
+      );
+      expect(memberEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    /**
+     * `isActive: true` sobre quien ya estaba activo no reactiva a nadie. Sin mirar el estado
+     * anterior, cada edición de rol o de puesto mandaría un aviso de "nuevo miembro".
+     */
+    it('update no anuncia nada al cambiar el rol de alguien que ya estaba activo', async () => {
+      const activeMember = {
+        id: 'member-2',
+        organizationId: 'org-1',
+        userId: 'user-2',
+        roleId: MEMBER_ROLE.id,
+        isActive: true,
+      };
+      accountRepository.findOne
+        .mockResolvedValueOnce(activeMember)
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.findOneOrFail.mockResolvedValue({
+        ...activeMember,
+        roleId: ADMIN_ROLE.id,
+      });
+
+      await updateAccountMember.execute('owner-1', 'member-2', {
+        roleId: ADMIN_ROLE.id,
+        isActive: true,
+      });
+
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
+      expect(memberEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Alta directa desde la pantalla de miembros (`POST /api/v1/organizations/members`). Lo que se
+   * prueba aquí es lo que la historia exige: que la organización salga SIEMPRE de la cuenta
+   * activa, que el rol se valide contra ella, que no se dupliquen membresías y que la respuesta
+   * traiga ya los permisos derivados del rol.
+   */
+  describe('AddOrganizationMemberUseCase', () => {
+    const NEW_USER = {
+      id: 'user-9',
+      email: 'nueva@empresa.com',
+      password: 'hash',
+    };
+
+    function savedMembershipRow(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'new-member-1',
+        userId: NEW_USER.id,
+        organizationId: 'org-1',
+        email: NEW_USER.email,
+        roleId: MEMBER_ROLE.id,
+        role: MEMBER_ROLE,
+        isActive: true,
+        status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        joinedAt: new Date('2026-09-10T10:00:00Z'),
+        user: { personalInformation: { rfc: null } },
+        ...overrides,
+      };
+    }
+
+    it('crea la membresía con el rol pedido y responde con los permisos que ese rol otorga', async () => {
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne
+        .mockResolvedValueOnce(null) // no hay membresía previa
+        .mockResolvedValueOnce(savedMembershipRow()); // lectura final para la respuesta
+
+      const result = await addOrganizationMember.execute(
+        'owner-1',
+        'admin-account-1',
+        { email: NEW_USER.email, roleId: MEMBER_ROLE.id },
+      );
+
+      expect(accountRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: NEW_USER.id,
+          organizationId: 'org-1',
+          roleId: MEMBER_ROLE.id,
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          isActive: true,
+          status: ACCOUNT_STATUS_ENUM.ACTIVE,
+        }),
+      );
+      expect(result.data.permissions).toEqual(MEMBER_PERMISSIONS);
+      expect(result.data.role).toEqual({
+        id: MEMBER_ROLE.id,
+        name: MEMBER_ROLE.name,
+      });
+      expect(result.data.status).toBe(ACCOUNT_STATUS_ENUM.ACTIVE);
+    });
+
+    /**
+     * Aislamiento multi-tenant: la organización sale de la cuenta activa del llamador, no de nada
+     * que venga en la petición. Aunque el administrador de `org-2` conozca el id de `org-1`, el
+     * alta aterriza en la suya.
+     */
+    it('da el alta en la organización de la cuenta activa, no en otra', async () => {
+      accountService.resolveOwnActiveAccountOrFail.mockResolvedValue(
+        adminAccount({ id: 'admin-account-2', organizationId: 'org-2' }),
+      );
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(savedMembershipRow({ organizationId: 'org-2' }));
+
+      await addOrganizationMember.execute('owner-2', 'admin-account-2', {
+        email: NEW_USER.email,
+        roleId: MEMBER_ROLE.id,
+      });
+
+      expect(rolesService.findAssignableRoleOrFail).toHaveBeenCalledWith(
+        MEMBER_ROLE.id,
+        'org-2',
+      );
+      expect(accountRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: 'org-2' }),
+      );
+    });
+
+    /**
+     * El permiso lo exige ahora `PermissionsGuard` (`@RequirePermission(MEMBER, INVITE)`), pero
+     * el caso de uso sigue rechazando una cuenta activa que no sea del llamador: eso no es
+     * autorización, es que `X-Account-Id` apunte de verdad a una membresía suya.
+     */
+    it('lanza ForbiddenException si la cuenta activa no es del llamador', async () => {
+      accountService.resolveOwnActiveAccountOrFail.mockRejectedValue(
+        new ForbiddenException('No tienes acceso a esta cuenta'),
+      );
+
+      await expect(
+        addOrganizationMember.execute('intruder', 'admin-account-1', {
+          email: NEW_USER.email,
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('lanza BadRequestException si falta el header X-Account-Id', async () => {
+      await expect(
+        addOrganizationMember.execute('owner-1', '', {
+          email: NEW_USER.email,
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(
+        accountService.resolveOwnActiveAccountOrFail,
+      ).not.toHaveBeenCalled();
+    });
+
+    /** Una cuenta personal no tiene miembros que administrar; esta pantalla no aplica. */
+    it('lanza BadRequestException si la cuenta activa es PERSONAL', async () => {
+      accountService.resolveOwnActiveAccountOrFail.mockResolvedValue(
+        adminAccount({
+          accountType: ACCOUNT_TYPE_ENUM.PERSONAL,
+          organizationId: null,
+        }),
+      );
+
+      await expect(
+        addOrganizationMember.execute('owner-1', 'personal-account-1', {
+          email: NEW_USER.email,
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('lanza NotFoundException si el rol no existe o es de otra organización', async () => {
+      rolesService.findAssignableRoleOrFail.mockRejectedValue(
+        new NotFoundException('Rol no encontrado para esta organización'),
+      );
+
+      await expect(
+        addOrganizationMember.execute('owner-1', 'admin-account-1', {
+          email: NEW_USER.email,
+          roleId: 'role-de-otra-org',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('lanza NotFoundException si no hay un usuario registrado con ese correo', async () => {
+      userRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        addOrganizationMember.execute('owner-1', 'admin-account-1', {
+          email: 'nadie@empresa.com',
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('lanza ConflictException si esa persona ya es miembro de la organización', async () => {
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne.mockResolvedValueOnce(
+        savedMembershipRow({ id: 'existing-1' }),
+      );
+
+      await expect(
+        addOrganizationMember.execute('owner-1', 'admin-account-1', {
+          email: NEW_USER.email,
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(accountRepository.save).not.toHaveBeenCalled();
+    });
+
+    /**
+     * La membresía dada de baja conserva su fila, así que insertar otra dejaría dos del mismo
+     * usuario en la misma organización. El mensaje lo distingue porque se arregla distinto:
+     * reactivar, no volver a crear.
+     */
+    it('distingue en el mensaje la membresía dada de baja de la que sigue activa', async () => {
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne.mockResolvedValueOnce(
+        savedMembershipRow({
+          id: 'existing-1',
+          isActive: false,
+          status: ACCOUNT_STATUS_ENUM.REMOVED,
+        }),
+      );
+
+      await expect(
+        addOrganizationMember.execute('owner-1', 'admin-account-1', {
+          email: NEW_USER.email,
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(/dada de baja/);
+    });
+
+    /** Sin esto, la organización no le aparece en el selector hasta que vuelva a iniciar sesión. */
+    /**
+     * Lo que va al catálogo es la membresía RECARGADA, con su organización, y no la fila que
+     * devolvió la transacción. La diferencia se ve en Redis: `toCatalogEntry` deriva
+     * `organizationDetail` de la relación, `getAccountsCatalog` lee de Redis SIN caer a Postgres,
+     * y una entrada sin ese detalle deja al nuevo miembro con un selector de cuentas que dice
+     * "Organización" a secas —indistinguible de cualquier otra— hasta que alguien edite el perfil
+     * de la organización.
+     */
+    it('agrega la organización al catálogo cacheado del nuevo miembro, con su nombre', async () => {
+      const reloaded = savedMembershipRow({
+        organization: {
+          id: 'org-1',
+          name: 'Acme S.A. de C.V.',
+          displayName: 'Acme',
+        },
+      });
+
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(savedMembershipRow());
+      accountService.findByIdOrFail.mockResolvedValue(reloaded);
+
+      await addOrganizationMember.execute('owner-1', 'admin-account-1', {
+        email: NEW_USER.email,
+        roleId: MEMBER_ROLE.id,
+      });
+
+      expect(accountService.findByIdOrFail).toHaveBeenCalledWith(
+        'new-member-1',
+      );
+      expect(accountService.appendAccountToCatalog).toHaveBeenCalledWith(
+        NEW_USER.id,
+        expect.objectContaining({
+          id: 'new-member-1',
+          organization: expect.objectContaining({ displayName: 'Acme' }),
+        }),
+      );
+    });
+
+    it('registra el aviso a propietarios y administradores y lo publica tras confirmar', async () => {
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(savedMembershipRow());
+
+      await addOrganizationMember.execute('owner-1', 'admin-account-1', {
+        email: NEW_USER.email,
+        roleId: MEMBER_ROLE.id,
+      });
+
+      expect(memberEventsProducer.enqueueJoined).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          membership: expect.objectContaining({ id: 'new-member-1' }),
+          actorUserId: 'owner-1',
+        },
+      );
+      expect(memberEventsProducer.flushOutbox).toHaveBeenCalled();
+    });
+
+    /**
+     * El alta y el evento comparten transacción, así que un alta que no llega a escribirse no
+     * deja aviso: aquí se comprueba por el camino que la corta antes de abrirla.
+     */
+    it('no anuncia nada si el alta falla porque esa persona ya es miembro', async () => {
+      userRepository.findOne.mockResolvedValue(NEW_USER);
+      accountRepository.findOne.mockResolvedValueOnce({
+        id: 'existing',
+        isActive: true,
+      });
+
+      await expect(
+        addOrganizationMember.execute('owner-1', 'admin-account-1', {
+          email: NEW_USER.email,
+          roleId: MEMBER_ROLE.id,
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(memberEventsProducer.enqueueJoined).not.toHaveBeenCalled();
+      expect(memberEventsProducer.flushOutbox).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('RevokeAccountAccessUseCase', () => {
+    it('marca isActive=false y quita la cuenta del catálogo cacheado del usuario revocado', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'member-1',
+          organizationId: 'org-1',
+          userId: 'user-1',
+          isActive: true,
+        }) // membresía objetivo
+        .mockResolvedValueOnce(adminAccount()); // ownership check del llamador
+
+      const result = await revokeAccountAccess.execute('owner-1', 'member-1');
+
+      expect(accountRepository.update).toHaveBeenCalledWith(
+        'member-1',
+        expect.objectContaining({ isActive: false }),
+      );
+      expect(accountService.removeAccountFromCatalog).toHaveBeenCalledWith(
+        'user-1',
+        'member-1',
+      );
+      expect(result.success).toBe(true);
+    });
+
+    it('lanza NotFoundException si la membresía no existe o ya estaba revocada', async () => {
+      accountRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        revokeAccountAccess.execute('owner-1', 'missing-id'),
+      ).rejects.toThrow(NotFoundException);
+      expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+
+    it('lanza ForbiddenException si el llamador no es ADMIN de la organización de esa membresía', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'member-1',
+          organizationId: 'org-1',
+          userId: 'user-1',
+          isActive: true,
+        })
+        .mockResolvedValueOnce(null);
+
+      await expect(
+        revokeAccountAccess.execute('intruder', 'member-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+      expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+
+    it('lanza ConflictException al eliminar al único ADMIN activo de la organización', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount()) // membresía objetivo: es ADMIN
+        .mockResolvedValueOnce(adminAccount()); // ownership check del llamador
+      accountRepository.count.mockResolvedValue(1); // es el único ADMIN activo
+
+      await expect(
+        revokeAccountAccess.execute('owner-1', 'admin-account-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(accountRepository.update).not.toHaveBeenCalled();
+      expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+
+    /** Historia "Impedir desactivación de cuentas con perfil Owner". */
+    it('rechaza dar de baja al propietario aunque haya otros administradores activos', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'owner-account-1',
+          organizationId: 'org-1',
+          userId: 'user-owner',
+          roleId: OWNER_ROLE.id,
+          isActive: true,
+        })
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.count.mockResolvedValue(3);
+
+      await expect(
+        revokeAccountAccess.execute('admin-1', 'owner-account-1'),
+      ).rejects.toThrow(
+        new ConflictException(
+          'No se puede desactivar una cuenta con perfil de propietario (Owner)',
+        ),
+      );
+      expect(accountRepository.update).not.toHaveBeenCalled();
+      expect(accountService.removeAccountFromCatalog).not.toHaveBeenCalled();
+    });
+
+    it('permite eliminar a un ADMIN si hay otro ADMIN activo en la organización', async () => {
+      accountRepository.findOne
+        .mockResolvedValueOnce(adminAccount())
+        .mockResolvedValueOnce(adminAccount());
+      accountRepository.count.mockResolvedValue(2); // hay otro ADMIN activo además del objetivo
+
+      const result = await revokeAccountAccess.execute(
+        'owner-1',
+        'admin-account-1',
+      );
+
+      expect(result.success).toBe(true);
+      expect(accountRepository.update).toHaveBeenCalled();
+    });
+  });
+});
