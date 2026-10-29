@@ -18,6 +18,14 @@ import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
 import { GetPublicDocumentAuditXmlUseCase } from './get-public-document-audit-xml.use-case';
 
 const DOCUMENT_ID = 'doc-1';
+const FRONT_IMAGE_KEY = 'pi-1/verif-1/front.jpg';
+const BACK_IMAGE_KEY = 'pi-1/verif-1/back.png';
+
+/** Cabeceras reales de cada formato: el `mimeType` del XML se detecta por los bytes. */
+const JPEG_BYTES = [0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02];
+const PNG_BYTES = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x03];
+const FRONT_BASE64 = Buffer.from(JPEG_BYTES).toString('base64');
+const BACK_BASE64 = Buffer.from(PNG_BYTES).toString('base64');
 
 function signedDocument(overrides: Record<string, unknown> = {}) {
   return {
@@ -51,7 +59,11 @@ function simpleSigner(overrides: Partial<CollaboratorEntity> = {}) {
       user: {
         email: 'firmante@example.com',
         nationalId: 'CURPDELREGISTRO001',
-        personalInformation: { curp: 'CURPCANONICA000001' },
+        personalInformation: {
+          curp: 'CURPCANONICA000001',
+          frontImageKey: FRONT_IMAGE_KEY,
+          backImageKey: BACK_IMAGE_KEY,
+        },
         signature: { signatureObjectKey: 'rubrica-perfil.png' },
       },
     },
@@ -61,10 +73,14 @@ function simpleSigner(overrides: Partial<CollaboratorEntity> = {}) {
 
 describe('GetPublicDocumentAuditXmlUseCase', () => {
   let useCase: GetPublicDocumentAuditXmlUseCase;
-  let collaboratorRepository: { find: jest.Mock };
+  /** Lo que devuelve la consulta de firmantes en cada prueba. */
+  let signers: CollaboratorEntity[];
+  let signersQuery: Record<string, jest.Mock>;
+  let collaboratorRepository: { createQueryBuilder: jest.Mock };
   let documentService: { findOne: jest.Mock };
   let minioService: {
     getFileInBytesFormat: jest.Mock;
+    getSensitiveObject: jest.Mock;
     uploadPdfAObject: jest.Mock;
     uploadObject: jest.Mock;
   };
@@ -79,7 +95,22 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
   };
 
   beforeEach(async () => {
-    collaboratorRepository = { find: jest.fn().mockResolvedValue([]) };
+    signers = [];
+    signersQuery = {};
+    for (const method of [
+      'leftJoinAndSelect',
+      'addSelect',
+      'where',
+      'andWhere',
+      'orderBy',
+      'addOrderBy',
+    ]) {
+      signersQuery[method] = jest.fn().mockReturnValue(signersQuery);
+    }
+    signersQuery.getMany = jest.fn(() => Promise.resolve(signers));
+    collaboratorRepository = {
+      createQueryBuilder: jest.fn().mockReturnValue(signersQuery),
+    };
     documentService = {
       findOne: jest.fn().mockResolvedValue(signedDocument()),
     };
@@ -88,6 +119,14 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
         .fn()
         .mockImplementation((_key: string, bucket: BUCKET_TYPES_ENUM) =>
           Promise.resolve(Buffer.from(storedFiles[bucket])),
+        ),
+      // Un Buffer nuevo por llamada: el caso de uso pone en cero los bytes de la INE al terminar.
+      getSensitiveObject: jest
+        .fn()
+        .mockImplementation((_bucket: BUCKET_TYPES_ENUM, key: string) =>
+          Promise.resolve(
+            Buffer.from(key === FRONT_IMAGE_KEY ? JPEG_BYTES : PNG_BYTES),
+          ),
         ),
       uploadPdfAObject: jest.fn(),
       uploadObject: jest.fn(),
@@ -210,7 +249,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
   });
 
   it('descarga la rúbrica del snapshot del firmante de firma simple', async () => {
-    collaboratorRepository.find.mockResolvedValue([simpleSigner()]);
+    signers = [simpleSigner()];
 
     const xml = (await useCase.execute(DOCUMENT_ID)).content.toString('utf-8');
 
@@ -226,7 +265,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
   });
 
   it('cae a la CURP del registro cuando no hay información personal', async () => {
-    collaboratorRepository.find.mockResolvedValue([
+    signers = [
       simpleSigner({
         account: {
           user: {
@@ -237,7 +276,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
           },
         },
       } as unknown as Partial<CollaboratorEntity>),
-    ]);
+    ];
 
     const xml = (await useCase.execute(DOCUMENT_ID)).content.toString('utf-8');
 
@@ -249,7 +288,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
    * expediente no puede salir omitiendo la rúbrica en silencio.
    */
   it('responde un error controlado si la rúbrica registrada no se puede leer', async () => {
-    collaboratorRepository.find.mockResolvedValue([simpleSigner()]);
+    signers = [simpleSigner()];
     minioService.getFileInBytesFormat.mockImplementation(
       (_key: string, bucket: BUCKET_TYPES_ENUM) =>
         bucket === BUCKET_TYPES_ENUM.SIGNATURE_IMAGES
@@ -263,7 +302,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
   });
 
   it('anota al firmante que nunca registró una rúbrica, sin fallar', async () => {
-    collaboratorRepository.find.mockResolvedValue([
+    signers = [
       simpleSigner({
         signatureSnapshotObjectKey: null,
         account: {
@@ -275,7 +314,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
           },
         },
       } as unknown as Partial<CollaboratorEntity>),
-    ]);
+    ];
 
     const xml = (await useCase.execute(DOCUMENT_ID)).content.toString('utf-8');
 
@@ -283,7 +322,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
   });
 
   it('incluye advanced_signature completo y ninguna rúbrica para e.firma', async () => {
-    collaboratorRepository.find.mockResolvedValue([
+    signers = [
       simpleSigner({
         signatureType: SIGNATURE_TYPE_ENUM.FIEL,
         advancedSignature: {
@@ -294,7 +333,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
           ocspEvidence: { status: 'good' },
         },
       } as unknown as Partial<CollaboratorEntity>),
-    ]);
+    ];
 
     const xml = (await useCase.execute(DOCUMENT_ID)).content.toString('utf-8');
 
@@ -303,23 +342,111 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
     expect(xml).toContain('>AAA010101AAA</rfc>');
     expect(xml).toContain('>good</status>');
     expect(xml).not.toContain('<simpleSignature>');
+    expect(xml).not.toContain('identityDocument');
     expect(minioService.getFileInBytesFormat).not.toHaveBeenCalledWith(
       expect.anything(),
       BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
     );
+    expect(minioService.getSensitiveObject).not.toHaveBeenCalled();
   });
 
-  it('pide sólo a los colaboradores firmantes, en el orden de firma', async () => {
+  it('incluye la INE de Didit en signatureMedia con el mimeType real de cada cara', async () => {
+    signers = [simpleSigner()];
+
+    const xml = (await useCase.execute(DOCUMENT_ID)).content.toString('utf-8');
+
+    expect(minioService.getSensitiveObject).toHaveBeenCalledWith(
+      BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS,
+      FRONT_IMAGE_KEY,
+    );
+    expect(minioService.getSensitiveObject).toHaveBeenCalledWith(
+      BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS,
+      BACK_IMAGE_KEY,
+    );
+    expect(xml).toMatch(
+      /<signatureMedia>\s*<signatureImage [^>]*>[^<]*<\/signatureImage>\s*<identityDocumentFrontImage /,
+    );
+    expect(xml).toContain(
+      `<identityDocumentFrontImage encoding="base64" mimeType="image/jpeg" available="true">${FRONT_BASE64}</identityDocumentFrontImage>`,
+    );
+    expect(xml).toContain(
+      `<identityDocumentBackImage encoding="base64" mimeType="image/png" available="true">${BACK_BASE64}</identityDocumentBackImage>`,
+    );
+    // La llave de MinIO de un documento de identidad no se publica.
+    expect(xml).not.toContain(FRONT_IMAGE_KEY);
+    expect(xml).not.toContain(BACK_IMAGE_KEY);
+  });
+
+  it('declara la cara de la INE que Didit no entregó y genera el XML igual', async () => {
+    signers = [
+      simpleSigner({
+        account: {
+          user: {
+            email: 'firmante@example.com',
+            nationalId: 'CURPDELREGISTRO001',
+            personalInformation: {
+              curp: 'CURPCANONICA000001',
+              frontImageKey: FRONT_IMAGE_KEY,
+              backImageKey: null,
+            },
+            signature: null,
+          },
+        },
+      } as unknown as Partial<CollaboratorEntity>),
+    ];
+
+    const xml = (await useCase.execute(DOCUMENT_ID)).content.toString('utf-8');
+
+    expect(xml).toContain(
+      '<identityDocumentBackImage encoding="base64" available="false" unavailableReason="El firmante no tiene la imagen trasera de la INE verificada por Didit." />',
+    );
+    expect(xml).toContain(`>${FRONT_BASE64}</identityDocumentFrontImage>`);
+    expect(minioService.getSensitiveObject).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['no se puede leer', () => Promise.reject(new Error('NoSuchKey'))],
+    [
+      'no es una imagen',
+      () => Promise.resolve(Buffer.from('no-soy-una-imagen')),
+    ],
+  ])(
+    'responde un error controlado si la INE registrada %s',
+    async (_label, read) => {
+      signers = [simpleSigner()];
+      minioService.getSensitiveObject.mockImplementation(read);
+
+      await expect(useCase.execute(DOCUMENT_ID)).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+    },
+  );
+
+  it('pide sólo a los colaboradores firmantes, con las llaves de la INE, en el orden de firma', async () => {
     await useCase.execute(DOCUMENT_ID);
 
-    expect(collaboratorRepository.find).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          documentId: DOCUMENT_ID,
-          colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
-        },
-        order: { signingOrder: 'ASC', createdAt: 'ASC' },
-      }),
+    expect(collaboratorRepository.createQueryBuilder).toHaveBeenCalledWith(
+      'collaborator',
+    );
+    expect(signersQuery.addSelect).toHaveBeenCalledWith([
+      'personalInformation.frontImageKey',
+      'personalInformation.backImageKey',
+    ]);
+    expect(signersQuery.where).toHaveBeenCalledWith(
+      'collaborator.documentId = :documentId',
+      { documentId: DOCUMENT_ID },
+    );
+    expect(signersQuery.andWhere).toHaveBeenCalledWith(
+      'collaborator.colaboratorType = :signerType',
+      { signerType: COLABORATOR_TYPE_ENUM.SIGNER },
+    );
+    expect(signersQuery.orderBy).toHaveBeenCalledWith(
+      'collaborator.signingOrder',
+      'ASC',
+    );
+    expect(signersQuery.addOrderBy).toHaveBeenCalledWith(
+      'collaborator.createdAt',
+      'ASC',
     );
   });
 });

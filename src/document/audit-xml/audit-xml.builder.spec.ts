@@ -227,6 +227,8 @@ describe('buildDocumentAuditXml', () => {
     expect(nodeText(xml, 'certificatePem')).toBe('-----BEGIN CERTIFICATE-----');
     expect(nodeText(xml, 'ocspUrl')).toBe('http://ocsp');
     expect(xml).not.toContain('<simpleSignature>');
+    expect(xml).not.toContain('signatureMedia');
+    expect(xml).not.toContain('identityDocument');
   });
 
   it('incluye la rúbrica PNG en Base64 del firmante de firma simple', () => {
@@ -246,6 +248,14 @@ describe('buildDocumentAuditXml', () => {
             simpleSignature: {
               objectKey: 'rubrica.png',
               imageBase64: 'UE5H',
+              identityDocumentFrontImage: {
+                mimeType: 'image/jpeg',
+                contentBase64: 'SU5FLUZSRU5URQ==',
+              },
+              identityDocumentBackImage: {
+                mimeType: 'image/png',
+                contentBase64: 'SU5FLVJFVkVSU08=',
+              },
             },
           },
         ],
@@ -256,6 +266,98 @@ describe('buildDocumentAuditXml', () => {
     expect(xml).toContain('>UE5H</signatureImage>');
     expect(xml).toContain(
       '<geoLocation available="true" latitude="19.43" longitude="-99.13" accuracy="12" />',
+    );
+  });
+
+  /**
+   * La rúbrica y las dos caras de la INE viajan juntas dentro de `signatureMedia`, cada una con su
+   * `encoding` y el `mimeType` real del archivo — no uno fijo: el reverso de este caso es PNG.
+   */
+  it('agrupa la rúbrica y la INE de Didit en signatureMedia con encoding y mimeType', () => {
+    const xml = buildDocumentAuditXml(
+      buildData({
+        signers: [
+          {
+            id: 'col-2',
+            email: 'simple@example.com',
+            curp: 'CURP000000HDFABC02',
+            signedAt: '2026-01-14T08:30:00.000Z',
+            signatureType: 'SIMPLE',
+            status: 'SIGNED',
+            ipAddress: '10.0.0.2',
+            geoLocation: null,
+            advancedSignature: null,
+            simpleSignature: {
+              objectKey: 'rubrica.png',
+              imageBase64: 'UE5H',
+              identityDocumentFrontImage: {
+                mimeType: 'image/jpeg',
+                contentBase64: 'SU5FLUZSRU5URQ==',
+              },
+              identityDocumentBackImage: {
+                mimeType: 'image/png',
+                contentBase64: 'SU5FLVJFVkVSU08=',
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(xml).toContain(
+      [
+        '      <simpleSignature>',
+        '        <signatureMedia>',
+        '          <signatureImage encoding="base64" mimeType="image/png" objectKey="rubrica.png" available="true">UE5H</signatureImage>',
+        '          <identityDocumentFrontImage encoding="base64" mimeType="image/jpeg" available="true">SU5FLUZSRU5URQ==</identityDocumentFrontImage>',
+        '          <identityDocumentBackImage encoding="base64" mimeType="image/png" available="true">SU5FLVJFVkVSU08=</identityDocumentBackImage>',
+        '        </signatureMedia>',
+        '      </simpleSignature>',
+      ].join('\n'),
+    );
+  });
+
+  /**
+   * Si Didit no entregó una cara, el nodo se declara no disponible y sin `mimeType`: un tipo MIME
+   * para un contenido que no existe sería un atributo falso.
+   */
+  it('declara la cara de la INE que Didit no entregó, sin contenido ni mimeType', () => {
+    const xml = buildDocumentAuditXml(
+      buildData({
+        signers: [
+          {
+            id: 'col-2',
+            email: 'simple@example.com',
+            curp: 'CURP000000HDFABC02',
+            signedAt: '2026-01-14T08:30:00.000Z',
+            signatureType: 'SIMPLE',
+            status: 'SIGNED',
+            ipAddress: '10.0.0.2',
+            geoLocation: null,
+            advancedSignature: null,
+            simpleSignature: {
+              objectKey: 'rubrica.png',
+              imageBase64: 'UE5H',
+              identityDocumentFrontImage: {
+                mimeType: 'image/jpeg',
+                contentBase64: 'SU5FLUZSRU5URQ==',
+              },
+              identityDocumentBackImage: {
+                mimeType: null,
+                contentBase64: null,
+                unavailableReason: 'Sin reverso.',
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(xml).toContain(
+      '<identityDocumentBackImage encoding="base64" available="false" unavailableReason="Sin reverso." />',
+    );
+    expect(nodeText(xml, 'identityDocumentFrontImage')).toBe(
+      'SU5FLUZSRU5URQ==',
     );
   });
 
@@ -277,6 +379,16 @@ describe('buildDocumentAuditXml', () => {
               objectKey: null,
               imageBase64: null,
               unavailableReason: 'El firmante no tiene una rúbrica registrada.',
+              identityDocumentFrontImage: {
+                mimeType: null,
+                contentBase64: null,
+                unavailableReason: 'Sin anverso.',
+              },
+              identityDocumentBackImage: {
+                mimeType: null,
+                contentBase64: null,
+                unavailableReason: 'Sin reverso.',
+              },
             },
           },
         ],

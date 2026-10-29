@@ -30,7 +30,8 @@ export class PersonalInformationEntity {
    * **`select: false`**: es un dato personal sensible y no debe salir por accidente en ninguna
    * respuesta, relación ni caché que cargue esta entidad (p. ej. `PUT /users/me/personal-information`
    * devuelve la fila completa). Sólo lo leen quienes lo piden explícitamente: el guardado de las
-   * imágenes tras el webhook de Didit y el envío de la firma simple a Seal Service.
+   * imágenes tras el webhook de Didit, el envío de la firma simple a Seal Service y el XML de
+   * auditoría de firma simple.
    *
    * `null` en la información personal anterior a esta historia o si la verificación no se completó.
    */

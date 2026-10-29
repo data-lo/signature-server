@@ -1,6 +1,7 @@
 import { escapeXml } from '../utils/xml.util';
 import type {
   AuditXmlDocumentFile,
+  AuditXmlIdentityDocumentImage,
   AuditXmlSeal,
   AuditXmlSigner,
   DocumentAuditXmlData,
@@ -180,26 +181,85 @@ function signerNode(signer: AuditXmlSigner): XmlNode {
   return { name: 'signer', attributes: { id: signer.id }, children };
 }
 
+/**
+ * La evidencia de firma simple agrupada en `signatureMedia`: la rúbrica estampada y las dos caras
+ * de la INE que verificó Didit.
+ */
 function simpleSignatureNode(signer: AuditXmlSigner): XmlNode {
-  const { imageBase64, objectKey, unavailableReason } =
-    signer.simpleSignature as NonNullable<AuditXmlSigner['simpleSignature']>;
+  const {
+    imageBase64,
+    objectKey,
+    unavailableReason,
+    identityDocumentFrontImage,
+    identityDocumentBackImage,
+  } = signer.simpleSignature as NonNullable<AuditXmlSigner['simpleSignature']>;
   const available = imageBase64 !== null;
 
   return {
     name: 'simpleSignature',
     children: [
       {
-        name: 'signatureImage',
-        attributes: {
-          encoding: 'base64',
-          mimeType: 'image/png',
-          objectKey,
-          available,
-          unavailableReason: available ? undefined : unavailableReason,
-        },
-        text: imageBase64,
+        name: 'signatureMedia',
+        children: [
+          {
+            name: 'signatureImage',
+            attributes: {
+              encoding: 'base64',
+              mimeType: 'image/png',
+              objectKey,
+              available,
+              unavailableReason: available ? undefined : unavailableReason,
+            },
+            text: imageBase64,
+          },
+          identityDocumentImageNode(
+            'identityDocumentFrontImage',
+            identityDocumentFrontImage,
+          ),
+          identityDocumentImageNode(
+            'identityDocumentBackImage',
+            identityDocumentBackImage,
+          ),
+        ],
       },
     ],
+  };
+}
+
+/**
+ * Una cara de la INE en Base64 con el tipo MIME real del archivo.
+ *
+ * Cuando la imagen no está disponible el nodo se emite igual, con `available="false"` y su motivo,
+ * y sin `mimeType`: declarar un tipo para un contenido inexistente sería un atributo falso.
+ *
+ * @param name - Nombre del nodo: `identityDocumentFrontImage` o `identityDocumentBackImage`.
+ * @param image - La cara de la INE ya resuelta.
+ * @returns El nodo listo para `signatureMedia`.
+ *
+ * @example
+ * ```ts
+ * identityDocumentImageNode('identityDocumentFrontImage', {
+ *   mimeType: 'image/jpeg',
+ *   contentBase64: '/9j/4AAQ',
+ * });
+ * // <identityDocumentFrontImage encoding="base64" mimeType="image/jpeg" available="true">/9j/4AAQ</...>
+ * ```
+ */
+function identityDocumentImageNode(
+  name: 'identityDocumentFrontImage' | 'identityDocumentBackImage',
+  image: AuditXmlIdentityDocumentImage,
+): XmlNode {
+  const available = image.contentBase64 !== null;
+
+  return {
+    name,
+    attributes: {
+      encoding: 'base64',
+      mimeType: available ? image.mimeType : undefined,
+      available,
+      unavailableReason: available ? undefined : image.unavailableReason,
+    },
+    text: image.contentBase64,
   };
 }
 
