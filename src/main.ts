@@ -11,7 +11,14 @@ import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
-import { INTEGRATION_API_KEY_SECURITY } from './document/integration/docs/api-integration-documents-common.docs';
+import {
+  INTEGRATION_API_KEY_SECURITY,
+  INTEGRATION_API_KEY_SECURITY_SCHEME,
+} from './document/integration/docs/api-integration-documents-common.docs';
+import {
+  createIntegrationOpenApiDocument,
+  INTEGRATION_OPENAPI_TITLE,
+} from './document/integration/openapi/create-integration-openapi-document';
 import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
 import { frontendBaseUrl } from './common/utils/frontend-url.util';
 import {
@@ -79,7 +86,7 @@ async function bootstrap() {
     // API key de organización de la API de integración (`/integration/...`). Mismo header que la
     // llave interna `x-api-key` de arriba, pero es otra cosa: la emite cada organización.
     .addApiKey(
-      { type: 'apiKey', name: 'X-API-Key', in: 'header' },
+      INTEGRATION_API_KEY_SECURITY_SCHEME,
       INTEGRATION_API_KEY_SECURITY,
     )
     .build();
@@ -103,6 +110,17 @@ async function bootstrap() {
   // que el `api/v1` va escrito aquí para que la documentación cuelgue del mismo prefijo que
   // documenta y no quede un `/api/docs` suelto al lado de `/api/v1/...`.
   SwaggerModule.setup(`${GLOBAL_API_PREFIX}/docs`, app, publicDocument);
+
+  // Contrato de los clientes de la API de integración: sólo `/api/v1/integration/...` y sólo
+  // `X-API-Key` (ver `createIntegrationOpenApiDocument`). Sale del documento general para que los
+  // DTOs y respuestas sean los mismos; Swagger publica además el JSON en `.../integration/docs-json`.
+  // Como `/api/v1/docs`, lo sirve el adaptador HTTP y no pasa por los guards: no pide sesión.
+  SwaggerModule.setup(
+    `${GLOBAL_API_PREFIX}/integration/docs`,
+    app,
+    createIntegrationOpenApiDocument(publicDocument),
+    { customSiteTitle: INTEGRATION_OPENAPI_TITLE },
+  );
 
   await app.listen(process.env.BACKEND_PORT ?? 3000);
   await app.startAllMicroservices();

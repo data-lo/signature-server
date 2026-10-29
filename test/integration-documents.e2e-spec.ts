@@ -36,7 +36,11 @@ import { ListUserIntegrationDocumentsUseCase } from './../src/document/integrati
 import { IssueIntegrationSigningAccessUseCase } from './../src/document/integration/applications/issue-integration-signing-access.use-case';
 import { ResendIntegrationSigningInvitationUseCase } from './../src/document/integration/applications/resend-integration-signing-invitation.use-case';
 import { SigningInvitationDeliveryService } from './../src/signing-invitation/signing-invitation-delivery.service';
-import { INTEGRATION_API_KEY_SECURITY } from './../src/document/integration/docs/api-integration-documents-common.docs';
+import {
+  INTEGRATION_API_KEY_SECURITY,
+  INTEGRATION_API_KEY_SECURITY_SCHEME,
+} from './../src/document/integration/docs/api-integration-documents-common.docs';
+import { createIntegrationOpenApiDocument } from './../src/document/integration/openapi/create-integration-openapi-document';
 import { IntegrationIdempotencyKeyEntity } from './../src/document/integration/entities/integration-idempotency-key.entity';
 import { IntegrationDocumentsController } from './../src/document/integration/integration-documents.controller';
 import { IntegrationIdempotencyService } from './../src/document/integration/services/integration-idempotency.service';
@@ -564,14 +568,17 @@ describe('API de integración de documentos (e2e)', () => {
     dataSource = app.get(getDataSourceToken());
     secrets = app.get(ApiKeySecretService);
 
-    swagger = SwaggerModule.createDocument(
-      app,
-      new DocumentBuilder()
-        .addApiKey(
-          { type: 'apiKey', name: 'X-API-Key', in: 'header' },
-          INTEGRATION_API_KEY_SECURITY,
-        )
-        .build(),
+    // El contrato que se publica a los clientes (`/api/v1/integration/docs`), no el general.
+    swagger = createIntegrationOpenApiDocument(
+      SwaggerModule.createDocument(
+        app,
+        new DocumentBuilder()
+          .addApiKey(
+            INTEGRATION_API_KEY_SECURITY_SCHEME,
+            INTEGRATION_API_KEY_SECURITY,
+          )
+          .build(),
+      ),
     );
 
     await seedOrganization('org1');
@@ -1770,7 +1777,7 @@ describe('API de integración de documentos (e2e)', () => {
       [
         '/api/v1/integration/documents',
         'get',
-        ['200', '400', '401', '403', '404'],
+        ['200', '400', '401', '403', '404', '422'],
       ],
       [
         '/api/v1/integration/documents/{documentId}/collaborators/{collaboratorId}/resend-invitation',
@@ -1780,7 +1787,7 @@ describe('API de integración de documentos (e2e)', () => {
       [
         '/api/v1/integration/users/{userId}/documents',
         'get',
-        ['200', '400', '401', '403', '404'],
+        ['200', '400', '401', '403', '404', '422'],
       ],
       [
         '/api/v1/integration/documents',
@@ -1808,9 +1815,13 @@ describe('API de integración de documentos (e2e)', () => {
         expect(operation.security).toEqual([
           { [INTEGRATION_API_KEY_SECURITY]: [] },
         ]);
+        // La llave se documenta una vez, en el esquema de seguridad; no como parámetro.
         expect(
-          operation.parameters?.map((parameter) => parameter.name),
-        ).toContain('X-API-Key');
+          operation.parameters?.map((parameter) => parameter.name) ?? [],
+        ).not.toContain('X-API-Key');
+        expect(
+          swagger.components?.securitySchemes?.[INTEGRATION_API_KEY_SECURITY],
+        ).toEqual(expect.objectContaining({ in: 'header', name: 'X-API-Key' }));
       },
     );
 

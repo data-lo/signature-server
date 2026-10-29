@@ -89,6 +89,15 @@ curl http://localhost:3000/health
 
 Y la documentación interactiva de la API en <http://localhost:3000/api/v1/docs>.
 
+La API de integración tiene además **su propia documentación para clientes**, sin el resto de los endpoints:
+
+| URL | Qué es |
+| --- | --- |
+| <http://localhost:3000/api/v1/integration/docs> | Swagger UI de **Firmalo Integration API**. Pública (no pide sesión). El cliente pega su `fma_live_*` en «Authorize» y sólo puede probar las rutas de integración. |
+| <http://localhost:3000/api/v1/integration/docs-json> | El contrato OpenAPI en JSON, para importarlo en Postman o Insomnia o generar un SDK. |
+
+Sólo contiene las rutas que empiezan con `/api/v1/integration/` y el esquema de seguridad `X-API-Key`: ni JWT, ni la `API_KEY` de servicios, ni `INTERNAL_PLATFORM_API_KEY`, ni rutas administrativas o internas. Sale del documento general con `createIntegrationOpenApiDocument` (`src/document/integration/openapi/`), que filtra rutas, tags, seguridad y esquemas no referenciados; los ejemplos (llave, `Idempotency-Key`, payload) son ficticios y viven en `docs/api-integration-examples.docs.ts`.
+
 ### Detalles que sorprenden la primera vez
 
 - **El puerto sale de `BACKEND_PORT` y su valor por defecto es `3000`.** El `Dockerfile` expone el `4000` y su healthcheck apunta ahí, así que un despliegue en contenedor **tiene que** fijar `BACKEND_PORT=4000` o el healthcheck lo marcará caído aunque la API responda.

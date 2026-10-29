@@ -196,3 +196,57 @@ export class IntegrationErrorResponseDto {
   @ApiProperty({ type: IntegrationErrorData })
   error: IntegrationErrorData;
 }
+
+/** Acceso temporal de firma emitido por `POST /integration/documents/:documentId/signing-access`. */
+export class IntegrationSigningAccessData {
+  @ApiProperty({
+    example: 'https://app.firmalo.com/sign/launch/EjemploDeTokenNoReal',
+    description:
+      'URL `/sign/launch/:token` de un solo uso para abrir desde tu portal. Al abrirla, la plataforma envía un código al correo del firmante.',
+  })
+  url: string;
+
+  @ApiProperty({
+    example: '2026-10-26T12:05:00.000Z',
+    description: 'Vencimiento de la URL: cinco minutos después de emitirla',
+  })
+  expiresAt: Date;
+}
+
+export class IntegrationSigningAccessResponse extends BaseResponse<IntegrationSigningAccessData> {
+  @ApiProperty({ example: 'Acceso temporal de firma generado' })
+  message: string;
+
+  @ApiProperty({ type: IntegrationSigningAccessData })
+  data: IntegrationSigningAccessData;
+}
+
+/** Resultado de `POST …/collaborators/:collaboratorId/resend-invitation`. Nunca trae el enlace. */
+export class IntegrationResentInvitationData {
+  @ApiProperty({
+    format: 'uuid',
+    example: '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f',
+  })
+  collaboratorId: string;
+
+  @ApiProperty({
+    example: '2026-11-02T12:00:00.000Z',
+    description: 'Vencimiento de la invitación nueva',
+  })
+  invitationExpiresAt: Date;
+
+  @ApiProperty({
+    example: true,
+    description:
+      '`false` si la invitación se emitió pero el correo no se pudo entregar; se puede reintentar más tarde',
+  })
+  emailDelivered: boolean;
+}
+
+export class IntegrationResentInvitationResponse extends BaseResponse<IntegrationResentInvitationData> {
+  @ApiProperty({ example: 'Invitación reenviada al correo del firmante' })
+  message: string;
+
+  @ApiProperty({ type: IntegrationResentInvitationData })
+  data: IntegrationResentInvitationData;
+}
