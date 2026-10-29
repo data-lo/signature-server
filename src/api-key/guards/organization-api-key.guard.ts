@@ -43,7 +43,8 @@ export const API_KEY_HEADER = 'x-api-key';
  * 2. que exista la llave de ese `publicId` y que el HMAC del secreto coincida (tiempo constante);
  * 3. estado `ACTIVE` y `expiresAt` futura;
  * 4. organización activa;
- * 5. que el actor —la membresía que emitió la llave— siga activo en ESA organización.
+ * 5. que el actor —la membresía que emitió la llave— siga activo en ESA organización. Una llave
+ *    emitida por la plataforma (sin `createdByAccountId`) no tiene actor y se salta este paso.
  *
  * Deja el `IntegrationApiClient` (llave, organización, actor y permisos, resueltos de la base y
  * nunca del request) en `request.apiClient` y marca `lastUsedAt`. **El valor de la llave no se
@@ -89,17 +90,7 @@ export class OrganizationApiKeyGuard implements CanActivate {
       throw new ApiKeyOrganizationInactiveException();
     }
 
-    const actor = await this.accountRepository.findOne({
-      where: {
-        id: apiKey.createdByAccountId,
-        organizationId: apiKey.organizationId,
-        isActive: true,
-      },
-      select: { id: true, userId: true },
-    });
-    if (!actor) {
-      throw new ApiKeyActorInactiveException();
-    }
+    const actor = await this.resolveActor(apiKey);
 
     const permissions: IntegrationApiClientPermission[] =
       apiKey.permissions.map((permission) => ({
@@ -112,8 +103,8 @@ export class OrganizationApiKeyGuard implements CanActivate {
       apiKeyId: apiKey.id,
       apiKeyName: apiKey.name,
       organizationId: apiKey.organizationId,
-      actorAccountId: actor.id,
-      actorUserId: actor.userId,
+      actorAccountId: actor?.id ?? null,
+      actorUserId: actor?.userId ?? null,
       permissions,
     };
     request.apiClient = apiClient;
@@ -121,6 +112,46 @@ export class OrganizationApiKeyGuard implements CanActivate {
     await this.touchLastUsedAt(apiKey.id);
 
     return true;
+  }
+
+  /**
+   * Resuelve la membresía en cuyo nombre actúa la llave.
+   *
+   * Una llave emitida por la plataforma (`createdByAccountId = null`, aprovisionamiento interno) no
+   * tiene actor: opera sólo con sus permisos sobre su organización, y se corta revocándola. Una
+   * llave emitida por un administrador deja de servir en cuanto esa membresía se da de baja.
+   *
+   * @param apiKey - Llave ya autenticada.
+   * @returns La membresía activa del emisor, o `null` si la llave es de plataforma.
+   *
+   * @throws {ApiKeyActorInactiveException} (403) Si la llave tiene emisor y ya no es miembro
+   *   activo de la organización.
+   *
+   * @example
+   * ```ts
+   * const actor = await this.resolveActor(apiKey); // null para una llave de plataforma
+   * ```
+   */
+  private async resolveActor(
+    apiKey: ApiKeyEntity,
+  ): Promise<Pick<AccountEntity, 'id' | 'userId'> | null> {
+    if (apiKey.createdByAccountId === null) {
+      return null;
+    }
+
+    const actor = await this.accountRepository.findOne({
+      where: {
+        id: apiKey.createdByAccountId,
+        organizationId: apiKey.organizationId,
+        isActive: true,
+      },
+      select: { id: true, userId: true },
+    });
+    if (!actor) {
+      throw new ApiKeyActorInactiveException();
+    }
+
+    return actor;
   }
 
   /**

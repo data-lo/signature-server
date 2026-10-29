@@ -78,10 +78,13 @@ export class OrganizationApiKeyData {
 
   @ApiProperty({
     example: 'a1b2…',
+    nullable: true,
+    type: String,
     format: 'uuid',
-    description: 'Membresía (`accounts.id`) que emitió la llave',
+    description:
+      'Membresía (`accounts.id`) que emitió la llave; `null` si la emitió la plataforma',
   })
-  createdByAccountId: string;
+  createdByAccountId: string | null;
 
   @ApiProperty({
     example: null,

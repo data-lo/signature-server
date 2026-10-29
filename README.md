@@ -605,6 +605,41 @@ Punto de entrada único de los proveedores externos. Recibe el cuerpo crudo, ver
 - `DiditWebhookController`: `POST /api/v1/webhooks/didit` → `ReceiveDiditWebhookUseCase`.
 - Una entrega con firma ausente o inválida responde 401 y **también** deja fila de auditoría, con `signature_valid = false` y sin `payload`: nunca ejecuta dominio.
 
+### `platform-provisioning` (`POST /api/v1/internal/organizations/provision`) — cuenta provisional Enterprise para pruebas de integración
+
+Crea en **una sola transacción** todo lo necesario para probar la firma documental por API, sin `signature-app`, Stripe, CAPTCHA, OTP ni contraseña:
+
+```
+Usuario PROVISIONED → cuenta personal → organización (activa) → membresía OWNER
+  → perfil de facturación MANUAL → periodo enterprise ($0 mxn) con N créditos → API key fma_live_*
+```
+
+- **Autenticación:** `@InternalPlatformAuth()` — sólo `INTERNAL_PLATFORM_API_KEY` en `x-api-key` (comparada en tiempo constante). No es `@Public()`: la `API_KEY` compartida de servicios **no** sirve aquí. Sin la variable (o con menos de 32 caracteres) responde 503. No aparece en Swagger (`@ApiExcludeController()`).
+- **Lo decide el backend, no el request:** plan `enterprise` (habilita `API_INTEGRATION`), importe 0, moneda `mxn`, origen `MANUAL` y el perfil de permisos de la llave (`DEFAULT_INTEGRATION_PERMISSION_KEYS`: `DOCUMENT.CREATE`, `DOCUMENT.READ_ORGANIZATION`, `DOCUMENT.SEND_SIGNATURE_REQUEST`, `DOCUMENT.CANCEL`, `DIRECTORY.READ/CREATE/UPDATE/DELETE`). Mandar `planType`, `permissionIds`, `billing.amount`, `owner.password`… responde 400 `RESERVED_FIELDS_NOT_ALLOWED`.
+- **La llave** nace sin emisor (`created_by_account_id = null`, migración `086`): `OrganizationApiKeyGuard` la deja sin actor y opera sólo con sus permisos. El secreto sólo viaja en la respuesta 201; en la base queda su HMAC y no se escribe en logs ni en la tabla de idempotencia.
+- **Propietario:** si el correo no existe se crea `PROVISIONED`; si ya es un `PROVISIONED` activo se reutiliza (puede ser dueño de varias organizaciones de prueba). El correo de un usuario `ACTIVE` (registrado de verdad) o desactivado responde 409. Ojo: un usuario nuevo nace como en el registro, con su cuenta personal y los 3 créditos Free de bienvenida; la organización recibe exactamente `documentsGranted`.
+- **Idempotencia:** `Idempotency-Key` obligatorio. Las peticiones con la misma clave se serializan con `pg_advisory_xact_lock`; la que llega después encuentra su fila en `platform_provisioning_requests` y responde **200** con lo ya creado, `apiKey: null`, `replayed: true` y el header `Idempotent-Replayed: true`, sin duplicar organización, créditos ni llaves. La misma clave con otros datos es 409 `IDEMPOTENCY_KEY_MISMATCH`. `billing.externalReference` debe ser único entre todos los periodos manuales (409 `EXTERNAL_REFERENCE_ALREADY_USED`).
+- **Rollback total:** cualquier fallo (folio repetido, correo de un usuario registrado, `API_KEY_PEPPER` ausente) revierte todo; la clave queda libre para reintentar.
+- **Requisitos del entorno:** `INTERNAL_PLATFORM_API_KEY`, `API_KEY_PEPPER` y el catálogo de permisos sembrado (`npm run seed:roles`). Si el entorno no tiene la fila `plans.enterprise` sincronizada desde Stripe, se crea `MANUAL` (sin producto de Stripe).
+
+**Flujo de prueba:**
+
+```bash
+# 1. Aprovisionar (guardar data.apiKey: no se vuelve a mostrar)
+curl -X POST http://localhost:3000/api/v1/internal/organizations/provision   -H "x-api-key: $INTERNAL_PLATFORM_API_KEY" -H "Idempotency-Key: prov-acme-001"   -H "Content-Type: application/json" -d '{
+    "organization": { "name": "Acme Pruebas", "organizationName": "Acme Pruebas S.A. de C.V.", "taxId": "ACM010101AAA", "domainAllowed": "acme.test" },
+    "owner": { "firstName": "Ana", "lastName": "López", "email": "ana@acme.test" },
+    "billing": { "documentsGranted": 1600, "periodStart": "2026-11-01T00:00:00.000Z", "periodEnd": "2027-11-01T00:00:00.000Z", "externalReference": "PROVISION-ACME-TEST-001" },
+    "apiKeyName": "Integración Enterprise Acme"
+  }'
+# → 201 { data: { organizationId, organizationAccountId (membresía OWNER), ownerUserId, ownerAccountId (cuenta personal),
+#         ownerLifecycleStatus: "PROVISIONED", ownerRole: "OWNER", billingProfileId, planType: "enterprise",
+#         documentsGranted: 1600, creditsAvailable: 1600, apiKeyId, apiKeyPrefix, apiKey: "fma_live_…", replayed: false } }
+
+# 2. Crear un documento con la llave: consume 1 crédito (creditsAvailable → 1599)
+curl -X POST http://localhost:3000/api/v1/integration/documents   -H "X-API-Key: fma_live_…" -H "Idempotency-Key: doc-acme-001"   -F 'payload={"creator":{"email":"ana@acme.test","firstName":"Ana","lastName":"López"},"document":{"signatureType":"SIMPLE","isSequential":true,"isIndexable":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis@correo.test","order":1,"signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.1,"widthRatio":0.2,"heightRatio":0.08}]}]}'   -F "file=@contrato.pdf;type=application/pdf"
+```
+
 ### `health`, `ip`, `kafka`
 
 - `GET /health` — combina pings de Postgres, Mongo y Redis. `@SkipJwtAuth()` (sin JWT ni x-api-key): lo consumen probes de infraestructura. **Sin el prefijo `/api/v1`**, a propósito: está en `GLOBAL_API_PREFIX_EXCLUDE` porque el `HEALTHCHECK` del `Dockerfile` apunta a `/health` literal (ver «Prefijo global» al inicio de esta sección).
@@ -678,6 +713,7 @@ y 72 operaciones idénticas byte a byte.
 Dos guards globales combinados con AND (`APP_GUARD` en `AuthModule`):
 
 - **`ApiKeyGuard`** — solo exige `x-api-key` en endpoints marcados `@Public()`.
+- **`@InternalPlatformAuth()`** (no es global) — operaciones internas de plataforma: `@SkipJwtAuth()` + `InternalPlatformApiKeyGuard`, que exige `INTERNAL_PLATFORM_API_KEY` en `x-api-key` y falla cerrado (503) si no está configurada. No acepta la `API_KEY` de `@Public()`.
 - **`JwtAuthGuard`** — exige `Authorization: Bearer <jwt>` válido y no presente en la blacklist de Redis, salvo `@Public()` o `@SkipJwtAuth()` — hoy usado en bastante más que `register`/`login`: todo el flujo de OTP (`verify-otp`/`resend-otp`/`forgot-password`/`verify-reset-code`/`reset-password`), `check-rfc`, las rutas de `organization-invitations`, `GET /document/public/:id` y todo el controlador `efirma`.
 
 `@CurrentUser()` expone el payload del JWT (`sub`, `email`, `roles`, `nationalId`, `jti`) inyectado por el guard en `request.user`. `nationalId` (CURP) se agregó como claim estable — no es un dato volátil de onboarding (eso vive en Redis, no en el JWT), es la misma clase de identificador que `email`/`roles`, y permite que `GET /api/v1/users/me` resuelva directo por Redis sin una consulta previa a Postgres.
@@ -711,7 +747,7 @@ La plantilla completa y comentada es [`.env.example`](.env.example): trae valore
 | **MinIO** | `MINIO_HOST`, `MINIO_PORT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_REGION` | `ACCESS_KEY`/`SECRET_KEY` deben coincidir con las `ROOT_*` (o con una llave creada en la consola), o toda operación de archivos falla con error de autenticación aunque el contenedor arranque bien. `MINIO_REGION` es opcional y por defecto es `us-east-1`. |
 | **MinIO — cliente público** | `MINIO_PUBLIC_HOST`, `MINIO_PUBLIC_PORT`, `MINIO_PUBLIC_USE_SSL` | Es el cliente que firma las URLs que el navegador abre directo. En local debe ir con `USE_SSL=false`, porque el MinIO de compose habla HTTP plano. Si faltan, el servicio lanza al arrancar. |
 | **MinIO — buckets** | `MINIO_*_BUCKET` (ocho) | Uno por etapa del documento: creado, firmado, finalizado, vista previa parcial, cancelado, rechazado, identificaciones y rúbricas. Se crean solos en la primera subida. |
-| **Autenticación** | `JWT_SECRET`, `JWT_EXPIRES_IN`, `CIPHER_SECRET`, `API_KEY` | `CIPHER_SECRET` cifra la bitácora de auditoría: cambiarlo deja ilegible lo ya escrito. `API_KEY` es la que exige `ApiKeyGuard` en las rutas `@Public()`. |
+| **Autenticación** | `JWT_SECRET`, `JWT_EXPIRES_IN`, `CIPHER_SECRET`, `API_KEY`, `INTERNAL_PLATFORM_API_KEY` | `CIPHER_SECRET` cifra la bitácora de auditoría: cambiarlo deja ilegible lo ya escrito. `API_KEY` es la que exige `ApiKeyGuard` en las rutas `@Public()`. `INTERNAL_PLATFORM_API_KEY` (≥ 32 caracteres, distinta de `API_KEY`) es la de `@InternalPlatformAuth()`, el aprovisionamiento interno; sin ella esas rutas responden 503. |
 | **Frontend** | `FRONTEND_URL` | Origen de CORS y base de los enlaces que viajan por correo. Se normaliza sola, pero conviene escribirla sin diagonal final. |
 | **SendGrid** | `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` | El correo remitente debe estar verificado en SendGrid. |
 | **Stripe** | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Sin la primera **la aplicación no arranca**. Si usas una *restricted key*, necesita LECTURA de Products y Prices —de ahí sale el catálogo— además de escritura en Checkout, Customers y Subscriptions. Los antiguos `STRIPE_PRICE_ID_*` ya no se usan: el catálogo se lee en vivo. |

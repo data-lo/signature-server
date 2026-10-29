@@ -38,6 +38,7 @@ import { PublicSigningModule } from './public-signing/public-signing.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
+import { PlatformProvisioningModule } from './platform-provisioning/platform-provisioning.module';
 
 @Module({
   imports: [
@@ -118,6 +119,7 @@ import { ApiKeyModule } from './api-key/api-key.module';
     AuthorizationModule,
     DirectoryModule,
     ApiKeyModule,
+    PlatformProvisioningModule,
   ],
   controllers: [AppController],
   providers: [
