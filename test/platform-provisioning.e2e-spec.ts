@@ -67,7 +67,7 @@ import { UserService } from './../src/user/user.service';
 
 config({ path: join(__dirname, '..', '.env') });
 
-const API_KEY_PEPPER =
+const INTEGRATION_API_KEY_HMAC_SECRET =
   'pepper-de-la-e2e-de-aprovisionamiento-con-32-caracteres';
 const INTERNAL_KEY = 'llave-interna-de-plataforma-e2e-con-mas-de-32-caracteres';
 const SHARED_SERVICES_KEY =
@@ -270,7 +270,8 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
   }
 
   beforeAll(async () => {
-    process.env.API_KEY_PEPPER = API_KEY_PEPPER;
+    process.env.INTEGRATION_API_KEY_HMAC_SECRET =
+      INTEGRATION_API_KEY_HMAC_SECRET;
     process.env.INTERNAL_PLATFORM_API_KEY = INTERNAL_KEY;
     process.env.API_KEY = SHARED_SERVICES_KEY;
     process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test/';

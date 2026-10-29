@@ -434,7 +434,7 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
      */
     it('si falla la emisión de la llave, la transacción falla entera', async () => {
       issuePlatformApiKey.issueWithin.mockRejectedValue(
-        new Error('API_KEY_PEPPER no configurado'),
+        new Error('INTEGRATION_API_KEY_HMAC_SECRET no configurado'),
       );
 
       await expect(
@@ -442,7 +442,7 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
           dto: buildDto() as never,
           idempotencyKey: 'prov-acme-001',
         }),
-      ).rejects.toThrow('API_KEY_PEPPER no configurado');
+      ).rejects.toThrow('INTEGRATION_API_KEY_HMAC_SECRET no configurado');
       expect(steps).not.toContain('saveRequest');
       expect(accountService.appendAccountToCatalog).not.toHaveBeenCalled();
     });

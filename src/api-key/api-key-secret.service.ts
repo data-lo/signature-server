@@ -16,6 +16,10 @@ const PUBLIC_ID_BYTES = 8;
 /** Largo mínimo del pepper: por debajo, un HMAC filtrado se atacaría por fuerza bruta del pepper. */
 const MIN_PEPPER_LENGTH = 32;
 
+/** Variable que guarda el secreto del servidor para el HMAC de las API keys de integración. */
+export const INTEGRATION_API_KEY_HMAC_SECRET_ENV =
+  'INTEGRATION_API_KEY_HMAC_SECRET';
+
 /**
  * Forma de una llave completa: prefijo fijo, `publicId` (16 hexadecimales) y secreto en base64url
  * (43 caracteres para 32 bytes). El secreto puede contener `_` y `-`; el `publicId`, no.
@@ -41,7 +45,7 @@ export interface GeneratedApiKeySecret {
   /** La llave completa en claro, `fma_live_<publicId>_<secret>`. Se entrega una sola vez. */
   key: string;
 
-  /** HMAC-SHA-256 del secreto con `API_KEY_PEPPER`, en hexadecimal (`api_keys.secret_hash`). */
+  /** HMAC-SHA-256 del secreto con `INTEGRATION_API_KEY_HMAC_SECRET`, en hexadecimal (`api_keys.secret_hash`). */
   secretHash: string;
 }
 
@@ -50,7 +54,7 @@ export interface GeneratedApiKeySecret {
  *
  * La llave tiene el formato `fma_live_<publicId>_<secret>`: `publicId` (16 hexadecimales, sin `_`)
  * localiza la fila y `secret` (32 bytes en base64url) es lo único que la autentica. De `secret`
- * sólo se guarda su HMAC-SHA-256 con `API_KEY_PEPPER`, así que una copia de la base no basta para
+ * sólo se guarda su HMAC-SHA-256 con `INTEGRATION_API_KEY_HMAC_SECRET`, así que una copia de la base no basta para
  * reconstruir ni probar llaves sin el pepper.
  *
  * **Nada de lo que sale de aquí se registra.** Ni el secreto ni la llave completa van a logs,
@@ -60,14 +64,14 @@ export interface GeneratedApiKeySecret {
 export class ApiKeySecretService {
   private readonly logger = new Logger(ApiKeySecretService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) { }
 
   /**
    * Genera una llave nueva con secreto criptográficamente seguro.
    *
    * @returns El identificador público, el prefijo, la llave completa y el hash del secreto.
    *
-   * @throws {ApiKeyNotConfiguredException} (500) Si `API_KEY_PEPPER` falta o es demasiado corto.
+   * @throws {ApiKeyNotConfiguredException} (500) Si `INTEGRATION_API_KEY_HMAC_SECRET` falta o es demasiado corto.
    *
    * @example
    * ```ts
@@ -89,12 +93,12 @@ export class ApiKeySecretService {
   }
 
   /**
-   * HMAC-SHA-256 del secreto con `API_KEY_PEPPER`.
+   * HMAC-SHA-256 del secreto con `INTEGRATION_API_KEY_HMAC_SECRET`.
    *
    * @param secret - La parte secreta de la llave, sin prefijo ni `publicId`.
    * @returns El hash en hexadecimal (64 caracteres).
    *
-   * @throws {ApiKeyNotConfiguredException} (500) Si `API_KEY_PEPPER` falta o es demasiado corto.
+   * @throws {ApiKeyNotConfiguredException} (500) Si `INTEGRATION_API_KEY_HMAC_SECRET` falta o es demasiado corto.
    *
    * @example
    * ```ts
@@ -133,7 +137,7 @@ export class ApiKeySecretService {
    * @param secretHash - `api_keys.secret_hash` de la llave localizada por su `publicId`.
    * @returns `true` si el HMAC del secreto coincide con el guardado.
    *
-   * @throws {ApiKeyNotConfiguredException} (500) Si `API_KEY_PEPPER` falta o es demasiado corto.
+   * @throws {ApiKeyNotConfiguredException} (500) Si `INTEGRATION_API_KEY_HMAC_SECRET` falta o es demasiado corto.
    *
    * @example
    * ```ts
@@ -155,7 +159,7 @@ export class ApiKeySecretService {
    * Se valida al usarlo y no al arrancar: un entorno sin la variable sigue sirviendo todo lo
    * demás, y sólo la emisión de llaves falla, con un error que no revela nada al cliente.
    *
-   * @returns El valor de `API_KEY_PEPPER`.
+   * @returns El valor de `INTEGRATION_API_KEY_HMAC_SECRET`.
    *
    * @throws {ApiKeyNotConfiguredException} (500) Si falta o tiene menos de 32 caracteres.
    *
@@ -165,11 +169,11 @@ export class ApiKeySecretService {
    * ```
    */
   private getPepper(): string {
-    const pepper = this.configService.get<string>('API_KEY_PEPPER');
+    const pepper = this.configService.get<string>(INTEGRATION_API_KEY_HMAC_SECRET_ENV,);
 
     if (!pepper || pepper.length < MIN_PEPPER_LENGTH) {
       this.logger.error(
-        `API_KEY_PEPPER no está configurado o tiene menos de ${MIN_PEPPER_LENGTH} caracteres`,
+        `${INTEGRATION_API_KEY_HMAC_SECRET_ENV} no está configurado o tiene menos de ${MIN_PEPPER_LENGTH} caracteres`,
       );
       throw new ApiKeyNotConfiguredException();
     }

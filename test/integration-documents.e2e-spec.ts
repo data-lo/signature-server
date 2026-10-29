@@ -53,7 +53,7 @@ import { DocumentReadService } from './../src/document/services/document-read.se
 
 config({ path: join(__dirname, '..', '.env') });
 
-const API_KEY_PEPPER =
+const INTEGRATION_API_KEY_HMAC_SECRET =
   'pepper-de-la-e2e-de-integracion-con-mas-de-32-caracteres';
 
 /**
@@ -435,7 +435,8 @@ describe('API de integración de documentos (e2e)', () => {
   }
 
   beforeAll(async () => {
-    process.env.API_KEY_PEPPER = API_KEY_PEPPER;
+    process.env.INTEGRATION_API_KEY_HMAC_SECRET =
+      INTEGRATION_API_KEY_HMAC_SECRET;
     process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test/';
     twoPagePdf = await buildPdf(2);
     otherPdf = await buildPdf(3);
