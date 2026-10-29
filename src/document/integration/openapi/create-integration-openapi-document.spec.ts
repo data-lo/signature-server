@@ -25,7 +25,8 @@ const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'patch'] as const;
 const ENV_SECRETS = {
   API_KEY: 'secreto-compartido-de-servicios-que-no-debe-publicarse',
   INTERNAL_PLATFORM_API_KEY: 'secreto-interno-de-plataforma-no-publicable',
-  API_KEY_PEPPER: 'pepper-que-no-debe-aparecer-en-el-contrato-publico',
+  INTEGRATION_API_KEY_HMAC_SECRET:
+    'secret-hmac-que-no-debe-aparecer-en-el-contrato-publico',
   JWT_SECRET: 'jwt-secreto-que-no-debe-aparecer',
 };
 
@@ -313,7 +314,7 @@ describe('createIntegrationOpenApiDocument', () => {
     }
     for (const name of [
       'INTERNAL_PLATFORM_API_KEY',
-      'API_KEY_PEPPER',
+      'INTEGRATION_API_KEY_HMAC_SECRET',
       'JWT_SECRET',
     ]) {
       expect(json).not.toContain(name);

@@ -96,7 +96,7 @@ export class IssuePlatformApiKeyUseCase {
    * @returns Los metadatos de la llave más `key`, la llave completa en claro, que no se vuelve a
    *   poder obtener.
    *
-   * @throws {ApiKeyNotConfiguredException} (500) Si falta `API_KEY_PEPPER`.
+   * @throws {ApiKeyNotConfiguredException} (500) Si falta `INTEGRATION_API_KEY_HMAC_SECRET`.
    * @throws {QueryFailedError} Si la base rechaza la fila (p. ej. una segunda llave activa).
    *
    * @example

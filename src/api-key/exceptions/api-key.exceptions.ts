@@ -167,7 +167,7 @@ export class ApiKeyInvalidExpirationException extends UnprocessableEntityExcepti
 }
 
 /**
- * Falta `API_KEY_PEPPER` en el servidor. Es un error de despliegue, no del cliente, y el mensaje
+ * Falta `INTEGRATION_API_KEY_HMAC_SECRET` en el servidor. Es un error de despliegue, no del cliente, y el mensaje
  * no dice cuál es la variable.
  */
 export class ApiKeyNotConfiguredException extends InternalServerErrorException {

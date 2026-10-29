@@ -125,7 +125,7 @@ export class ProvisionProvisionalEnterpriseAccountUseCase {
    * @throws {ProvisionalOwnerUnavailableException} (409) Si el correo es de un usuario desactivado.
    * @throws {ConcurrentProvisioningException} (409) Si otra petición creó lo mismo a la vez.
    * @throws {ApiKeyPermissionNotFoundException} (422) Si el catálogo de permisos no está sembrado.
-   * @throws {ApiKeyNotConfiguredException} (500) Si falta `API_KEY_PEPPER`.
+   * @throws {ApiKeyNotConfiguredException} (500) Si falta `INTEGRATION_API_KEY_HMAC_SECRET`.
    * @throws {InternalServerErrorException} (500) Si el rol OWNER no está sembrado.
    *
    * @example

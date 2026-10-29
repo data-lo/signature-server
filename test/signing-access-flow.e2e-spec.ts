@@ -304,7 +304,7 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
   }
 
   beforeAll(async () => {
-    process.env.API_KEY_PEPPER =
+    process.env.INTEGRATION_API_KEY_HMAC_SECRET =
       'pepper-de-la-e2e-de-acceso-a-firma-con-mas-de-32-caracteres';
     process.env.JWT_SECRET = 'jwt-secret-e2e-acceso-a-firma';
     process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test';
