@@ -32,7 +32,7 @@ import { RotateOrganizationApiKeyDto } from './dto/rotate-organization-api-key.d
  */
 @ApiExcludeController()
 @InternalPlatformAuth()
-@Controller('internal/organizations/:organizationId/api-keys')
+@Controller('platform/organizations/:organizationId/api-keys')
 export class InternalOrganizationApiKeysController {
   constructor(
     private readonly createOrganizationApiKey: CreateOrganizationApiKeyUseCase,

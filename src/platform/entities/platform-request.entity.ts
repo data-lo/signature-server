@@ -9,7 +9,7 @@ import {
 
 /**
  * Un `Idempotency-Key` ya usado para aprovisionar una cuenta provisional Enterprise, con todo lo
- * que creó (`AddPlatformProvisioning1784300000086`).
+ * que creó (migración `1784300000086`).
  *
  * Se escribe al final de la MISMA transacción que crea el usuario, la organización, el perfil, los
  * créditos y la llave, así que existe si y sólo si el aprovisionamiento se confirmó: no hay estado
@@ -28,7 +28,7 @@ import {
   'CHK_platform_provisioning_requests_documents_granted',
   '"documents_granted" > 0',
 )
-export class PlatformProvisioningRequestEntity {
+export class PlatformRequestEntity {
   @PrimaryGeneratedColumn('uuid', {
     primaryKeyConstraintName: 'PK_platform_provisioning_requests',
   })

@@ -55,11 +55,11 @@ import { IntegrationIdempotencyService } from './../src/document/integration/ser
 import { IntegrationPayloadValidator } from './../src/document/integration/validation/integration-payload.validator';
 import { DocumentReadService } from './../src/document/services/document-read.service';
 import { OrganizationMemberEventsProducer } from './../src/kafka/organization-member.producer';
-import { DEFAULT_INTEGRATION_PERMISSION_KEYS } from './../src/platform-provisioning/constants/default-integration-permissions';
-import { ProvisionProvisionalEnterpriseAccountUseCase } from './../src/platform-provisioning/applications/provision-provisional-enterprise-account.use-case';
-import { PlatformProvisioningRequestEntity } from './../src/platform-provisioning/entities/platform-provisioning-request.entity';
-import { InternalOrganizationProvisioningController } from './../src/platform-provisioning/internal-organization-provisioning.controller';
-import { ProvisionalOwnerProvisioningService } from './../src/platform-provisioning/services/provisional-owner-provisioning.service';
+import { DEFAULT_INTEGRATION_PERMISSION_KEYS } from '../src/platform/constants/default-integration-permissions';
+import { ProvisionProvisionalEnterpriseAccountUseCase } from '../src/platform/applications/provision-provisional-enterprise-account.use-case';
+import { PlatformRequestEntity } from '../src/platform/entities/platform-request.entity';
+import { InternalOrganizationProvisioningController } from '../src/platform/internal-organization-provisioning.controller';
+import { ProvisionalOwnerProvisioningService } from '../src/platform/services/provisional-owner-provisioning.service';
 import { RolesModule } from './../src/roles/roles.module';
 import { SigningInvitationDeliveryService } from './../src/signing-invitation/signing-invitation-delivery.service';
 import { UserEntity } from './../src/user/entities/user.entity';
@@ -213,7 +213,7 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
     apiKey: string | null = INTERNAL_KEY,
   ) {
     let call = request(app.getHttpServer())
-      .post('/api/v1/internal/organizations/provision')
+      .post('/api/v1/platform/organizations/provision')
       .send(payload);
     if (apiKey) call = call.set('x-api-key', apiKey);
     if (idempotencyKey) call = call.set('Idempotency-Key', idempotencyKey);
@@ -302,7 +302,7 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
           entities: [join(__dirname, '..', 'src', '**', '*.entity{.ts,.js}')],
         }),
         TypeOrmModule.forFeature([
-          PlatformProvisioningRequestEntity,
+          PlatformRequestEntity,
           DocumentEntity,
           CollaboratorEntity,
           AccountEntity,
@@ -435,7 +435,7 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
       );
       expect(
         Object.keys(document.paths).filter((path) =>
-          path.includes('internal/organizations'),
+          path.includes('platform/organizations'),
         ),
       ).toEqual([]);
     });

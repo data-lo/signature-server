@@ -3,7 +3,7 @@ import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status
 import {
   ProvisionalOwnerEmailAlreadyRegisteredException,
   ProvisionalOwnerUnavailableException,
-} from '../exceptions/platform-provisioning.exceptions';
+} from '../exceptions/platform.exceptions';
 import { ProvisionalOwnerProvisioningService } from './provisional-owner-provisioning.service';
 
 describe('ProvisionalOwnerProvisioningService', () => {

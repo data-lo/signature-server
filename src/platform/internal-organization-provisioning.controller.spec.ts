@@ -3,7 +3,7 @@ import { DECORATORS } from '@nestjs/swagger/dist/constants';
 import {
   ProvisioningIdempotencyKeyRequiredException,
   ProvisioningReservedFieldsException,
-} from './exceptions/platform-provisioning.exceptions';
+} from './exceptions/platform.exceptions';
 import {
   assertNoReservedFields,
   InternalOrganizationProvisioningController,
