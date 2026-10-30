@@ -70,6 +70,7 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
 import { PublicSigningController } from './public-signing.controller';
 import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
 import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
+import { DocumentIndexingJobEntity } from './entities/document-indexing-job.entity';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
@@ -170,6 +171,8 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
       // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
       BiometricSignatureAttemptEntity,
       GuestSigningAccessEntity,
+      // Trabajos de indexación: estado técnico del envío al indexador, aparte de `DocumentEntity`.
+      DocumentIndexingJobEntity,
       IntegrationIdempotencyKeyEntity,
       // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
       // pedido dentro de la organización de la API key.
