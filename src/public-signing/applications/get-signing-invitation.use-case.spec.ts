@@ -50,7 +50,7 @@ describe('GetSigningInvitationUseCase', () => {
     );
   });
 
-  it('ACTIVE: contexto mínimo, sin ids del documento ni del colaborador, posiciones ni PDF', async () => {
+  it('ACTIVE: contexto mínimo, sin ids del documento ni del colaborador (firmante sin cuenta), posiciones ni PDF', async () => {
     const context = await useCase.execute(TOKEN, NOW);
 
     expect(context).toEqual({
@@ -107,6 +107,21 @@ describe('GetSigningInvitationUseCase', () => {
 
     expect(context.signer?.publicSigningAllowed).toBe(false);
     expect(context.signature?.requiresIdentityValidation).toBe(false);
+    // Para mandarlo a iniciar sesión y, después, al documento en el panel.
+    expect(context.document).toEqual({ name: 'contrato.pdf', id: 'd-1' });
+  });
+
+  it('FIEL con cuenta PROVISIONED: no expone el documento (esa cuenta no puede iniciar sesión)', async () => {
+    invitation!.collaborator.accountId = 'acc-1';
+    invitation!.collaborator.account = {
+      userId: 'u-1',
+      user: { lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED },
+    };
+
+    const context = await useCase.execute(TOKEN, NOW);
+
+    expect(context.signer?.publicSigningAllowed).toBe(false);
+    expect(context.document).toEqual({ name: 'contrato.pdf' });
   });
 
   it.each([
