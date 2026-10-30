@@ -49,6 +49,7 @@ import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-docume
 import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
+import { DocumentIndexRequestService } from '../services/document-index-request.service';
 import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
 import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
 import {
@@ -243,6 +244,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly documentReviewerService: DocumentReviewerService,
     private readonly assertPlanAction: AssertPlanActionUseCase,
     private readonly directoryCollaborators: DirectoryCollaboratorsService,
+    private readonly documentIndexRequest: DocumentIndexRequestService,
   ) {}
 
   async execute(
@@ -426,9 +428,10 @@ export class CreateDocumentSignatureFlowUseCase {
      * cliente mande `isIndexable: true`. La pantalla ya esconde la opción en ese caso; esto cubre
      * a un cliente que no la esconda o que tenga el catálogo de cuentas desactualizado.
      */
+    const { allowsIndexing, organizationName } =
+      await this.findOrganizationIndexing(activeAccount.organizationId);
     const isIndexable =
-      (await this.organizationAllowsIndexing(activeAccount.organizationId)) &&
-      (dto.documentData.isIndexable ?? true);
+      allowsIndexing && (dto.documentData.isIndexable ?? true);
 
     // Defensa en profundidad (ver signature-collision.util.ts): valida ANTES de tocar la base de
     // datos, agrupando por página todas las posiciones de todos los firmantes del payload.
@@ -762,6 +765,19 @@ export class CreateDocumentSignatureFlowUseCase {
         );
       }
 
+      /**
+       * La solicitud de indexación —el evento `document.index` y su job en `PENDING`— se registra
+       * en esta misma transacción y la publica el `flush` de abajo, después del commit: un
+       * documento que no llegue a guardarse nunca se manda a indexar ni deja un job huérfano.
+       * Sólo si es indexable —la regla vive en `DocumentIndexRequestService.enqueue`—.
+       */
+      await this.documentIndexRequest.enqueue(
+        manager,
+        document,
+        organizationName,
+        createdBy,
+      );
+
       return {
         document,
         notificationEvents,
@@ -791,8 +807,8 @@ export class CreateDocumentSignatureFlowUseCase {
     });
 
     /**
-     * Publica lo que la transacción dejó en la outbox: las notificaciones de cada colaborador y,
-     * con aprobación, el `document.approval_requested`. Después del commit y best-effort: si Kafka
+     * Publica lo que la transacción dejó en la outbox: las notificaciones de cada colaborador,
+     * con aprobación el `document.approval_requested` y, si es indexable, el `document.index`. Después del commit y best-effort: si Kafka
      * falla, las filas quedan pendientes y las publica el siguiente `flush` (ver `OutboxService`),
      * así que un fallo aquí nunca deshace un documento que ya quedó creado.
      */
@@ -802,22 +818,6 @@ export class CreateDocumentSignatureFlowUseCase {
       this.logger.error(
         `No se pudo publicar la outbox tras crear el documento ${document.id}; queda pendiente para el siguiente flush: ${error}`,
       );
-    }
-
-    if (document.isIndexable) {
-      /**
-       * Punto de enganche de Búsqueda Inteligente, deliberadamente vacío por ahora.
-       *
-       * **No publica ningún evento ni llama a ningún servicio**: la indexación todavía no existe
-       * (no hay productor, ni consumidor, ni índice), y este bloque marca el lugar exacto donde
-       * entrará cuando se construya — después de que la transacción haya confirmado, junto al
-       * resto de los efectos externos, para que un documento que no llegó a guardarse no
-       * dispare nada.
-       *
-       * La condición ya es la definitiva: un documento con `isIndexable: false` nunca entra acá,
-       * así que quien agregue la llamada no tiene que acordarse de filtrarlo — la regla ya está
-       * puesta y probada.
-       */
     }
 
     return {
@@ -910,8 +910,8 @@ export class CreateDocumentSignatureFlowUseCase {
   }
 
   /**
-   * Dice si la organización de la cuenta activa permite que sus documentos entren a Búsqueda
-   * Inteligente.
+   * Lee de la organización de la cuenta activa lo que la indexación necesita: si permite que sus
+   * documentos entren a Búsqueda Inteligente y su nombre, que viaja en `document.index`.
    *
    * Una cuenta PERSONAL no tiene organización y no está sujeta a este interruptor: decide sólo la
    * casilla de cada documento. Tampoco se bloquea si la organización no aparece —la membresía se
@@ -919,26 +919,32 @@ export class CreateDocumentSignatureFlowUseCase {
    * un documento sin indexar.
    *
    * @param organizationId - Organización de la cuenta activa, o `null` en cuentas PERSONAL.
-   * @returns `false` sólo si la organización existe y tiene `indexDocuments` apagado.
+   * @returns `allowsIndexing` en `false` sólo si la organización existe y tiene `indexDocuments`
+   *   apagado; `organizationName` en `null` si no hay organización.
    *
    * @example
    * ```ts
-   * await this.organizationAllowsIndexing('org-1'); // false si apagó Búsqueda Inteligente
-   * await this.organizationAllowsIndexing(null); // true
+   * await this.findOrganizationIndexing('org-1'); // { allowsIndexing: true, organizationName: 'Acme' }
+   * await this.findOrganizationIndexing(null); // { allowsIndexing: true, organizationName: null }
    * ```
    */
-  private async organizationAllowsIndexing(
+  private async findOrganizationIndexing(
     organizationId: string | null,
-  ): Promise<boolean> {
-    if (!organizationId) return true;
+  ): Promise<{ allowsIndexing: boolean; organizationName: string | null }> {
+    if (!organizationId) {
+      return { allowsIndexing: true, organizationName: null };
+    }
 
     const organization = await this.dataSource
       .getRepository(OrganizationEntity)
       .findOne({
         where: { id: organizationId },
-        select: { id: true, indexDocuments: true },
+        select: { id: true, name: true, indexDocuments: true },
       });
 
-    return organization?.indexDocuments ?? true;
+    return {
+      allowsIndexing: organization?.indexDocuments ?? true,
+      organizationName: organization?.name ?? null,
+    };
   }
 }

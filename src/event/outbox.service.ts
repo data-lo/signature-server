@@ -19,6 +19,23 @@ export interface EnqueueEventParams {
   body: Record<string, unknown>;
   /** Actor del evento (normalmente un `userId`). */
   from?: string | null;
+  /**
+   * `false` publica `body` tal cual, sin `eventId`/`occurredAt`/`version`/`actorUserId`. Es para
+   * contratos de servicios externos que exigen un cuerpo exacto (`document.index`). Por omisión
+   * `true`: los consumidores internos deduplican por `eventId`.
+   */
+  envelope?: boolean;
+}
+
+/**
+ * Forma en que se guarda en `metadata` un evento sin sobre. El cuerpo va anidado en `payload`, y
+ * no esparcido junto a `topic` como en los eventos con sobre, para que ninguna clave del contrato
+ * externo pueda chocar con las de control.
+ */
+interface RawEventMetadata {
+  topic: string;
+  envelope: false;
+  payload: Record<string, unknown>;
 }
 
 /**
@@ -72,7 +89,7 @@ export class OutboxService {
    * @param manager - `EntityManager` de la transacción que está cambiando el estado. Es
    *   obligatorio a propósito: llamar a esto fuera de una transacción no tendría ninguna de las
    *   garantías por las que existe la outbox.
-   * @param params - Tipo, tópico, cuerpo y actor del evento.
+   * @param params - Tipo, tópico, cuerpo y actor del evento, y si se publica con sobre.
    * @returns La fila ya escrita, con su `id` — que es el `eventId` del sobre.
    *
    * @throws {QueryFailedError} Si la inserción falla; propaga y revierte la transacción del
@@ -90,7 +107,7 @@ export class OutboxService {
    */
   async enqueue(
     manager: EntityManager,
-    { eventType, topic, body, from }: EnqueueEventParams,
+    { eventType, topic, body, from, envelope = true }: EnqueueEventParams,
   ): Promise<EventEntity> {
     const repository = manager.getRepository(EventEntity);
 
@@ -102,7 +119,13 @@ export class OutboxService {
          * porque quien republica es un `flush` posterior que ya no tiene el contexto del cambio.
          * `topic` viaja dentro por lo mismo.
          */
-        metadata: { ...body, topic },
+        metadata: envelope
+          ? { ...body, topic }
+          : ({
+              topic,
+              envelope: false,
+              payload: body,
+            } satisfies RawEventMetadata),
         from: from ?? null,
         version: EVENT_CONTRACT_VERSION,
         publishedAt: null,
@@ -153,13 +176,21 @@ export class OutboxService {
           continue;
         }
 
-        this.kafkaProducer.emit(topic, {
-          eventId: event.id,
-          occurredAt: event.createdAt.toISOString(),
-          version: event.version,
-          actorUserId: event.from,
-          ...body,
-        });
+        if (body.envelope === false) {
+          // Contrato externo: se publica exactamente lo que se registró (ver `RawEventMetadata`).
+          this.kafkaProducer.emit(
+            topic,
+            (body as Omit<RawEventMetadata, 'topic'>).payload,
+          );
+        } else {
+          this.kafkaProducer.emit(topic, {
+            eventId: event.id,
+            occurredAt: event.createdAt.toISOString(),
+            version: event.version,
+            actorUserId: event.from,
+            ...body,
+          });
+        }
 
         await this.eventRepository.update(event.id, {
           publishedAt: new Date(),
