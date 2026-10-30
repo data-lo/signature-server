@@ -1090,7 +1090,16 @@ describe('API de integración de documentos (e2e)', () => {
           lifecycle_status: 'PROVISIONED',
           password: null,
           national_id: null,
-          personal_information_id: null,
+        });
+        // Nace con su ficha (sin CURP): el webhook aprobado de Didit guarda ahí la INE.
+        const [personalInformation] = await dataSource.query(
+          `SELECT name, last_name, curp FROM personal_information WHERE id = $1`,
+          [user.personal_information_id],
+        );
+        expect(personalInformation).toEqual({
+          name: 'Nora',
+          last_name: 'Nueva',
+          curp: null,
         });
         const accounts = await accountsOf(user.id);
         expect(accounts).toEqual([

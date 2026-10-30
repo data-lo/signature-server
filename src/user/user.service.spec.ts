@@ -105,6 +105,94 @@ describe('UserService', () => {
     expect(service).toBeDefined();
   });
 
+  /**
+   * Bug "Crear personal_information para usuarios provisionales de integración": el provisional
+   * nace con su ficha para que el webhook aprobado de Didit pueda guardar la INE.
+   */
+  describe('createProvisionedUser', () => {
+    let users: { create: jest.Mock; save: jest.Mock };
+    let personalInformation: { create: jest.Mock; save: jest.Mock };
+    let manager: { getRepository: jest.Mock };
+
+    beforeEach(() => {
+      users = {
+        create: jest.fn((data) => ({ ...data })),
+        save: jest.fn(async (user) => ({ id: 'user-prov', ...user })),
+      };
+      personalInformation = {
+        create: jest.fn((data) => ({ ...data })),
+        save: jest.fn(async (row) => ({ id: 'pi-prov', ...row })),
+      };
+      manager = {
+        getRepository: jest.fn((entity: unknown) =>
+          entity === PersonalInformationEntity ? personalInformation : users,
+        ),
+      };
+    });
+
+    it('crea su información personal sin CURP y se la asigna al usuario PROVISIONED', async () => {
+      const { user, personalAccount } = await service.createProvisionedUser(
+        manager as never,
+        { email: 'ana@acme.test', firstName: 'ana', lastName: 'lópez' },
+      );
+
+      expect(personalInformation.create).toHaveBeenCalledWith({
+        name: 'Ana',
+        lastName: 'López',
+        curp: null,
+        rfc: null,
+      });
+      expect(users.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'ana@acme.test',
+          lifecycleStatus: 'PROVISIONED',
+          nationalId: null,
+          password: null,
+          personalInformationId: 'pi-prov',
+        }),
+      );
+      expect(user.personalInformationId).toBe('pi-prov');
+      expect(accountService.createDefaultPersonalAccount).toHaveBeenCalledWith(
+        manager,
+        'user-prov',
+        'ana@acme.test',
+        null,
+      );
+      expect(personalAccount).toEqual({ id: 'personal-account-1' });
+    });
+
+    it('usa el manager de la transacción del llamador para las dos filas', async () => {
+      await service.createProvisionedUser(manager as never, {
+        email: 'ana@acme.test',
+        firstName: 'Ana',
+        lastName: 'López',
+      });
+
+      expect(manager.getRepository).toHaveBeenCalledWith(
+        PersonalInformationEntity,
+      );
+      expect(manager.getRepository).toHaveBeenCalledWith(UserEntity);
+      expect(personalInformationRepository.save).not.toHaveBeenCalled();
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('si no se puede crear la información personal, no crea el usuario ni su cuenta', async () => {
+      personalInformation.save.mockRejectedValue(new Error('insert fallido'));
+
+      await expect(
+        service.createProvisionedUser(manager as never, {
+          email: 'ana@acme.test',
+          firstName: 'Ana',
+          lastName: 'López',
+        }),
+      ).rejects.toThrow('insert fallido');
+      expect(users.save).not.toHaveBeenCalled();
+      expect(
+        accountService.createDefaultPersonalAccount,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
   describe('saveNewUser', () => {
     const dto: CreateUserDto = {
       firstName: 'Juan',
