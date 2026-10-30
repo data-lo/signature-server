@@ -61,6 +61,7 @@ import { GetDocumentApproversUseCase } from './applications/get-document-approve
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
+import { DocumentIndexRequestService } from './services/document-index-request.service';
 import { WitnessNotificationService } from './services/witness-notification.service';
 import { NotificationEntity } from './entities/notification.entity';
 import { DocumentApprovalService } from './services/document-approval.service';
@@ -127,6 +128,8 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
     RestoreArchivedDocumentUseCase,
     /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
     DocumentReviewerService,
+    /** Pide la indexación de los documentos indexables (`document.index`) al crearlos. */
+    DocumentIndexRequestService,
     DocumentApprovalService,
     /** Avisos por correo a los testigos (ver el servicio para qué recibe el testigo y cuándo). */
     WitnessNotificationService,
