@@ -21,7 +21,7 @@ import { SkipJwtAuth } from './skip-jwt-auth.decorator';
  * ```ts
  * @ApiExcludeController()
  * @InternalPlatformAuth()
- * @Controller('internal/organizations')
+ * @Controller('platform/organizations')
  * export class InternalOrganizationProvisioningController {}
  * ```
  */

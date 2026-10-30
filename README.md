@@ -614,7 +614,7 @@ Punto de entrada único de los proveedores externos. Recibe el cuerpo crudo, ver
 - `DiditWebhookController`: `POST /api/v1/webhooks/didit` → `ReceiveDiditWebhookUseCase`.
 - Una entrega con firma ausente o inválida responde 401 y **también** deja fila de auditoría, con `signature_valid = false` y sin `payload`: nunca ejecuta dominio.
 
-### `platform-provisioning` (`POST /api/v1/internal/organizations/provision`) — cuenta provisional Enterprise para pruebas de integración
+### `platform` (`POST /api/v1/platform/organizations/provision`) — cuenta provisional Enterprise para pruebas de integración
 
 Crea en **una sola transacción** todo lo necesario para probar la firma documental por API, sin `signature-app`, Stripe, CAPTCHA, OTP ni contraseña:
 
@@ -635,7 +635,7 @@ Usuario PROVISIONED → cuenta personal → organización (activa) → membresí
 
 ```bash
 # 1. Aprovisionar (guardar data.apiKey: no se vuelve a mostrar)
-curl -X POST http://localhost:3000/api/v1/internal/organizations/provision   -H "x-api-key: $INTERNAL_PLATFORM_API_KEY" -H "Idempotency-Key: prov-acme-001"   -H "Content-Type: application/json" -d '{
+curl -X POST http://localhost:3000/api/v1/platform/organizations/provision   -H "x-api-key: $INTERNAL_PLATFORM_API_KEY" -H "Idempotency-Key: prov-acme-001"   -H "Content-Type: application/json" -d '{
     "organization": { "name": "Acme Pruebas", "organizationName": "Acme Pruebas S.A. de C.V.", "taxId": "ACM010101AAA", "domainAllowed": "acme.test" },
     "owner": { "firstName": "Ana", "lastName": "López", "email": "ana@acme.test" },
     "billing": { "documentsGranted": 1600, "periodStart": "2026-11-01T00:00:00.000Z", "periodEnd": "2027-11-01T00:00:00.000Z", "externalReference": "PROVISION-ACME-TEST-001" },

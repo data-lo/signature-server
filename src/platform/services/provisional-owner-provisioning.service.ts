@@ -10,7 +10,7 @@ import { UserService } from 'src/user/user.service';
 import {
   ProvisionalOwnerEmailAlreadyRegisteredException,
   ProvisionalOwnerUnavailableException,
-} from '../exceptions/platform-provisioning.exceptions';
+} from '../exceptions/platform.exceptions';
 
 /** Identidad del propietario pedida en el aprovisionamiento. */
 export interface ProvisionalOwnerIdentity {

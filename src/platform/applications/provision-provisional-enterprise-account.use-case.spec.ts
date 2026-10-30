@@ -11,18 +11,20 @@ import { UserEntity } from 'src/user/entities/user.entity';
 import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status.enum';
 
 import { DEFAULT_INTEGRATION_PERMISSION_KEYS } from '../constants/default-integration-permissions';
-import { PlatformProvisioningRequestEntity } from '../entities/platform-provisioning-request.entity';
+import { PlatformRequestEntity } from '../entities/platform-request.entity';
 import {
   ConcurrentProvisioningException,
   ProvisionalOwnerEmailAlreadyRegisteredException,
   ProvisioningExternalReferenceAlreadyUsedException,
   ProvisioningIdempotencyKeyMismatchException,
   ProvisioningInvalidBillingPeriodException,
-} from '../exceptions/platform-provisioning.exceptions';
+} from '../exceptions/platform.exceptions';
 import {
   buildProvisioningRequestHash,
   PROVISIONING_ADVISORY_LOCK_NAMESPACE,
+  PROVISIONING_REPLAYED_MESSAGE,
   ProvisionProvisionalEnterpriseAccountUseCase,
+  provisionedAccountMessage,
 } from './provision-provisional-enterprise-account.use-case';
 
 const API_KEY =
@@ -106,7 +108,7 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
     steps = [];
     repositories = new Map<unknown, Record<string, jest.Mock>>([
       [
-        PlatformProvisioningRequestEntity,
+        PlatformRequestEntity,
         {
           findOne: jest.fn().mockResolvedValue(null),
           insert: record('saveRequest', undefined),
@@ -256,7 +258,7 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
 
     expect(result).toEqual({
       success: true,
-      message: 'Cuenta provisional aprovisionada correctamente',
+      message: provisionedAccountMessage(1600),
       data: {
         organizationId: 'org-1',
         organizationAccountId: 'account-org',
@@ -293,7 +295,7 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
       idempotencyKey: 'prov-acme-001',
     });
 
-    const insert = repositories.get(PlatformProvisioningRequestEntity)!.insert;
+    const insert = repositories.get(PlatformRequestEntity)!.insert;
     expect(insert).toHaveBeenCalledWith({
       idempotencyKey: 'prov-acme-001',
       requestHash: buildProvisioningRequestHash(buildDto() as never),
@@ -334,19 +336,17 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
 
   describe('idempotencia', () => {
     it('repite la respuesta sin escribir nada y sin la llave en claro', async () => {
-      repositories
-        .get(PlatformProvisioningRequestEntity)!
-        .findOne.mockResolvedValue({
-          idempotencyKey: 'prov-acme-001',
-          requestHash: buildProvisioningRequestHash(buildDto() as never),
-          organizationId: 'org-1',
-          organizationAccountId: 'account-org',
-          ownerUserId: 'user-1',
-          ownerAccountId: 'account-personal',
-          billingProfileId: 'bp-1',
-          apiKeyId: 'key-1',
-          documentsGranted: 1600,
-        });
+      repositories.get(PlatformRequestEntity)!.findOne.mockResolvedValue({
+        idempotencyKey: 'prov-acme-001',
+        requestHash: buildProvisioningRequestHash(buildDto() as never),
+        organizationId: 'org-1',
+        organizationAccountId: 'account-org',
+        ownerUserId: 'user-1',
+        ownerAccountId: 'account-personal',
+        billingProfileId: 'bp-1',
+        apiKeyId: 'key-1',
+        documentsGranted: 1600,
+      });
 
       const result = await useCase.execute({
         dto: buildDto() as never,
@@ -355,6 +355,7 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
 
       expect(steps).toEqual([]);
       expect(accountService.appendAccountToCatalog).not.toHaveBeenCalled();
+      expect(result.message).toBe(PROVISIONING_REPLAYED_MESSAGE);
       expect(result.data).toEqual(
         expect.objectContaining({
           organizationId: 'org-1',
@@ -368,14 +369,12 @@ describe('ProvisionProvisionalEnterpriseAccountUseCase', () => {
     });
 
     it('rechaza con 409 la misma clave con otros datos', async () => {
-      repositories
-        .get(PlatformProvisioningRequestEntity)!
-        .findOne.mockResolvedValue({
-          idempotencyKey: 'prov-acme-001',
-          requestHash: buildProvisioningRequestHash(
-            buildDto({ documentsGranted: 10 }) as never,
-          ),
-        });
+      repositories.get(PlatformRequestEntity)!.findOne.mockResolvedValue({
+        idempotencyKey: 'prov-acme-001',
+        requestHash: buildProvisioningRequestHash(
+          buildDto({ documentsGranted: 10 }) as never,
+        ),
+      });
 
       await expect(
         useCase.execute({

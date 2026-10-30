@@ -10,7 +10,7 @@ import { ProvisionProvisionalEnterpriseAccountDto } from './dto/provision-provis
 import {
   ProvisioningIdempotencyKeyRequiredException,
   ProvisioningReservedFieldsException,
-} from './exceptions/platform-provisioning.exceptions';
+} from './exceptions/platform.exceptions';
 import { ProvisionedEnterpriseAccountData } from './interfaces/provision-provisional-enterprise-account-response';
 
 /** Header de la respuesta que indica si fue la repetición de un aprovisionamiento ya hecho. */
@@ -57,14 +57,14 @@ export const PROVISIONING_RESERVED_FIELDS: Readonly<
  */
 @ApiExcludeController()
 @InternalPlatformAuth()
-@Controller('internal/organizations')
+@Controller('platform/organizations')
 export class InternalOrganizationProvisioningController {
   constructor(
     private readonly provisionAccount: ProvisionProvisionalEnterpriseAccountUseCase,
   ) {}
 
   /**
-   * `POST /api/v1/internal/organizations/provision`: crea usuario provisional, organización,
+   * `POST /api/v1/platform/organizations/provision`: crea usuario provisional, organización,
    * OWNER, perfil Enterprise manual, créditos y API key en una sola transacción.
    *
    * Responde 201 con la llave completa la primera vez, y 200 con `apiKey: null` y el header
@@ -83,7 +83,7 @@ export class InternalOrganizationProvisioningController {
    *
    * @example
    * ```ts
-   * // POST /api/v1/internal/organizations/provision
+   * // POST /api/v1/platform/organizations/provision
    * // x-api-key: <INTERNAL_PLATFORM_API_KEY>
    * // Idempotency-Key: prov-acme-001
    * ```

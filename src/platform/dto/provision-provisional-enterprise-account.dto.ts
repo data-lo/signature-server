@@ -116,7 +116,7 @@ export class ProvisionBillingDto {
 }
 
 /**
- * `POST /api/v1/internal/organizations/provision`.
+ * `POST /api/v1/platform/organizations/provision`.
  *
  * No declara `planType`, `permissionIds` ni nada que decida el backend: el controller rechaza esos
  * campos con 400 (`ProvisioningReservedFieldsException`) en vez de dejar que `whitelist` los

@@ -29,13 +29,13 @@ import {
   PROVISIONED_PLAN_TYPE,
 } from '../constants/provisioning-billing.constants';
 import { ProvisionProvisionalEnterpriseAccountDto } from '../dto/provision-provisional-enterprise-account.dto';
-import { PlatformProvisioningRequestEntity } from '../entities/platform-provisioning-request.entity';
+import { PlatformRequestEntity } from '../entities/platform-request.entity';
 import {
   ConcurrentProvisioningException,
   ProvisioningExternalReferenceAlreadyUsedException,
   ProvisioningIdempotencyKeyMismatchException,
   ProvisioningInvalidBillingPeriodException,
-} from '../exceptions/platform-provisioning.exceptions';
+} from '../exceptions/platform.exceptions';
 import { ProvisionedEnterpriseAccountData } from '../interfaces/provision-provisional-enterprise-account-response';
 import {
   ProvisionalOwner,
@@ -48,6 +48,22 @@ import {
  * basta con que no lo use otro bloqueo asesor del proyecto.
  */
 export const PROVISIONING_ADVISORY_LOCK_NAMESPACE = 1784300086;
+
+/**
+ * Explica el resultado de un aprovisionamiento nuevo e indica la regla de entrega única de la
+ * API key. Incluye los créditos acreditados para que el operador pueda verificar el alta sin
+ * inferirlo de los identificadores internos de la respuesta.
+ */
+export function provisionedAccountMessage(documentsGranted: number): string {
+  return (
+    `Organización Enterprise aprovisionada: se acreditaron ${documentsGranted} crédito(s) ` +
+    'y se emitió una API key de integración. Guarda data.apiKey ahora: por seguridad, la key completa no se volverá a mostrar.'
+  );
+}
+
+/** Explica por qué un reintento exitoso no incluye otra vez el secreto de la API key. */
+export const PROVISIONING_REPLAYED_MESSAGE =
+  'Este aprovisionamiento ya se había completado con el mismo Idempotency-Key. No se creó ni acreditó nada de nuevo; por seguridad, data.apiKey es null porque la key completa sólo se entrega una vez.';
 
 /** Lo que llega del controller, ya autenticado y validado. */
 export interface ProvisionProvisionalEnterpriseAccountCommand {
@@ -65,7 +81,7 @@ interface CreatedProvisioning {
 }
 
 /**
- * `POST /api/v1/internal/organizations/provision`: crea en UNA operación una cuenta provisional
+ * `POST /api/v1/platform/organizations/provision`: crea en UNA operación una cuenta provisional
  * lista para probar la firma documental por API.
  *
  * ```
@@ -189,8 +205,7 @@ export class ProvisionProvisionalEnterpriseAccountUseCase {
     if (outcome.kind === 'REPLAY') {
       return {
         success: true,
-        message:
-          'La cuenta provisional ya se había aprovisionado con este Idempotency-Key',
+        message: PROVISIONING_REPLAYED_MESSAGE,
         data: outcome.data,
       };
     }
@@ -204,7 +219,7 @@ export class ProvisionProvisionalEnterpriseAccountUseCase {
 
     return {
       success: true,
-      message: 'Cuenta provisional aprovisionada correctamente',
+      message: provisionedAccountMessage(outcome.data.documentsGranted),
       data: outcome.data,
     };
   }
@@ -295,7 +310,7 @@ export class ProvisionProvisionalEnterpriseAccountUseCase {
       permissions: params.permissions,
     });
 
-    await manager.getRepository(PlatformProvisioningRequestEntity).insert({
+    await manager.getRepository(PlatformRequestEntity).insert({
       idempotencyKey: params.idempotencyKey,
       requestHash: params.requestHash,
       organizationId: membership.organizationId,
@@ -351,7 +366,7 @@ export class ProvisionProvisionalEnterpriseAccountUseCase {
     requestHash: string,
   ): Promise<ProvisionedEnterpriseAccountData | null> {
     const previous = await manager
-      .getRepository(PlatformProvisioningRequestEntity)
+      .getRepository(PlatformRequestEntity)
       .findOne({ where: { idempotencyKey } });
     if (!previous) {
       return null;

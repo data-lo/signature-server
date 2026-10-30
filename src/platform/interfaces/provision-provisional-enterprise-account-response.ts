@@ -1,6 +1,6 @@
 import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status.enum';
 
-/** Lo que devuelve `POST /api/v1/internal/organizations/provision`. */
+/** Lo que devuelve `POST /api/v1/platform/organizations/provision`. */
 export interface ProvisionedEnterpriseAccountData {
   /** Organización creada (`organizations.id`). */
   organizationId: string;
