@@ -16,6 +16,41 @@ export enum DOCUMENT_KAFKA_TOPICS {
   REJECTED = 'document.rejected',
   CANCELLATION_REQUESTED = 'document.cancellation_requested',
   CANCELLED = 'document.cancelled',
+  /**
+   * Pide al servicio externo de indexación (Búsqueda Inteligente) que indexe un documento recién
+   * creado. A diferencia del resto, su cuerpo NO es un `DocumentEventPayload`: es el contrato del
+   * indexador, `DocumentIndexEventPayload`, y viaja sin el sobre de la outbox.
+   */
+  INDEX = 'document.index',
+}
+
+/**
+ * Cuerpo de `document.index`: el contrato que espera el indexador, campo por campo y sin nada más.
+ *
+ * Por eso no extiende `DocumentEventPayload` ni lleva `eventId`/`occurredAt`/`version`: el
+ * consumidor es un servicio externo que correlaciona por `clientDocumentId`, no un consumidor
+ * interno que deduplique por `eventId`.
+ */
+export interface DocumentIndexEventPayload {
+  /** Nombre de la organización dueña del documento; `null` en documentos personales. */
+  organization: string | null;
+  /** Tipo de origen del archivo para el indexador (`DOCUMENT_INDEX_ORIGIN_TYPE`). */
+  originType: string;
+  /**
+   * Ubicación interna del archivo en MinIO: `<bucket de documentos creados>/<objectKey>`. Nunca
+   * una URL prefirmada: el indexador lee el archivo con sus propias credenciales.
+   */
+  originReference: string;
+  /** `documents.id`: lo que el indexador devuelve para correlacionar su respuesta. */
+  clientDocumentId: string;
+  metadata: {
+    /** `null` en documentos personales. */
+    organizationId: string | null;
+    /** ISO 8601 de `documents.created_at`. */
+    createdAt: string;
+    /** ISO 8601 de `documents.signed_at`; al crear el documento siempre es `null`. */
+    signedAt: string | null;
+  };
 }
 
 /**
