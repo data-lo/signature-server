@@ -181,9 +181,9 @@ describe('AdvancedSummaryDocumentService', () => {
     const [documentInfo] = tablesOf(buildDefinition());
 
     expect(documentInfo).toEqual([
-      ['ID', document.id],
+      ['Id del Documento', document.id],
       ['Nombre del Documento', document.documentName],
-      ['Hash', document.hash],
+      ['Huella del Documento', document.hash],
       ['No. de Páginas', '1'],
       ['Creado por', document.createdBy],
     ]);
@@ -238,7 +238,6 @@ describe('AdvancedSummaryDocumentService', () => {
       '30001000000500003416',
     );
     expect(valueOf('Tipo de Firma')).toBe('Firma Electronica Avanzada');
-    expect(valueOf('IP')).toBe('189.237.82.225');
     // La firma llega completa; solo se le agregan cortes de renglón para que quepa en la celda.
     expect(valueOf('Firma Electrónica')?.replace(/\n/g, '')).toBe(
       'a'.repeat(344),

@@ -17,6 +17,7 @@ import { StripePaymentService } from './../src/payments/stripe/stripe-payment.se
 import { SubscriptionBillingService } from './../src/billing/subscriptions/subscription-billing.service';
 import { RegisterSubscriptionBillingUseCase } from './../src/billing/subscriptions/register-subscription-billing.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './../src/billing/subscriptions/finalize-subscription-from-stripe.use-case';
+import { RegisterDocumentCreditPurchaseUseCase } from './../src/billing/credits/register-document-credit-purchase.use-case';
 import { SubscriptionBillingHistoryEntity } from './../src/billing/subscriptions/subscription-billing-history.entity';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
 import { CatalogSyncService } from './../src/billing/catalog/catalog-sync.service';
@@ -263,6 +264,7 @@ describe('Webhook de Stripe (e2e)', () => {
          */
         RegisterSubscriptionBillingUseCase,
         FinalizeSubscriptionFromStripeUseCase,
+        RegisterDocumentCreditPurchaseUseCase,
         BillingCatalogService,
         CatalogSyncService,
         CheckoutOrderService,
