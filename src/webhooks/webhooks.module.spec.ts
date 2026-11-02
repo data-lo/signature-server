@@ -23,9 +23,12 @@ import { ProcessBiometricSignatureResultUseCase } from 'src/biometric-signature/
 import { BiometricSignatureAttemptService } from 'src/biometric-signature/services/biometric-signature-attempt.service';
 import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
+import { DocumentIndexingJobEntity } from 'src/document/entities/document-indexing-job.entity';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
+import { ReceiveIndexerWebhookUseCase } from './applications/receive-indexer-webhook.use-case';
 import { DiditWebhookController } from './didit-webhook.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
+import { IndexerWebhookController } from './indexer-webhook.controller';
 
 /**
  * Vale la pena tenerlo: los errores de cableado de Nest (un provider que dejó de exportarse,
@@ -87,6 +90,8 @@ describe('WebhooksModule', () => {
       .useModule(StubBiometricSignatureModule)
       .overrideProvider(getRepositoryToken(WebhookEventEntity))
       .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(DocumentIndexingJobEntity))
+      .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(AccountEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(IdentityVerificationEntity))
@@ -122,5 +127,7 @@ describe('WebhooksModule', () => {
     expect(moduleRef.get(DiditWebhookController)).toBeDefined();
     expect(moduleRef.get(StripeWebhookController)).toBeDefined();
     expect(moduleRef.get(ReceiveDiditWebhookUseCase)).toBeDefined();
+    expect(moduleRef.get(IndexerWebhookController)).toBeDefined();
+    expect(moduleRef.get(ReceiveIndexerWebhookUseCase)).toBeDefined();
   });
 });

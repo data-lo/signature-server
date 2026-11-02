@@ -161,6 +161,7 @@ describe('DocumentIndexRequestService', () => {
         status: DOCUMENT_INDEXING_STATUS_ENUM.PENDING,
         attemptCount: 0,
         externalJobId: null,
+        externalDocumentId: null,
         receivedAt: null,
         completedAt: null,
         error: null,
