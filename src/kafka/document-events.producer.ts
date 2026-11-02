@@ -4,6 +4,7 @@ import {
   DOCUMENT_KAFKA_TOPICS,
   DocumentEventPayload,
   DocumentCollaboratorSignedPayload,
+  DocumentIndexEventPayload,
 } from './document-events.topics';
 import { EventService } from 'src/event/event.service';
 import { EVENT_TYPE_ENUM } from 'src/event/enums/event-type.enum';
@@ -50,6 +51,7 @@ const TOPIC_TO_EVENT_TYPE: Record<DOCUMENT_KAFKA_TOPICS, EVENT_TYPE_ENUM> = {
   [DOCUMENT_KAFKA_TOPICS.CANCELLATION_REQUESTED]:
     EVENT_TYPE_ENUM.DOCUMENT_CANCELLATION_REQUESTED,
   [DOCUMENT_KAFKA_TOPICS.CANCELLED]: EVENT_TYPE_ENUM.DOCUMENT_CANCELLED,
+  [DOCUMENT_KAFKA_TOPICS.INDEX]: EVENT_TYPE_ENUM.DOCUMENT_INDEX,
 };
 
 /** Publica los eventos de negocio del ciclo de vida del documento (creado, enviado a firma, firmado, rechazado, cancelado). */
@@ -157,6 +159,41 @@ export class DocumentEventsProducer {
         resolutionNote: resolutionNote ?? null,
       },
       from: actorUserId,
+    });
+  }
+
+  /**
+   * Registra en la outbox la solicitud de indexación de un documento (`document.index`), dentro de
+   * la transacción que lo crea.
+   *
+   * Se publica sin el sobre de la outbox (`envelope: false`): el indexador es un servicio externo
+   * con un contrato exacto, y `DocumentIndexEventPayload` ya es ese contrato completo.
+   *
+   * @param manager - `EntityManager` de la transacción que crea el documento.
+   * @param payload - Contrato del indexador, ya armado.
+   * @param actorUserId - Usuario que creó el documento; queda en `events.from` para trazabilidad,
+   *   pero no viaja en el mensaje.
+   * @returns El evento registrado en la outbox.
+   *
+   * @throws {QueryFailedError} Si la inserción falla — propaga y revierte la creación del
+   *   documento, igual que el resto de los eventos de la outbox.
+   *
+   * @example
+   * ```ts
+   * await producer.enqueueIndexRequested(manager, payload, createdBy);
+   * ```
+   */
+  async enqueueIndexRequested(
+    manager: EntityManager,
+    payload: DocumentIndexEventPayload,
+    actorUserId: string,
+  ): Promise<EventEntity> {
+    return this.outboxService.enqueue(manager, {
+      eventType: TOPIC_TO_EVENT_TYPE[DOCUMENT_KAFKA_TOPICS.INDEX],
+      topic: DOCUMENT_KAFKA_TOPICS.INDEX,
+      body: { ...payload },
+      from: actorUserId,
+      envelope: false,
     });
   }
 
