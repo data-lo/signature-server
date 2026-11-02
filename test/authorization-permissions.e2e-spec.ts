@@ -35,6 +35,8 @@ import { GetDocumentUseCase } from './../src/document/applications/get-document.
 import { CreateOrganizationUseCase } from './../src/account/applications/create-organization.use-case';
 import { InviteOrganizationMemberUseCase } from './../src/account/applications/invite-organization-member.use-case';
 import { AddOrganizationMemberUseCase } from './../src/account/applications/add-organization-member.use-case';
+import { GetOrganizationUseCase } from './../src/account/applications/get-organization.use-case';
+import { UpdateOrganizationUseCase } from './../src/account/applications/update-organization.use-case';
 import { GetOrganizationMemberListUseCase } from './../src/account/applications/get-organization-member-list.use-case';
 import { UpdateAccountMemberUseCase } from './../src/account/applications/update-account-member.use-case';
 import { RevokeAccountAccessUseCase } from './../src/account/applications/revoke-account-access.use-case';
@@ -176,6 +178,8 @@ describe('Autorización por permisos (e2e)', () => {
       CreateOrganizationUseCase,
       InviteOrganizationMemberUseCase,
       AddOrganizationMemberUseCase,
+      GetOrganizationUseCase,
+      UpdateOrganizationUseCase,
       GetOrganizationMemberListUseCase,
       UpdateAccountMemberUseCase,
       RevokeAccountAccessUseCase,

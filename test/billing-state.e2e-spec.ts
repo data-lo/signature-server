@@ -9,6 +9,8 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
 
 import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
+import { GetAvailableDocumentCreditOffersUseCase } from './../src/billing/credits/get-available-document-credit-offers.use-case';
+import { CreateDocumentCreditCheckoutUseCase } from './../src/billing/checkout/create-document-credit-checkout.use-case';
 import { PaymentsController } from './../src/payments/payments.controller';
 import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-public-stripe-plans.use-case';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
@@ -158,6 +160,15 @@ describe('Estado de facturación (e2e)', () => {
         },
         {
           provide: ResumeSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        // El controller los pide para la compra de paquetes, que tiene su propia cobertura.
+        {
+          provide: GetAvailableDocumentCreditOffersUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        {
+          provide: CreateDocumentCreditCheckoutUseCase,
           useValue: { execute: jest.fn() },
         },
         GetBillingAccessUseCase,

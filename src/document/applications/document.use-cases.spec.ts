@@ -9,6 +9,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IsNull } from 'typeorm';
 import { GuestSigningAccessService } from '../services/guest-signing-access.service';
+import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
+import { SigningInvitationService } from 'src/signing-invitation/signing-invitation.service';
+import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
 import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from '../enum/guest-signing-access-purpose.enum';
 import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
@@ -217,6 +220,7 @@ describe('casos de uso de documentos', () => {
   let emailService: Record<string, jest.Mock>;
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
+  let authorizationService: { authorize: jest.Mock };
   let accountMemberService: Record<string, jest.Mock>;
   let witnessNotificationService: { notifyWitnessesOfRejection: jest.Mock };
   let verificationCodeService: Record<string, jest.Mock>;
@@ -229,6 +233,8 @@ describe('casos de uso de documentos', () => {
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
   let guestSigningAccessService: Record<string, jest.Mock>;
+  let signingInvitations: { issue: jest.Mock };
+  let biometricAttemptRepository: ReturnType<typeof createMockRepository>;
   let createDocument: CreateDocumentUseCase;
   let getDocuments: GetDocumentsUseCase;
   let getDocument: GetDocumentUseCase;
@@ -367,6 +373,11 @@ describe('casos de uso de documentos', () => {
     // produce, así que los tests pasaban contra un contrato inexistente — y lo que se persiste en
     // `advancedSignature` es justo lo que después se le manda a Seal Service.
     efirmaService = {
+      calcularHashDocumento: jest.fn().mockReturnValue('hash-doc-1'),
+      verificar: jest.fn().mockReturnValue({
+        hashCoincide: true,
+        firmaValida: true,
+      }),
       firmar: jest.fn().mockReturnValue({
         originalHash: 'hash-doc-1',
         signatureBase64: 'firma-base64',
@@ -416,6 +427,12 @@ describe('casos de uso de documentos', () => {
       revokeOpenForCollaborator: jest.fn().mockResolvedValue(0),
       revokeOpenForDocument: jest.fn().mockResolvedValue(0),
     };
+    signingInvitations = {
+      issue: jest
+        .fn()
+        .mockResolvedValue({ url: 'https://app.test/sign/token' }),
+    };
+    biometricAttemptRepository = createMockRepository();
     signatureQrService = {
       generateAdvancedSignaturePng: jest
         .fn()
@@ -497,6 +514,12 @@ describe('casos de uso de documentos', () => {
           useValue: advancedSummaryDocumentService,
         },
         { provide: SignatureQrService, useValue: signatureQrService },
+        SigningLinkService,
+        { provide: SigningInvitationService, useValue: signingInvitations },
+        {
+          provide: getRepositoryToken(BiometricSignatureAttemptEntity),
+          useValue: biometricAttemptRepository,
+        },
         {
           provide: GuestSigningAccessService,
           useValue: guestSigningAccessService,
