@@ -472,13 +472,17 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
       );
 
       const [user] = await dataSource.query(
-        `SELECT lifecycle_status, password, national_id FROM users WHERE id = $1`,
+        `SELECT u.lifecycle_status, u.password, u.national_id, p.curp
+         FROM users u JOIN personal_information p ON p.id = u.personal_information_id
+         WHERE u.id = $1`,
         [provisioned.ownerUserId],
       );
+      // Con su ficha (sin CURP), para que el webhook aprobado de Didit pueda guardar la INE.
       expect(user).toEqual({
         lifecycle_status: 'PROVISIONED',
         password: null,
         national_id: null,
+        curp: null,
       });
 
       const [membership] = await dataSource.query(
