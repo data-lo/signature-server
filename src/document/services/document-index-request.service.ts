@@ -6,6 +6,8 @@ import { DocumentIndexEventPayload } from 'src/kafka/document-events.topics';
 import { EventEntity } from 'src/event/entities/event.entity';
 
 import { DocumentEntity } from '../entities/document.entity';
+import { DocumentIndexingJobEntity } from '../entities/document-indexing-job.entity';
+import { DOCUMENT_INDEXING_STATUS_ENUM } from '../enum/document-indexing-status.enum';
 
 /** Lo mínimo del documento que necesita el contrato del indexador. */
 export type IndexableDocument = Pick<
@@ -19,6 +21,26 @@ export type IndexableDocument = Pick<
 >;
 
 /**
+ * Copia del contexto enviado al indexador que se guarda en `document_indexing_jobs.metadata`, para
+ * revisar, reintentar o auditar la solicitud aunque después cambie el documento o la organización.
+ */
+export interface DocumentIndexingJobMetadata extends Record<string, unknown> {
+  originType: string;
+  originReference: string;
+  organizationId: string | null;
+  organizationName: string | null;
+  clientDocumentId: string;
+  /** ISO 8601 de `documents.created_at`. */
+  createdAt: string;
+}
+
+/** Lo que deja registrado una solicitud de indexación: el evento de la outbox y su job. */
+export interface DocumentIndexRequest {
+  event: EventEntity;
+  job: DocumentIndexingJobEntity;
+}
+
+/**
  * Solicita al servicio externo de indexación (Búsqueda Inteligente) que indexe un documento,
  * publicando `document.index` a través de la outbox transaccional.
  *
@@ -26,8 +48,9 @@ export type IndexableDocument = Pick<
  * así que una variable faltante impide levantar la aplicación en lugar de aparecer en la primera
  * creación de un documento.
  *
- * El estado del trabajo de indexación (`DocumentIndexingJobEntity`) y la respuesta del indexador
- * quedan fuera: esto sólo pide la indexación.
+ * Cada solicitud deja además un `DocumentIndexingJobEntity` en `PENDING`, en la misma transacción
+ * que el evento: es lo que permitirá procesar la respuesta del indexador. Esa respuesta —y los
+ * estados `RECEIVED`, `INDEXED` y `FAILED`— queda fuera: esto sólo pide la indexación.
  */
 @Injectable()
 export class DocumentIndexRequestService {
@@ -106,23 +129,54 @@ export class DocumentIndexRequestService {
   }
 
   /**
-   * Registra la solicitud de indexación en la outbox, dentro de la transacción que crea el
-   * documento, si y sólo si el documento es indexable.
+   * Arma la `metadata` del job a partir del payload que se envía al indexador, para que sea una
+   * copia fiel de lo enviado y no una segunda lectura del documento.
    *
-   * La publicación real la hace el `flush` de la outbox después del commit: si la transacción se
-   * revierte, la fila desaparece con ella y el indexador nunca se entera.
+   * @param payload - Cuerpo de `document.index` ya armado.
+   * @returns La copia que se guarda en el job.
+   *
+   * @example
+   * ```ts
+   * service.buildJobMetadata(service.buildPayload(document, 'Acme'));
+   * // { originType: 'digital_native', originReference: 'created-documents/abc.pdf',
+   * //   organizationId: 'org-1', organizationName: 'Acme', clientDocumentId: document.id,
+   * //   createdAt: '2026-10-30T12:00:00.000Z' }
+   * ```
+   */
+  buildJobMetadata(
+    payload: DocumentIndexEventPayload,
+  ): DocumentIndexingJobMetadata {
+    return {
+      originType: payload.originType,
+      originReference: payload.originReference,
+      organizationId: payload.metadata.organizationId,
+      organizationName: payload.organization,
+      clientDocumentId: payload.clientDocumentId,
+      createdAt: payload.metadata.createdAt,
+    };
+  }
+
+  /**
+   * Registra la solicitud de indexación —el evento `document.index` en la outbox y su
+   * `DocumentIndexingJobEntity` en `PENDING`— dentro de la transacción que crea el documento, si y
+   * sólo si el documento es indexable.
+   *
+   * Las dos filas se escriben con el mismo `manager`: si la transacción se revierte, desaparecen
+   * con el documento. La publicación real la hace el `flush` de la outbox después del commit, así
+   * que el job existe antes de que el indexador pueda responder.
    *
    * @param manager - `EntityManager` de la transacción que crea el documento.
    * @param document - Documento ya guardado en esa transacción.
    * @param organizationName - Nombre de su organización; `null` en documentos personales.
    * @param actorUserId - Usuario que creó el documento.
-   * @returns El evento registrado, o `null` si el documento no es indexable.
+   * @returns El evento y el job registrados, o `null` si el documento no es indexable.
    *
-   * @throws {QueryFailedError} Si la inserción en la outbox falla; revierte la transacción.
+   * @throws {QueryFailedError} Si falla la inserción del evento o del job; revierte la transacción.
    *
    * @example
    * ```ts
-   * await this.documentIndexRequest.enqueue(manager, document, 'Acme', createdBy);
+   * const request = await this.documentIndexRequest.enqueue(manager, document, 'Acme', createdBy);
+   * request?.job.status; // 'PENDING'
    * ```
    */
   async enqueue(
@@ -130,13 +184,31 @@ export class DocumentIndexRequestService {
     document: IndexableDocument,
     organizationName: string | null,
     actorUserId: string,
-  ): Promise<EventEntity | null> {
+  ): Promise<DocumentIndexRequest | null> {
     if (document.isIndexable !== true) return null;
 
-    return this.documentEventsProducer.enqueueIndexRequested(
+    const payload = this.buildPayload(document, organizationName);
+    const event = await this.documentEventsProducer.enqueueIndexRequested(
       manager,
-      this.buildPayload(document, organizationName),
+      payload,
       actorUserId,
     );
+
+    const jobRepository = manager.getRepository(DocumentIndexingJobEntity);
+    const job = await jobRepository.save(
+      jobRepository.create({
+        documentId: document.id,
+        status: DOCUMENT_INDEXING_STATUS_ENUM.PENDING,
+        attemptCount: 0,
+        // Se llenan al recibir la respuesta del indexador (fuera de esta tarea).
+        externalJobId: null,
+        receivedAt: null,
+        completedAt: null,
+        error: null,
+        metadata: this.buildJobMetadata(payload),
+      }),
+    );
+
+    return { event, job };
   }
 }

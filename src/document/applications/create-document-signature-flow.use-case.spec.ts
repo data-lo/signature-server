@@ -30,6 +30,8 @@ import {
 } from '../dto/create-document-signatures.dto';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
 import { DocumentIndexRequestService } from '../services/document-index-request.service';
+import { DocumentIndexingJobEntity } from '../entities/document-indexing-job.entity';
+import { DOCUMENT_INDEXING_STATUS_ENUM } from '../enum/document-indexing-status.enum';
 import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
 import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
 import { PlanActionNotIncludedException } from 'src/billing/exceptions/billing.exceptions';
@@ -70,6 +72,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let collaboratorRepo: ReturnType<typeof createMockRepository>;
   let notificationRepo: ReturnType<typeof createMockRepository>;
   let simpleSignatureRepo: ReturnType<typeof createMockRepository>;
+  let indexingJobRepo: ReturnType<typeof createMockRepository>;
   let dataSource: { transaction: jest.Mock; getRepository: jest.Mock };
   let organizationRepo: { findOne: jest.Mock };
   let minioService: Record<string, jest.Mock>;
@@ -202,6 +205,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     collaboratorRepo = createMockRepository();
     notificationRepo = createMockRepository();
     simpleSignatureRepo = createMockRepository();
+    indexingJobRepo = createMockRepository();
 
     /** Como TypeORM tras el INSERT: devuelve también el `createdAt` generado por la base. */
     const saveDocument = documentRepo.save.getMockImplementation()!;
@@ -216,6 +220,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         if (entity === CollaboratorEntity) return collaboratorRepo;
         if (entity === NotificationEntity) return notificationRepo;
         if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
+        if (entity === DocumentIndexingJobEntity) return indexingJobRepo;
         throw new Error('repositorio no mockeado');
       }),
     };
@@ -1695,6 +1700,81 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         ).toHaveBeenCalledWith(manager, expect.anything(), 'creator-1');
         expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
       });
+
+      /**
+       * Historia "Crear un trabajo de indexación al encolar el evento document.index": el job se
+       * escribe con el repositorio de la transacción de creación, en `PENDING`, y antes del flush.
+       */
+      it('documento indexable: crea un job PENDING en la transacción, antes del flush', async () => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'org-1',
+        });
+
+        const result = await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(manager.getRepository).toHaveBeenCalledWith(
+          DocumentIndexingJobEntity,
+        );
+        expect(indexingJobRepo.save).toHaveBeenCalledTimes(1);
+        expect(indexingJobRepo.create).toHaveBeenCalledWith({
+          documentId: result.data.id,
+          status: DOCUMENT_INDEXING_STATUS_ENUM.PENDING,
+          attemptCount: 0,
+          externalJobId: null,
+          receivedAt: null,
+          completedAt: null,
+          error: null,
+          metadata: {
+            originType: 'digital_native',
+            originReference: 'created-documents/object-key-1.pdf',
+            organizationId: 'org-1',
+            organizationName: 'Acme',
+            clientDocumentId: result.data.id,
+            createdAt: '2026-10-30T12:00:00.000Z',
+          },
+        });
+        expect(indexingJobRepo.save.mock.invocationCallOrder[0]).toBeLessThan(
+          documentEventsProducer.flushOutbox.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('documento no indexable: no crea ningún job', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...baseDto,
+            documentData: { ...baseDto.documentData, isIndexable: false },
+          },
+          file,
+          '127.0.0.1',
+        );
+
+        expect(indexingJobRepo.save).not.toHaveBeenCalled();
+      });
+
+      /**
+       * Si el job no se puede guardar, la creación entera falla: el error sale de la transacción
+       * —que revierte documento, evento y job— y nada llega al flush de la outbox.
+       */
+      it('si guardar el job falla, la creación falla y no se publica nada', async () => {
+        indexingJobRepo.save.mockRejectedValue(new Error('insert del job'));
+
+        await expect(
+          useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+        ).rejects.toThrow('insert del job');
+
+        expect(documentEventsProducer.enqueueIndexRequested).toHaveBeenCalled();
+        expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+      });
     });
 
     describe('interruptor de la organización (indexDocuments)', () => {
@@ -1875,6 +1955,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
               if (entity === CollaboratorEntity) return collaboratorRepo;
               if (entity === NotificationEntity) return notificationRepo;
               if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
+              if (entity === DocumentIndexingJobEntity) return indexingJobRepo;
               throw new Error('repositorio no mockeado');
             }),
           }),

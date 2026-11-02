@@ -1,5 +1,8 @@
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 
+import { DocumentIndexingJobEntity } from '../entities/document-indexing-job.entity';
+import { DOCUMENT_INDEXING_STATUS_ENUM } from '../enum/document-indexing-status.enum';
+
 import {
   DocumentIndexRequestService,
   IndexableDocument,
@@ -11,7 +14,9 @@ import {
  */
 describe('DocumentIndexRequestService', () => {
   const ORIGINAL_ENV = { ...process.env };
-  const manager = {} as never;
+  let jobRepository: { create: jest.Mock; save: jest.Mock };
+  /** `EntityManager` de la transacción, reducido al repositorio de jobs. */
+  let manager: { getRepository: jest.Mock };
 
   let documentEventsProducer: { enqueueIndexRequested: jest.Mock };
   let service: DocumentIndexRequestService;
@@ -36,6 +41,16 @@ describe('DocumentIndexRequestService', () => {
     process.env.MINIO_CREATED_DOCUMENTS_BUCKET = 'created-documents';
     documentEventsProducer = {
       enqueueIndexRequested: jest.fn().mockResolvedValue({ id: 'event-1' }),
+    };
+    jobRepository = {
+      create: jest.fn((data: object) => ({ ...data })),
+      save: jest.fn(async (job: object) => ({ id: 'job-1', ...job })),
+    };
+    manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === DocumentIndexingJobEntity) return jobRepository;
+        throw new Error('repositorio no mockeado');
+      }),
     };
     service = new DocumentIndexRequestService(
       documentEventsProducer as unknown as DocumentEventsProducer,
@@ -119,26 +134,97 @@ describe('DocumentIndexRequestService', () => {
     });
   });
 
+  /**
+   * Historia "Crear un trabajo de indexación al encolar el evento document.index": cada evento
+   * encolado deja exactamente un job en `PENDING`, escrito con el mismo `manager` de la transacción.
+   */
   describe('enqueue', () => {
-    it('documento indexable: lo registra en la outbox con el manager de la transacción', async () => {
+    it('documento indexable: registra el evento y un job PENDING con el manager de la transacción', async () => {
       const result = await service.enqueue(
-        manager,
+        manager as never,
         organizationDocument,
         'Acme',
         'user-1',
       );
 
-      expect(result).toEqual({ id: 'event-1' });
       expect(documentEventsProducer.enqueueIndexRequested).toHaveBeenCalledWith(
         manager,
         service.buildPayload(organizationDocument, 'Acme'),
         'user-1',
       );
+      expect(manager.getRepository).toHaveBeenCalledWith(
+        DocumentIndexingJobEntity,
+      );
+      expect(jobRepository.save).toHaveBeenCalledTimes(1);
+      expect(jobRepository.create).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        status: DOCUMENT_INDEXING_STATUS_ENUM.PENDING,
+        attemptCount: 0,
+        externalJobId: null,
+        receivedAt: null,
+        completedAt: null,
+        error: null,
+        metadata: {
+          originType: 'digital_native',
+          originReference: 'created-documents/a1b2c3.pdf',
+          organizationId: 'org-1',
+          organizationName: 'Acme',
+          clientDocumentId: 'doc-1',
+          createdAt: '2026-10-30T12:00:00.000Z',
+        },
+      });
+      expect(result).toEqual({
+        event: { id: 'event-1' },
+        job: expect.objectContaining({
+          id: 'job-1',
+          status: DOCUMENT_INDEXING_STATUS_ENUM.PENDING,
+        }),
+      });
     });
 
-    it('documento no indexable: no registra nada', async () => {
+    it('documento personal: el job guarda organización e id de organización en null', async () => {
+      await service.enqueue(manager as never, personalDocument, null, 'user-1');
+
+      expect(jobRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-2',
+          metadata: expect.objectContaining({
+            organizationId: null,
+            organizationName: null,
+            clientDocumentId: 'doc-2',
+          }),
+        }),
+      );
+    });
+
+    /**
+     * La `metadata` del job es una copia del payload enviado, no una segunda lectura del documento:
+     * los campos compartidos tienen que coincidir uno a uno.
+     */
+    it('la metadata del job coincide con lo enviado al indexador', async () => {
+      await service.enqueue(
+        manager as never,
+        organizationDocument,
+        'Acme',
+        'user-1',
+      );
+
+      const [, payload] =
+        documentEventsProducer.enqueueIndexRequested.mock.calls[0];
+      const { metadata } = jobRepository.create.mock.calls[0][0];
+      expect(metadata).toStrictEqual({
+        originType: payload.originType,
+        originReference: payload.originReference,
+        organizationId: payload.metadata.organizationId,
+        organizationName: payload.organization,
+        clientDocumentId: payload.clientDocumentId,
+        createdAt: payload.metadata.createdAt,
+      });
+    });
+
+    it('documento no indexable: no registra evento ni job', async () => {
       const result = await service.enqueue(
-        manager,
+        manager as never,
         { ...organizationDocument, isIndexable: false },
         'Acme',
         'user-1',
@@ -148,6 +234,24 @@ describe('DocumentIndexRequestService', () => {
       expect(
         documentEventsProducer.enqueueIndexRequested,
       ).not.toHaveBeenCalled();
+      expect(jobRepository.save).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Si el job no se puede guardar, el error sube y revierte la transacción del llamador, que se
+     * lleva consigo el evento ya encolado: nunca queda un evento sin su job.
+     */
+    it('si guardar el job falla, propaga el error para revertir la transacción', async () => {
+      jobRepository.save.mockRejectedValue(new Error('insert fallido'));
+
+      await expect(
+        service.enqueue(
+          manager as never,
+          organizationDocument,
+          'Acme',
+          'user-1',
+        ),
+      ).rejects.toThrow('insert fallido');
     });
   });
 

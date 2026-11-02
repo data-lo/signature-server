@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -18,8 +19,13 @@ import { DOCUMENT_INDEXING_STATUS_ENUM } from '../enum/document-indexing-status.
  * trabajos, por eso la relación es `ManyToOne`.
  *
  * `documentId` y `document` comparten la columna física `document_id`.
+ *
+ * Se crea en `PENDING` dentro de la transacción que crea el documento y encola `document.index`
+ * (ver `DocumentIndexRequestService.enqueue`), así que nunca existe un job sin su evento ni al revés.
+ * La tabla la crea la migración `CreateDocumentIndexingJobs`.
  */
 @Entity('document_indexing_jobs')
+@Index('IDX_document_indexing_jobs_document', ['documentId'])
 export class DocumentIndexingJobEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -27,8 +33,13 @@ export class DocumentIndexingJobEntity {
   @Column({ name: 'document_id', type: 'uuid' })
   documentId: string;
 
-  @ManyToOne(() => DocumentEntity)
-  @JoinColumn({ name: 'document_id' })
+  /** `CASCADE` como el resto de las tablas hijas de `documents`: el job no vive sin su documento. */
+  @ManyToOne(() => DocumentEntity, { onDelete: 'CASCADE' })
+  @JoinColumn({
+    name: 'document_id',
+    // El mismo nombre que la migración, para que `schema:log` no proponga recrearla.
+    foreignKeyConstraintName: 'FK_document_indexing_jobs_document_id',
+  })
   document: DocumentEntity;
 
   /** Id que asigna el indexador; `null` hasta que acepta el trabajo. */
