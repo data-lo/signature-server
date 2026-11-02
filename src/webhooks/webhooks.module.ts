@@ -3,19 +3,15 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { PaymentsModule } from 'src/payments/payments.module';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
-import { DocumentIndexingModule } from 'src/document/document-indexing.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { DiditWebhookSignatureVerifierService } from './didit/didit-webhook-signature-verifier.service';
 import { DiditWebhookDispatcherService } from './didit/didit-webhook-dispatcher.service';
 import { StripeWebhookSignatureVerifierService } from './stripe/stripe-webhook-signature-verifier.service';
-import { IndexerWebhookSignatureVerifierService } from './indexer/indexer-webhook-signature-verifier.service';
 import { RegisterWebhookEventUseCase } from './applications/register-webhook-event.use-case';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
 import { ReceiveStripeWebhookUseCase } from './applications/receive-stripe-webhook.use-case';
-import { ReceiveIndexerWebhookUseCase } from './applications/receive-indexer-webhook.use-case';
 import { DiditWebhookController } from './didit-webhook.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
-import { IndexerWebhookController } from './indexer-webhook.controller';
 
 /**
  * Punto de entrada único de los webhooks de proveedores externos.
@@ -39,9 +35,6 @@ import { IndexerWebhookController } from './indexer-webhook.controller';
  * búsqueda del intento por `session_id`: Didit manda al mismo endpoint los resultados de identidad
  * y de firma biométrica, y `DiditWebhookDispatcherService` decide a cuál pertenece cada entrega.
  * Mismo sentido único: `biometric-signature` no conoce a `webhooks`.
- *
- * `DocumentIndexingModule` se importa por `ProcessIndexerNotificationUseCase`, que aplica al trabajo
- * de indexación lo que notifica el indexador. Mismo sentido único: `document` no conoce a `webhooks`.
  */
 @Module({
   imports: [
@@ -49,22 +42,15 @@ import { IndexerWebhookController } from './indexer-webhook.controller';
     PaymentsModule,
     IdentityVerificationModule,
     BiometricSignatureModule,
-    DocumentIndexingModule,
   ],
-  controllers: [
-    DiditWebhookController,
-    StripeWebhookController,
-    IndexerWebhookController,
-  ],
+  controllers: [DiditWebhookController, StripeWebhookController],
   providers: [
     DiditWebhookSignatureVerifierService,
     DiditWebhookDispatcherService,
     StripeWebhookSignatureVerifierService,
-    IndexerWebhookSignatureVerifierService,
     RegisterWebhookEventUseCase,
     ReceiveDiditWebhookUseCase,
     ReceiveStripeWebhookUseCase,
-    ReceiveIndexerWebhookUseCase,
   ],
   exports: [RegisterWebhookEventUseCase],
 })

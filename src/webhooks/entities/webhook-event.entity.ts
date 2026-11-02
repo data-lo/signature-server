@@ -11,7 +11,7 @@ import { WEBHOOK_PROVIDER_ENUM } from '../enums/webhook-provider.enum';
 import { WEBHOOK_PROCESSING_STATUS_ENUM } from '../enums/webhook-processing-status.enum';
 
 /**
- * Bitácora de entregas de webhook de proveedores externos (Didit, Stripe, indexador).
+ * Bitácora de entregas de webhook de proveedores externos (Didit, Stripe).
  *
  * Es el registro de idempotencia del módulo: antes de delegar al dominio se inserta la fila,
  * y `UNIQUE(provider, provider_event_id)` garantiza que una re-entrega del mismo evento no
