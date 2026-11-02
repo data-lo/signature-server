@@ -612,6 +612,7 @@ Punto de entrada único de los proveedores externos. Recibe el cuerpo crudo, ver
 
 - `StripeWebhookController`: `POST /api/v1/webhooks/stripe` → `ReceiveStripeWebhookUseCase` → `StripeWebhookService` (módulo `payments`).
 - `DiditWebhookController`: `POST /api/v1/webhooks/didit` → `ReceiveDiditWebhookUseCase`.
+- `IndexerWebhookController`: `POST /api/v1/webhooks/indexer` → `ReceiveIndexerWebhookUseCase` → `ProcessIndexerNotificationUseCase` (módulo `document`).
 - Una entrega con firma ausente o inválida responde 401 y **también** deja fila de auditoría, con `signature_valid = false` y sin `payload`: nunca ejecuta dominio.
 
 ### `platform` (`POST /api/v1/platform/organizations/provision`) — cuenta provisional Enterprise para pruebas de integración
@@ -761,6 +762,7 @@ La plantilla completa y comentada es [`.env.example`](.env.example): trae valore
 | **SendGrid** | `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` | El correo remitente debe estar verificado en SendGrid. |
 | **Stripe** | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Sin la primera **la aplicación no arranca**. Si usas una *restricted key*, necesita LECTURA de Products y Prices —de ahí sale el catálogo— además de escritura en Checkout, Customers y Subscriptions. Los antiguos `STRIPE_PRICE_ID_*` ya no se usan: el catálogo se lee en vivo. |
 | **Didit** | `DIDIT_API_KEY`, `DIDIT_WORKFLOW_ID`, `DIDIT_API_URL`, `DIDIT_WEBHOOK_SECRET_KEY` | La API key nunca sale del servidor: al frontend sólo le llega la URL hospedada. Sin el secreto del webhook se rechazan todas las entregas y ningún usuario avanza de "identidad pendiente". |
+| **Indexador** | `INDEXER_WEBHOOK_SECRET` | Sin él se rechazan todas las entregas del indexador y los trabajos de indexación se quedan en `PENDING`. |
 | **Turnstile** | `TURNSTILE_SECRET_KEY` | Clave **privada**, sólo acá. Su pareja pública `TURNSTILE_SITE_KEY` vive en el `.env` de `signature-app`. Para desarrollo, Cloudflare publica una clave de prueba que siempre aprueba. |
 | **Seal Service** | `SEAL_SERVICE_URL`, `SEAL_SERVICE_API_KEY` | La API key tiene que ser idéntica a la `API_KEY` del `.env` de `seal-service`, o su guard responde 401. El puerto debe coincidir con el `PORT` de ese servicio: su valor por defecto es `3001`, que en local ya ocupa `signature-app`. |
 
