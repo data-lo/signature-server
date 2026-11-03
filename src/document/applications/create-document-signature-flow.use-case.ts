@@ -766,12 +766,6 @@ export class CreateDocumentSignatureFlowUseCase {
         );
       }
 
-      /**
-       * La solicitud de indexación —el evento `document.index` y su job en `PENDING`— se registra
-       * en esta misma transacción y la publica el `flush` de abajo, después del commit: un
-       * documento que no llegue a guardarse nunca se manda a indexar ni deja un job huérfano.
-       * Sólo si es indexable —la regla vive en `DocumentIndexRequestService.enqueue`—.
-       */
       await this.documentIndexRequest.enqueue(
         manager,
         document,
