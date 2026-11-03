@@ -49,8 +49,9 @@ export interface DocumentIndexRequest {
  * creación de un documento.
  *
  * Cada solicitud deja además un `DocumentIndexingJobEntity` en `PENDING`, en la misma transacción
- * que el evento: es lo que permitirá procesar la respuesta del indexador. Esa respuesta —y los
- * estados `RECEIVED`, `INDEXED` y `FAILED`— queda fuera: esto sólo pide la indexación.
+ * que el evento: es lo que permite procesar la respuesta del indexador. Esa respuesta —y los
+ * estados `RECEIVED`, `INDEXED` y `FAILED`— la aplica `ProcessIndexerNotificationUseCase`: esto sólo
+ * pide la indexación.
  */
 @Injectable()
 export class DocumentIndexRequestService {
@@ -200,8 +201,9 @@ export class DocumentIndexRequestService {
         documentId: document.id,
         status: DOCUMENT_INDEXING_STATUS_ENUM.PENDING,
         attemptCount: 0,
-        // Se llenan al recibir la respuesta del indexador (fuera de esta tarea).
+        // Se llenan al recibir la respuesta del indexador.
         externalJobId: null,
+        externalDocumentId: null,
         receivedAt: null,
         completedAt: null,
         error: null,
