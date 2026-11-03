@@ -168,6 +168,20 @@ export class MetricsService {
   }
 
   /**
+   * Indica si las métricas están activas.
+   *
+   * @returns El valor de `METRICS_ENABLED` resuelto al arrancar.
+   *
+   * @example
+   * ```ts
+   * metrics.isEnabled(); // true
+   * ```
+   */
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /**
    * Indica si una petición se mide.
    *
    * Se descartan `/health` y el propio endpoint de métricas, que son sondeos periódicos y

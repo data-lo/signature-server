@@ -16,6 +16,7 @@ import {
 } from './metrics.constants';
 import { MetricsController } from './metrics.controller';
 import { MetricsService } from './metrics.service';
+import { WebhookMetricsService } from './webhook-metrics.service';
 import { HttpMetricsMiddleware } from './middleware/http-metrics.middleware';
 
 /**
@@ -66,12 +67,13 @@ export class MetricsModule implements NestModule {
     const baseProviders = [
       { provide: METRICS_OPTIONS, useValue: options },
       MetricsService,
+      WebhookMetricsService,
     ];
 
     return {
       module: MetricsModule,
       global: true,
-      exports: [MetricsService],
+      exports: [MetricsService, WebhookMetricsService],
       providers: options.enabled
         ? [
             ...baseProviders,

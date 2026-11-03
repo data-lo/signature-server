@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { WebhookBacklogMetricsCollector } from 'src/metrics/webhook-backlog-metrics.collector';
 import { PaymentsModule } from 'src/payments/payments.module';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
@@ -35,9 +37,13 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  * búsqueda del intento por `session_id`: Didit manda al mismo endpoint los resultados de identidad
  * y de firma biométrica, y `DiditWebhookDispatcherService` decide a cuál pertenece cada entrega.
  * Mismo sentido único: `biometric-signature` no conoce a `webhooks`.
+ *
+ * `WebhookBacklogMetricsCollector` se registra aquí y no en `MetricsModule` porque lee esta tabla, y
+ * `MetricsModule` tiene que poder montarse sin base de datos. `ScheduleModule` es quien lo ejecuta.
  */
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([WebhookEventEntity]),
     PaymentsModule,
     IdentityVerificationModule,
@@ -51,6 +57,7 @@ import { StripeWebhookController } from './stripe-webhook.controller';
     RegisterWebhookEventUseCase,
     ReceiveDiditWebhookUseCase,
     ReceiveStripeWebhookUseCase,
+    WebhookBacklogMetricsCollector,
   ],
   exports: [RegisterWebhookEventUseCase],
 })

@@ -25,6 +25,8 @@ import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
 import { DiditWebhookController } from './didit-webhook.controller';
+import { MetricsModule } from 'src/metrics/metrics.module';
+import { WebhookBacklogMetricsCollector } from 'src/metrics/webhook-backlog-metrics.collector';
 import { StripeWebhookController } from './stripe-webhook.controller';
 
 /**
@@ -80,6 +82,7 @@ describe('WebhooksModule', () => {
       imports: [
         ConfigModule.forRoot({ isGlobal: true }),
         StubDataSourceModule,
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         WebhooksModule,
       ],
     })
@@ -122,5 +125,6 @@ describe('WebhooksModule', () => {
     expect(moduleRef.get(DiditWebhookController)).toBeDefined();
     expect(moduleRef.get(StripeWebhookController)).toBeDefined();
     expect(moduleRef.get(ReceiveDiditWebhookUseCase)).toBeDefined();
+    expect(moduleRef.get(WebhookBacklogMetricsCollector)).toBeDefined();
   });
 });
