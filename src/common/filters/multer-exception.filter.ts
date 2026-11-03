@@ -2,6 +2,7 @@ import { ArgumentsHost, Catch, HttpException } from '@nestjs/common';
 import { BaseExceptionFilter } from '@nestjs/core';
 import { Response } from 'express';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
+import { setHttpErrorType } from 'src/metrics/http-metrics.utils';
 
 /**
  * Respuesta para un multipart que llegó cortado. Pasa cuando la subida se interrumpe a medias
@@ -36,6 +37,10 @@ const MULTER_MESSAGE_TRANSLATIONS: Record<string, string> = {
 @Catch(HttpException)
 export class MulterExceptionFilter extends BaseExceptionFilter {
   catch(exception: HttpException, host: ArgumentsHost) {
+    // Este filtro gana a `MetricsExceptionFilter` en toda `HttpException`: sin esto, un 401 de un
+    // guard llegaría a `http_server_errors_total` sin su `error_type`.
+    setHttpErrorType(host.switchToHttp().getRequest<object>(), exception);
+
     const translated = MULTER_MESSAGE_TRANSLATIONS[exception.message];
     if (!translated) {
       super.catch(exception, host);
