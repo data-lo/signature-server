@@ -26,6 +26,14 @@ import { DOCUMENT_INDEXING_STATUS_ENUM } from '../enum/document-indexing-status.
  */
 @Entity('document_indexing_jobs')
 @Index('IDX_document_indexing_jobs_document', ['documentId'])
+/**
+ * Un solo job activo por documento: el webhook del indexador identifica el documento y no el job,
+ * así que es lo que hace inequívoca la correlación.
+ */
+@Index('UQ_document_indexing_jobs_active', ['documentId'], {
+  unique: true,
+  where: `"status" IN ('PENDING', 'RECEIVED')`,
+})
 export class DocumentIndexingJobEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -45,6 +53,13 @@ export class DocumentIndexingJobEntity {
   /** Id que asigna el indexador; `null` hasta que acepta el trabajo. */
   @Column({ name: 'external_job_id', type: 'varchar', nullable: true })
   externalJobId: string | null;
+
+  /**
+   * `documentId` que asigna el indexador; `null` hasta que responde. No se usa para buscar: el job se
+   * localiza por `documentId`, nuestro id, que el indexador devuelve como `clientDocumentId`.
+   */
+  @Column({ name: 'external_document_id', type: 'varchar', nullable: true })
+  externalDocumentId: string | null;
 
   @Column({
     type: 'enum',

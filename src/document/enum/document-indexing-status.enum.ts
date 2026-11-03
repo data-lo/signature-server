@@ -17,3 +17,16 @@ export enum DOCUMENT_INDEXING_STATUS_ENUM {
   /** El indexador terminó con error; el detalle queda en `error`. */
   FAILED = 'FAILED',
 }
+
+/**
+ * Estado que persiste cada `state` del webhook del indexador. Es la única lista de estados del
+ * proveedor: de aquí salen también los que acepta la validación del webhook.
+ */
+export const DOCUMENT_INDEXING_STATUS_BY_PROVIDER_STATE = {
+  received: DOCUMENT_INDEXING_STATUS_ENUM.RECEIVED,
+  indexed: DOCUMENT_INDEXING_STATUS_ENUM.INDEXED,
+  failed: DOCUMENT_INDEXING_STATUS_ENUM.FAILED,
+} as const;
+
+export type IndexerProviderState =
+  keyof typeof DOCUMENT_INDEXING_STATUS_BY_PROVIDER_STATE;

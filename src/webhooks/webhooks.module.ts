@@ -5,15 +5,19 @@ import { WebhookBacklogMetricsCollector } from 'src/metrics/webhook-backlog-metr
 import { PaymentsModule } from 'src/payments/payments.module';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
+import { DocumentIndexingModule } from 'src/document/document-indexing.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import { DiditWebhookSignatureVerifierService } from './didit/didit-webhook-signature-verifier.service';
 import { DiditWebhookDispatcherService } from './didit/didit-webhook-dispatcher.service';
 import { StripeWebhookSignatureVerifierService } from './stripe/stripe-webhook-signature-verifier.service';
+import { IndexerWebhookSignatureVerifierService } from './indexer/indexer-webhook-signature-verifier.service';
 import { RegisterWebhookEventUseCase } from './applications/register-webhook-event.use-case';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
 import { ReceiveStripeWebhookUseCase } from './applications/receive-stripe-webhook.use-case';
+import { ReceiveIndexerWebhookUseCase } from './applications/receive-indexer-webhook.use-case';
 import { DiditWebhookController } from './didit-webhook.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
+import { IndexerWebhookController } from './indexer-webhook.controller';
 
 /**
  * Punto de entrada único de los webhooks de proveedores externos.
@@ -40,6 +44,9 @@ import { StripeWebhookController } from './stripe-webhook.controller';
  *
  * `WebhookBacklogMetricsCollector` se registra aquí y no en `MetricsModule` porque lee esta tabla, y
  * `MetricsModule` tiene que poder montarse sin base de datos. `ScheduleModule` es quien lo ejecuta.
+
+ * `DocumentIndexingModule` se importa por `ProcessIndexerNotificationUseCase`, que aplica al trabajo
+ * de indexación lo que notifica el indexador. Mismo sentido único: `document` no conoce a `webhooks`.
  */
 @Module({
   imports: [
@@ -48,16 +55,23 @@ import { StripeWebhookController } from './stripe-webhook.controller';
     PaymentsModule,
     IdentityVerificationModule,
     BiometricSignatureModule,
+    DocumentIndexingModule,
   ],
-  controllers: [DiditWebhookController, StripeWebhookController],
+  controllers: [
+    DiditWebhookController,
+    StripeWebhookController,
+    IndexerWebhookController,
+  ],
   providers: [
     DiditWebhookSignatureVerifierService,
     DiditWebhookDispatcherService,
     StripeWebhookSignatureVerifierService,
+    IndexerWebhookSignatureVerifierService,
     RegisterWebhookEventUseCase,
     ReceiveDiditWebhookUseCase,
     ReceiveStripeWebhookUseCase,
     WebhookBacklogMetricsCollector,
+    ReceiveIndexerWebhookUseCase,
   ],
   exports: [RegisterWebhookEventUseCase],
 })
