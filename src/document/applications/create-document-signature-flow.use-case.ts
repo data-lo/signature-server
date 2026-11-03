@@ -747,7 +747,6 @@ export class CreateDocumentSignatureFlowUseCase {
             reviewerNotification.notificationChannelSource,
           actorUserId: createdBy,
         });
-
         /**
          * El anuncio de que hay una aprobación esperando se registra dentro de esta transacción y
          * se publica después del commit (ver `OutboxService`): un documento que no llegue a
@@ -757,7 +756,7 @@ export class CreateDocumentSignatureFlowUseCase {
           manager,
           DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
           {
-            organizationId: activeAccount.organizationId,
+            organization: organizationName,
             documentId: document.id,
             fileName: document.fileName,
             actorUserId: createdBy,
@@ -785,7 +784,7 @@ export class CreateDocumentSignatureFlowUseCase {
     this.documentEventsProducer.emitCreated({
       documentId: document.id,
       fileName: document.fileName,
-      organizationId: activeAccount.organizationId,
+      organization: organizationName,
       actorUserId: createdBy,
       ...(origin && {
         createdViaApiKeyId: origin.apiKeyId,

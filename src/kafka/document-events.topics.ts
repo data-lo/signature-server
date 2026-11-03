@@ -66,6 +66,8 @@ export interface DocumentEventPayload {
   eventId?: string;
   documentId: string;
   fileName: string;
+  /** Nombre de la organización dueña del documento; `null` para documentos personales. */
+  organization: string | null;
   actorUserId: string;
   /** ISO 8601 del momento en que ocurrió el hecho, no de su publicación. */
   occurredAt: string;

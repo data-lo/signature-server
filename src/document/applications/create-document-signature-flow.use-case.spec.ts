@@ -1109,6 +1109,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith({
         documentId: expect.any(String),
         fileName: baseDto.documentData.fileName,
+        organization: null,
         actorUserId: 'creator-1',
       });
     });
@@ -1385,7 +1386,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       expect(documentEventsProducer.enqueueApprovalEvent).toHaveBeenCalledWith(
         expect.anything(),
         DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
-        expect.objectContaining({ documentId: expect.any(String) }),
+        expect.objectContaining({
+          documentId: expect.any(String),
+          organization: 'Acme',
+        }),
       );
       expect(documentEventsProducer.flushOutbox).toHaveBeenCalled();
     });
