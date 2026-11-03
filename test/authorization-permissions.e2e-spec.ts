@@ -56,6 +56,7 @@ import { GetAvailableDocumentCreditOffersUseCase } from './../src/billing/credit
 import { CancelSubscriptionUseCase } from './../src/billing/subscriptions/cancel-subscription.use-case';
 import { ResumeSubscriptionUseCase } from './../src/billing/subscriptions/resume-subscription.use-case';
 import { GetBillingAccessUseCase } from './../src/billing/entitlements/get-billing-access.use-case';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 /**
  * Autorización de punta a punta, un endpoint por recurso del catálogo.
@@ -207,6 +208,7 @@ describe('Autorización por permisos (e2e)', () => {
     }));
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
       controllers: [
         OrganizationsController,
         OrganizationPermissionsController,

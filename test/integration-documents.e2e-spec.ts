@@ -50,6 +50,7 @@ import { OrganizationMemberEventsProducer } from './../src/kafka/organization-me
 import { RolesModule } from './../src/roles/roles.module';
 import { UserEntity } from './../src/user/entities/user.entity';
 import { DocumentReadService } from './../src/document/services/document-read.service';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 config({ path: join(__dirname, '..', '.env') });
 
@@ -454,6 +455,7 @@ describe('API de integración de documentos (e2e)', () => {
 
     @Module({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         TypeOrmModule.forRoot({
           type: 'postgres',

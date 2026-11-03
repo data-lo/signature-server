@@ -66,6 +66,7 @@ import { SigningLaunchService } from './../src/signing-invitation/signing-launch
 import { SigningRateLimitService } from './../src/signing-invitation/signing-rate-limit.service';
 import { UploadSignatureImageUseCase } from './../src/signature/applications/upload-signature-image.use-case';
 import { StartDiditVerificationUseCase } from './../src/identity-verification/applications/start-didit-verification.use-case';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 config({ path: join(__dirname, '..', '.env') });
 
@@ -343,6 +344,7 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
 
     @Module({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         ThrottlerModule.forRoot([{ ttl: 60000, limit: 1000 }]),
         TypeOrmModule.forRoot({

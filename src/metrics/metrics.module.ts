@@ -6,10 +6,9 @@ import {
   NestModule,
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_FILTER, APP_INTERCEPTOR, RouterModule } from '@nestjs/core';
+import { APP_FILTER, RouterModule } from '@nestjs/core';
 
 import { MetricsExceptionFilter } from './filters/metrics-exception.filter';
-import { HttpMetricsInterceptor } from './interceptors/http-metrics.interceptor';
 import {
   METRICS_OPTIONS,
   MetricsOptions,
@@ -52,8 +51,8 @@ export class MetricsModule implements NestModule {
   }
 
   /**
-   * Monta el módulo con opciones explícitas. Apagado, sólo deja disponible `MetricsService`: ni
-   * endpoint, ni interceptor, ni filtro, ni middleware.
+   * Monta el módulo con opciones explícitas. Apagado, sólo deja disponible `MetricsService`, que
+   * entonces no mide nada: ni endpoint, ni filtro, ni middleware.
    *
    * @param options - Si está activo y en qué ruta se expone.
    * @returns El módulo configurado.
@@ -76,7 +75,6 @@ export class MetricsModule implements NestModule {
       providers: options.enabled
         ? [
             ...baseProviders,
-            { provide: APP_INTERCEPTOR, useClass: HttpMetricsInterceptor },
             { provide: APP_FILTER, useClass: MetricsExceptionFilter },
           ]
         : baseProviders,

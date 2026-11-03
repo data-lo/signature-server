@@ -7,8 +7,8 @@ import { setHttpErrorType } from '../http-metrics.utils';
  * Anota el tipo de la excepción para `http_server_errors_total` sin alterar la respuesta ni el log:
  * el manejo sigue siendo el de `BaseExceptionFilter`, el mismo que usa Nest cuando no hay filtro.
  *
- * Sus huecos los cubre otro: el interceptor anota lo que se lanza dentro del handler, y
- * `MulterExceptionFilter` —que en `main.ts` tiene precedencia— las `HttpException` de los guards.
+ * Sirve a lo que mide `HttpMetricsMiddleware`, como los rechazos de guards. Sus huecos los cubre
+ * `MulterExceptionFilter`, que en `main.ts` tiene precedencia en las `HttpException`.
  */
 @Catch()
 export class MetricsExceptionFilter extends BaseExceptionFilter {

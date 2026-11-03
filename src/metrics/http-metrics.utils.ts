@@ -9,6 +9,46 @@ import { UNKNOWN_ERROR_TYPE, UNMATCHED_ROUTE_LABEL } from './metrics.constants';
  */
 const httpErrorTypes = new WeakMap<object, string>();
 
+/** Peticiones que ya mide `RequestIpInterceptor`. */
+const claimedRequests = new WeakSet<object>();
+
+/**
+ * Reserva la medición de una petición para quien la llama.
+ *
+ * Una petición la pueden ver varias piezas: `RequestIpInterceptor` corre dos veces en las rutas
+ * que además lo declaran con `@UseInterceptors`, y `HttpMetricsMiddleware` la ve siempre. Sin esta
+ * marca, cada una sumaría su propia muestra.
+ *
+ * @param request - Petición en curso.
+ * @returns `true` la primera vez; `false` si ya estaba reservada.
+ *
+ * @example
+ * ```ts
+ * claimHttpRequest(request); // true
+ * claimHttpRequest(request); // false
+ * ```
+ */
+export function claimHttpRequest(request: object): boolean {
+  if (claimedRequests.has(request)) return false;
+  claimedRequests.add(request);
+  return true;
+}
+
+/**
+ * Indica si un interceptor ya midió la petición.
+ *
+ * @param request - Petición atendida.
+ * @returns `true` si la reservó `claimHttpRequest`.
+ *
+ * @example
+ * ```ts
+ * if (isHttpRequestClaimed(request)) return;
+ * ```
+ */
+export function isHttpRequestClaimed(request: object): boolean {
+  return claimedRequests.has(request);
+}
+
 /**
  * Anota el tipo de la excepción que produjo la respuesta de error de una petición.
  *
