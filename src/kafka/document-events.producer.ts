@@ -16,7 +16,8 @@ interface EmitDocumentEventParams {
   documentId: string;
   fileName: string;
   actorUserId: string;
-  organizationId?: string | undefined
+  /** Nombre de la organización dueña del documento; `null` para documentos personales. */
+  organization?: string | null;
   /** Ver `DocumentEventPayload.createdViaApiKeyId`. */
   createdViaApiKeyId?: string;
   createdViaApiKeyName?: string;
@@ -71,6 +72,7 @@ export class DocumentEventsProducer {
     {
       documentId,
       fileName,
+      organization,
       actorUserId,
       createdViaApiKeyId,
       createdViaApiKeyName,
@@ -79,6 +81,7 @@ export class DocumentEventsProducer {
     const payload: DocumentEventPayload = {
       documentId,
       fileName,
+      organization: organization ?? null,
       actorUserId,
       occurredAt: new Date().toISOString(),
       ...(createdViaApiKeyId && { createdViaApiKeyId, createdViaApiKeyName }),
@@ -145,6 +148,7 @@ export class DocumentEventsProducer {
     {
       documentId,
       fileName,
+      organization,
       actorUserId,
       collaboratorId,
       resolutionNote,
@@ -156,6 +160,7 @@ export class DocumentEventsProducer {
       body: {
         documentId,
         fileName,
+        organization: organization ?? null,
         collaboratorId,
         resolutionNote: resolutionNote ?? null,
       },
@@ -221,6 +226,7 @@ export class DocumentEventsProducer {
   emitCollaboratorSigned({
     documentId,
     fileName,
+    organization,
     actorUserId,
     collaboratorId,
     signedAt,
@@ -228,6 +234,7 @@ export class DocumentEventsProducer {
     const payload: DocumentCollaboratorSignedPayload = {
       documentId,
       fileName,
+      organization: organization ?? null,
       actorUserId,
       collaboratorId,
       signedAt,

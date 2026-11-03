@@ -278,7 +278,6 @@ export class CreateDocumentUseCase {
         users: [{ userId: createdBy, action: AuditAction.DOCUMENT_CREATED }],
       });
       this.documentEventsProducer.emitCreated({
-        organizationId: activeAccount.organizationId,
         documentId: savedDocument.id,
         fileName: savedDocument.fileName,
         actorUserId: createdBy,
