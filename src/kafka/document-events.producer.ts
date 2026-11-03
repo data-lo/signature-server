@@ -16,6 +16,7 @@ interface EmitDocumentEventParams {
   documentId: string;
   fileName: string;
   actorUserId: string;
+  organizationId: string
   /** Ver `DocumentEventPayload.createdViaApiKeyId`. */
   createdViaApiKeyId?: string;
   createdViaApiKeyName?: string;

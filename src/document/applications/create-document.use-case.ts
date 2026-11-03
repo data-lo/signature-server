@@ -131,10 +131,7 @@ export class CreateDocumentUseCase {
         signatureCoordinates,
       } = createDocumentDto;
 
-      const allParticipantIds = [
-        ...signerIds,
-        ...(witnessIds ?? []),
-        ...(reviewerIds ?? []),
+      const allParticipantIds = [...signerIds, ...(witnessIds ?? []), ...(reviewerIds ?? []),
       ];
       const uniqueParticipantIds = new Set(allParticipantIds);
 
@@ -281,6 +278,7 @@ export class CreateDocumentUseCase {
         users: [{ userId: createdBy, action: AuditAction.DOCUMENT_CREATED }],
       });
       this.documentEventsProducer.emitCreated({
+        organizationId: activeAccount.organizationId,
         documentId: savedDocument.id,
         fileName: savedDocument.fileName,
         actorUserId: createdBy,
