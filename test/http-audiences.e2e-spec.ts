@@ -57,6 +57,7 @@ import { PublicSigningSessionsController } from './../src/public-signing/public-
 import { PublicSigningSessionTokenService } from './../src/public-signing/services/public-signing-session-token.service';
 import { SigningInvitationService } from './../src/signing-invitation/signing-invitation.service';
 import { USER_LIFECYCLE_STATUS_ENUM } from './../src/user/enums/user-lifecycle-status.enum';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 const JWT_SECRET = 'jwt-secret-e2e-audiencias';
 const PEPPER = 'pepper-de-la-e2e-de-audiencias-con-mas-de-32-caracteres';
@@ -216,6 +217,7 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
 
     @Module({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         JwtModule.register({ secret: JWT_SECRET }),
         ThrottlerModule.forRoot([{ ttl: 60000, limit: 1000 }]),
       ],

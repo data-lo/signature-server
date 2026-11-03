@@ -13,14 +13,16 @@ import {
   UnauthorizedException,
   UseFilters,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { HttpAdapterHost } from '@nestjs/core';
+import { APP_INTERCEPTOR, HttpAdapterHost } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { Response } from 'express';
 import * as request from 'supertest';
 
 import { applyGlobalApiPrefix } from 'src/common/constants/api-prefix.constants';
 import { MulterExceptionFilter } from 'src/common/filters/multer-exception.filter';
+import { RequestIpInterceptor } from 'src/common/interceptors/request-ip.interceptor';
 
 import { MetricsModule } from './metrics.module';
 import { MetricsService } from './metrics.service';
@@ -51,6 +53,12 @@ class DocumentsStub {
   @UseGuards(RejectingGuard)
   create() {
     return {};
+  }
+
+  @Post(':id/codes')
+  @UseInterceptors(RequestIpInterceptor)
+  requestCode(@Param('id') id: string) {
+    return { id };
   }
 }
 
@@ -91,6 +99,10 @@ describe('MetricsModule', () => {
       const moduleRef = await Test.createTestingModule({
         imports: [MetricsModule.register({ enabled: true, path: '/metrics' })],
         controllers: [DocumentsStub, IntegrationStub, HealthStub],
+        providers: [
+          // Mismo interceptor global que monta AppModule.
+          { provide: APP_INTERCEPTOR, useClass: RequestIpInterceptor },
+        ],
       }).compile();
 
       app = moduleRef.createNestApplication({ logger: false });
@@ -137,6 +149,21 @@ describe('MetricsModule', () => {
       expect(response.text).toContain('process_cpu_seconds_total');
       expect(response.text).toContain('nodejs_eventloop_lag_seconds');
       expect(response.text).toContain('nodejs_heap_size_used_bytes');
+    });
+
+    it('una ruta que también declara el interceptor con @UseInterceptors se mide una sola vez', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/documents/abc-123/codes')
+        .expect(201);
+
+      expect(
+        await seriesValue(
+          'http_server_requests_total{method="POST",route="/api/v1/documents/:id/codes",status_code="201"}',
+        ),
+      ).toBe(1);
+      expect(await metrics.getMetrics()).toContain(
+        'http_server_in_flight_requests{method="POST",route="/api/v1/documents/:id/codes"} 0',
+      );
     });
 
     it('cuenta y mide una petición exitosa una sola vez, con la plantilla de la ruta', async () => {
@@ -202,14 +229,14 @@ describe('MetricsModule', () => {
       ).toBe(1);
     });
 
-    it('un filtro de controlador no esconde el error y se registra su estado final', async () => {
+    it('registra el estado de la excepción, no el que traduce un filtro de controlador', async () => {
       await request(app.getHttpServer())
         .get('/api/v1/integration/handler')
         .expect(418);
 
       expect(
         await seriesValue(
-          'http_server_errors_total{route="/api/v1/integration/handler",status_code="418",error_type="BadRequestException"}',
+          'http_server_errors_total{route="/api/v1/integration/handler",status_code="400",error_type="BadRequestException"}',
         ),
       ).toBe(1);
     });
@@ -239,6 +266,24 @@ describe('MetricsModule', () => {
         expect(await metrics.getMetrics()).not.toContain('usr_123');
       },
     );
+
+    it('IDs distintos suman a la misma serie', async () => {
+      const series =
+        'http_server_requests_total{method="GET",route="/api/v1/documents/:id",status_code="200"}';
+      const before = await seriesValue(series);
+
+      await request(app.getHttpServer())
+        .get('/api/v1/documents/id-uno')
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/api/v1/documents/id-dos')
+        .expect(200);
+
+      expect(await seriesValue(series)).toBe(before + 2);
+      const body = await metrics.getMetrics();
+      expect(body).not.toContain('id-uno');
+      expect(body).not.toContain('id-dos');
+    });
 
     it('/health y /metrics no aparecen en las métricas HTTP', async () => {
       await request(app.getHttpServer()).get('/health').expect(200);
@@ -293,6 +338,9 @@ describe('MetricsModule', () => {
       const moduleRef = await Test.createTestingModule({
         imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
         controllers: [DocumentsStub],
+        providers: [
+          { provide: APP_INTERCEPTOR, useClass: RequestIpInterceptor },
+        ],
       }).compile();
       const app = moduleRef.createNestApplication({ logger: false });
       applyGlobalApiPrefix(app);

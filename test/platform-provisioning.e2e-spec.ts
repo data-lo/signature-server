@@ -64,6 +64,7 @@ import { RolesModule } from './../src/roles/roles.module';
 import { SigningInvitationDeliveryService } from './../src/signing-invitation/signing-invitation-delivery.service';
 import { UserEntity } from './../src/user/entities/user.entity';
 import { UserService } from './../src/user/user.service';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 config({ path: join(__dirname, '..', '.env') });
 
@@ -295,6 +296,7 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
 
     @Module({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         TypeOrmModule.forRoot({
           type: 'postgres',

@@ -48,6 +48,7 @@ import { SummaryDocumentService } from './../src/document/summary-document/summa
 import { SealDocumentUseCase } from './../src/document/seal/use-cases/seal-document.use-case';
 import { SealApiService } from './../src/document/seal/services/seal-api.service';
 import { SealEntity } from './../src/document/seal/entities/seal.entity';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
@@ -236,6 +237,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     collaboratorRepository.find.mockResolvedValue([buildFielSigner()]);
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
       controllers: [DocumentController],
       providers: [
         // El endpoint bajo prueba entra por su caso de uso real; los otros 16 del controller se

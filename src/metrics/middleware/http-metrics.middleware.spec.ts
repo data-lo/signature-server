@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import type { Request, Response } from 'express';
 
-import { setHttpErrorType } from '../http-metrics.utils';
+import { claimHttpRequest, setHttpErrorType } from '../http-metrics.utils';
 import { MetricsService } from '../metrics.service';
 import { HttpMetricsMiddleware } from './http-metrics.middleware';
 
@@ -81,6 +81,17 @@ describe('HttpMetricsMiddleware', () => {
         errorType: 'ClientClosedRequest',
       }),
     );
+  });
+
+  it('no registra lo que ya midió el interceptor', () => {
+    const request = { method: 'GET' } as Request;
+    const response = buildResponse(200, true);
+
+    middleware.use(request, response, jest.fn());
+    claimHttpRequest(request);
+    response.emit('close');
+
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('una petición que cae en dos montajes del comodín se mide una sola vez', () => {

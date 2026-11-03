@@ -10,6 +10,8 @@ import {
   Registry,
 } from '@prometheus-io/client';
 
+import { GLOBAL_API_PREFIX } from 'src/common/constants/api-prefix.constants';
+
 import {
   FORBIDDEN_METRIC_LABELS,
   HEALTH_ROUTE,
@@ -22,6 +24,11 @@ import {
   MetricsOptions,
   UNKNOWN_ERROR_TYPE,
 } from './metrics.constants';
+
+/** Rutas de Swagger: el documento general y el de integración, con sus variantes JSON y YAML. */
+const SWAGGER_ROUTE_PATTERN = new RegExp(
+  `^/${GLOBAL_API_PREFIX}(/integration)?/docs(-json|-yaml|/.*)?$`,
+);
 
 /** Resultado de una petición HTTP ya atendida. */
 export interface HttpRequestSample {
@@ -44,6 +51,7 @@ export interface HttpRequestSample {
 @Injectable()
 export class MetricsService {
   private readonly registry = new Registry();
+  private readonly enabled: boolean;
   private readonly ignoredRoutes: ReadonlySet<string>;
 
   private readonly httpRequestsTotal: Counter<
@@ -58,6 +66,7 @@ export class MetricsService {
   >;
 
   constructor(@Inject(METRICS_OPTIONS) options: MetricsOptions) {
+    this.enabled = options.enabled;
     this.ignoredRoutes = new Set([HEALTH_ROUTE, options.path]);
 
     if (options.enabled) {
@@ -159,10 +168,34 @@ export class MetricsService {
   }
 
   /**
-   * Registra una petición finalizada: contador, histograma y, si es 4xx o 5xx, contador de errores.
+   * Indica si una petición se mide.
    *
-   * `/health` y el propio endpoint de métricas se descartan: son sondeos periódicos de
-   * infraestructura y aplanarían la latencia y el volumen reales de la API.
+   * Se descartan `/health` y el propio endpoint de métricas, que son sondeos periódicos y
+   * aplanarían la latencia y el volumen reales de la API; Swagger, que no es tráfico de la API; y
+   * `OPTIONS`, que son preflights del navegador.
+   *
+   * @param method - Método HTTP.
+   * @param route - Plantilla de la ruta.
+   * @returns `false` si no se mide o si las métricas están apagadas.
+   *
+   * @example
+   * ```ts
+   * metrics.shouldMeasure('GET', '/api/v1/document/:id'); // true
+   * metrics.shouldMeasure('GET', '/health'); // false
+   * ```
+   */
+  shouldMeasure(method: string, route: string): boolean {
+    return (
+      this.enabled &&
+      method !== 'OPTIONS' &&
+      !this.ignoredRoutes.has(route) &&
+      !SWAGGER_ROUTE_PATTERN.test(route)
+    );
+  }
+
+  /**
+   * Registra una petición finalizada: contador, histograma y, si es 4xx o 5xx, contador de errores.
+   * No hace nada si `shouldMeasure` la descarta.
    *
    * @param sample - Resultado de la petición.
    * @returns Nada.
@@ -179,7 +212,7 @@ export class MetricsService {
    * ```
    */
   recordHttpRequest(sample: HttpRequestSample): void {
-    if (this.ignoredRoutes.has(sample.route)) return;
+    if (!this.shouldMeasure(sample.method, sample.route)) return;
 
     const labels = {
       method: sample.method,
@@ -208,11 +241,11 @@ export class MetricsService {
    * @example
    * ```ts
    * const release = metrics.trackInFlightRequest('GET', '/api/v1/document/:id');
-   * response.once('close', release);
+   * stream$.pipe(finalize(release));
    * ```
    */
   trackInFlightRequest(method: string, route: string): () => void {
-    if (this.ignoredRoutes.has(route)) return () => undefined;
+    if (!this.shouldMeasure(method, route)) return () => undefined;
 
     const labels = { method, route };
     this.httpInFlightRequests.inc(labels);

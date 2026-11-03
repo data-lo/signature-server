@@ -90,7 +90,15 @@ describe('MetricsService', () => {
       );
     });
 
-    it.each(['/health', '/metrics'])('descarta %s', async (route) => {
+    it.each([
+      '/health',
+      '/metrics',
+      '/api/v1/docs',
+      '/api/v1/docs-json',
+      '/api/v1/docs/swagger-ui.css',
+      '/api/v1/integration/docs',
+      '/api/v1/integration/docs-json',
+    ])('descarta %s', async (route) => {
       service.recordHttpRequest({
         method: 'GET',
         route,
@@ -99,6 +107,38 @@ describe('MetricsService', () => {
       });
 
       expect(await service.getMetrics()).not.toContain(`route="${route}"`);
+    });
+
+    it('descarta las solicitudes OPTIONS', async () => {
+      service.recordHttpRequest({
+        method: 'OPTIONS',
+        route: '/x',
+        statusCode: 204,
+        durationSeconds: 0.01,
+      });
+
+      expect(await service.getMetrics()).not.toContain('route="/x"');
+    });
+
+    it('no confunde una ruta de negocio con Swagger', () => {
+      expect(
+        service.shouldMeasure('GET', '/api/v1/integration/documents'),
+      ).toBe(true);
+      expect(service.shouldMeasure('GET', '/api/v1/document')).toBe(true);
+    });
+
+    it('apagado no mide nada', async () => {
+      const disabled = new MetricsService({ enabled: false, path: '/metrics' });
+
+      disabled.recordHttpRequest({
+        method: 'GET',
+        route: '/x',
+        statusCode: 200,
+        durationSeconds: 0.01,
+      });
+      disabled.trackInFlightRequest('GET', '/x')();
+
+      expect(await disabled.getMetrics()).not.toContain('route="/x"');
     });
 
     it('descarta la ruta configurada en METRICS_PATH, no sólo la de por defecto', async () => {
