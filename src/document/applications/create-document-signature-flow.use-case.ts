@@ -757,6 +757,7 @@ export class CreateDocumentSignatureFlowUseCase {
           manager,
           DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
           {
+            organizationId: activeAccount.organizationId,
             documentId: document.id,
             fileName: document.fileName,
             actorUserId: createdBy,
@@ -765,12 +766,6 @@ export class CreateDocumentSignatureFlowUseCase {
         );
       }
 
-      /**
-       * La solicitud de indexación —el evento `document.index` y su job en `PENDING`— se registra
-       * en esta misma transacción y la publica el `flush` de abajo, después del commit: un
-       * documento que no llegue a guardarse nunca se manda a indexar ni deja un job huérfano.
-       * Sólo si es indexable —la regla vive en `DocumentIndexRequestService.enqueue`—.
-       */
       await this.documentIndexRequest.enqueue(
         manager,
         document,
@@ -787,18 +782,10 @@ export class CreateDocumentSignatureFlowUseCase {
 
     const { document, notificationEvents, verificationCodesCount } = created;
 
-    // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
-    // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.
-    //
-    // Bug corregido: este endpoint nunca publicaba DOCUMENT_KAFKA_TOPICS.CREATED (solo el tópico
-    // de NotificationEventsProducer, uno por colaborador, para el envío de correo) — por lo que
-    // DocumentEventsConsumer.handleCreated() nunca corría para documentos creados por esta vía
-    // (la única que usa el frontend), y el ledger global de auditoría (AuditChainService, ver
-    // historia "Módulo de Auditoría e Integridad Global de BD") arrancaba su cadena directo en el
-    // primer evento de firma en vez de en la creación del documento.
     this.documentEventsProducer.emitCreated({
       documentId: document.id,
       fileName: document.fileName,
+      organizationId: activeAccount.organizationId,
       actorUserId: createdBy,
       ...(origin && {
         createdViaApiKeyId: origin.apiKeyId,
