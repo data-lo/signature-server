@@ -101,11 +101,68 @@ Sólo contiene las rutas que empiezan con `/api/v1/integration/` y el esquema de
 ### Detalles que sorprenden la primera vez
 
 - **El puerto sale de `BACKEND_PORT` y su valor por defecto es `3000`.** El `Dockerfile` expone el `4000` y su healthcheck apunta ahí, así que un despliegue en contenedor **tiene que** fijar `BACKEND_PORT=4000` o el healthcheck lo marcará caído aunque la API responda.
-- **Todas las rutas cuelgan de `/api/v1`**, menos `/health` y `/`, que quedan fuera del prefijo a propósito (ver `api-prefix.constants.ts`).
+- **Todas las rutas cuelgan de `/api/v1`**, menos `/health`, `/` y `/metrics`, que quedan fuera del prefijo a propósito (ver `api-prefix.constants.ts`).
 - **Los buckets de MinIO se crean solos** en la primera subida; no hay que darlos de alta en la consola.
 - **Una base que ya existía necesita un paso previo.** Si tu Postgres se creó cuando la aplicación corría con `synchronize: true`, sus tablas están al día pero el historial de migraciones no, y el arranque fallaría con `column "..." already exists`. Se alinea una sola vez con `npm run build && npm run migration:baseline:prod -- --confirm` (ver «Comandos disponibles»). Una base nueva no lo necesita.
 - **El seed de roles no es automático.** Para poblar el catálogo RBAC: `npm run seed:roles`, y después
   `npm run seed:static-permissions` para el catálogo de permisos estáticos de organización (sección 3).
+
+---
+
+## Métricas de Prometheus
+
+`src/metrics/` expone el estado y el rendimiento de la API en `GET /metrics`, en el formato de texto de Prometheus, con el cliente oficial `@prometheus-io/client`. Se controla con dos variables: `METRICS_ENABLED` (sólo `true` lo activa; **si falta, queda apagado** y la ruta responde 404) y `METRICS_PATH` (por defecto `/metrics`).
+
+| Métrica | Tipo | Labels |
+|---|---|---|
+| `http_server_requests_total` | Counter | `method`, `route`, `status_code` |
+| `http_server_request_duration_seconds` | Histogram | `method`, `route`, `status_code` |
+| `http_server_in_flight_requests` | Gauge | `method`, `route` |
+| `http_server_errors_total` | Counter | `route`, `status_code`, `error_type` |
+| Runtime de Node (`process_cpu_*`, `nodejs_heap_*`, `nodejs_gc_*`, `nodejs_eventloop_lag_*`…) | Varias | Sin labels propios |
+
+- **`route` es la plantilla (`/api/v1/document/:id`), nunca la URL real.** Lo que no resuelve a un controlador (un 404, por ejemplo) va junto en `route="unmatched"`.
+- **`/health` y la ruta de métricas no se miden**: son sondeos periódicos y aplanarían la latencia real. Swagger (`/api/v1/docs`) tampoco: `main.ts` lo monta antes de que se instale el middleware.
+- **Quién mide qué:** el conteo, la duración y los errores los registra `HttpMetricsMiddleware` al cerrarse la respuesta, porque los guards corren antes que los interceptores y un 401 nunca llegaría a `HttpMetricsInterceptor`. El gauge sí vive en el interceptor —necesita la ruta al entrar—, así que una petición detenida en un guard no cuenta como «en curso».
+- **`error_type` es la clase de la excepción**, nunca el mensaje. Vale `UnknownError` cuando nadie pudo observarla: un guard de un controlador con filtro propio (la API key de `/integration`) o un handler que escribe el 4xx a mano. La petición se cuenta igual, sólo pierde ese detalle. Un cliente que corta antes de recibir la respuesta se registra como `499` / `ClientClosedRequest`.
+- **Métricas nuevas:** se crean con `MetricsService.createCounter/createGauge/createHistogram`, inyectable en cualquier módulo. Rechazan al crearse los labels de `FORBIDDEN_METRIC_LABELS` (`user_id`, `organization_id`, `document_id`, correo, CURP, IP, token, mensaje…).
+
+### Protección: el endpoint no pide credenciales
+
+Igual que `/health`, `/metrics` responde sin JWT ni `x-api-key`, y **el servidor no distingue a Prometheus de cualquier otro cliente**. La protección es de red y hay que configurarla antes de poner `METRICS_ENABLED=true` en un entorno público:
+
+1. El proxy o balanceador público debe bloquear `METRICS_PATH`.
+2. También hay que bloquear `/api<METRICS_PATH>` en el dominio de `signature-app`: su rewrite (`/api/:path*` → `<backend>/:path*`) convierte `https://<app>/api/metrics` en `GET /metrics` del backend.
+3. Prometheus consulta directo al contenedor por la red interna.
+
+### Verificarlo localmente
+
+```bash
+# Con METRICS_ENABLED=true en el .env y el servidor levantado (npm run start:dev):
+curl -i http://localhost:3000/metrics
+# HTTP/1.1 200 OK
+# Content-Type: text/plain; charset=utf-8; version=0.0.4
+
+# Una petición sin sesión: 401 de JwtAuthGuard
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/api/v1/accounts/me
+
+curl -s http://localhost:3000/metrics | grep -E '^http_server_(requests_total|errors_total)'
+# http_server_requests_total{method="GET",route="/api/v1/accounts/me",status_code="401"} 1
+# http_server_errors_total{route="/api/v1/accounts/me",status_code="401",error_type="UnauthorizedException"} 1
+
+# Runtime de Node
+curl -s http://localhost:3000/metrics | grep -E '^(process_cpu_seconds_total|nodejs_eventloop_lag_seconds) '
+```
+
+Para consultarlo desde Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: signature-server
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['signature-server:4000']
+```
 
 ---
 
@@ -335,12 +392,13 @@ Si al agregar un controlador se le vuelve a poner el `api/v1` local, su ruta rea
 `/api/v1/api/v1/...` y el endpoint desaparece de donde lo busca el cliente; hay una prueba que fija
 ese caso (`api-prefix.constants.spec.ts`).
 
-**Las dos únicas exclusiones**, ambas registradas en `GLOBAL_API_PREFIX_EXCLUDE`:
+**Las únicas exclusiones**: las dos de `GLOBAL_API_PREFIX_EXCLUDE` y la ruta de métricas, que `applyGlobalApiPrefix()` agrega porque sale de `METRICS_PATH`:
 
 | Ruta | Por qué queda fuera del prefijo |
 |---|---|
 | `GET /health` | Lo consumen probes de infraestructura que apuntan a una URL fija. El `HEALTHCHECK` del `Dockerfile` pide `http://localhost:4000/health` literalmente; moverlo dejaría el contenedor marcado como `unhealthy` |
 | `GET /` | Saludo de sanidad del andamiaje de Nest, también oculto del Swagger publicado (`ApiGetHello`). No es parte del contrato de la API |
+| `GET /metrics` | Lo consulta Prometheus en una URL fija y no es parte del contrato de la API. Ver «Métricas de Prometheus» |
 
 Donde una tabla escribe la ruta relativa (`POST /`, `PATCH /:permissionId`, `GET /me`), es relativa
 a la base del controlador que encabeza la subsección — que ya incluye el prefijo.

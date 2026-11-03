@@ -39,6 +39,7 @@ import { AuthorizationModule } from './authorization/authorization.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
 import { PlatformModule } from './platform/platform.module';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
@@ -120,6 +121,7 @@ import { PlatformModule } from './platform/platform.module';
     DirectoryModule,
     ApiKeyModule,
     PlatformModule,
+    MetricsModule.forRoot(),
   ],
   controllers: [AppController],
   providers: [
