@@ -43,6 +43,7 @@ import {
   createInMemoryRepository,
   InMemoryRepository,
 } from './billing-e2e-fixtures';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 /**
  * Secreto de firma de esta prueba. NO es el del despliegue: la firma se genera acá mismo con el
@@ -249,6 +250,7 @@ describe('Webhook de Stripe (e2e)', () => {
     );
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
       controllers: [StripeWebhookController],
       providers: [
         ReceiveStripeWebhookUseCase,

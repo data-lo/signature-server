@@ -128,6 +128,32 @@ Sólo contiene las rutas que empiezan con `/api/v1/integration/` y el esquema de
 - **`error_type` es la clase de la excepción**, nunca el mensaje. Vale `UnknownError` cuando nadie pudo observarla: un guard de un controlador con filtro propio (la API key de `/integration`) o un handler que escribe el 4xx a mano. La petición se cuenta igual, sólo pierde ese detalle. Un cliente que corta antes de recibir la respuesta se registra como `499` / `ClientClosedRequest`.
 - **Métricas nuevas:** se crean con `MetricsService.createCounter/createGauge/createHistogram`, inyectable en cualquier módulo. Rechazan al crearse los labels de `FORBIDDEN_METRIC_LABELS` (`user_id`, `organization_id`, `document_id`, correo, CURP, IP, token, mensaje…).
 
+### Métricas de webhooks
+
+| Métrica | Tipo | Labels |
+|---|---|---|
+| `webhook_deliveries_total` | Counter | `provider`, `event_type`, `outcome` |
+| `webhook_delivery_duration_seconds` | Histogram | `provider`, `event_type`, `outcome` |
+| `webhook_signature_verifications_total` | Counter | `provider`, `result` |
+| `webhook_dispatch_total` | Counter | `provider`, `target` |
+| `webhook_events_pending` | Gauge | `provider`, `status` |
+| `webhook_oldest_pending_seconds` | Gauge | `provider`, `status` |
+
+| `outcome` | Qué significa | Respuesta | ¿Reintenta el proveedor? |
+|---|---|---|---|
+| `processed` | Un dominio la atendió | 200 | No |
+| `ignored` | Autenticada y descartada a propósito: evento de Stripe no soportado, o entrega de Didit con prefijo biométrico sin intento local | 200 | No |
+| `duplicate` | Ya estaba procesada; no se ejecutó el dominio | 200 | No |
+| `rejected` | Firma inválida (401), o cuerpo de Didit firmado pero ilegible o fuera de contrato (400) | 401 / 400 | Según el proveedor |
+| `failed` | Falló el dominio o la base | 5xx | Sí |
+
+- **El cuerpo del webhook de Didit llega crudo** (`applyDiditWebhookBodyParser`): sin esto, el parser JSON global respondía 400 a un cuerpo ilegible antes de verificar la firma y sin dejar auditoría. Por eso un cuerpo ilegible **sin** firma válida responde 401, como cualquier otra entrega no autenticada. El webhook de Stripe sigue pasando por el parser global.
+- **`event_type` es vocabulario controlado.** Didit: `status.updated` y `data.updated`. Stripe: cualquier valor con la forma de sus tipos (`customer.subscription.updated`). Lo demás se publica como `unknown`. `unverified` e `invalid_payload` marcan las entregas rechazadas.
+- **Backlog:** `WebhookBacklogMetricsCollector` consulta `webhook_events` al arrancar y cada minuto, sin modificar filas. Las combinaciones sin filas se publican en `0`. Si la consulta falla conserva el último valor y lo registra en el log.
+- **El backlog no cuenta los rechazos de auditoría** (`provider_event_id IS NULL`): quedan en `FAILED` para siempre, nadie los reintenta, y los puede crear cualquiera con un POST sin firma. Se ven con `outcome="rejected"`.
+- **`webhook_oldest_pending_seconds` mide desde el último intento:** cada reintento del proveedor renueva `received_at`.
+- **Con varias réplicas**, cada una publica el mismo total de la base: agregar con `max`, no con `sum`.
+
 ### Protección: el endpoint no pide credenciales
 
 Igual que `/health`, `/metrics` responde sin JWT ni `x-api-key`, y **el servidor no distingue a Prometheus de cualquier otro cliente**. La protección es de red y hay que configurarla antes de poner `METRICS_ENABLED=true` en un entorno público:
