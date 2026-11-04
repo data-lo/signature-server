@@ -82,9 +82,10 @@ export class CollaboratorEntity {
   lastName: string | null;
 
   /**
-   * Identificador fiscal del colaborador (en México, su RFC). Solo lo guarda el WITNESS: al
-   * firmante no se le pide en ningún flujo, y en firma avanzada el dato real sale del
-   * certificado de e.firma al momento de firmar.
+   * Identificador fiscal esperado del firmante avanzado (en México, su RFC). Sólo lo llena la API
+   * de integración, para compararlo contra el titular del certificado de e.firma; en la
+   * plataforma no se pide a nadie. Testigos anteriores a la historia "Eliminar campo RFC de la
+   * sección de Testigos" pueden conservar el que se capturó entonces; ya no se lee ni se escribe.
    */
   @Column({ name: 'tax_id', nullable: true })
   taxId: string | null;
