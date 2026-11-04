@@ -4,6 +4,10 @@ import {
   INTEGRATION_VALIDATION_CODE_ENUM as CODE,
   IntegrationValidationException,
 } from './integration-validation.exception';
+import {
+  EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+  EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+} from '../docs/api-integration-examples.docs';
 import { IntegrationPayloadValidator } from './integration-payload.validator';
 
 type Plain = Record<string, any>;
@@ -52,6 +56,117 @@ function validator(config: Record<string, unknown> = {}) {
 }
 
 /** Ejecuta y devuelve el cuerpo del error de integración, o falla si no lanzó. */
+/**
+ * Los ejemplos de Swagger son contrato para quien integra: tienen que pasar el validador real.
+ */
+describe('ejemplos publicados en Swagger', () => {
+  it.each([
+    ['secuencial', EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD],
+    ['no secuencial', EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD],
+  ])('el ejemplo %s es válido', (_label, example) => {
+    const subject = validator();
+
+    const validated = subject.validatePayload(JSON.stringify(example));
+
+    expect(() =>
+      subject.assertPositionsFitDocument(validated, 1),
+    ).not.toThrow();
+  });
+
+  it('el ejemplo secuencial numera a dos firmantes y deja al testigo sin order', () => {
+    const { participants } = EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD;
+
+    expect(
+      participants.filter(({ role }) => role === 'SIGNER').map((p) => p.order),
+    ).toEqual([1, 2]);
+    expect(
+      participants.find(({ role }) => role === 'WITNESS'),
+    ).not.toHaveProperty('order');
+  });
+
+  describe('lo que la documentación afirma de order', () => {
+    function withParticipants(
+      example: Plain,
+      patch: (participants: Plain[]) => void,
+    ) {
+      const copy = structuredClone(example);
+      patch(copy.participants);
+      return JSON.stringify(copy);
+    }
+
+    it('en un flujo secuencial, el order de un testigo no cuenta en la secuencia', () => {
+      const raw = withParticipants(
+        EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+        (participants) => {
+          participants[2].order = 99;
+        },
+      );
+
+      expect(() => validator().validatePayload(raw)).not.toThrow();
+    });
+
+    it('sin isSequential el documento es secuencial y exige order a cada firmante', () => {
+      const copy: Plain = structuredClone(EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD);
+      delete copy.document.isSequential;
+      delete copy.participants[0].order;
+
+      expect(
+        errorOf(() => validator().validatePayload(JSON.stringify(copy))),
+      ).toEqual(expect.objectContaining({ code: 'INVALID_SIGNING_ORDER' }));
+    });
+
+    it('la posición en participants no define el orden: se aceptan desordenados', () => {
+      const raw = withParticipants(
+        EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+        (participants) => {
+          participants.reverse();
+        },
+      );
+
+      expect(() => validator().validatePayload(raw)).not.toThrow();
+    });
+
+    it('con isSequential: false, un order repetido no se rechaza', () => {
+      const raw = withParticipants(
+        EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+        (participants) => {
+          participants[0].order = 5;
+          participants[1].order = 5;
+        },
+      );
+
+      expect(() => validator().validatePayload(raw)).not.toThrow();
+    });
+
+    it.each([
+      ['un testigo', EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD, 2],
+      [
+        'isSequential: false',
+        EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+        0,
+      ],
+    ])('con %s, un order menor a 1 se rechaza', (_label, example, index) => {
+      const raw = withParticipants(example, (participants) => {
+        participants[index].order = 0;
+      });
+
+      expect(errorOf(() => validator().validatePayload(raw))).toEqual(
+        expect.objectContaining({ code: 'INVALID_SIGNING_ORDER' }),
+      );
+    });
+  });
+
+  it('el ejemplo no secuencial no lleva order en ningún participante', () => {
+    const { document, participants } =
+      EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD;
+
+    expect(document.isSequential).toBe(false);
+    for (const participant of participants) {
+      expect(participant).not.toHaveProperty('order');
+    }
+  });
+});
+
 function errorOf(run: () => unknown): Plain {
   try {
     run();
