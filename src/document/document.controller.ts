@@ -55,7 +55,7 @@ import { SubmitDocumentForCancellationUseCase } from './applications/submit-docu
 import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
-import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { ArchiveDocumentUseCase } from './applications/archive-document.use-case';
 import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 
 // Enums
@@ -129,7 +129,7 @@ export class DocumentController {
     private readonly confirmCancellationUseCase: ConfirmDocumentCancellationUseCase,
     private readonly updateDocument: UpdateDocumentUseCase,
     private readonly deleteDocument: DeleteDocumentUseCase,
-    private readonly archiveCompletedDocument: ArchiveCompletedDocumentUseCase,
+    private readonly archiveDocument: ArchiveDocumentUseCase,
     private readonly restoreArchivedDocument: RestoreArchivedDocumentUseCase,
   ) {}
 
@@ -430,7 +430,7 @@ export class DocumentController {
    * archivado de quien llama.
    *
    * Mismo permiso y misma Policy que `GET /document/:id`: se archiva lo que se puede ver, con
-   * independencia de quién haya creado el documento (ver `ArchiveCompletedDocumentUseCase`).
+   * independencia de quién haya creado el documento (ver `ArchiveDocumentUseCase`).
    */
   @Post(':id/archive')
   @ApiArchiveDocument()
@@ -439,7 +439,7 @@ export class DocumentController {
     @Param('id') id: string,
     @CurrentAuthorization() authorization: AuthorizationContext,
   ) {
-    return this.archiveCompletedDocument.execute({
+    return this.archiveDocument.execute({
       documentId: id,
       authorization,
     });

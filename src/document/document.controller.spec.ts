@@ -22,7 +22,7 @@ import { SubmitDocumentForCancellationUseCase } from './applications/submit-docu
 import { ConfirmDocumentCancellationUseCase } from './applications/confirm-document-cancellation.use-case';
 import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
-import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { ArchiveDocumentUseCase } from './applications/archive-document.use-case';
 import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 import { ApproveDocumentUseCase } from './applications/approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './applications/reject-document-approval.use-case';
@@ -56,7 +56,7 @@ const USE_CASES = [
   ConfirmDocumentCancellationUseCase,
   UpdateDocumentUseCase,
   DeleteDocumentUseCase,
-  ArchiveCompletedDocumentUseCase,
+  ArchiveDocumentUseCase,
   RestoreArchivedDocumentUseCase,
 ];
 
@@ -438,14 +438,15 @@ describe('DocumentController', () => {
    * Archivar se autoriza por permisos, no por quién creó el documento: el controller pasa el
    * contexto que dejó el guard y el caso de uso lo confronta con el documento.
    */
-  it('archive delega en ArchiveCompletedDocumentUseCase con el contexto autorizado', () => {
+  it('archive delega en ArchiveDocumentUseCase con el contexto autorizado', () => {
     const context = authorization(ACTION_KEY_ENUM.READ);
 
     controller.archive('doc-1', context);
 
-    expect(
-      useCase(ArchiveCompletedDocumentUseCase).execute,
-    ).toHaveBeenCalledWith({ documentId: 'doc-1', authorization: context });
+    expect(useCase(ArchiveDocumentUseCase).execute).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      authorization: context,
+    });
   });
 
   /**

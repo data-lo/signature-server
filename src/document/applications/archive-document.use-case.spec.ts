@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 
@@ -12,7 +8,7 @@ import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
-import { ArchiveCompletedDocumentUseCase } from './archive-document.use-case';
+import { ArchiveDocumentUseCase } from './archive-document.use-case';
 import { DocumentService } from '../document.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
@@ -109,8 +105,8 @@ const OWN_AND_ORGANIZATION = [
  * `DocumentAuthorizationPolicy`—; sólo se doblan la base y la resolución de contexto en otra
  * organización. Así estas pruebas fijan QUIÉN puede archivar, no sólo que se llamó a algo.
  */
-describe('ArchiveCompletedDocumentUseCase', () => {
-  let useCase: ArchiveCompletedDocumentUseCase;
+describe('ArchiveDocumentUseCase', () => {
+  let useCase: ArchiveDocumentUseCase;
   let preferenceRepository: ReturnType<typeof createPreferenceRepository>;
   let documentRepository: { findOne: jest.Mock };
   let documentService: { resolveMyCollaborator: jest.Mock };
@@ -135,7 +131,7 @@ describe('ArchiveCompletedDocumentUseCase', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        ArchiveCompletedDocumentUseCase,
+        ArchiveDocumentUseCase,
         DocumentReadAccessService,
         DocumentAuthorizationPolicy,
         {
@@ -151,7 +147,7 @@ describe('ArchiveCompletedDocumentUseCase', () => {
       ],
     }).compile();
 
-    useCase = module.get(ArchiveCompletedDocumentUseCase);
+    useCase = module.get(ArchiveDocumentUseCase);
   });
 
   describe('quién puede archivar', () => {
@@ -325,34 +321,31 @@ describe('ArchiveCompletedDocumentUseCase', () => {
   });
 
   /**
-   * Archivar es sólo para lo que ya terminó: esconder un documento que todavía espera una firma
-   * dejaría a su firmante sin la lista donde iba a encontrarlo. La regla vale igual para quien
-   * archiva por permiso de organización.
+   * Historia "Habilitar archivado para todos los archivos, independientemente de su estatus". Se
+   * recorre el enum completo para que un estatus nuevo quede cubierto sin tocar la prueba. El
+   * repositorio de documentos sólo expone `findOne`: archivar no puede escribir en el documento.
    */
-  it.each([
-    DOCUMENT_STATUS_ENUM.CREATED,
-    DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
-    DOCUMENT_STATUS_ENUM.REJECTED,
-    DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING,
-    DOCUMENT_STATUS_ENUM.CANCELLED,
-    DOCUMENT_STATUS_ENUM.EXPIRED,
-  ])(
-    'rechaza con BadRequestException un documento en estatus %s',
+  it.each(Object.values(DOCUMENT_STATUS_ENUM))(
+    'archiva un documento en estatus %s sin modificarlo',
     async (status) => {
-      documentRepository.findOne.mockResolvedValue(buildDocument({ status }));
+      const document = buildDocument({ status });
+      documentRepository.findOne.mockResolvedValue(document);
 
-      await expect(
-        useCase.execute({
-          documentId: DOCUMENT_ID,
-          authorization: authorizationFor(ADMIN_ID, OWN_AND_ORGANIZATION),
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(preferenceRepository.upsert).not.toHaveBeenCalled();
+      const response = await useCase.execute({
+        documentId: DOCUMENT_ID,
+        authorization: authorizationFor(ADMIN_ID, OWN_AND_ORGANIZATION),
+      });
+
+      expect(response.success).toBe(true);
+      expect(
+        preferenceRepository.rows.get(`${DOCUMENT_ID}:${ADMIN_ID}`)?.archivedAt,
+      ).toBeInstanceOf(Date);
+      expect(document.status).toBe(status);
     },
   );
 
-  /** A quien no puede ver el documento no se le cuenta en qué estado está. */
-  it('autoriza antes de validar el estatus', async () => {
+  /** Que no se mire el estatus no abre la autorización: sigue contando quién lo pide. */
+  it('un documento pendiente sigue sin poder archivarlo quien no puede verlo', async () => {
     documentRepository.findOne.mockResolvedValue(
       buildDocument({ status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE }),
     );
@@ -363,5 +356,6 @@ describe('ArchiveCompletedDocumentUseCase', () => {
         authorization: authorizationFor(MEMBER_ID, OWN_ONLY),
       }),
     ).rejects.toThrow(ForbiddenException);
+    expect(preferenceRepository.upsert).not.toHaveBeenCalled();
   });
 });

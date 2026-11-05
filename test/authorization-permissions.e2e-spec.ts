@@ -27,7 +27,7 @@ import {
 } from './../src/roles/static-permission-catalog';
 
 import { DOCUMENT_CONTROLLER_USE_CASE_STUBS } from './document-controller-use-case-stubs';
-import { ArchiveCompletedDocumentUseCase } from './../src/document/applications/archive-document.use-case';
+import { ArchiveDocumentUseCase } from './../src/document/applications/archive-document.use-case';
 import { SignDocumentUseCase } from './../src/document/applications/sign-document.use-case';
 import { GetDocumentUseCase } from './../src/document/applications/get-document.use-case';
 
@@ -200,7 +200,7 @@ describe('Autorización por permisos (e2e)', () => {
       CancelSubscriptionUseCase,
       ResumeSubscriptionUseCase,
       GetBillingAccessUseCase,
-      ArchiveCompletedDocumentUseCase,
+      ArchiveDocumentUseCase,
       SignDocumentUseCase,
     ].map((provide) => ({
       provide,

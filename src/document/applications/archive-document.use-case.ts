@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -10,7 +6,6 @@ import { AuthorizationContext } from 'src/authorization/interfaces/authorization
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 
 import { DocumentEntity } from '../entities/document.entity';
-import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { DocumentUserPreferenceEntity } from '../preferences/document-user-preference.entity';
 import { DocumentService } from '../document.service';
 import { DocumentReadAccessService } from '../services/document-read-access.service';
@@ -23,7 +18,7 @@ export interface ArchivedDocumentData {
 }
 
 /**
- * `POST /document/:id/archive`: quien ya terminó con un documento firmado se lo quita de encima.
+ * `POST /document/:id/archive`: quien ya no quiere ver un documento en su bandeja se lo quita de encima.
  *
  * **Archivar es una decisión personal, no un cambio en el documento.** El documento no cambia de
  * estatus, no se borra y no se mueve: lo único que ocurre es que se escribe una fecha en la
@@ -39,18 +34,18 @@ export interface ArchivedDocumentData {
  * ofrecían "Archivar" y recibía 403. Como archivar sólo esconde el documento de la bandeja de
  * quien lo pide, no hace falta un permiso más fuerte que el que ya le deja verlo ahí.
  *
- * **Sólo se archiva lo que ya terminó.** El estado final del dominio es `SIGNED` —firmado por
- * todos— y es el único desde el que tiene sentido: esconder un documento que todavía espera una
- * firma dejaría a su firmante sin la lista donde iba a encontrarlo, y el flujo no tiene otra
- * manera de recordárselo. Los estados terminales por la vía negativa (rechazado, cancelado,
- * expirado) quedan fuera de esta historia a propósito.
+ * **Se archiva en cualquier estatus** (historia "Habilitar archivado para todos los archivos,
+ * independientemente de su estatus"). Como el documento no cambia, su flujo sigue su curso: un
+ * pendiente archivado se puede seguir firmando desde su enlace y no vuelve solo a la bandeja al
+ * avanzar. Quien lo archiva deja de verlo en su listado, también en "Por firmar", hasta que lo
+ * recupere.
  *
  * Lo archivado se lista con el filtro "Archivados" (`GET /document?archived=true`) y se recupera
  * con `DELETE /document/:id/archive` (`RestoreArchivedDocumentUseCase`). Se guarda una fecha y no
  * un booleano porque es la que explica qué pasó cuando alguien no encuentra un documento.
  */
 @Injectable()
-export class ArchiveCompletedDocumentUseCase {
+export class ArchiveDocumentUseCase {
   constructor(
     @InjectRepository(DocumentUserPreferenceEntity)
     private readonly preferenceRepository: Repository<DocumentUserPreferenceEntity>,
@@ -61,10 +56,7 @@ export class ArchiveCompletedDocumentUseCase {
   ) {}
 
   /**
-   * Archiva un documento firmado para el usuario autorizado, sin importar quién lo creó.
-   *
-   * Primero autoriza y después valida el estatus: a quien no puede ver el documento no se le
-   * cuenta en qué estado está.
+   * Archiva un documento para el usuario autorizado, sin importar quién lo creó ni su estatus.
    *
    * @param params.documentId - Documento pedido en la ruta.
    * @param params.authorization - Contexto que dejó `PermissionsGuard` (usuario, organización
@@ -74,11 +66,10 @@ export class ArchiveCompletedDocumentUseCase {
    * @throws {NotFoundException} (404) Si el documento no existe.
    * @throws {ForbiddenException} (403) Si ningún alcance de lectura concedido cubre a este
    *   documento — ni en la organización activa ni en la del documento.
-   * @throws {BadRequestException} (400) Si el documento no está en estatus `SIGNED`.
    *
    * @example
    * ```ts
-   * await archiveCompletedDocument.execute({ documentId: 'doc-1', authorization });
+   * await archiveDocument.execute({ documentId: 'doc-1', authorization });
    * ```
    */
   async execute(params: {
@@ -113,12 +104,6 @@ export class ArchiveCompletedDocumentUseCase {
       authorization,
       participant: participant ?? null,
     });
-
-    if (document.status !== DOCUMENT_STATUS_ENUM.SIGNED) {
-      throw new BadRequestException(
-        `El documento no puede archivarse. Solo se permiten documentos con estatus '${DOCUMENT_STATUS_ENUM.SIGNED}', el estatus actual es '${document.status}'`,
-      );
-    }
 
     const archivedAt = new Date();
 

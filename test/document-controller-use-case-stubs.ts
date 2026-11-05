@@ -19,7 +19,7 @@ import { SubmitDocumentForCancellationUseCase } from './../src/document/applicat
 import { ConfirmDocumentCancellationUseCase } from './../src/document/applications/confirm-document-cancellation.use-case';
 import { UpdateDocumentUseCase } from './../src/document/applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './../src/document/applications/delete-document.use-case';
-import { ArchiveCompletedDocumentUseCase } from './../src/document/applications/archive-document.use-case';
+import { ArchiveDocumentUseCase } from './../src/document/applications/archive-document.use-case';
 import { RestoreArchivedDocumentUseCase } from './../src/document/applications/restore-archived-document.use-case';
 
 /**
@@ -51,6 +51,6 @@ export const DOCUMENT_CONTROLLER_USE_CASE_STUBS: Provider[] = [
   ConfirmDocumentCancellationUseCase,
   UpdateDocumentUseCase,
   DeleteDocumentUseCase,
-  ArchiveCompletedDocumentUseCase,
+  ArchiveDocumentUseCase,
   RestoreArchivedDocumentUseCase,
 ].map((provide) => ({ provide, useValue: { execute: jest.fn() } }));

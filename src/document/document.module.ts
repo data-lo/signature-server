@@ -58,7 +58,7 @@ import { UpdateDocumentUseCase } from './applications/update-document.use-case';
 import { DeleteDocumentUseCase } from './applications/delete-document.use-case';
 import { CreateDocumentSignatureFlowUseCase } from './applications/create-document-signature-flow.use-case';
 import { GetDocumentApproversUseCase } from './applications/get-document-approvers.use-case';
-import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
+import { ArchiveDocumentUseCase } from './applications/archive-document.use-case';
 import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
 import { DocumentIndexRequestService } from './services/document-index-request.service';
@@ -125,7 +125,7 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
     DeleteDocumentUseCase,
     CreateDocumentSignatureFlowUseCase,
     GetDocumentApproversUseCase,
-    ArchiveCompletedDocumentUseCase,
+    ArchiveDocumentUseCase,
     RestoreArchivedDocumentUseCase,
     /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
     DocumentReviewerService,
@@ -159,7 +159,7 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
       CollaboratorEntity,
       VerificationCodeEntity,
       /**
-       * La inyecta `ArchiveCompletedDocumentUseCase`, y además tiene que estar nombrada acá
+       * La inyecta `ArchiveDocumentUseCase`, y además tiene que estar nombrada acá
        * porque con `autoLoadEntities: true` (ver `app.module.ts`) TypeORM sólo carga el metadata
        * de una entidad si algún `forFeature()` la menciona: que exista su archivo `.entity.ts`
        * no basta. Sin esto, `synchronize` no crearía la tabla en desarrollo, las relaciones

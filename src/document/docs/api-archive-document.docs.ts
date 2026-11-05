@@ -1,18 +1,16 @@
 import { applyDecorators } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
-import {
-  BadRequestResponse,
-  NotFoundResponse,
-} from 'src/interfaces/api-response.dto';
+import { NotFoundResponse } from 'src/interfaces/api-response.dto';
 
-/** `POST /document/:id/archive` — archiva un documento firmado para el usuario autenticado. */
+/** `POST /document/:id/archive` — archiva un documento para el usuario autenticado. */
 export function ApiArchiveDocument() {
   return applyDecorators(
     ApiOperation({
-      summary: 'Archivar un documento completado',
+      summary: 'Archivar un documento',
       description:
-        'Oculta el documento del listado de completados DEL USUARIO AUTENTICADO. No cambia el ' +
-        'estatus del documento ni afecta a los demás participantes. Es idempotente: archivar ' +
+        'Oculta el documento del listado DEL USUARIO AUTENTICADO, sea cual sea su estatus. No ' +
+        'cambia el estatus del documento ni afecta su flujo ni a los demás participantes. Es ' +
+        'idempotente: archivar ' +
         'dos veces no falla ni duplica la preferencia, sólo actualiza la fecha. Requiere ' +
         'DOCUMENT.READ y se autoriza igual que el detalle: con DOCUMENT.READ_ORGANIZATION se ' +
         'archiva cualquier documento de la organización aunque no se haya creado; con ' +
@@ -22,11 +20,6 @@ export function ApiArchiveDocument() {
     ApiResponse({
       status: 201,
       description: 'Documento archivado correctamente',
-    }),
-    ApiResponse({
-      status: 400,
-      description: 'El documento no se encuentra en estatus SIGNED',
-      type: BadRequestResponse,
     }),
     ApiResponse({
       status: 401,
