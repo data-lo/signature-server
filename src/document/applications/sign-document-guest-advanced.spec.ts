@@ -13,6 +13,7 @@ import {
   GuestAdvancedInvitationNotFoundException,
   InvalidGuestSigningAccessException,
 } from '../exceptions/guest-signing-access.exceptions';
+import { CertificateTaxIdMismatchException } from '../exceptions/signing-validation.exceptions';
 import {
   GuestAdvancedSignatureRequest,
   SignDocumentUseCase,
@@ -287,6 +288,44 @@ describe('SignDocumentUseCase — Firma Avanzada de invitado sin cuenta', () => 
       useCase.executeGuestAdvanced(request({ geolocation: undefined })),
     ).rejects.toThrow(BadRequestException);
     expect(accesses.findActive).not.toHaveBeenCalled();
+  });
+
+  describe('RFC registrado del firmante', () => {
+    const CERTIFICATE_RESULT = {
+      ...EFIRMA_RESULT,
+      certificate: { rfc: 'LOPA800101AB1', name: 'ANA LOPEZ PEREZ' },
+    };
+
+    beforeEach(() => {
+      documentService.validateAndSignWithEfirma.mockResolvedValue(
+        CERTIFICATE_RESULT,
+      );
+    });
+
+    it('coincidencia: firma', async () => {
+      signer.taxId = 'lopa800101ab1';
+
+      await useCase.executeGuestAdvanced(request());
+
+      expect(accesses.consume).toHaveBeenCalled();
+    });
+
+    it('discrepancia: bloquea la firma sin gastar el acceso', async () => {
+      signer.taxId = 'MAML900101XY2';
+
+      await expect(
+        useCase.executeGuestAdvanced(request()),
+      ).rejects.toBeInstanceOf(CertificateTaxIdMismatchException);
+      expect(accesses.consume).not.toHaveBeenCalled();
+    });
+
+    it('sin RFC registrado: firma como hasta ahora', async () => {
+      signer.taxId = null;
+
+      await useCase.executeGuestAdvanced(request());
+
+      expect(accesses.consume).toHaveBeenCalled();
+    });
   });
 
   it('una e.firma inválida no gasta el acceso', async () => {

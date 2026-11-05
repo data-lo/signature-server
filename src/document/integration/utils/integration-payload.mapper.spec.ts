@@ -169,6 +169,39 @@ describe('toCreateDocumentSignaturesDto', () => {
     expect(eva.signerTaxId).toBeUndefined();
   });
 
+  it('lleva el taxId de un firmante avanzado como signerTaxId, y tiene prioridad sobre rfc', () => {
+    const base = payload();
+    const [luis, eva] = toCreateDocumentSignaturesDto(
+      payload({
+        document: {
+          ...base.document,
+          signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
+        },
+        participants: [
+          {
+            ...base.participants[0],
+            taxId: 'LOPA800101AB1',
+            rfc: 'MARL800101AB2',
+          },
+          base.participants[1],
+        ],
+      }),
+      'contrato.pdf',
+    ).collaborators;
+
+    expect(luis.signerTaxId).toBe('LOPA800101AB1');
+    expect(eva.signerTaxId).toBeUndefined();
+  });
+
+  it('un firmante sin taxId viaja sin RFC', () => {
+    const [luis] = toCreateDocumentSignaturesDto(
+      payload(),
+      'contrato.pdf',
+    ).collaborators;
+
+    expect(luis.signerTaxId).toBeNull();
+  });
+
   it('rechaza requiresApproval: true, que la integración todavía no admite', () => {
     expect(() =>
       toCreateDocumentSignaturesDto(

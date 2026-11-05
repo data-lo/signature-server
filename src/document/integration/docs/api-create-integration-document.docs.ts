@@ -52,6 +52,7 @@ const CREATED_DOCUMENT_EXAMPLE = {
         status: 'PENDING',
         signatureType: 'SIMPLE',
         order: 1,
+        taxId: null,
       },
     ],
   },
