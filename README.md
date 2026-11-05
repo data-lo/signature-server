@@ -735,6 +735,16 @@ curl -X POST http://localhost:3000/api/v1/platform/organizations/provision   -H 
 curl -X POST http://localhost:3000/api/v1/integration/documents   -H "X-API-Key: fma_live_…" -H "Idempotency-Key: doc-acme-001"   -F 'payload={"creator":{"email":"ana@acme.test","firstName":"Ana","lastName":"López"},"document":{"signatureType":"SIMPLE","isSequential":true,"isIndexable":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis@correo.test","order":1,"signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.1,"widthRatio":0.2,"heightRatio":0.08}]}]}'   -F "file=@contrato.pdf;type=application/pdf"
 ```
 
+### `platform` (`POST /api/v1/platform/organizations/:organizationId/credits`) — recarga de créditos Enterprise
+
+Acredita créditos adicionales a una organización activa con perfil Enterprise de facturación manual, sin Stripe y sin tocar su plan, periodo ni suscripción.
+
+- **Autenticación:** `@InternalPlatformAuth()`; rechaza JWT, `API_KEY` de servicios y llaves `fma_live_*`. Excluida de Swagger.
+- **Efecto:** en una transacción, un `credit_lots` con origen `ADD_ON` y sin caducidad, y su constancia en `platform_credit_grants` (migración `092`). El saldo sigue siendo la suma de los lotes vigentes.
+- **Idempotencia:** `Idempotency-Key` obligatorio. Repetir con los mismos datos responde `200` con `replayed: true` y el saldo actual; con otros datos, `409 IDEMPOTENCY_KEY_MISMATCH`. El folio `externalReference` es único: reutilizarlo con otra clave es `409 EXTERNAL_REFERENCE_ALREADY_USED`.
+- **Respuesta `201`:** `{ grantId, organizationId, billingProfileId, creditLotId, documentsGranted, creditsAvailable, externalReference, replayed }`.
+- **Errores:** `400` (cuerpo inválido; `documentsGranted` es entero de 1 a 100 000), `404` (organización inexistente), `422` (organización desactivada o perfil que no es Enterprise manual activo).
+
 ### `health`, `ip`, `kafka`
 
 - `GET /health` — combina pings de Postgres, Mongo y Redis. `@SkipJwtAuth()` (sin JWT ni x-api-key): lo consumen probes de infraestructura. **Sin el prefijo `/api/v1`**, a propósito: está en `GLOBAL_API_PREFIX_EXCLUDE` porque el `HEALTHCHECK` del `Dockerfile` apunta a `/health` literal (ver «Prefijo global» al inicio de esta sección).

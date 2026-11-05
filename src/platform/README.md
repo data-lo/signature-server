@@ -50,17 +50,45 @@ generarlo una vez por operación y reutilizarlo ante timeouts o reintentos.
 - Misma clave y payload distinto: responde `409 IDEMPOTENCY_KEY_MISMATCH`.
 - Una nueva operación debe usar una nueva clave y un `billing.externalReference` distinto.
 
+## Recarga de créditos
+
+`POST /api/v1/platform/organizations/:organizationId/credits` acredita créditos adicionales a una
+organización activa con perfil Enterprise de facturación manual, sin Stripe. Usa la misma credencial
+y el mismo modelo de idempotencia que el aprovisionamiento.
+
+```bash
+curl -X POST http://localhost:3000/api/v1/platform/organizations/$ORGANIZATION_ID/credits \
+  -H "x-api-key: $INTERNAL_PLATFORM_API_KEY" -H "Idempotency-Key: recarga-acme-001" \
+  -H "Content-Type: application/json" \
+  -d '{ "documentsGranted": 500, "externalReference": "RECARGA-ACME-2026-001", "notes": "Recarga autorizada por contrato" }'
+```
+
+Crea en una sola transacción un `credit_lot` con origen `ADD_ON`, sin caducidad, y su constancia en
+`platform_credit_grants`. No modifica los lotes existentes, el plan, el periodo, la suscripción ni la
+configuración de Stripe; el saldo sigue siendo la suma de los lotes vigentes.
+
+- `documentsGranted`: entero de 1 a 100 000.
+- `externalReference`: folio obligatorio, único entre todas las recargas de la plataforma.
+- Primera ejecución: `201` con `grantId`, `creditLotId`, `documentsGranted`, `creditsAvailable` y
+  `replayed: false`.
+- Misma clave y mismo payload: `200` con `replayed: true` y el saldo actual; no acredita de nuevo.
+- Misma clave con otro payload u otra organización: `409 IDEMPOTENCY_KEY_MISMATCH`.
+- Otra clave con un folio ya usado: `409 EXTERNAL_REFERENCE_ALREADY_USED`.
+- Organización inexistente: `404`. Organización desactivada o perfil que no sea Enterprise manual
+  activo: `422`.
+
 ## Estructura
 
 | Archivo o carpeta                                  | Responsabilidad                                                                    |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `platform.module.ts`                               | Integra las dependencias de cuentas, roles, facturación y API keys.                |
 | `internal-organization-provisioning.controller.ts` | Expone y protege el endpoint, valida headers y evita campos que decide el backend. |
-| `applications/`                                    | Orquesta el aprovisionamiento transaccional y la idempotencia.                     |
+| `internal-organization-credits.controller.ts`      | Expone y protege la recarga de créditos de una organización existente.             |
+| `applications/`                                    | Orquesta el aprovisionamiento y las recargas, con su transacción e idempotencia.   |
 | `services/`                                        | Crea o reutiliza al propietario provisional.                                       |
 | `dto/`                                             | Define y valida el contrato de entrada.                                            |
 | `constants/`                                       | Declara las condiciones fijas Enterprise y el perfil de permisos de integración.   |
-| `entities/`                                        | Guarda la huella de cada aprovisionamiento para resolver reintentos.               |
+| `entities/`                                        | Guarda la huella de aprovisionamientos y recargas para resolver reintentos.        |
 | `exceptions/`                                      | Expone errores de negocio estables para el consumidor de plataforma.               |
 
 ## Cambios futuros

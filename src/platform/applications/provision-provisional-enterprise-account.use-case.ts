@@ -7,7 +7,7 @@ import { AccountService } from 'src/account/account.service';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
 import { IssuePlatformApiKeyUseCase } from 'src/api-key/applications/issue-platform-api-key.use-case';
-import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
+import { countAvailableCredits } from 'src/billing/credits/count-available-credits.util';
 import { BillingProfileProvisioningService } from 'src/billing/profiles/billing-profile-provisioning.service';
 import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entity';
 import { toBillingOwner } from 'src/billing/profiles/billing-owner.util';
@@ -336,7 +336,7 @@ export class ProvisionProvisionalEnterpriseAccountUseCase {
         billingProfileId: profile.id,
         planType: PROVISIONED_PLAN_TYPE,
         documentsGranted,
-        creditsAvailable: await this.countAvailableCredits(manager, profile.id),
+        creditsAvailable: await countAvailableCredits(manager, profile.id),
         apiKeyId: issued.id,
         apiKeyPrefix: issued.prefix,
         apiKey: issued.key,
@@ -403,42 +403,12 @@ export class ProvisionProvisionalEnterpriseAccountUseCase {
       billingProfileId: previous.billingProfileId,
       planType: profile.currentPlanType ?? PROVISIONED_PLAN_TYPE,
       documentsGranted: previous.documentsGranted,
-      creditsAvailable: await this.countAvailableCredits(manager, profile.id),
+      creditsAvailable: await countAvailableCredits(manager, profile.id),
       apiKeyId: apiKey.id,
       apiKeyPrefix: apiKey.keyPrefix,
       apiKey: null,
       replayed: true,
     };
-  }
-
-  /**
-   * Saldo utilizable del perfil: lo que queda en lotes que no han caducado, con la misma regla que
-   * `ConsumeDocumentCreditUseCase`.
-   *
-   * @param manager - Transacción en curso.
-   * @param billingProfileId - Perfil a consultar.
-   * @returns Créditos disponibles.
-   *
-   * @example
-   * ```ts
-   * await this.countAvailableCredits(manager, 'bp-1'); // 1600
-   * ```
-   */
-  private async countAvailableCredits(
-    manager: EntityManager,
-    billingProfileId: string,
-  ): Promise<number> {
-    const row = await manager
-      .createQueryBuilder(CreditLotEntity, 'lot')
-      .select('COALESCE(SUM(lot.remaining), 0)', 'available')
-      .where('lot.billing_profile_id = :billingProfileId', {
-        billingProfileId,
-      })
-      .andWhere('lot.remaining > 0')
-      .andWhere('(lot.expires_at IS NULL OR lot.expires_at > now())')
-      .getRawOne<{ available: string | number }>();
-
-    return Number(row?.available ?? 0);
   }
 
   /**

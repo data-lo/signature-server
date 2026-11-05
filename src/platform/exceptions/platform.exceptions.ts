@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   HttpStatus,
+  NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 
@@ -23,6 +24,9 @@ export enum PLATFORM_ERROR_CODE_ENUM {
   OWNER_UNAVAILABLE = 'OWNER_UNAVAILABLE',
   EXTERNAL_REFERENCE_ALREADY_USED = 'EXTERNAL_REFERENCE_ALREADY_USED',
   CONCURRENT_PROVISIONING = 'CONCURRENT_PROVISIONING',
+  ORGANIZATION_NOT_FOUND = 'ORGANIZATION_NOT_FOUND',
+  ORGANIZATION_INACTIVE = 'ORGANIZATION_INACTIVE',
+  CREDIT_GRANT_PROFILE_NOT_ELIGIBLE = 'CREDIT_GRANT_PROFILE_NOT_ELIGIBLE',
 }
 
 /** Falta `Idempotency-Key` o no tiene de 1 a 255 caracteres ASCII visibles. */
@@ -135,6 +139,76 @@ export class ConcurrentProvisioningException extends ConflictException {
         'Conflict',
         'Otra operación de aprovisionamiento con los mismos datos se ejecutó a la vez; reintenta',
         PLATFORM_ERROR_CODE_ENUM.CONCURRENT_PROVISIONING,
+      ),
+    );
+  }
+}
+
+/** El `Idempotency-Key` ya se usó para una recarga con otro contenido. */
+export class CreditGrantIdempotencyKeyMismatchException extends ConflictException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.CONFLICT,
+        'Conflict',
+        'Este Idempotency-Key ya se usó para una recarga con otros datos; usa una clave nueva',
+        PLATFORM_ERROR_CODE_ENUM.IDEMPOTENCY_KEY_MISMATCH,
+      ),
+    );
+  }
+}
+
+/** `externalReference` ya se registró en otra recarga de la plataforma. */
+export class CreditGrantExternalReferenceAlreadyUsedException extends ConflictException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.CONFLICT,
+        'Conflict',
+        'externalReference ya está registrada en otra recarga; usa un folio nuevo',
+        PLATFORM_ERROR_CODE_ENUM.EXTERNAL_REFERENCE_ALREADY_USED,
+      ),
+    );
+  }
+}
+
+/** La organización de la ruta no existe. */
+export class CreditGrantOrganizationNotFoundException extends NotFoundException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.NOT_FOUND,
+        'Not Found',
+        'La organización no existe',
+        PLATFORM_ERROR_CODE_ENUM.ORGANIZATION_NOT_FOUND,
+      ),
+    );
+  }
+}
+
+/** La organización está desactivada: sus llaves no pueden gastar lo que se le acredite. */
+export class CreditGrantOrganizationInactiveException extends UnprocessableEntityException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        'Unprocessable Entity',
+        'La organización está desactivada; no se le pueden acreditar créditos',
+        PLATFORM_ERROR_CODE_ENUM.ORGANIZATION_INACTIVE,
+      ),
+    );
+  }
+}
+
+/** La organización no tiene un perfil con plan Enterprise, facturación manual y estado activo. */
+export class CreditGrantProfileNotEligibleException extends UnprocessableEntityException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        'Unprocessable Entity',
+        'La organización no tiene un perfil de facturación Enterprise manual activo',
+        PLATFORM_ERROR_CODE_ENUM.CREDIT_GRANT_PROFILE_NOT_ELIGIBLE,
       ),
     );
   }
