@@ -15,7 +15,10 @@ export const EXAMPLE_INTEGRATION_API_KEY =
 /** `Idempotency-Key` de ejemplo: lo elige el cliente, p. ej. el folio de su propio sistema. */
 export const EXAMPLE_IDEMPOTENCY_KEY = 'erp-contrato-2026-000184';
 
-/** Payload JSON de ejemplo del campo multipart `payload` de `POST /integration/documents`. */
+/**
+ * Payload JSON de ejemplo del campo multipart `payload` de `POST /integration/documents`, en un flujo
+ * secuencial: dos firmantes con `order` y un testigo sin él.
+ */
 export const EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD = {
   creator: {
     email: 'ana.lopez@cliente.example',
@@ -45,13 +48,43 @@ export const EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD = {
       ],
     },
     {
+      role: 'SIGNER',
+      firstName: 'Marta',
+      lastName: 'Gómez',
+      email: 'marta.gomez@correo.example',
+      order: 2,
+      signaturePositions: [
+        {
+          page: 1,
+          xRatio: 0.55,
+          yRatio: 0.8,
+          widthRatio: 0.25,
+          heightRatio: 0.08,
+        },
+      ],
+    },
+    {
       role: 'WITNESS',
       firstName: 'Eva',
       lastName: 'Ruiz',
       email: 'eva.ruiz@correo.example',
-      order: 2,
     },
   ],
+};
+
+/**
+ * El mismo documento en un flujo no secuencial: los firmantes pueden firmar en cualquier momento,
+ * así que nadie lleva `order`.
+ */
+export const EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD = {
+  ...EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+  document: {
+    ...EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD.document,
+    isSequential: false,
+  },
+  participants: EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD.participants.map(
+    ({ order: _order, ...participant }) => participant,
+  ),
 };
 
 /**

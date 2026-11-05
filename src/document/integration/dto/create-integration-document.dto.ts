@@ -124,7 +124,7 @@ export class IntegrationDocumentOptionsDto {
   @ApiPropertyOptional({
     default: true,
     description:
-      'Con `true` (el valor por omisión) los firmantes firman por `order`, que debe ser único y consecutivo desde 1.',
+      'Con `true`, o si se omite, los firmantes firman uno a la vez y cada participante con `role: SIGNER` debe incluir `order`. Con `false`, cualquier firmante pendiente puede firmar en cualquier momento y `order` no es obligatorio ni define el orden de firma. Un `WITNESS` nunca requiere `order`.',
   })
   @IsOptional()
   @IsBoolean(DOCUMENT)
@@ -153,7 +153,11 @@ export class IntegrationDocumentOptionsDto {
  * (páginas, traslapes) las aplica `IntegrationPayloadValidator`.
  */
 export class IntegrationParticipantDto {
-  @ApiProperty({ enum: INTEGRATION_PARTICIPANT_ROLE_ENUM })
+  @ApiProperty({
+    enum: INTEGRATION_PARTICIPANT_ROLE_ENUM,
+    description:
+      '`SIGNER` firma el documento: requiere `signaturePositions` y, si el documento es secuencial, `order`. `WITNESS` no requiere `order` ni participa en él, y no admite `signaturePositions`.',
+  })
   @IsEnum(INTEGRATION_PARTICIPANT_ROLE_ENUM, ROLE)
   role: INTEGRATION_PARTICIPANT_ROLE_ENUM;
 
@@ -181,9 +185,11 @@ export class IntegrationParticipantDto {
   email: string;
 
   @ApiPropertyOptional({
+    type: 'integer',
+    minimum: 1,
     example: 1,
     description:
-      'Posición del firmante en el orden de firma, desde 1. Obligatorio para cada SIGNER si `document.isSequential` es `true`; único y consecutivo.',
+      'Posición del firmante en el orden de firma: entero que inicia en 1. Obligatorio para cada `SIGNER` si `document.isSequential` es `true` o se omite. Entre los firmantes debe ser único y consecutivo, sin huecos (1, 2, 3…), y es este valor, no la posición en `participants`, lo que define el orden. Un `WITNESS` no lo requiere y no cuenta en la secuencia; con `isSequential: false` tampoco es obligatorio. Si se envía en esos casos no tiene efecto, pero debe ser un entero mayor o igual a 1.',
   })
   @IsOptional()
   @IsInt(ORDER)
