@@ -304,6 +304,20 @@ export class CreateDocumentSignatureFlowUseCase {
       );
     }
 
+    // El RFC se compara contra el certificado de la e.firma: sin firma avanzada no hay contra qué.
+    if (
+      payloadSignatureType !== PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED &&
+      dto.collaborators.some(
+        (c) =>
+          c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER &&
+          c.signerTaxId,
+      )
+    ) {
+      throw new BadRequestException(
+        'El RFC del firmante sólo se admite en documentos con firma avanzada',
+      );
+    }
+
     /**
      * Historia "Hacer obligatorias las coordenadas de posición de firma". El DTO ya lo exige para
      * las peticiones HTTP; se repite aquí porque el caso de uso no debe depender de que alguien
@@ -606,7 +620,7 @@ export class CreateDocumentSignatureFlowUseCase {
             lastName: identity.lastName,
             // El WITNESS guarda su identificador fiscal; para un firmante se descarta lo que mande
             // el cliente en `taxId` (ver `CollaboratorPayloadDto.taxId`). La única excepción es el
-            // RFC que manda la integración para un firmante avanzado (`signerTaxId`): no se
+            // RFC registrado para un firmante avanzado (`signerTaxId`): no se
             // captura por capturar, es contra lo que se compara el titular de su certificado.
             taxId: isSigner
               ? (participant.signerTaxId ?? null)

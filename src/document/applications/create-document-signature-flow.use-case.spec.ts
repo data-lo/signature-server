@@ -726,7 +726,44 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     expect(juanCall[0].taxId).toBeNull();
   });
 
-  it('conserva el RFC que la integración manda para un firmante avanzado (signerTaxId)', async () => {
+  it('rechaza el RFC de un firmante en un documento sin firma avanzada', async () => {
+    await expect(
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        {
+          ...baseDto,
+          collaborators: baseDto.collaborators.map((collaborator) =>
+            collaborator.email === 'juan.perez@mail.com'
+              ? { ...collaborator, signerTaxId: 'LOPA800101AB1' }
+              : collaborator,
+          ),
+        },
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toThrow(
+      'El RFC del firmante sólo se admite en documentos con firma avanzada',
+    );
+    expect(collaboratorRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('guarda sin RFC al firmante avanzado que no lo registró', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      advancedDto,
+      file,
+      '127.0.0.1',
+    );
+
+    const juanCall = collaboratorRepo.create.mock.calls.find(
+      (call) => call[0].email === 'juan.perez@mail.com',
+    );
+    expect(juanCall[0].taxId).toBeNull();
+  });
+
+  it('conserva el RFC registrado para un firmante avanzado (signerTaxId)', async () => {
     await useCase.execute(
       'creator-1',
       'account-1',

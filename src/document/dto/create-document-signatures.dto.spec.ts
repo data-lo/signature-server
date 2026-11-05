@@ -40,6 +40,46 @@ function errorsFor(
  * VIEWER; ahora es opcional también para VIEWER, pero si llega con valor se sigue validando como
  * string.
  */
+/** Historia "Validar RFC del firmante FIEL contra el certificado al momento de firmar". */
+describe('CollaboratorPayloadDto.signerTaxId', () => {
+  const signerWith = (signerTaxId: unknown) =>
+    baseWitness({
+      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+      signerTaxId,
+    });
+
+  it('normaliza espacios y mayúsculas antes de validar', async () => {
+    const dto = plainToInstance(
+      CollaboratorPayloadDto,
+      signerWith(' peaj 800101 abc '),
+    );
+
+    expect(dto.signerTaxId).toBe('PEAJ800101ABC');
+    expect(errorsFor(await validate(dto), 'signerTaxId')).toHaveLength(0);
+  });
+
+  it.each([
+    ['ausente', undefined],
+    ['en null', null],
+    ['vacío', ''],
+    ['solo espacios', '   '],
+    ['de persona moral', 'ACM010101AAA'],
+  ])('acepta un RFC %s', async (_name, value) => {
+    const errors = await validateDto(signerWith(value));
+
+    expect(errorsFor(errors, 'signerTaxId')).toHaveLength(0);
+  });
+
+  it.each(['ABC', 'PEAJ80010', 'PEAJ800101ABCD', '1234567890123', 12345])(
+    'rechaza el formato inválido %s',
+    async (value) => {
+      const errors = await validateDto(signerWith(value));
+
+      expect(errorsFor(errors, 'signerTaxId').length).toBeGreaterThan(0);
+    },
+  );
+});
+
 describe('CollaboratorPayloadDto.taxId', () => {
   it.each([
     ['sin el campo', baseWitness()],

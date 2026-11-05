@@ -14,6 +14,7 @@ import {
   IsPositive,
   IsString,
   IsUUID,
+  Matches,
   Max,
   Min,
   Validate,
@@ -23,6 +24,8 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator';
+
+import { RFC_FORMAT, normalizeTaxId } from '../utils/tax-id.util';
 
 /**
  * Vocabulario del payload en inglés (pedido por la historia de frontend), distinto de los
@@ -523,11 +526,30 @@ export class CollaboratorPayloadDto {
   taxId?: string | null;
 
   /**
-   * RFC esperado del titular del certificado de un firmante de firma avanzada. Sólo lo llena la
-   * API de integración (campo `rfc` del participante, ya validado); no se expone en Swagger ni se
-   * acepta del cliente de la plataforma: sin decoradores, el `ValidationPipe` con `whitelist` lo
-   * descarta.
+   * RFC esperado del titular del certificado de un firmante de firma avanzada (historia "Validar
+   * RFC del firmante FIEL contra el certificado al momento de firmar"). Opcional: lo captura quien
+   * crea el documento, o lo manda la API de integración en el campo `rfc` del participante. Se
+   * normaliza sin espacios y en mayúsculas; vacío equivale a no registrarlo.
    */
+  @ApiPropertyOptional({
+    example: 'PEAJ800101ABC',
+    nullable: true,
+    description:
+      'RFC del firmante. Sólo en documentos ADVANCED: al firmar debe coincidir con el del certificado.',
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? normalizeTaxId(value) || null : value,
+  )
+  @ValidateIf(
+    (c: CollaboratorPayloadDto) =>
+      c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER &&
+      c.signerTaxId !== undefined &&
+      c.signerTaxId !== null,
+  )
+  @Matches(RFC_FORMAT, {
+    message:
+      'El RFC del firmante no tiene un formato válido (12 o 13 caracteres)',
+  })
   signerTaxId?: string | null;
 
   /**
