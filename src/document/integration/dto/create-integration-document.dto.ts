@@ -22,6 +22,7 @@ import {
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   SignaturePositionDto,
 } from '../../dto/create-document-signatures.dto';
+import { RFC_FORMAT, normalizeTaxId } from '../../utils/tax-id.util';
 import { EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD } from '../docs/api-integration-examples.docs';
 import { INTEGRATION_VALIDATION_CODE_ENUM } from '../validation/integration-validation.exception';
 
@@ -58,13 +59,10 @@ function normalizeEmail({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? value.trim().toLowerCase() : value;
 }
 
-/** Recorta y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
+/** Quita los espacios y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
 function normalizeRfc({ value }: { value: unknown }): unknown {
-  return typeof value === 'string' ? value.trim().toUpperCase() : value;
+  return typeof value === 'string' ? normalizeTaxId(value) : value;
 }
-
-/** Forma de un RFC de persona física (13) o moral (12). */
-export const RFC_FORMAT = /^[A-ZÑ&]{3,4}\d{6}[A-Z\d]{3}$/;
 
 /** Recorta los espacios de un nombre. */
 function trimText({ value }: { value: unknown }): unknown {
@@ -212,7 +210,19 @@ export class IntegrationParticipantDto {
   @ApiPropertyOptional({
     example: 'LOPA800101AB1',
     description:
-      'RFC del firmante. Sólo para un SIGNER de un documento `ADVANCED`: si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.',
+      'RFC del firmante, sin distinguir mayúsculas ni espacios. Sólo para un SIGNER de un documento `ADVANCED` (FIEL); en cualquier otro participante responde 422 `PARTICIPANT_RFC_NOT_ALLOWED`. Si viene, el RFC del certificado de su e.firma tiene que coincidir o la firma se rechaza; si no viene, el flujo de firma no cambia.',
+  })
+  @IsOptional()
+  @Transform(normalizeRfc)
+  @IsString(RFC)
+  @Matches(RFC_FORMAT, RFC)
+  taxId?: string;
+
+  @ApiPropertyOptional({
+    example: 'LOPA800101AB1',
+    deprecated: true,
+    description:
+      'Nombre anterior de `taxId`, con las mismas reglas. Si llegan los dos, deben tener el mismo valor.',
   })
   @IsOptional()
   @Transform(normalizeRfc)
@@ -253,9 +263,10 @@ export class IntegrationDocumentPayloadDto {
  * regla. Lo valida `IntegrationPayloadValidator`.
  *
  * No existe —ni se acepta— ningún campo de organización, cuenta, usuario o permisos
- * (`organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `permissionIds`), ni el PDF en
- * base64 (`documentBase64`): la organización sale de la API key y el creador, de su correo. Si
- * alguno llega, se responde 400 en vez de ignorarlo (ver `assertNoTenantOverrides`).
+ * (`organizationId`, `taxId` fuera de un participante, `userId`, `accountId`, `createdBy`,
+ * `permissionIds`), ni el PDF en base64 (`documentBase64`): la organización sale de la API key y el
+ * creador, de su correo. Si alguno llega, se responde 400 en vez de ignorarlo (ver
+ * `assertNoTenantOverrides`). El `taxId` de un participante es otra cosa: el RFC del firmante.
  */
 export class CreateIntegrationDocumentDto {
   /**

@@ -22,6 +22,10 @@ export const TENANT_OVERRIDE_FIELDS = [
   'documentBase64',
 ] as const;
 
+/** En un participante, `taxId` no elige organización: es el RFC del firmante. */
+const PARTICIPANT_OVERRIDE_FIELDS: readonly string[] =
+  TENANT_OVERRIDE_FIELDS.filter((field) => field !== 'taxId');
+
 /** Headers de cuenta activa de la plataforma, que esta API no usa. */
 export const TENANT_OVERRIDE_HEADERS = ['x-account-id', 'x-organization-id'];
 
@@ -42,6 +46,7 @@ export interface IntegrationRawRequest {
  * campos en silencio, y un cliente que los manda tiene que enterarse de que no sirven. Se mira el
  * query, los headers de cuenta activa, el primer nivel del body y, dentro de `payload` (que en
  * multipart llega como JSON en texto), su primer nivel, `creator`, `document` y cada participante.
+ * `taxId` sólo se admite dentro de un participante, donde es el RFC del firmante.
  *
  * @param request - Headers, query y body tal como llegaron.
  * @returns Nada.
@@ -70,14 +75,16 @@ export function assertNoTenantOverrides(request: IntegrationRawRequest): void {
     payload,
     asObject(payload?.creator),
     asObject(payload?.document),
-    ...participants.map(asObject),
   ];
   for (const container of containers) {
-    for (const field of TENANT_OVERRIDE_FIELDS) {
-      if (container && Object.prototype.hasOwnProperty.call(container, field)) {
-        found.add(field);
-      }
-    }
+    collectPresentFields(container, TENANT_OVERRIDE_FIELDS, found);
+  }
+  for (const participant of participants) {
+    collectPresentFields(
+      asObject(participant),
+      PARTICIPANT_OVERRIDE_FIELDS,
+      found,
+    );
   }
 
   if (found.size > 0) {
@@ -133,6 +140,34 @@ export function buildRequestFingerprint(
   return createHash('sha256')
     .update(JSON.stringify([fileHash, body?.payload ?? null]))
     .digest('hex');
+}
+
+/**
+ * Anota en `found` los campos de la lista que el objeto trae como propios, aunque valgan `null`.
+ *
+ * @param container - Objeto a revisar; `null` o `undefined` no aportan nada.
+ * @param fields - Campos que se buscan.
+ * @param found - Conjunto donde se acumulan los encontrados.
+ * @returns Nada.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * const found = new Set<string>();
+ * collectPresentFields({ userId: 'u-1' }, ['userId', 'taxId'], found); // found: { 'userId' }
+ * ```
+ */
+function collectPresentFields(
+  container: Record<string, unknown> | null | undefined,
+  fields: readonly string[],
+  found: Set<string>,
+): void {
+  for (const field of fields) {
+    if (container && Object.prototype.hasOwnProperty.call(container, field)) {
+      found.add(field);
+    }
+  }
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {

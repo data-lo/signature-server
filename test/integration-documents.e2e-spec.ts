@@ -304,8 +304,12 @@ describe('API de integración de documentos (e2e)', () => {
       createdBy: string,
       accountId: string,
       dto: {
-        documentData: { fileName: string };
-        collaborators: { email: string; collaboratorType: string }[];
+        documentData: { fileName: string; signatureType?: string };
+        collaborators: {
+          email: string;
+          collaboratorType: string;
+          signerTaxId?: string | null;
+        }[];
       },
       file: Express.Multer.File,
       ip: string,
@@ -336,9 +340,21 @@ describe('API de integración de documentos (e2e)', () => {
           );
           await origin?.onDocumentSaved?.(manager, saved);
           for (const collaborator of dto.collaborators) {
+            // Del flujo real sólo se imita lo que decide el RFC: el tipo FIEL del firmante y su
+            // `signerTaxId`. En los demás casos, el tipo queda sin guardar.
+            const isFielSigner =
+              collaborator.collaboratorType === 'SIGNER' &&
+              dto.documentData.signatureType === 'ADVANCED';
             await manager.query(
-              `INSERT INTO collaborators (document_id, email, colaborator_type, ip_address) VALUES ($1, $2, $3, $4)`,
-              [saved.id, collaborator.email, collaborator.collaboratorType, ip],
+              `INSERT INTO collaborators (document_id, email, colaborator_type, ip_address, signature_type, tax_id) VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                saved.id,
+                collaborator.email,
+                collaborator.collaboratorType,
+                ip,
+                isFielSigner ? 'FIEL' : null,
+                collaborator.signerTaxId ?? null,
+              ],
             );
           }
           if (flowFailures > 0) {
@@ -1161,9 +1177,145 @@ describe('API de integración de documentos (e2e)', () => {
                 status: 'PENDING',
                 signatureType: null,
                 order: 1,
+                taxId: null,
               },
             ],
           },
+        });
+      });
+
+      describe('taxId del firmante', () => {
+        const fielSigner =
+          (taxId?: unknown) => (value: Record<string, any>) => {
+            value.document.signatureType = 'ADVANCED';
+            if (taxId !== undefined) value.participants[0].taxId = taxId;
+          };
+
+        async function storedTaxId(documentId: string) {
+          const [row] = await dataSource.query(
+            `SELECT tax_id FROM collaborators WHERE document_id = $1 AND colaborator_type = 'SIGNER'`,
+            [documentId],
+          );
+          return row.tax_id as string | null;
+        }
+
+        it('un firmante FIEL lo registra normalizado y se devuelve, también en un reintento', async () => {
+          const idempotencyKey = `tax-id-${randomUUID()}`;
+          const options = { body: payload(fielSigner(' lopa 800101 ab1 ')) };
+
+          const created = await postDocument(
+            'org1-full',
+            idempotencyKey,
+            options,
+          ).expect(201);
+          expect(created.body.data.participants[0]).toMatchObject({
+            signatureType: 'FIEL',
+            taxId: 'LOPA800101AB1',
+          });
+          expect(await storedTaxId(created.body.data.id)).toBe('LOPA800101AB1');
+
+          const replay = await postDocument(
+            'org1-full',
+            idempotencyKey,
+            options,
+          ).expect(200);
+          expect(replay.body.data.participants[0].taxId).toBe('LOPA800101AB1');
+        });
+
+        it('un firmante FIEL sin taxId se crea sin RFC', async () => {
+          const created = await postDocument(
+            'org1-full',
+            `sin-tax-id-${randomUUID()}`,
+            { body: payload(fielSigner()) },
+          ).expect(201);
+
+          expect(created.body.data.participants[0].taxId).toBeNull();
+          expect(await storedTaxId(created.body.data.id)).toBeNull();
+        });
+
+        it('`rfc`, su nombre anterior, se sigue aceptando y queda como taxId', async () => {
+          const created = await postDocument(
+            'org1-full',
+            `rfc-anterior-${randomUUID()}`,
+            {
+              body: payload((value) => {
+                fielSigner()(value);
+                value.participants[0].rfc = 'LOPA800101AB1';
+              }),
+            },
+          ).expect(201);
+
+          expect(created.body.data.participants[0].taxId).toBe('LOPA800101AB1');
+        });
+
+        it('no se devuelve el de un firmante que no es FIEL, aunque la columna traiga uno anterior', async () => {
+          const idempotencyKey = `no-fiel-${randomUUID()}`;
+          const created = await postDocument(
+            'org1-full',
+            idempotencyKey,
+          ).expect(201);
+          await dataSource.query(
+            `UPDATE collaborators SET tax_id = 'LOPA800101AB1', signature_type = 'SIMPLE' WHERE document_id = $1 AND colaborator_type = 'SIGNER'`,
+            [created.body.data.id],
+          );
+
+          const replay = await postDocument('org1-full', idempotencyKey).expect(
+            200,
+          );
+          expect(replay.body.data.participants[0]).toMatchObject({
+            signatureType: 'SIMPLE',
+            taxId: null,
+          });
+        });
+
+        it.each([
+          [
+            'en un firmante SIMPLE',
+            (value: Record<string, any>) => {
+              value.participants[0].taxId = 'LOPA800101AB1';
+            },
+            'PARTICIPANT_RFC_NOT_ALLOWED',
+            'participants[0].taxId',
+          ],
+          [
+            'en un firmante BIOMETRIC',
+            (value: Record<string, any>) => {
+              value.document.signatureType = 'BIOMETRIC';
+              value.participants[0].taxId = 'LOPA800101AB1';
+            },
+            'PARTICIPANT_RFC_NOT_ALLOWED',
+            'participants[0].taxId',
+          ],
+          [
+            'en un testigo de un documento FIEL',
+            (value: Record<string, any>) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[1].taxId = 'LOPA800101AB1';
+            },
+            'PARTICIPANT_RFC_NOT_ALLOWED',
+            'participants[1].taxId',
+          ],
+          [
+            'con formato inválido en un firmante FIEL',
+            fielSigner('NO-ES-RFC'),
+            'INVALID_PARTICIPANT_RFC',
+            'participants[0].taxId',
+          ],
+        ])('lo rechaza %s, sin cobrar', async (_label, patch, code, field) => {
+          const before = creditsCharged;
+
+          const response = await postDocument(
+            'org1-full',
+            `tax-id-rechazado-${randomUUID()}`,
+            { body: payload(patch) },
+          ).expect(422);
+
+          expect(response.body.error).toEqual({
+            code,
+            message: expect.any(String),
+            details: expect.objectContaining({ field }),
+          });
+          expect(creditsCharged).toBe(before);
         });
       });
 
