@@ -49,9 +49,13 @@ import {
   SigningRequestMetadata,
   signingActorReference,
 } from '../interfaces/signing-actor.interface';
-import { CertificateSubjectMismatchException } from '../exceptions/signing-validation.exceptions';
+import {
+  CertificateSubjectMismatchException,
+  CertificateTaxIdMismatchException,
+} from '../exceptions/signing-validation.exceptions';
 import {
   certificateSubjectMatches,
+  certificateTaxIdMatches,
   ExpectedCertificateSubject,
 } from '../utils/certificate-subject.util';
 
@@ -383,6 +387,10 @@ export class SignDocumentUseCase {
           document,
           command.advancedSignatureInput,
         );
+      this.assertCertificateMatchesRegisteredTaxId(
+        participant,
+        advancedSignatureResult,
+      );
       if (
         command.expectedCertificateSubject &&
         !certificateSubjectMatches(
@@ -711,6 +719,10 @@ export class SignDocumentUseCase {
         document,
         request.advancedSignatureInput,
       );
+    this.assertCertificateMatchesRegisteredTaxId(
+      participant,
+      advancedSignatureResult,
+    );
 
     await this.assertVerificationCode(
       document,
@@ -729,6 +741,38 @@ export class SignDocumentUseCase {
       signingAuthorization: SIGNING_AUTHORIZATION_ENUM.GUEST_EMAIL_OTP,
       guestAccessId: access.id,
     });
+  }
+
+  /**
+   * Bloquea la firma FIEL si el firmante tiene RFC registrado y el certificado trae otro. Sin RFC
+   * registrado no compara nada. Corre en las tres rutas de firma FIEL, antes de gastar el código
+   * de verificación y de registrar la firma.
+   *
+   * @param participant - Firmante que está firmando.
+   * @param signatureResult - Resultado de la e.firma, con el RFC leído del certificado.
+   * @returns Nada.
+   *
+   * @throws {CertificateTaxIdMismatchException} (422) Si los RFC no coinciden.
+   *
+   * @example
+   * ```ts
+   * this.assertCertificateMatchesRegisteredTaxId(participant, signatureResult);
+   * ```
+   */
+  private assertCertificateMatchesRegisteredTaxId(
+    participant: CollaboratorEntity,
+    signatureResult: SignatureResult,
+  ): void {
+    if (!participant.taxId) return;
+
+    if (
+      !certificateTaxIdMatches(
+        signatureResult.certificate.rfc,
+        participant.taxId,
+      )
+    ) {
+      throw new CertificateTaxIdMismatchException();
+    }
   }
 
   /**
