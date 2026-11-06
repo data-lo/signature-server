@@ -72,7 +72,7 @@ export function ApiCreateIntegrationDocument() {
     ApiOperation({
       summary: 'Crear un documento PDF con su flujo de firmas',
       description: [
-        'Requiere `DOCUMENT.CREATE`. Es `multipart/form-data` con dos campos: `file` (el PDF, binario) y `payload` (texto con un JSON con `creator`, `document` y `participants`; su estructura es `IntegrationDocumentPayloadDto`).',
+        'Es `multipart/form-data` con dos campos: `file` (el PDF, binario) y `payload` (texto con un JSON con `creator`, `document` y `participants`; su estructura es `IntegrationDocumentPayloadDto`).',
         'La organización sale de la API key. El creador se identifica por su correo: si es miembro de la organización se usa su cuenta; si existe sin membresía, se le crea una con el rol `INTEGRATION_DOCUMENT_CREATOR`; si no existe, se crea como usuario provisional (sin contraseña). Sus datos nunca se sobrescriben.',
         'Cada documento creado consume un crédito de la organización. Los participantes se invitan por correo.',
         'Ejemplo con curl:',
@@ -97,7 +97,7 @@ export function ApiCreateIntegrationDocument() {
       description:
         'Valor único elegido por ti para este documento (1 a 255 caracteres ASCII visibles), por API key, durante 24 horas. Repetir la petición con la misma clave y el mismo contenido devuelve el documento original sin subir, crear, cobrar ni notificar nada.',
     }),
-    ApiIntegrationCommonResponses('DOCUMENT.CREATE', {
+    ApiIntegrationCommonResponses({
       badRequestExamples: {
         idempotencyKeyRequired: integrationErrorExample(
           'Falta Idempotency-Key',
