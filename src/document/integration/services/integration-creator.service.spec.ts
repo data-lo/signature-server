@@ -6,6 +6,7 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { RolesService } from 'src/roles/roles.service';
+import { PersonalInformationEntity } from 'src/user/entities/personal-information.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status.enum';
 
@@ -26,6 +27,7 @@ const PARAMS = {
 describe('IntegrationCreatorService', () => {
   let users: { findOne: jest.Mock; create: jest.Mock; save: jest.Mock };
   let accounts: { findOne: jest.Mock; find: jest.Mock };
+  let personalInformation: { create: jest.Mock; save: jest.Mock };
   let manager: { getRepository: jest.Mock };
   let dataSource: { transaction: jest.Mock; getRepository: jest.Mock };
   let accountService: {
@@ -59,10 +61,16 @@ describe('IntegrationCreatorService', () => {
           membership,
         ]),
     };
+    personalInformation = {
+      create: jest.fn((data) => ({ ...data })),
+      save: jest.fn(async (row) => ({ id: 'pi-ana', ...row })),
+    };
     manager = {
-      getRepository: jest.fn((entity: unknown) =>
-        entity === UserEntity ? users : accounts,
-      ),
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === UserEntity) return users;
+        if (entity === PersonalInformationEntity) return personalInformation;
+        return accounts;
+      }),
     };
     dataSource = {
       transaction: jest.fn((work) => work(manager)),
@@ -111,11 +119,43 @@ describe('IntegrationCreatorService', () => {
           lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
           nationalId: null,
           password: null,
-          personalInformationId: null,
+          personalInformationId: 'pi-ana',
           isEmailVerified: false,
         }),
       );
       expect(result.provisioned).toEqual({ user: true, membership: true });
+    });
+
+    /**
+     * Bug "Crear personal_information para usuarios provisionales de integración": sin ficha, el
+     * webhook aprobado de Didit no tenía dónde guardar la INE. Se crea antes que el usuario y con
+     * el mismo `manager`.
+     */
+    it('crea su información personal (sin CURP) en la misma transacción y se la asigna', async () => {
+      await service.resolve(PARAMS);
+
+      expect(personalInformation.create).toHaveBeenCalledWith({
+        name: 'Ana',
+        lastName: 'López',
+        curp: null,
+        rfc: null,
+      });
+      expect(manager.getRepository).toHaveBeenCalledWith(
+        PersonalInformationEntity,
+      );
+      expect(personalInformation.save.mock.invocationCallOrder[0]).toBeLessThan(
+        users.save.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('si no se puede crear la información personal, no crea el usuario', async () => {
+      personalInformation.save.mockRejectedValue(new Error('insert fallido'));
+
+      await expect(service.resolve(PARAMS)).rejects.toThrow('insert fallido');
+      expect(users.save).not.toHaveBeenCalled();
+      expect(
+        accountService.createDefaultPersonalAccount,
+      ).not.toHaveBeenCalled();
     });
 
     it('le crea cuenta personal y membresía con el rol mínimo, en la misma transacción', async () => {
@@ -257,8 +297,10 @@ describe('IntegrationCreatorService', () => {
           lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
           password: null,
           nationalId: null,
+          personalInformationId: 'pi-ana',
         }),
       );
+      expect(personalInformation.save).toHaveBeenCalledTimes(1);
       expect(accountService.createDefaultPersonalAccount).toHaveBeenCalled();
       // No es miembro de la organización: sólo firma.
       expect(accountMemberService.saveMembership).not.toHaveBeenCalled();

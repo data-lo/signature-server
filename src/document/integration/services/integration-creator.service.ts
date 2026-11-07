@@ -6,13 +6,12 @@ import { AccountMemberService } from 'src/account/account-member.service';
 import { AccountService } from 'src/account/account.service';
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { DuplicateOrganizationMembershipException } from 'src/account/exceptions/organization.exceptions';
-import { formatPersonName } from 'src/common/utils/format-person-name.util';
 import { OrganizationMemberEventsProducer } from 'src/kafka/organization-member.producer';
 import { SYSTEM_ROLE_NAME_ENUM } from 'src/roles/enums/system-role-name.enum';
 import { RolesService } from 'src/roles/roles.service';
 import { UserEntity } from 'src/user/entities/user.entity';
+import { insertProvisionedUser } from 'src/user/utils/insert-provisioned-user.util';
 import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status.enum';
-import { UserRoles } from 'src/user/enums/user-roles';
 
 import {
   IntegrationCreatorMembershipRevokedException,
@@ -241,19 +240,9 @@ export class IntegrationCreatorService {
     manager: EntityManager,
     params: ProvisionalUserIdentity,
   ): Promise<UserEntity> {
-    const user = await manager.getRepository(UserEntity).save(
-      manager.getRepository(UserEntity).create({
-        firstName: formatPersonName(params.firstName),
-        lastName: formatPersonName(params.lastName),
-        email: params.email,
-        roles: [UserRoles.SIGNER],
-        lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
-        nationalId: null,
-        password: null,
-        personalInformationId: null,
-        isEmailVerified: false,
-      }),
-    );
+    // Usuario y su `personal_information`, igual que `UserService.createProvisionedUser`: sin la
+    // ficha, el webhook aprobado de Didit no tendría dónde guardar la INE.
+    const user = await insertProvisionedUser(manager, params);
 
     await this.accountService.createDefaultPersonalAccount(
       manager,

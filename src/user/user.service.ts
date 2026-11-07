@@ -19,7 +19,6 @@ import { PersonalInformationEntity } from './entities/personal-information.entit
 
 // Enums
 import { UserRoles } from './enums/user-roles';
-import { USER_LIFECYCLE_STATUS_ENUM } from './enums/user-lifecycle-status.enum';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from './enums/signing-credential-status.enum';
 
 // Interfaces
@@ -36,6 +35,7 @@ import {
   formatPersonName,
 } from 'src/common/utils/format-person-name.util';
 import { EmailVerificationCodeService } from './email-verification-code.service';
+import { insertProvisionedUser } from './utils/insert-provisioned-user.util';
 import { SignupPendingVerificationData } from './interfaces/response/signup-pending-verification-response';
 
 @Injectable()
@@ -343,12 +343,14 @@ export class UserService {
    * Da de alta un usuario `PROVISIONED` con su cuenta personal, dentro de la transacción del
    * llamador.
    *
-   * Es el mismo usuario provisional que crea la API de integración para un creador desconocido:
-   * sólo nombre y correo, sin CURP, contraseña ni ficha personal, así que no puede iniciar sesión
-   * con contraseña (`LoginUseCase`). Su cuenta personal nace como en el registro
-   * (`AccountService.createDefaultPersonalAccount`), con su perfil Free.
+   * Es el mismo usuario provisional que crea la API de integración para un creador desconocido
+   * (los dos pasan por `insertProvisionedUser`): nombre y correo, sin CURP ni contraseña, así que
+   * no puede iniciar sesión con contraseña (`LoginUseCase`). Nace con su `personal_information`
+   * —sólo nombre y apellido— para que el webhook de Didit pueda guardar su INE. Su cuenta personal
+   * nace como en el registro (`AccountService.createDefaultPersonalAccount`), con su perfil Free.
    *
-   * @param manager - Transacción en curso; si se revierte, no queda ni el usuario ni su cuenta.
+   * @param manager - Transacción en curso; si se revierte, no queda ni la ficha, ni el usuario, ni
+   *   su cuenta.
    * @param identity - Correo ya normalizado, nombre y apellido.
    * @returns El usuario creado y su cuenta personal.
    *
@@ -360,26 +362,14 @@ export class UserService {
    *   email: 'ana@acme.test', firstName: 'Ana', lastName: 'López',
    * });
    * user.lifecycleStatus; // 'PROVISIONED'
+   * user.personalInformationId; // uuid de su ficha
    * ```
    */
   async createProvisionedUser(
     manager: EntityManager,
     identity: { email: string; firstName: string; lastName: string },
   ): Promise<{ user: UserEntity; personalAccount: AccountEntity }> {
-    const repository = manager.getRepository(UserEntity);
-    const user = await repository.save(
-      repository.create({
-        firstName: formatPersonName(identity.firstName),
-        lastName: formatPersonName(identity.lastName),
-        email: identity.email,
-        roles: [UserRoles.SIGNER],
-        lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
-        nationalId: null,
-        password: null,
-        personalInformationId: null,
-        isEmailVerified: false,
-      }),
-    );
+    const user = await insertProvisionedUser(manager, identity);
 
     const { account } = await this.accountService.createDefaultPersonalAccount(
       manager,

@@ -31,6 +31,7 @@ import { SUBSCRIPTION_END_REASON_ENUM } from '../enums/subscription-end-reason.e
 import { FREE_PLAN_TYPE } from '../catalog/free-plan.constants';
 import { CHECKOUT_ORDER_STATUS_ENUM } from '../enums/checkout-order-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
+import { MetricsModule } from 'src/metrics/metrics.module';
 
 const PERIOD_START = 1893456000; // 2030-01-01T00:00:00Z
 const PERIOD_END = 1896134400; // 2030-02-01T00:00:00Z
@@ -154,6 +155,7 @@ describe('Suscripción recurrente — flujo de webhooks (integración)', () => {
     verifier = { verify: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
+      imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
       providers: [
         // Cadena real, sin dobles entre capas.
         ReceiveStripeWebhookUseCase,

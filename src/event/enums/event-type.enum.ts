@@ -16,6 +16,8 @@ export enum EVENT_TYPE_ENUM {
   DOCUMENT_REJECTED = 'document.rejected',
   DOCUMENT_CANCELLATION_REQUESTED = 'document.cancellation_requested',
   DOCUMENT_CANCELLED = 'document.cancelled',
+  /** Solicitud de indexación al servicio externo (ver migración `AddDocumentIndexToEventType`). */
+  DOCUMENT_INDEX = 'document.index',
   ORGANIZATION_MEMBER_INVITED = 'organization.member.invited',
   ORGANIZATION_MEMBER_JOINED = 'organization.member.joined',
   NOTIFICATION_CREATED = 'notification.created',

@@ -107,6 +107,7 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64
           tags: |
             ${{ env.IMAGE_NAME }}:${{ needs.validate.outputs.version }}
             ${{ env.IMAGE_NAME }}:sha-${{ needs.validate.outputs.sha }}

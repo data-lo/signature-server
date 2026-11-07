@@ -61,6 +61,7 @@ import { GetDocumentApproversUseCase } from './applications/get-document-approve
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
+import { DocumentIndexRequestService } from './services/document-index-request.service';
 import { WitnessNotificationService } from './services/witness-notification.service';
 import { NotificationEntity } from './entities/notification.entity';
 import { DocumentApprovalService } from './services/document-approval.service';
@@ -70,6 +71,7 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
 import { PublicSigningController } from './public-signing.controller';
 import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
 import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
+import { DocumentIndexingJobEntity } from './entities/document-indexing-job.entity';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
@@ -127,6 +129,8 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
     RestoreArchivedDocumentUseCase,
     /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
     DocumentReviewerService,
+    /** Pide la indexación de los documentos indexables (`document.index`) al crearlos. */
+    DocumentIndexRequestService,
     DocumentApprovalService,
     /** Avisos por correo a los testigos (ver el servicio para qué recibe el testigo y cuándo). */
     WitnessNotificationService,
@@ -170,6 +174,8 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
       // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
       BiometricSignatureAttemptEntity,
       GuestSigningAccessEntity,
+      // Trabajos de indexación: estado técnico del envío al indexador, aparte de `DocumentEntity`.
+      DocumentIndexingJobEntity,
       IntegrationIdempotencyKeyEntity,
       // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
       // pedido dentro de la organización de la API key.

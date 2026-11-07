@@ -29,7 +29,7 @@ export function ApiListUserIntegrationDocuments() {
       summary:
         'Listar los documentos creados por un usuario de la organización',
       description:
-        'Requiere `DOCUMENT.READ_OWN` o `DOCUMENT.READ_ORGANIZATION`. Con `READ_OWN` sólo se puede consultar al usuario que emitió la API key; con `READ_ORGANIZATION`, a cualquier miembro activo de la organización. Misma paginación y filtros que el listado de la organización.',
+        'Devuelve una página de documentos creados por el usuario indicado. Admite la misma paginación y filtros por estatus y fechas que el listado de la organización.',
     }),
     ApiParam({
       name: 'userId',
@@ -37,9 +37,9 @@ export function ApiListUserIntegrationDocuments() {
       example: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
       description: '`users.id` del creador',
     }),
-    ApiIntegrationCommonResponses('DOCUMENT.READ_ORGANIZATION', {
+    ApiIntegrationCommonResponses({
       forbiddenNote:
-        'Con `DOCUMENT.READ_OWN` basta para el propio usuario de la llave; pedir otro responde `INTEGRATION_SCOPE_DENIED`.',
+        'Puede devolver `INTEGRATION_SCOPE_DENIED` si la llave no tiene acceso a los documentos solicitados.',
       forbiddenExamples: { scopeDenied: SCOPE_DENIED_EXAMPLE },
     }),
     ApiResponse({

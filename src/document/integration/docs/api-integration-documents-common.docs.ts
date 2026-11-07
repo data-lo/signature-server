@@ -28,7 +28,7 @@ export const INTEGRATION_API_KEY_SECURITY_SCHEME: SecuritySchemeObject = {
   description: [
     'API key de tu organización, con formato `fma_live_<publicId>_<secret>`. Se emite (y se rota o revoca) desde **Integraciones** en Firmalo; el secreto completo sólo se muestra al emitirla.',
     `Ejemplo (no es una llave real): \`${EXAMPLE_INTEGRATION_API_KEY}\``,
-    'La organización, los permisos y el autor salen de la llave: no se usan JWT, `X-Account-Id` ni `X-Organization-Id`. Llama a la API sólo desde tu backend; nunca expongas la llave en un navegador o una app móvil.',
+    'La organización y el contexto de acceso salen de la llave: no se usan JWT, `X-Account-Id` ni `X-Organization-Id`. Llama a la API sólo desde tu backend; nunca expongas la llave en un navegador o una app móvil.',
   ].join('\n\n'),
 };
 
@@ -36,7 +36,7 @@ export const INTEGRATION_API_KEY_SECURITY_SCHEME: SecuritySchemeObject = {
 export interface IntegrationCommonResponsesOptions {
   /** Ejemplos de 400 propios del endpoint (p. ej. `Idempotency-Key` faltante). */
   badRequestExamples?: Record<string, ApiResponseExamples>;
-  /** Aclaración del 403 (p. ej. qué alcance falla con `READ_OWN`). */
+  /** Aclaración adicional del 403 para un endpoint. */
   forbiddenNote?: string;
   /** Ejemplos de 403 propios del endpoint. */
   forbiddenExamples?: Record<string, ApiResponseExamples>;
@@ -47,18 +47,15 @@ export interface IntegrationCommonResponsesOptions {
  * 403 de `assertNoTenantOverrides`, `OrganizationApiKeyGuard` y `ApiKeyPermissionGuard`, con sus
  * ejemplos.
  *
- * @param requiredPermission - Clave del permiso que exige el endpoint (`DOCUMENT.CREATE`), para la
- *   descripción y el ejemplo del 403.
  * @param options - Ejemplos de 400 y 403 propios del endpoint y una aclaración del 403.
  * @returns Los decoradores de Swagger.
  *
  * @example
  * ```ts
- * ApiIntegrationCommonResponses('DOCUMENT.READ_ORGANIZATION');
+ * ApiIntegrationCommonResponses();
  * ```
  */
 export function ApiIntegrationCommonResponses(
-  requiredPermission: string,
   options: IntegrationCommonResponsesOptions = {},
 ) {
   return applyDecorators(
@@ -98,7 +95,7 @@ export function ApiIntegrationCommonResponses(
     ApiResponse({
       status: 403,
       description: [
-        `\`API_KEY_PERMISSION_DENIED\` (la llave no tiene \`${requiredPermission}\`), \`API_KEY_ORGANIZATION_INACTIVE\` o \`API_KEY_ACTOR_INACTIVE\` (quien emitió la llave ya no es miembro activo).`,
+        '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).',
         options.forbiddenNote,
       ]
         .filter(Boolean)
@@ -106,9 +103,9 @@ export function ApiIntegrationCommonResponses(
       type: IntegrationErrorResponseDto,
       examples: {
         permissionDenied: integrationErrorExample(
-          'Permiso faltante',
+          'Operación no autorizada',
           'API_KEY_PERMISSION_DENIED',
-          `La API key no tiene el permiso requerido: ${requiredPermission}`,
+          'La API key no está autorizada para esta operación',
         ),
         organizationInactive: integrationErrorExample(
           'Organización desactivada',

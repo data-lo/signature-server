@@ -50,10 +50,11 @@ import { OrganizationMemberEventsProducer } from './../src/kafka/organization-me
 import { RolesModule } from './../src/roles/roles.module';
 import { UserEntity } from './../src/user/entities/user.entity';
 import { DocumentReadService } from './../src/document/services/document-read.service';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 config({ path: join(__dirname, '..', '.env') });
 
-const API_KEY_PEPPER =
+const INTEGRATION_API_KEY_HMAC_SECRET =
   'pepper-de-la-e2e-de-integracion-con-mas-de-32-caracteres';
 
 /**
@@ -435,7 +436,8 @@ describe('API de integración de documentos (e2e)', () => {
   }
 
   beforeAll(async () => {
-    process.env.API_KEY_PEPPER = API_KEY_PEPPER;
+    process.env.INTEGRATION_API_KEY_HMAC_SECRET =
+      INTEGRATION_API_KEY_HMAC_SECRET;
     process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test/';
     twoPagePdf = await buildPdf(2);
     otherPdf = await buildPdf(3);
@@ -453,6 +455,7 @@ describe('API de integración de documentos (e2e)', () => {
 
     @Module({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         TypeOrmModule.forRoot({
           type: 'postgres',
@@ -1089,7 +1092,16 @@ describe('API de integración de documentos (e2e)', () => {
           lifecycle_status: 'PROVISIONED',
           password: null,
           national_id: null,
-          personal_information_id: null,
+        });
+        // Nace con su ficha (sin CURP): el webhook aprobado de Didit guarda ahí la INE.
+        const [personalInformation] = await dataSource.query(
+          `SELECT name, last_name, curp FROM personal_information WHERE id = $1`,
+          [user.personal_information_id],
+        );
+        expect(personalInformation).toEqual({
+          name: 'Nora',
+          last_name: 'Nueva',
+          curp: null,
         });
         const accounts = await accountsOf(user.id);
         expect(accounts).toEqual([

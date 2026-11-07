@@ -3,6 +3,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { AccountService } from 'src/account/account.service';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { PasswordService } from 'src/common/password/password.service';
+import { PasswordPolicyService } from 'src/common/password/password-policy.service';
 import { UserService } from 'src/user/user.service';
 
 import { AuthService } from '../auth.service';
@@ -28,6 +29,7 @@ export class ResetPasswordUseCase {
     private readonly userService: UserService,
     private readonly accountService: AccountService,
     private readonly passwordService: PasswordService,
+    private readonly passwordPolicyService: PasswordPolicyService,
     private readonly authService: AuthService,
   ) {}
 
@@ -42,6 +44,10 @@ export class ResetPasswordUseCase {
     if (validAfter && payload.iat && payload.iat < validAfter) {
       throw new UnauthorizedException('Este enlace ya fue utilizado');
     }
+
+    // Después de validar el token y antes de escribir nada: si la contraseña no pasa, el token
+    // sigue sirviendo para reintentar con otra.
+    this.passwordPolicyService.assertValid(dto.newPassword);
 
     const hashedPassword = await this.passwordService.hash(dto.newPassword);
 

@@ -49,7 +49,7 @@ export class InternalPlatformApiKeyGuard implements CanActivate {
    * @example
    * ```ts
    * @InternalPlatformAuth()
-   * @Controller('internal/organizations')
+   * @Controller('platform/organizations')
    * export class InternalOrganizationProvisioningController {}
    * ```
    */

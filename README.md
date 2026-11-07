@@ -101,11 +101,95 @@ Sólo contiene las rutas que empiezan con `/api/v1/integration/` y el esquema de
 ### Detalles que sorprenden la primera vez
 
 - **El puerto sale de `BACKEND_PORT` y su valor por defecto es `3000`.** El `Dockerfile` expone el `4000` y su healthcheck apunta ahí, así que un despliegue en contenedor **tiene que** fijar `BACKEND_PORT=4000` o el healthcheck lo marcará caído aunque la API responda.
-- **Todas las rutas cuelgan de `/api/v1`**, menos `/health` y `/`, que quedan fuera del prefijo a propósito (ver `api-prefix.constants.ts`).
+- **Todas las rutas cuelgan de `/api/v1`**, menos `/health`, `/` y `/metrics`, que quedan fuera del prefijo a propósito (ver `api-prefix.constants.ts`).
 - **Los buckets de MinIO se crean solos** en la primera subida; no hay que darlos de alta en la consola.
 - **Una base que ya existía necesita un paso previo.** Si tu Postgres se creó cuando la aplicación corría con `synchronize: true`, sus tablas están al día pero el historial de migraciones no, y el arranque fallaría con `column "..." already exists`. Se alinea una sola vez con `npm run build && npm run migration:baseline:prod -- --confirm` (ver «Comandos disponibles»). Una base nueva no lo necesita.
 - **El seed de roles no es automático.** Para poblar el catálogo RBAC: `npm run seed:roles`, y después
   `npm run seed:static-permissions` para el catálogo de permisos estáticos de organización (sección 3).
+
+---
+
+## Métricas de Prometheus
+
+`src/metrics/` expone el estado y el rendimiento de la API en `GET /metrics`, en el formato de texto de Prometheus, con el cliente oficial `@prometheus-io/client`. Se controla con dos variables: `METRICS_ENABLED` (sólo `true` lo activa; **si falta, queda apagado** y la ruta responde 404) y `METRICS_PATH` (por defecto `/metrics`).
+
+| Métrica | Tipo | Labels |
+|---|---|---|
+| `http_server_requests_total` | Counter | `method`, `route`, `status_code` |
+| `http_server_request_duration_seconds` | Histogram | `method`, `route`, `status_code` |
+| `http_server_in_flight_requests` | Gauge | `method`, `route` |
+| `http_server_errors_total` | Counter | `route`, `status_code`, `error_type` |
+| Runtime de Node (`process_cpu_*`, `nodejs_heap_*`, `nodejs_gc_*`, `nodejs_eventloop_lag_*`…) | Varias | Sin labels propios |
+
+- **`route` es la plantilla (`/api/v1/document/:id`), nunca la URL real.** Lo que no resuelve a un controlador (un 404, por ejemplo) va junto en `route="unmatched"`.
+- **`/health`, la ruta de métricas, Swagger y `OPTIONS` no se miden**: los sondeos periódicos y los preflights aplanarían la latencia real.
+- **Quién mide qué:** `RequestIpInterceptor` registra el contador, el histograma y el gauge de todo lo que llega al handler. `HttpMetricsMiddleware` registra lo demás al cerrarse la respuesta —los rechazos de guards y los 404—, porque los guards corren antes que los interceptores. Cada petición se mide una sola vez (`claimHttpRequest`), aunque la ruta declare además el interceptor con `@UseInterceptors`. Una petición detenida en un guard no cuenta como «en curso».
+- **Lo que el interceptor no puede ver:** el estado de un error sale de la excepción, antes de los filtros, así que los 422 que `ApiKeyValidationFilter` e `IntegrationErrorFilter` traducen de un 400 quedan como `status_code="400"`. Y el gauge y la duración terminan con el handler: en una descarga por streaming no incluyen el envío del cuerpo.
+- **`error_type` es la clase de la excepción**, nunca el mensaje. Vale `UnknownError` cuando nadie pudo observarla: un guard de un controlador con filtro propio (la API key de `/integration`) o un handler que escribe el 4xx a mano. La petición se cuenta igual, sólo pierde ese detalle. Un cliente que corta antes de recibir la respuesta se registra como `499` / `ClientClosedRequest`.
+- **Métricas nuevas:** se crean con `MetricsService.createCounter/createGauge/createHistogram`, inyectable en cualquier módulo. Rechazan al crearse los labels de `FORBIDDEN_METRIC_LABELS` (`user_id`, `organization_id`, `document_id`, correo, CURP, IP, token, mensaje…).
+
+### Métricas de webhooks
+
+| Métrica | Tipo | Labels |
+|---|---|---|
+| `webhook_deliveries_total` | Counter | `provider`, `event_type`, `outcome` |
+| `webhook_delivery_duration_seconds` | Histogram | `provider`, `event_type`, `outcome` |
+| `webhook_signature_verifications_total` | Counter | `provider`, `result` |
+| `webhook_dispatch_total` | Counter | `provider`, `target` |
+| `webhook_events_pending` | Gauge | `provider`, `status` |
+| `webhook_oldest_pending_seconds` | Gauge | `provider`, `status` |
+
+| `outcome` | Qué significa | Respuesta | ¿Reintenta el proveedor? |
+|---|---|---|---|
+| `processed` | Un dominio la atendió | 200 | No |
+| `ignored` | Autenticada y descartada a propósito: evento de Stripe no soportado, o entrega de Didit con prefijo biométrico sin intento local | 200 | No |
+| `duplicate` | Ya estaba procesada; no se ejecutó el dominio | 200 | No |
+| `rejected` | Firma inválida (401), o cuerpo de Didit firmado pero ilegible o fuera de contrato (400) | 401 / 400 | Según el proveedor |
+| `failed` | Falló el dominio o la base | 5xx | Sí |
+
+- **El cuerpo del webhook de Didit llega crudo** (`applyDiditWebhookBodyParser`): sin esto, el parser JSON global respondía 400 a un cuerpo ilegible antes de verificar la firma y sin dejar auditoría. Por eso un cuerpo ilegible **sin** firma válida responde 401, como cualquier otra entrega no autenticada. El webhook de Stripe sigue pasando por el parser global.
+- **`event_type` es vocabulario controlado.** Didit: `status.updated` y `data.updated`. Stripe: cualquier valor con la forma de sus tipos (`customer.subscription.updated`). Lo demás se publica como `unknown`. `unverified` e `invalid_payload` marcan las entregas rechazadas.
+- **Backlog:** `WebhookBacklogMetricsCollector` consulta `webhook_events` al arrancar y cada minuto, sin modificar filas. Las combinaciones sin filas se publican en `0`. Si la consulta falla conserva el último valor y lo registra en el log.
+- **El backlog no cuenta los rechazos de auditoría** (`provider_event_id IS NULL`): quedan en `FAILED` para siempre, nadie los reintenta, y los puede crear cualquiera con un POST sin firma. Se ven con `outcome="rejected"`.
+- **`webhook_oldest_pending_seconds` mide desde el último intento:** cada reintento del proveedor renueva `received_at`.
+- **Con varias réplicas**, cada una publica el mismo total de la base: agregar con `max`, no con `sum`.
+
+### Protección: el endpoint no pide credenciales
+
+Igual que `/health`, `/metrics` responde sin JWT ni `x-api-key`, y **el servidor no distingue a Prometheus de cualquier otro cliente**. La protección es de red y hay que configurarla antes de poner `METRICS_ENABLED=true` en un entorno público:
+
+1. El proxy o balanceador público debe bloquear `METRICS_PATH`.
+2. También hay que bloquear `/api<METRICS_PATH>` en el dominio de `signature-app`: su rewrite (`/api/:path*` → `<backend>/:path*`) convierte `https://<app>/api/metrics` en `GET /metrics` del backend.
+3. Prometheus consulta directo al contenedor por la red interna.
+
+### Verificarlo localmente
+
+```bash
+# Con METRICS_ENABLED=true en el .env y el servidor levantado (npm run start:dev):
+curl -i http://localhost:3000/metrics
+# HTTP/1.1 200 OK
+# Content-Type: text/plain; charset=utf-8; version=0.0.4
+
+# Una petición sin sesión: 401 de JwtAuthGuard
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/api/v1/accounts/me
+
+curl -s http://localhost:3000/metrics | grep -E '^http_server_(requests_total|errors_total)'
+# http_server_requests_total{method="GET",route="/api/v1/accounts/me",status_code="401"} 1
+# http_server_errors_total{route="/api/v1/accounts/me",status_code="401",error_type="UnauthorizedException"} 1
+
+# Runtime de Node
+curl -s http://localhost:3000/metrics | grep -E '^(process_cpu_seconds_total|nodejs_eventloop_lag_seconds) '
+```
+
+Para consultarlo desde Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: signature-server
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['signature-server:4000']
+```
 
 ---
 
@@ -335,12 +419,13 @@ Si al agregar un controlador se le vuelve a poner el `api/v1` local, su ruta rea
 `/api/v1/api/v1/...` y el endpoint desaparece de donde lo busca el cliente; hay una prueba que fija
 ese caso (`api-prefix.constants.spec.ts`).
 
-**Las dos únicas exclusiones**, ambas registradas en `GLOBAL_API_PREFIX_EXCLUDE`:
+**Las únicas exclusiones**: las dos de `GLOBAL_API_PREFIX_EXCLUDE` y la ruta de métricas, que `applyGlobalApiPrefix()` agrega porque sale de `METRICS_PATH`:
 
 | Ruta | Por qué queda fuera del prefijo |
 |---|---|
 | `GET /health` | Lo consumen probes de infraestructura que apuntan a una URL fija. El `HEALTHCHECK` del `Dockerfile` pide `http://localhost:4000/health` literalmente; moverlo dejaría el contenedor marcado como `unhealthy` |
 | `GET /` | Saludo de sanidad del andamiaje de Nest, también oculto del Swagger publicado (`ApiGetHello`). No es parte del contrato de la API |
+| `GET /metrics` | Lo consulta Prometheus en una URL fija y no es parte del contrato de la API. Ver «Métricas de Prometheus» |
 
 Donde una tabla escribe la ruta relativa (`POST /`, `PATCH /:permissionId`, `GET /me`), es relativa
 a la base del controlador que encabeza la subsección — que ya incluye el prefijo.
@@ -612,9 +697,10 @@ Punto de entrada único de los proveedores externos. Recibe el cuerpo crudo, ver
 
 - `StripeWebhookController`: `POST /api/v1/webhooks/stripe` → `ReceiveStripeWebhookUseCase` → `StripeWebhookService` (módulo `payments`).
 - `DiditWebhookController`: `POST /api/v1/webhooks/didit` → `ReceiveDiditWebhookUseCase`.
+- `IndexerWebhookController`: `POST /api/v1/webhooks/indexer` → `ReceiveIndexerWebhookUseCase` → `ProcessIndexerNotificationUseCase` (módulo `document`).
 - Una entrega con firma ausente o inválida responde 401 y **también** deja fila de auditoría, con `signature_valid = false` y sin `payload`: nunca ejecuta dominio.
 
-### `platform-provisioning` (`POST /api/v1/internal/organizations/provision`) — cuenta provisional Enterprise para pruebas de integración
+### `platform` (`POST /api/v1/platform/organizations/provision`) — cuenta provisional Enterprise para pruebas de integración
 
 Crea en **una sola transacción** todo lo necesario para probar la firma documental por API, sin `signature-app`, Stripe, CAPTCHA, OTP ni contraseña:
 
@@ -628,14 +714,14 @@ Usuario PROVISIONED → cuenta personal → organización (activa) → membresí
 - **La llave** nace sin emisor (`created_by_account_id = null`, migración `086`): `OrganizationApiKeyGuard` la deja sin actor y opera sólo con sus permisos. El secreto sólo viaja en la respuesta 201; en la base queda su HMAC y no se escribe en logs ni en la tabla de idempotencia.
 - **Propietario:** si el correo no existe se crea `PROVISIONED`; si ya es un `PROVISIONED` activo se reutiliza (puede ser dueño de varias organizaciones de prueba). El correo de un usuario `ACTIVE` (registrado de verdad) o desactivado responde 409. Ojo: un usuario nuevo nace como en el registro, con su cuenta personal y los 3 créditos Free de bienvenida; la organización recibe exactamente `documentsGranted`.
 - **Idempotencia:** `Idempotency-Key` obligatorio. Las peticiones con la misma clave se serializan con `pg_advisory_xact_lock`; la que llega después encuentra su fila en `platform_provisioning_requests` y responde **200** con lo ya creado, `apiKey: null`, `replayed: true` y el header `Idempotent-Replayed: true`, sin duplicar organización, créditos ni llaves. La misma clave con otros datos es 409 `IDEMPOTENCY_KEY_MISMATCH`. `billing.externalReference` debe ser único entre todos los periodos manuales (409 `EXTERNAL_REFERENCE_ALREADY_USED`).
-- **Rollback total:** cualquier fallo (folio repetido, correo de un usuario registrado, `API_KEY_PEPPER` ausente) revierte todo; la clave queda libre para reintentar.
-- **Requisitos del entorno:** `INTERNAL_PLATFORM_API_KEY`, `API_KEY_PEPPER` y el catálogo de permisos sembrado (`npm run seed:roles`). Si el entorno no tiene la fila `plans.enterprise` sincronizada desde Stripe, se crea `MANUAL` (sin producto de Stripe).
+- **Rollback total:** cualquier fallo (folio repetido, correo de un usuario registrado, `INTEGRATION_API_KEY_HMAC_SECRET` ausente) revierte todo; la clave queda libre para reintentar.
+- **Requisitos del entorno:** `INTERNAL_PLATFORM_API_KEY`, `INTEGRATION_API_KEY_HMAC_SECRET` y el catálogo de permisos sembrado (`npm run seed:roles`). Si el entorno no tiene la fila `plans.enterprise` sincronizada desde Stripe, se crea `MANUAL` (sin producto de Stripe).
 
 **Flujo de prueba:**
 
 ```bash
 # 1. Aprovisionar (guardar data.apiKey: no se vuelve a mostrar)
-curl -X POST http://localhost:3000/api/v1/internal/organizations/provision   -H "x-api-key: $INTERNAL_PLATFORM_API_KEY" -H "Idempotency-Key: prov-acme-001"   -H "Content-Type: application/json" -d '{
+curl -X POST http://localhost:3000/api/v1/platform/organizations/provision   -H "x-api-key: $INTERNAL_PLATFORM_API_KEY" -H "Idempotency-Key: prov-acme-001"   -H "Content-Type: application/json" -d '{
     "organization": { "name": "Acme Pruebas", "organizationName": "Acme Pruebas S.A. de C.V.", "taxId": "ACM010101AAA", "domainAllowed": "acme.test" },
     "owner": { "firstName": "Ana", "lastName": "López", "email": "ana@acme.test" },
     "billing": { "documentsGranted": 1600, "periodStart": "2026-11-01T00:00:00.000Z", "periodEnd": "2027-11-01T00:00:00.000Z", "externalReference": "PROVISION-ACME-TEST-001" },
@@ -648,6 +734,16 @@ curl -X POST http://localhost:3000/api/v1/internal/organizations/provision   -H 
 # 2. Crear un documento con la llave: consume 1 crédito (creditsAvailable → 1599)
 curl -X POST http://localhost:3000/api/v1/integration/documents   -H "X-API-Key: fma_live_…" -H "Idempotency-Key: doc-acme-001"   -F 'payload={"creator":{"email":"ana@acme.test","firstName":"Ana","lastName":"López"},"document":{"signatureType":"SIMPLE","isSequential":true,"isIndexable":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis@correo.test","order":1,"signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.1,"widthRatio":0.2,"heightRatio":0.08}]}]}'   -F "file=@contrato.pdf;type=application/pdf"
 ```
+
+### `platform` (`POST /api/v1/platform/organizations/:organizationId/credits`) — recarga de créditos Enterprise
+
+Acredita créditos adicionales a una organización activa con perfil Enterprise de facturación manual, sin Stripe y sin tocar su plan, periodo ni suscripción.
+
+- **Autenticación:** `@InternalPlatformAuth()`; rechaza JWT, `API_KEY` de servicios y llaves `fma_live_*`. Excluida de Swagger.
+- **Efecto:** en una transacción, un `credit_lots` con origen `ADD_ON` y sin caducidad, y su constancia en `platform_credit_grants` (migración `092`). El saldo sigue siendo la suma de los lotes vigentes.
+- **Idempotencia:** `Idempotency-Key` obligatorio. Repetir con los mismos datos responde `200` con `replayed: true` y el saldo actual; con otros datos, `409 IDEMPOTENCY_KEY_MISMATCH`. El folio `externalReference` es único: reutilizarlo con otra clave es `409 EXTERNAL_REFERENCE_ALREADY_USED`.
+- **Respuesta `201`:** `{ grantId, organizationId, billingProfileId, creditLotId, documentsGranted, creditsAvailable, externalReference, replayed }`.
+- **Errores:** `400` (cuerpo inválido; `documentsGranted` es entero de 1 a 100 000), `404` (organización inexistente), `422` (organización desactivada o perfil que no es Enterprise manual activo).
 
 ### `health`, `ip`, `kafka`
 
@@ -761,6 +857,7 @@ La plantilla completa y comentada es [`.env.example`](.env.example): trae valore
 | **SendGrid** | `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` | El correo remitente debe estar verificado en SendGrid. |
 | **Stripe** | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Sin la primera **la aplicación no arranca**. Si usas una *restricted key*, necesita LECTURA de Products y Prices —de ahí sale el catálogo— además de escritura en Checkout, Customers y Subscriptions. Los antiguos `STRIPE_PRICE_ID_*` ya no se usan: el catálogo se lee en vivo. |
 | **Didit** | `DIDIT_API_KEY`, `DIDIT_WORKFLOW_ID`, `DIDIT_API_URL`, `DIDIT_WEBHOOK_SECRET_KEY` | La API key nunca sale del servidor: al frontend sólo le llega la URL hospedada. Sin el secreto del webhook se rechazan todas las entregas y ningún usuario avanza de "identidad pendiente". |
+| **Indexador** | `INDEXER_WEBHOOK_SECRET` | Sin él se rechazan todas las entregas del indexador y los trabajos de indexación se quedan en `PENDING`. |
 | **Turnstile** | `TURNSTILE_SECRET_KEY` | Clave **privada**, sólo acá. Su pareja pública `TURNSTILE_SITE_KEY` vive en el `.env` de `signature-app`. Para desarrollo, Cloudflare publica una clave de prueba que siempre aprueba. |
 | **Seal Service** | `SEAL_SERVICE_URL`, `SEAL_SERVICE_API_KEY` | La API key tiene que ser idéntica a la `API_KEY` del `.env` de `seal-service`, o su guard responde 401. El puerto debe coincidir con el `PORT` de ese servicio: su valor por defecto es `3001`, que en local ya ocupa `signature-app`. |
 

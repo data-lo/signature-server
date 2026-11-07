@@ -17,6 +17,7 @@ import { ApiKeyEntity } from './entities/api-key.entity';
 import { ApiKeyPermissionGuard } from './guards/api-key-permission.guard';
 import { OrganizationApiKeyGuard } from './guards/organization-api-key.guard';
 import { OrganizationApiKeysController } from './organization-api-keys.controller';
+import { InternalOrganizationApiKeysController } from './internal-organization-api-keys.controller';
 
 /**
  * API keys de organización: el modelo y su administración interna
@@ -45,7 +46,10 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
       AccountEntity,
     ]),
   ],
-  controllers: [OrganizationApiKeysController],
+  controllers: [
+    OrganizationApiKeysController,
+    InternalOrganizationApiKeysController,
+  ],
   providers: [
     ApiKeyService,
     ApiKeySecretService,

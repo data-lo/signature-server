@@ -29,6 +29,9 @@ import {
   REQUIRES_DIFFERENT_SIGNATURES_ENUM,
 } from '../dto/create-document-signatures.dto';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
+import { DocumentIndexRequestService } from '../services/document-index-request.service';
+import { DocumentIndexingJobEntity } from '../entities/document-indexing-job.entity';
+import { DOCUMENT_INDEXING_STATUS_ENUM } from '../enum/document-indexing-status.enum';
 import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
 import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
 import { PlanActionNotIncludedException } from 'src/billing/exceptions/billing.exceptions';
@@ -53,11 +56,23 @@ function createMockRepository() {
 }
 
 describe('CreateDocumentSignatureFlowUseCase', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeAll(() => {
+    process.env.DOCUMENT_INDEX_ORIGIN_TYPE = 'digital_native';
+    process.env.MINIO_CREATED_DOCUMENTS_BUCKET = 'created-documents';
+  });
+
+  afterAll(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
   let useCase: CreateDocumentSignatureFlowUseCase;
   let documentRepo: ReturnType<typeof createMockRepository>;
   let collaboratorRepo: ReturnType<typeof createMockRepository>;
   let notificationRepo: ReturnType<typeof createMockRepository>;
   let simpleSignatureRepo: ReturnType<typeof createMockRepository>;
+  let indexingJobRepo: ReturnType<typeof createMockRepository>;
   let dataSource: { transaction: jest.Mock; getRepository: jest.Mock };
   let organizationRepo: { findOne: jest.Mock };
   let minioService: Record<string, jest.Mock>;
@@ -72,6 +87,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let documentReviewerService: Record<string, jest.Mock>;
   let assertPlanAction: Record<string, jest.Mock>;
   let directoryCollaborators: Record<string, jest.Mock>;
+  let manager: { getRepository: jest.Mock };
+
+  /** `created_at` que Postgres le pone al documento al insertarlo. */
+  const DOCUMENT_CREATED_AT = new Date('2026-10-30T12:00:00.000Z');
 
   const file = {
     buffer: Buffer.from('%PDF-1.4'),
@@ -82,9 +101,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
 
   /**
    * Documento de firma SIMPLE (el tipo lo define `documentData`, no cada colaborador — ver
-   * historia "Selección de tipo de firma al crear documentos"). Juan trae un `taxId` que el backend
-   * debe descartar por ser SIGNER, y María trae requiresTwoFactorAuth:false que el backend debe
-   * forzar a true por ser un documento SIMPLE.
+   * historia "Selección de tipo de firma al crear documentos"). María trae
+   * requiresTwoFactorAuth:false que el backend debe forzar a true por ser un documento SIMPLE.
    */
   const baseDto: CreateDocumentSignaturesDto = {
     documentData: {
@@ -99,7 +117,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Juan',
         lastName: 'Pérez',
         email: 'juan.perez@mail.com',
-        taxId: 'PEAJ800101XXX',
         signatures: [
           {
             signatureId: 'sig-1',
@@ -119,7 +136,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'María',
         lastName: 'Gómez',
         email: 'maria.gomez@mail.com',
-        taxId: null,
         // Desde la historia "Hacer obligatorias las coordenadas de posición de firma" todo
         // firmante trae al menos una posición. En otra página que la de Juan, para no solaparse.
         signatures: [
@@ -141,7 +157,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Carlos',
         lastName: 'Solares',
         email: 'auditor@mail.com',
-        taxId: 'AUDI990101YYY',
       },
     ],
   };
@@ -186,13 +201,22 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     collaboratorRepo = createMockRepository();
     notificationRepo = createMockRepository();
     simpleSignatureRepo = createMockRepository();
+    indexingJobRepo = createMockRepository();
 
-    const manager = {
+    /** Como TypeORM tras el INSERT: devuelve también el `createdAt` generado por la base. */
+    const saveDocument = documentRepo.save.getMockImplementation()!;
+    documentRepo.save.mockImplementation(async (entity) => ({
+      createdAt: DOCUMENT_CREATED_AT,
+      ...(await saveDocument(entity)),
+    }));
+
+    manager = {
       getRepository: jest.fn((entity: unknown) => {
         if (entity === DocumentEntity) return documentRepo;
         if (entity === CollaboratorEntity) return collaboratorRepo;
         if (entity === NotificationEntity) return notificationRepo;
         if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
+        if (entity === DocumentIndexingJobEntity) return indexingJobRepo;
         throw new Error('repositorio no mockeado');
       }),
     };
@@ -201,7 +225,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     organizationRepo = {
       findOne: jest
         .fn()
-        .mockResolvedValue({ id: 'org-1', indexDocuments: true }),
+        .mockResolvedValue({ id: 'org-1', name: 'Acme', indexDocuments: true }),
     };
 
     dataSource = {
@@ -239,6 +263,9 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     documentEventsProducer = {
       emitCreated: jest.fn(),
       enqueueApprovalEvent: jest.fn().mockResolvedValue({ id: 'event-1' }),
+      enqueueIndexRequested: jest
+        .fn()
+        .mockResolvedValue({ id: 'event-index-1' }),
       flushOutbox: jest.fn().mockResolvedValue(undefined),
     };
     documentTransactionService = { createInitial: jest.fn() };
@@ -309,6 +336,11 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           provide: DirectoryCollaboratorsService,
           useValue: directoryCollaborators,
         },
+        /**
+         * El servicio real, con el productor mockeado: así lo que se afirma aquí es el payload que
+         * de verdad llega a la outbox. Su configuración la pone `beforeAll`.
+         */
+        DocumentIndexRequestService,
       ],
     }).compile();
 
@@ -648,7 +680,11 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   it('el tipo del recibo proviene del documento guardado, no del payload', async () => {
     documentRepo.save.mockImplementation(async (entity) => {
       const { signatureType: _descartado, ...sinTipoDeFirma } = entity;
-      return { id: 'documento-sin-tipo', ...sinTipoDeFirma };
+      return {
+        id: 'documento-sin-tipo',
+        createdAt: DOCUMENT_CREATED_AT,
+        ...sinTipoDeFirma,
+      };
     });
 
     const result = await useCase.execute(
@@ -670,20 +706,27 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
   });
 
-  it('historia "Selección de tipo de firma": descarta el taxId que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
+  it('descarta el taxId que mande un cliente viejo, sea firmante o testigo', async () => {
     await useCase.execute(
       'creator-1',
       'account-1',
-      advancedDto,
+      {
+        ...baseDto,
+        collaborators: baseDto.collaborators.map((collaborator) => ({
+          ...collaborator,
+          taxId: 'AURU800101ABC',
+        })),
+      },
       file,
       '127.0.0.1',
     );
 
-    const juanCall = collaboratorRepo.create.mock.calls.find(
-      (call) => call[0].email === 'juan.perez@mail.com',
+    expect(collaboratorRepo.create).toHaveBeenCalledTimes(
+      baseDto.collaborators.length,
     );
-    // El payload trae taxId: 'PEAJ800101XXX' — un cliente viejo no puede reintroducir el campo.
-    expect(juanCall[0].taxId).toBeNull();
+    for (const [collaborator] of collaboratorRepo.create.mock.calls) {
+      expect(collaborator.taxId).toBeNull();
+    }
   });
 
   it('conserva el RFC que la integración manda para un firmante avanzado (signerTaxId)', async () => {
@@ -870,7 +913,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
     expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WITNESS);
     expect(viewerCall[0].signatureType).toBeNull();
-    expect(viewerCall[0].taxId).toBe('AUDI990101YYY');
+    expect(viewerCall[0].taxId).toBeNull();
     // Solo 2 verification_codes en total (los 2 signers), ninguno para el viewer.
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
   });
@@ -1069,6 +1112,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       expect(documentEventsProducer.emitCreated).toHaveBeenCalledWith({
         documentId: expect.any(String),
         fileName: baseDto.documentData.fileName,
+        organization: null,
         actorUserId: 'creator-1',
       });
     });
@@ -1345,7 +1389,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       expect(documentEventsProducer.enqueueApprovalEvent).toHaveBeenCalledWith(
         expect.anything(),
         DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
-        expect.objectContaining({ documentId: expect.any(String) }),
+        expect.objectContaining({
+          documentId: expect.any(String),
+          organization: 'Acme',
+        }),
       );
       expect(documentEventsProducer.flushOutbox).toHaveBeenCalled();
     });
@@ -1521,42 +1568,221 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     });
 
     /**
-     * El punto de enganche de la indexación está vacío a propósito (todavía no existe el flujo),
-     * así que lo único que se puede afirmar hoy es que NADIE publica nada extra por ser
-     * indexable: los dos casos emiten exactamente los mismos eventos. Cuando se agregue la
-     * llamada real, esta prueba es la que va a fallar y pedir que se distinga.
+     * Historia "Publicar evento document.index al crear un documento indexable": la solicitud de
+     * indexación se registra en la outbox con el `manager` de la transacción que crea el
+     * documento, y la publica el `flush` posterior al commit.
      */
-    it('hoy la indexación todavía no emite nada: indexable y no indexable publican lo mismo', async () => {
-      await useCase.execute(
-        'creator-1',
-        'account-1',
-        baseDto,
-        file,
-        '127.0.0.1',
-      );
-      const eventosIndexable =
-        documentEventsProducer.emitCreated.mock.calls.length;
+    describe('evento document.index', () => {
+      it('documento organizacional: registra el contrato exacto en la transacción de creación', async () => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'org-1',
+        });
 
-      jest.clearAllMocks();
-      minioService.uploadObject.mockResolvedValue({
-        status: FILE_STATUS_ENUM.FILE_CREATED,
-        fileId: 'object-key-1',
+        const result = await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(
+          documentEventsProducer.enqueueIndexRequested,
+        ).toHaveBeenCalledTimes(1);
+        const [usedManager, payload, actor] =
+          documentEventsProducer.enqueueIndexRequested.mock.calls[0];
+        expect(usedManager).toBe(manager);
+        expect(actor).toBe('creator-1');
+        expect(payload).toStrictEqual({
+          organization: 'Acme',
+          originType: 'digital_native',
+          originReference: 'created-documents/object-key-1.pdf',
+          clientDocumentId: result.data.id,
+          metadata: {
+            organizationId: 'org-1',
+            createdAt: '2026-10-30T12:00:00.000Z',
+            signedAt: null,
+          },
+        });
       });
 
-      await useCase.execute(
-        'creator-1',
-        'account-1',
-        {
-          ...baseDto,
-          documentData: { ...baseDto.documentData, isIndexable: false },
-        },
-        file,
-        '127.0.0.1',
-      );
+      it('documento personal: organización e id de organización en null', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
 
-      expect(documentEventsProducer.emitCreated).toHaveBeenCalledTimes(
-        eventosIndexable,
-      );
+        const [, payload] =
+          documentEventsProducer.enqueueIndexRequested.mock.calls[0];
+        expect(payload.organization).toBeNull();
+        expect(payload.metadata.organizationId).toBeNull();
+        expect(payload.metadata.signedAt).toBeNull();
+      });
+
+      it('documento no indexable: no registra ningún document.index', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...baseDto,
+            documentData: { ...baseDto.documentData, isIndexable: false },
+          },
+          file,
+          '127.0.0.1',
+        );
+
+        expect(
+          documentEventsProducer.enqueueIndexRequested,
+        ).not.toHaveBeenCalled();
+        // El resto de los efectos de la creación siguen ocurriendo.
+        expect(documentEventsProducer.flushOutbox).toHaveBeenCalled();
+      });
+
+      it('con la indexación de la organización apagada, no registra ningún document.index', async () => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'org-1',
+        });
+        organizationRepo.findOne.mockResolvedValue({
+          id: 'org-1',
+          name: 'Acme',
+          indexDocuments: false,
+        });
+
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(
+          documentEventsProducer.enqueueIndexRequested,
+        ).not.toHaveBeenCalled();
+      });
+
+      it('se registra antes del flush que lo publica', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(
+          documentEventsProducer.enqueueIndexRequested.mock
+            .invocationCallOrder[0],
+        ).toBeLessThan(
+          documentEventsProducer.flushOutbox.mock.invocationCallOrder[0],
+        );
+      });
+
+      /**
+       * La transacción revienta DESPUÉS de haber registrado el evento (p. ej. falla el commit):
+       * la fila de la outbox se revierte con ella y nada llama al `flush`, así que el indexador
+       * nunca recibe un documento que no existe.
+       */
+      it('si la transacción falla, no se publica', async () => {
+        dataSource.transaction.mockImplementationOnce(
+          async (cb: (m: unknown) => Promise<unknown>) => {
+            await cb(manager);
+            throw new Error('commit fallido');
+          },
+        );
+
+        await expect(
+          useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+        ).rejects.toThrow('commit fallido');
+
+        expect(
+          documentEventsProducer.enqueueIndexRequested,
+        ).toHaveBeenCalledWith(manager, expect.anything(), 'creator-1');
+        expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+      });
+
+      /**
+       * Historia "Crear un trabajo de indexación al encolar el evento document.index": el job se
+       * escribe con el repositorio de la transacción de creación, en `PENDING`, y antes del flush.
+       */
+      it('documento indexable: crea un job PENDING en la transacción, antes del flush', async () => {
+        accountMemberService.assertIsActiveMember.mockResolvedValue({
+          id: 'account-1',
+          accountType: ACCOUNT_TYPE_ENUM.ORGANIZATION,
+          organizationId: 'org-1',
+        });
+
+        const result = await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(manager.getRepository).toHaveBeenCalledWith(
+          DocumentIndexingJobEntity,
+        );
+        expect(indexingJobRepo.save).toHaveBeenCalledTimes(1);
+        expect(indexingJobRepo.create).toHaveBeenCalledWith({
+          documentId: result.data.id,
+          status: DOCUMENT_INDEXING_STATUS_ENUM.PENDING,
+          attemptCount: 0,
+          externalJobId: null,
+          externalDocumentId: null,
+          receivedAt: null,
+          completedAt: null,
+          error: null,
+          metadata: {
+            originType: 'digital_native',
+            originReference: 'created-documents/object-key-1.pdf',
+            organizationId: 'org-1',
+            organizationName: 'Acme',
+            clientDocumentId: result.data.id,
+            createdAt: '2026-10-30T12:00:00.000Z',
+          },
+        });
+        expect(indexingJobRepo.save.mock.invocationCallOrder[0]).toBeLessThan(
+          documentEventsProducer.flushOutbox.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('documento no indexable: no crea ningún job', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          {
+            ...baseDto,
+            documentData: { ...baseDto.documentData, isIndexable: false },
+          },
+          file,
+          '127.0.0.1',
+        );
+
+        expect(indexingJobRepo.save).not.toHaveBeenCalled();
+      });
+
+      /**
+       * Si el job no se puede guardar, la creación entera falla: el error sale de la transacción
+       * —que revierte documento, evento y job— y nada llega al flush de la outbox.
+       */
+      it('si guardar el job falla, la creación falla y no se publica nada', async () => {
+        indexingJobRepo.save.mockRejectedValue(new Error('insert del job'));
+
+        await expect(
+          useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1'),
+        ).rejects.toThrow('insert del job');
+
+        expect(documentEventsProducer.enqueueIndexRequested).toHaveBeenCalled();
+        expect(documentEventsProducer.flushOutbox).not.toHaveBeenCalled();
+      });
     });
 
     describe('interruptor de la organización (indexDocuments)', () => {
@@ -1591,7 +1817,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
 
         expect(organizationRepo.findOne).toHaveBeenCalledWith({
           where: { id: 'org-1' },
-          select: { id: true, indexDocuments: true },
+          select: { id: true, name: true, indexDocuments: true },
         });
         expect(documentRepo.create).toHaveBeenCalledWith(
           expect.objectContaining({ isIndexable: false }),
@@ -1694,7 +1920,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
     });
 
-    it('un testigo MANUAL se crea con los datos del payload y su RFC', async () => {
+    it('un testigo MANUAL se crea con los datos del payload y sin RFC', async () => {
       await useCase.execute(
         'creator-1',
         'account-1',
@@ -1707,7 +1933,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
             lastName: 'Solares',
             email: 'carlos@mail.com',
             addToDirectory: false,
-            taxId: 'SOCA800101AAA',
           },
         ]),
         file,
@@ -1718,7 +1943,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Carlos',
         lastName: 'Solares',
         email: 'carlos@mail.com',
-        taxId: 'SOCA800101AAA',
+        taxId: null,
         colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
       });
       expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(
@@ -1737,6 +1962,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
               if (entity === CollaboratorEntity) return collaboratorRepo;
               if (entity === NotificationEntity) return notificationRepo;
               if (entity === SimpleSignatureEntity) return simpleSignatureRepo;
+              if (entity === DocumentIndexingJobEntity) return indexingJobRepo;
               throw new Error('repositorio no mockeado');
             }),
           }),

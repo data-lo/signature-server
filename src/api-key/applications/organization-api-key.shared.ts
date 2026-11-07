@@ -188,7 +188,7 @@ export interface IssueApiKeyParams {
  * @param params - Organización, autor, nombre, permisos y expiración.
  * @returns Los metadatos de la llave más la llave completa, que sólo se entrega aquí.
  *
- * @throws {ApiKeyNotConfiguredException} (500) Si falta `API_KEY_PEPPER`.
+ * @throws {ApiKeyNotConfiguredException} (500) Si falta `INTEGRATION_API_KEY_HMAC_SECRET`.
  * @throws {QueryFailedError} Si la base rechaza la fila (p. ej. una segunda llave activa).
  *
  * @example
