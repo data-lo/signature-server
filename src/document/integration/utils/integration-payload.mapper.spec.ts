@@ -149,7 +149,7 @@ describe('toCreateDocumentSignaturesDto', () => {
     ]);
   });
 
-  it('lleva el rfc de un firmante avanzado como signerTaxId', () => {
+  it('lleva el taxId de un firmante avanzado como signerTaxId', () => {
     const base = payload();
     const [luis, eva] = toCreateDocumentSignaturesDto(
       payload({
@@ -158,7 +158,7 @@ describe('toCreateDocumentSignaturesDto', () => {
           signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED,
         },
         participants: [
-          { ...base.participants[0], rfc: 'LOPA800101AB1' },
+          { ...base.participants[0], taxId: 'LOPA800101AB1' },
           base.participants[1],
         ],
       }),

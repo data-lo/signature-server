@@ -22,6 +22,12 @@ export const TENANT_OVERRIDE_FIELDS = [
   'documentBase64',
 ] as const;
 
+/**
+ * Nombres de `TENANT_OVERRIDE_FIELDS` que, dentro de un participante, son campos legítimos de su
+ * contrato: `taxId` es el RFC del firmante de firma avanzada.
+ */
+const PARTICIPANT_FIELDS: ReadonlySet<string> = new Set(['taxId']);
+
 /** Headers de cuenta activa de la plataforma, que esta API no usa. */
 export const TENANT_OVERRIDE_HEADERS = ['x-account-id', 'x-organization-id'];
 
@@ -42,6 +48,9 @@ export interface IntegrationRawRequest {
  * campos en silencio, y un cliente que los manda tiene que enterarse de que no sirven. Se mira el
  * query, los headers de cuenta activa, el primer nivel del body y, dentro de `payload` (que en
  * multipart llega como JSON en texto), su primer nivel, `creator`, `document` y cada participante.
+ *
+ * En un participante, `taxId` no cuenta: ahí es el RFC del firmante avanzado (contrato propio,
+ * validado por `IntegrationPayloadValidator`), no el de la organización.
  *
  * @param request - Headers, query y body tal como llegaron.
  * @returns Nada.
@@ -64,16 +73,22 @@ export function assertNoTenantOverrides(request: IntegrationRawRequest): void {
   const participants = Array.isArray(payload?.participants)
     ? (payload.participants as unknown[])
     : [];
-  const containers = [
-    request.query,
-    request.body,
-    payload,
-    asObject(payload?.creator),
-    asObject(payload?.document),
-    ...participants.map(asObject),
+  const containers: [Record<string, unknown> | null | undefined, boolean][] = [
+    [request.query, false],
+    [request.body, false],
+    [payload, false],
+    [asObject(payload?.creator), false],
+    [asObject(payload?.document), false],
+    ...participants.map(
+      (participant): [Record<string, unknown> | null, boolean] => [
+        asObject(participant),
+        true,
+      ],
+    ),
   ];
-  for (const container of containers) {
+  for (const [container, isParticipant] of containers) {
     for (const field of TENANT_OVERRIDE_FIELDS) {
+      if (isParticipant && PARTICIPANT_FIELDS.has(field)) continue;
       if (container && Object.prototype.hasOwnProperty.call(container, field)) {
         found.add(field);
       }

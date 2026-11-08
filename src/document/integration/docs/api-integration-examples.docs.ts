@@ -88,6 +88,23 @@ export const EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD = {
 };
 
 /**
+ * El mismo documento con firma avanzada (e.firma): el primer firmante trae `taxId`, así que su
+ * certificado tiene que ser de ese RFC; el segundo no lo trae y se le compara por nombre. El
+ * testigo nunca lleva `taxId`.
+ */
+export const EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD = {
+  ...EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+  document: {
+    ...EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD.document,
+    signatureType: 'ADVANCED',
+  },
+  participants: EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD.participants.map(
+    (participant, index) =>
+      index === 0 ? { ...participant, taxId: 'MAGL800101AB1' } : participant,
+  ),
+};
+
+/**
  * Arma un ejemplo de error con la forma de `IntegrationErrorFilter`:
  * `{ success: false, error: { code, message, details? } }`.
  *

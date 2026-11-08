@@ -305,7 +305,11 @@ describe('API de integración de documentos (e2e)', () => {
       accountId: string,
       dto: {
         documentData: { fileName: string };
-        collaborators: { email: string; collaboratorType: string }[];
+        collaborators: {
+          email: string;
+          collaboratorType: string;
+          signerTaxId?: string | null;
+        }[];
       },
       file: Express.Multer.File,
       ip: string,
@@ -337,8 +341,14 @@ describe('API de integración de documentos (e2e)', () => {
           await origin?.onDocumentSaved?.(manager, saved);
           for (const collaborator of dto.collaborators) {
             await manager.query(
-              `INSERT INTO collaborators (document_id, email, colaborator_type, ip_address) VALUES ($1, $2, $3, $4)`,
-              [saved.id, collaborator.email, collaborator.collaboratorType, ip],
+              `INSERT INTO collaborators (document_id, email, colaborator_type, ip_address, tax_id) VALUES ($1, $2, $3, $4, $5)`,
+              [
+                saved.id,
+                collaborator.email,
+                collaborator.collaboratorType,
+                ip,
+                collaborator.signerTaxId ?? null,
+              ],
             );
           }
           if (flowFailures > 0) {
@@ -1679,6 +1689,115 @@ describe('API de integración de documentos (e2e)', () => {
           });
         });
 
+        describe('RFC del firmante avanzado (taxId)', () => {
+          const advanced = (patch: (v: Record<string, any>) => void) =>
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              patch(value);
+            });
+
+          it('acepta taxId en un firmante ADVANCED y lo guarda normalizado en el colaborador', async () => {
+            const response = await postDocument(
+              'org1-full',
+              `tax-id-${randomUUID()}`,
+              {
+                body: advanced(
+                  (v) => (v.participants[0].taxId = ' lopa800101ab1 '),
+                ),
+              },
+            ).expect(201);
+
+            const rows = await dataSource.query(
+              `SELECT email, tax_id FROM collaborators WHERE document_id = $1 ORDER BY email`,
+              [response.body.data.id],
+            );
+            expect(rows).toEqual([
+              { email: 'eva@correo.test', tax_id: null },
+              { email: 'luis@correo.test', tax_id: 'LOPA800101AB1' },
+            ]);
+          });
+
+          it.each([
+            [
+              'rfc (campo retirado) en un firmante',
+              (v: any) => {
+                v.document.signatureType = 'ADVANCED';
+                v.participants[0].rfc = 'LOPA800101AB1';
+              },
+              'UNSUPPORTED_PARTICIPANT_FIELD',
+              'participants[0].rfc',
+            ],
+            [
+              'rfc (campo retirado) en un documento simple',
+              (v: any) => (v.participants[0].rfc = 'LOPA800101AB1'),
+              'UNSUPPORTED_PARTICIPANT_FIELD',
+              'participants[0].rfc',
+            ],
+            [
+              'un taxId con formato inválido',
+              (v: any) => {
+                v.document.signatureType = 'ADVANCED';
+                v.participants[0].taxId = 'NO-ES-RFC';
+              },
+              'INVALID_PARTICIPANT_TAX_ID',
+              'participants[0].taxId',
+            ],
+            [
+              'taxId en un documento simple',
+              (v: any) => (v.participants[0].taxId = 'LOPA800101AB1'),
+              'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+              'participants[0].taxId',
+            ],
+            [
+              'taxId en un testigo',
+              (v: any) => {
+                v.document.signatureType = 'ADVANCED';
+                v.participants[1].taxId = 'LOPA800101AB1';
+              },
+              'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+              'participants[1].taxId',
+            ],
+          ])(
+            'rechaza %s con 422, sin cobrar ni crear nada',
+            async (_label, patch, code, field) => {
+              const before = creditsCharged;
+
+              const response = await postDocument(
+                'org1-full',
+                `tax-id-invalido-${randomUUID()}`,
+                { body: payload(patch) },
+              ).expect(422);
+
+              expect(response.body).toEqual({
+                success: false,
+                error: {
+                  code,
+                  message: expect.any(String),
+                  details: expect.objectContaining({ field }),
+                },
+              });
+              expect(creditsCharged).toBe(before);
+            },
+          );
+
+          it('el error de rfc dice qué campo usar', async () => {
+            const response = await postDocument(
+              'org1-full',
+              `rfc-retirado-${randomUUID()}`,
+              {
+                body: advanced(
+                  (v) => (v.participants[0].rfc = 'LOPA800101AB1'),
+                ),
+              },
+            ).expect(422);
+
+            expect(response.body.error.details).toEqual({
+              field: 'participants[0].rfc',
+              replacedBy: 'participants[0].taxId',
+            });
+          });
+        });
+
         it('un documento no secuencial puede omitir order', async () => {
           await postDocument('org1-full', `no-secuencial-${randomUUID()}`, {
             body: payload((value) => {
@@ -1836,6 +1955,29 @@ describe('API de integración de documentos (e2e)', () => {
         ).toEqual(expect.objectContaining({ in: 'header', name: 'X-API-Key' }));
       },
     );
+
+    it('el participante documenta taxId (RFC, 12 o 13 caracteres) y ya no rfc', () => {
+      const participant = swagger.components?.schemas?.[
+        'IntegrationParticipantDto'
+      ] as Record<string, any>;
+
+      expect(participant.properties).not.toHaveProperty('rfc');
+      expect(participant.properties.taxId).toEqual(
+        expect.objectContaining({
+          type: 'string',
+          minLength: 12,
+          maxLength: 13,
+          pattern: expect.any(String),
+          description: expect.stringContaining('ADVANCED'),
+        }),
+      );
+      expect(participant.required ?? []).not.toContain('taxId');
+      // Ningún ejemplo ni descripción publicada vuelve a enseñar el campo retirado como válido.
+      const operation = (
+        swagger.paths['/api/v1/integration/documents'] as Record<string, any>
+      ).post;
+      expect(JSON.stringify(operation.requestBody)).not.toMatch(/"rfc"/);
+    });
 
     it('la creación documenta Idempotency-Key y multipart', () => {
       const operation = (

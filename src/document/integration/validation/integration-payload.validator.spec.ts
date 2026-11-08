@@ -5,6 +5,7 @@ import {
   IntegrationValidationException,
 } from './integration-validation.exception';
 import {
+  EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD,
   EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
   EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
 } from '../docs/api-integration-examples.docs';
@@ -63,6 +64,7 @@ describe('ejemplos publicados en Swagger', () => {
   it.each([
     ['secuencial', EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD],
     ['no secuencial', EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD],
+    ['de firma avanzada', EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD],
   ])('el ejemplo %s es válido', (_label, example) => {
     const subject = validator();
 
@@ -71,6 +73,21 @@ describe('ejemplos publicados en Swagger', () => {
     expect(() =>
       subject.assertPositionsFitDocument(validated, 1),
     ).not.toThrow();
+  });
+
+  it('ningún ejemplo publicado usa el campo retirado rfc', () => {
+    for (const example of [
+      EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+      EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+      EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD,
+    ]) {
+      for (const participant of example.participants) {
+        expect(participant).not.toHaveProperty('rfc');
+      }
+    }
+    expect(
+      EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD.participants[0],
+    ).toHaveProperty('taxId');
   });
 
   it('el ejemplo secuencial numera a dos firmantes y deja al testigo sin order', () => {
@@ -449,57 +466,132 @@ describe('IntegrationPayloadValidator', () => {
     });
   });
 
-  describe('RFC del firmante avanzado', () => {
-    it('acepta el RFC de un firmante ADVANCED, normalizado a mayúsculas', () => {
+  describe('RFC del firmante avanzado (taxId)', () => {
+    it('acepta el taxId de un firmante ADVANCED, normalizado a mayúsculas', () => {
       const result = validator().validatePayload(
         payload((value) => {
           value.document.signatureType = 'ADVANCED';
-          value.participants[0].rfc = ' lopa800101ab1 ';
+          value.participants[0].taxId = ' lopa800101ab1 ';
         }),
       );
-      expect(result.participants[0].rfc).toBe('LOPA800101AB1');
+      expect(result.participants[0].taxId).toBe('LOPA800101AB1');
     });
 
-    it('rechaza un RFC con formato inválido', () => {
+    it('acepta el RFC de 12 caracteres de una persona moral', () => {
+      const result = validator().validatePayload(
+        payload((value) => {
+          value.document.signatureType = 'ADVANCED';
+          value.participants[0].taxId = 'ACM010101AB1';
+        }),
+      );
+      expect(result.participants[0].taxId).toBe('ACM010101AB1');
+    });
+
+    it('un firmante ADVANCED sin taxId sigue siendo válido', () => {
+      const result = validator().validatePayload(
+        payload((value) => (value.document.signatureType = 'ADVANCED')),
+      );
+      expect(result.participants[0].taxId).toBeUndefined();
+    });
+
+    it.each([
+      ['un formato inválido', 'NO-ES-RFC'],
+      ['menos de 12 caracteres', 'ACM010101AB'],
+      ['más de 13 caracteres', 'LOPA800101AB12'],
+      ['un valor que no es texto', 12345],
+    ])('rechaza %s', (_label, taxId) => {
       expect(
         errorOf(() =>
           validator().validatePayload(
             payload((value) => {
               value.document.signatureType = 'ADVANCED';
-              value.participants[0].rfc = 'NO-ES-RFC';
+              value.participants[0].taxId = taxId;
             }),
           ),
         ),
-      ).toMatchObject({ code: CODE.INVALID_PARTICIPANT_RFC });
-    });
-
-    it('rechaza el RFC en un documento que no es ADVANCED', () => {
-      expect(
-        errorOf(() =>
-          validator().validatePayload(
-            payload((value) => (value.participants[0].rfc = 'LOPA800101AB1')),
-          ),
-        ),
       ).toMatchObject({
-        code: CODE.PARTICIPANT_RFC_NOT_ALLOWED,
-        details: { field: 'participants[0].rfc' },
+        code: CODE.INVALID_PARTICIPANT_TAX_ID,
+        details: { field: 'participants[0].taxId' },
       });
     });
 
-    it('rechaza el RFC en un testigo', () => {
+    it.each(['SIMPLE', 'BIOMETRIC'])(
+      'rechaza el taxId en un documento %s',
+      (signatureType) => {
+        expect(
+          errorOf(() =>
+            validator().validatePayload(
+              payload((value) => {
+                value.document.signatureType = signatureType;
+                value.participants[0].taxId = 'LOPA800101AB1';
+              }),
+            ),
+          ),
+        ).toMatchObject({
+          code: CODE.PARTICIPANT_TAX_ID_NOT_ALLOWED,
+          details: { field: 'participants[0].taxId' },
+        });
+      },
+    );
+
+    it('rechaza el taxId en un testigo', () => {
       expect(
         errorOf(() =>
           validator().validatePayload(
             payload((value) => {
               value.document.signatureType = 'ADVANCED';
-              value.participants[1].rfc = 'LOPA800101AB1';
+              value.participants[1].taxId = 'LOPA800101AB1';
             }),
           ),
         ),
       ).toMatchObject({
-        code: CODE.PARTICIPANT_RFC_NOT_ALLOWED,
-        details: { field: 'participants[1].rfc' },
+        code: CODE.PARTICIPANT_TAX_ID_NOT_ALLOWED,
+        details: { field: 'participants[1].taxId' },
       });
+    });
+  });
+
+  describe('campo retirado rfc', () => {
+    it.each([
+      ['un firmante ADVANCED', 'ADVANCED', 0],
+      ['un firmante SIMPLE', 'SIMPLE', 0],
+      ['un testigo', 'ADVANCED', 1],
+    ])(
+      'rechaza rfc en %s con 422 y el campo que lo reemplaza',
+      (_label, signatureType, index) => {
+        const error = errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = signatureType;
+              value.participants[index].rfc = 'LOPA800101AB1';
+            }),
+          ),
+        );
+
+        expect(error).toMatchObject({
+          statusCode: 422,
+          code: CODE.UNSUPPORTED_PARTICIPANT_FIELD,
+          details: {
+            field: `participants[${index}].rfc`,
+            replacedBy: `participants[${index}].taxId`,
+          },
+        });
+        expect(error.message).toContain('taxId');
+      },
+    );
+
+    it('lo rechaza aunque también venga taxId', () => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[0].taxId = 'LOPA800101AB1';
+              value.participants[0].rfc = 'LOPA800101AB1';
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: CODE.UNSUPPORTED_PARTICIPANT_FIELD });
     });
   });
 

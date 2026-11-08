@@ -8,11 +8,13 @@ import { AuthController } from 'src/auth/auth.controller';
 import { InternalSubscriptionBillingController } from 'src/billing/subscriptions/internal-subscription-billing.controller';
 import { applyGlobalApiPrefix } from 'src/common/constants/api-prefix.constants';
 
+import { RFC_FORMAT } from '../dto/create-integration-document.dto';
 import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,
 } from '../docs/api-integration-documents-common.docs';
 import {
+  EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD,
   EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
   EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
 } from '../docs/api-integration-examples.docs';
@@ -270,14 +272,72 @@ describe('createIntegrationOpenApiDocument', () => {
       );
     });
 
-    it('el cuerpo multipart publica los dos ejemplos', () => {
+    it('el cuerpo multipart publica los tres ejemplos', () => {
       const body = createOperation().requestBody as {
         content: Record<string, { examples?: Record<string, unknown> }>;
       };
 
       expect(
         Object.keys(body.content['multipart/form-data'].examples ?? {}),
-      ).toEqual(['sequential', 'nonSequential']);
+      ).toEqual(['sequential', 'nonSequential', 'advanced']);
+    });
+  });
+
+  describe('RFC del firmante avanzado (taxId)', () => {
+    const participantSchema = () =>
+      integration.components!.schemas!['IntegrationParticipantDto'] as {
+        properties: Record<string, Record<string, unknown>>;
+        required?: string[];
+      };
+    const createOperation = () =>
+      integration.paths['/api/v1/integration/documents'].post!;
+
+    it('el participante publica taxId opcional, con su formato y cuándo aplica, y ya no rfc', () => {
+      const { properties, required } = participantSchema();
+
+      expect(properties).not.toHaveProperty('rfc');
+      expect(required ?? []).not.toContain('taxId');
+      expect(properties.taxId).toEqual(
+        expect.objectContaining({
+          type: 'string',
+          minLength: 12,
+          maxLength: 13,
+          pattern: RFC_FORMAT.source,
+          example: 'LOPA800101AB1',
+        }),
+      );
+      expect(properties.taxId.description).toEqual(
+        expect.stringMatching(/`role: SIGNER`.*signatureType: ADVANCED/s),
+      );
+    });
+
+    it('la operación muestra el ejemplo de firma avanzada y los códigos 422 de taxId', () => {
+      const operation = createOperation();
+
+      expect(operation.description).toContain(
+        JSON.stringify(EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD, null, 2),
+      );
+      expect(operation.description).toContain('"taxId":"MAGL800101AB1"');
+      expect(
+        (operation.responses['422'] as { description: string }).description,
+      ).toEqual(
+        expect.stringMatching(
+          /INVALID_PARTICIPANT_TAX_ID.*PARTICIPANT_TAX_ID_NOT_ALLOWED.*UNSUPPORTED_PARTICIPANT_FIELD/s,
+        ),
+      );
+    });
+
+    it('ningún ejemplo de payload ni de respuesta exitosa usa rfc', () => {
+      const operation = createOperation();
+      const requestBody = JSON.stringify(operation.requestBody);
+      const successResponses = JSON.stringify([
+        operation.responses['200'],
+        operation.responses['201'],
+      ]);
+
+      expect(requestBody).not.toMatch(/"rfc"/);
+      expect(successResponses).not.toMatch(/rfc/i);
+      expect(operation.description).not.toMatch(/"rfc"/);
     });
   });
 
