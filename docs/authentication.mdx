@@ -1,0 +1,35 @@
+---
+title: "Autenticación"
+description: "Identifica a tu organización con su API key."
+---
+
+Todas las peticiones se autentican con la API key de tu organización, en el header `X-API-Key`.
+
+```bash
+curl "$FIRMALO_API_URL/api/v1/integration/documents" \
+  -H "X-API-Key: $FIRMALO_API_KEY"
+```
+
+## Formato de la llave
+
+Una API key tiene el formato `fma_live_<publicId>_<secret>`. Se emite, se rota y se revoca desde **Integraciones** en Firmalo.
+
+<Warning>
+  El secreto completo sólo se muestra al emitir la llave. Guárdalo en el gestor de secretos de tu backend.
+</Warning>
+
+## La organización sale de la llave
+
+La organización y el contexto de acceso se resuelven a partir de la llave. No uses JWT, `X-Account-Id` ni `X-Organization-Id`.
+
+Si la petición intenta elegir la organización, la cuenta o el autor (por ejemplo, con `organizationId` o `userId` en el cuerpo o en el query), la API responde `400 INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED` en lugar de ignorarlo.
+
+## Errores de autenticación
+
+| Estado | Código | Qué significa |
+| --- | --- | --- |
+| `401` | `API_KEY_INVALID` | La llave falta, tiene un formato incorrecto, no coincide o fue revocada. |
+| `401` | `API_KEY_EXPIRED` | La llave venció. Genera una nueva desde Integraciones. |
+| `403` | `API_KEY_PERMISSION_DENIED` | La llave no está autorizada para esa operación. |
+| `403` | `API_KEY_ORGANIZATION_INACTIVE` | La organización de la llave está desactivada. |
+| `403` | `API_KEY_ACTOR_INACTIVE` | Quien emitió la llave ya no es miembro activo de la organización. |
