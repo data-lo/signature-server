@@ -43,6 +43,11 @@ import {
 import { createIntegrationOpenApiDocument } from './../src/document/integration/openapi/create-integration-openapi-document';
 import { IntegrationIdempotencyKeyEntity } from './../src/document/integration/entities/integration-idempotency-key.entity';
 import { IntegrationDocumentsController } from './../src/document/integration/integration-documents.controller';
+import { IntegrationOrganizationController } from './../src/document/integration/integration-organization.controller';
+import { GetIntegrationOrganizationContextUseCase } from './../src/document/integration/applications/get-integration-organization-context.use-case';
+import { OrganizationEntity } from './../src/account/entities/organization.entity';
+import { CreditLotEntity } from './../src/billing/credits/credit-lot.entity';
+import { BillingProfileEntity } from './../src/billing/profiles/billing-profile.entity';
 import { IntegrationIdempotencyService } from './../src/document/integration/services/integration-idempotency.service';
 import { IntegrationCreatorService } from './../src/document/integration/services/integration-creator.service';
 import { IntegrationPayloadValidator } from './../src/document/integration/validation/integration-payload.validator';
@@ -468,14 +473,21 @@ describe('API de integración de documentos (e2e)', () => {
           AccountEntity,
           UserEntity,
           IntegrationIdempotencyKeyEntity,
+          OrganizationEntity,
+          BillingProfileEntity,
+          CreditLotEntity,
         ]),
         E2eJwtModule,
         AuthorizationModule,
         ApiKeyModule,
         RolesModule,
       ],
-      controllers: [IntegrationDocumentsController],
+      controllers: [
+        IntegrationDocumentsController,
+        IntegrationOrganizationController,
+      ],
       providers: [
+        GetIntegrationOrganizationContextUseCase,
         ListOrganizationIntegrationDocumentsUseCase,
         ListUserIntegrationDocumentsUseCase,
         CreateIntegrationDocumentUseCase,
@@ -1781,6 +1793,227 @@ describe('API de integración de documentos (e2e)', () => {
         ).expect(403);
         expect(response.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
       });
+    });
+  });
+
+  describe('GET /integration/organization/context', () => {
+    const URL = '/api/v1/integration/organization/context';
+    const DAY = 24 * 60 * 60 * 1000;
+    const periodStart = new Date(Date.now() - 5 * DAY);
+    const periodEnd = new Date(periodStart.getTime() + 30 * DAY);
+    const day = (date: Date) => date.toISOString().slice(0, 10);
+    const context = (keyName: string) =>
+      request(app.getHttpServer()).get(URL).set(api(keyName));
+
+    /** Una organización con su miembro y su llave activa con `DOCUMENT.READ` de organización. */
+    async function seedTenant(key: string): Promise<void> {
+      await seedOrganization(key);
+      await seedMember(`${key}-owner`, key);
+      await seedApiKey(key, {
+        organizationKey: key,
+        actorKey: `${key}-owner`,
+        permissions: ['read-org'],
+      });
+    }
+
+    /** Perfil de la organización en el plan Business y con el periodo vigente. */
+    async function seedProfile(key: string): Promise<string> {
+      const [profile] = await dataSource.query(
+        `INSERT INTO billing_profiles (organization_id, current_plan_type, status, billing_source, current_period_start, current_period_end)
+         VALUES ($1, 'ctx-business', 'ACTIVE', 'STRIPE', $2, $3) RETURNING id`,
+        [ids[`org:${key}`], periodStart, periodEnd],
+      );
+      return profile.id;
+    }
+
+    function seedLot(
+      profileId: string,
+      origin: string,
+      issued: number,
+      remaining: number,
+      period: [Date, Date] | null = [periodStart, periodEnd],
+    ) {
+      return dataSource.query(
+        `INSERT INTO credit_lots (billing_profile_id, origin, issued, remaining, period_start, period_end)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [profileId, origin, issued, remaining, period?.[0], period?.[1]],
+      );
+    }
+
+    /** Documento ya firmado de la organización, en la fecha indicada. */
+    async function seedSigned(
+      key: string,
+      organizationKey: string,
+      signedAt: Date,
+    ) {
+      await seedDocument(key, `${organizationKey}-owner`, organizationKey, {
+        status: 'SIGNED',
+      });
+      await dataSource.query(
+        `UPDATE documents SET signed_at = $1 WHERE id = $2`,
+        [signedAt, ids[`doc:${key}`]],
+      );
+    }
+
+    beforeAll(async () => {
+      await dataSource.query(
+        `INSERT INTO plans (plan_type, name, documents_included) VALUES ('ctx-business', 'Business', 1)`,
+      );
+      for (const key of ['ctx-quota', 'ctx-empty', 'ctx-new', 'ctx-none']) {
+        await seedTenant(key);
+      }
+
+      const quota = await seedProfile('ctx-quota');
+      await seedLot(quota, 'CURRENT_PERIOD', 1000, 275);
+      await seedLot(quota, 'ROLLOVER', 20, 5, [
+        new Date(periodStart.getTime() - 30 * DAY),
+        periodStart,
+      ]);
+      await seedLot(quota, 'ADD_ON', 10, 10, null);
+      // Un lote agotado de un periodo anterior conserva CURRENT_PERIOD: no debe contar.
+      await seedLot(quota, 'CURRENT_PERIOD', 50, 0, [
+        new Date(periodStart.getTime() - 60 * DAY),
+        new Date(periodStart.getTime() - 30 * DAY),
+      ]);
+      await seedSigned('ctx-q-1', 'ctx-quota', new Date(Date.now() - DAY));
+      await seedSigned('ctx-q-2', 'ctx-quota', new Date(Date.now() - 2 * DAY));
+      await seedSigned(
+        'ctx-q-old',
+        'ctx-quota',
+        new Date(periodStart.getTime() - 3 * DAY),
+      );
+      await seedDocument('ctx-q-pending', 'ctx-quota-owner', 'ctx-quota');
+
+      const empty = await seedProfile('ctx-empty');
+      await seedLot(empty, 'CURRENT_PERIOD', 10, 0);
+      await seedSigned('ctx-e-1', 'ctx-empty', new Date(Date.now() - DAY));
+
+      const fresh = await seedProfile('ctx-new');
+      await seedLot(fresh, 'CURRENT_PERIOD', 10, 10);
+    });
+
+    it('resuelve la organización desde la llave, con cuota disponible y resumen de facturación', async () => {
+      const response = await context('ctx-quota').expect(200);
+
+      expect(response.body).toEqual({
+        success: true,
+        message: expect.any(String),
+        data: {
+          organization: {
+            id: ids['org:ctx-quota'],
+            name: 'Org ctx-quota',
+            status: 'active',
+          },
+          signatureQuota: {
+            planLimit: 1000,
+            documentsSigned: 2,
+            documentsRemaining: 290,
+            periodStart: day(periodStart),
+            periodEnd: day(new Date(periodEnd.getTime() - 1)),
+          },
+          billing: {
+            plan: 'Business',
+            status: 'active',
+            billingCycle: 'monthly',
+            nextBillingDate: day(periodEnd),
+            paymentStatus: 'paid',
+          },
+        },
+      });
+    });
+
+    it('con la cuota agotada devuelve documentsRemaining en 0', async () => {
+      const response = await context('ctx-empty').expect(200);
+
+      expect(response.body.data.signatureQuota).toMatchObject({
+        planLimit: 10,
+        documentsSigned: 1,
+        documentsRemaining: 0,
+      });
+    });
+
+    it('sin documentos firmados devuelve documentsSigned en 0', async () => {
+      const response = await context('ctx-new').expect(200);
+
+      expect(response.body.data.signatureQuota).toMatchObject({
+        planLimit: 10,
+        documentsSigned: 0,
+        documentsRemaining: 10,
+      });
+    });
+
+    it('una organización sin facturación responde en cero y sin crear su perfil', async () => {
+      const response = await context('ctx-none').expect(200);
+
+      expect(response.body.data.signatureQuota).toEqual({
+        planLimit: 0,
+        documentsSigned: 0,
+        documentsRemaining: 0,
+        periodStart: null,
+        periodEnd: null,
+      });
+      expect(response.body.data.billing).toEqual({
+        plan: null,
+        status: null,
+        billingCycle: null,
+        nextBillingDate: null,
+        paymentStatus: 'not_applicable',
+      });
+      expect(
+        await dataSource.query(
+          `SELECT id FROM billing_profiles WHERE organization_id = $1`,
+          [ids['org:ctx-none']],
+        ),
+      ).toEqual([]);
+    });
+
+    it('rechaza organizationId en vez de usarlo para elegir organización', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`${URL}?organizationId=${ids['org:ctx-quota']}`)
+        .set(api('ctx-new'))
+        .expect(400);
+
+      expect(response.body.error.code).toBe(
+        'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
+      );
+    });
+
+    it.each([
+      ['sin llave', {}],
+      ['con una llave inválida', { 'X-API-Key': 'fma_live_no_valida' }],
+    ])('responde 401 API_KEY_INVALID %s', async (_label, headers) => {
+      const response = await request(app.getHttpServer())
+        .get(URL)
+        .set(headers)
+        .expect(401);
+      expect(response.body.error.code).toBe('API_KEY_INVALID');
+    });
+
+    it('responde 401 a una llave revocada', async () => {
+      const response = await context('org1-revoked').expect(401);
+      expect(response.body.error.code).toBe('API_KEY_INVALID');
+    });
+
+    it('responde 401 API_KEY_EXPIRED a una llave vencida', async () => {
+      await dataSource.query(
+        `UPDATE api_keys SET expires_at = '2026-02-01T00:00:00.000Z' WHERE id = $1`,
+        [ids['key:ctx-new']],
+      );
+      try {
+        const response = await context('ctx-new').expect(401);
+        expect(response.body.error.code).toBe('API_KEY_EXPIRED');
+      } finally {
+        await dataSource.query(
+          `UPDATE api_keys SET expires_at = NULL WHERE id = $1`,
+          [ids['key:ctx-new']],
+        );
+      }
+    });
+
+    it('responde 403 a una llave que sólo tiene alcance OWN', async () => {
+      await activateOnly('org1-own');
+      const response = await context('org1-own').expect(403);
+      expect(response.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
     });
   });
 
