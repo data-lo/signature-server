@@ -13,23 +13,25 @@ import { DocumentEntity } from '../../entities/document.entity';
 import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../../enum/collaborator-status.enum';
 import { DOCUMENT_STATUS_ENUM } from '../../enum/document-status.enum';
+import { collaboratorEmail } from '../../utils/collaborator-display.util';
 import { isSignerTurn } from '../../utils/next-signer.util';
 import {
   IntegrationInvitationNotResendableException,
   IntegrationSignerNotFoundException,
 } from '../exceptions/integration-document.exceptions';
+import { findSignerByEmail } from '../utils/find-signer-by-email.util';
 
-/** Resultado del reenvío. Nunca incluye el enlace: sólo llega al correo del firmante. */
+/** Resultado del reenvío. Nunca incluye el enlace (sólo llega al correo del firmante) ni ids internos. */
 export interface ResentSigningInvitation {
-  collaboratorId: string;
+  email: string;
   invitationExpiresAt: Date;
   emailDelivered: boolean;
 }
 
 /**
- * `POST /integration/documents/:documentId/collaborators/:collaboratorId/resend-invitation`:
- * emite una invitación nueva (`/sign/:token`) para un firmante y se la envía a su correo. La
- * anterior deja de servir.
+ * `POST /integration/documents/:documentId/collaborators/resend-invitation`: emite una invitación
+ * nueva (`/sign/:token`) para el firmante con ese correo y se la envía. La anterior deja de servir.
+ * El id del colaborador se resuelve aquí y sólo se usa internamente.
  *
  * El documento tiene que ser de la organización de la API key —la organización sale de la llave,
  * nunca del request— y el firmante tiene que poder firmar ya: documento esperando firmas, firmante
@@ -51,25 +53,26 @@ export class ResendIntegrationSigningInvitationUseCase {
    *
    * @param apiClient - Cliente autenticado por la API key.
    * @param documentId - Documento de la ruta.
-   * @param collaboratorId - Firmante de la ruta.
+   * @param email - Correo del firmante (se compara normalizado).
    * @param metadata - IP y user-agent de la petición.
-   * @returns El colaborador, el vencimiento de la invitación nueva y si el correo salió.
+   * @returns El correo del firmante, el vencimiento de la invitación nueva y si el correo salió.
    *
-   * @throws {IntegrationSignerNotFoundException} (404) Si el documento no es de la organización o el
-   *   colaborador no es firmante de él.
+   * @throws {IntegrationSignerNotFoundException} (404) Si el documento no es de la organización o
+   *   ningún firmante tiene ese correo.
+   * @throws {IntegrationAmbiguousSignerException} (409) Si más de un firmante tiene ese correo.
    * @throws {IntegrationInvitationNotResendableException} (409) Si ya no se puede firmar o no es su
    *   turno.
    * @throws {SigningRateLimitException} (429) Si el firmante ya recibió demasiadas invitaciones.
    *
    * @example
    * ```ts
-   * await resend.execute(apiClient, 'd-1', 'c-1', { ipAddress: '10.0.0.1', userAgent: 'erp/1.0' });
+   * await resend.execute(apiClient, 'd-1', 'ana@correo.com', { ipAddress: '10.0.0.1', userAgent: 'erp/1.0' });
    * ```
    */
   async execute(
     apiClient: IntegrationApiClient,
     documentId: string,
-    collaboratorId: string,
+    email: string,
     metadata: { ipAddress: string | null; userAgent: string | null },
   ): Promise<BaseResponse<ResentSigningInvitation>> {
     const document = await this.documentRepository.findOne({
@@ -82,8 +85,7 @@ export class ResendIntegrationSigningInvitationUseCase {
       relations: { account: { user: true } },
       order: { signingOrder: 'ASC' },
     });
-    const collaborator = signers.find(({ id }) => id === collaboratorId);
-    if (!collaborator) throw new IntegrationSignerNotFoundException();
+    const collaborator = findSignerByEmail(signers, email);
 
     if (
       document.status !== DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE ||
@@ -122,7 +124,7 @@ export class ResendIntegrationSigningInvitationUseCase {
         ? 'Invitación reenviada al correo del firmante'
         : 'Se emitió la invitación, pero no se pudo enviar el correo',
       data: {
-        collaboratorId,
+        email: collaboratorEmail(collaborator),
         invitationExpiresAt: delivered.expiresAt,
         emailDelivered: delivered.emailDelivered,
       },

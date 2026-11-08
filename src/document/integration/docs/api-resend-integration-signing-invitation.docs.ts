@@ -11,12 +11,13 @@ import {
 } from './api-create-integration-signing-access.docs';
 import { ApiIntegrationCommonResponses } from './api-integration-documents-common.docs';
 import {
+  INVALID_REQUEST_EXAMPLE,
   integrationErrorExample,
   TOO_MANY_REQUESTS_EXAMPLE,
 } from './api-integration-examples.docs';
 
 /**
- * `POST /api/v1/integration/documents/:documentId/collaborators/:collaboratorId/resend-invitation`.
+ * `POST /api/v1/integration/documents/:documentId/collaborators/resend-invitation`.
  *
  * @returns Los decoradores de Swagger del endpoint.
  *
@@ -30,17 +31,12 @@ export function ApiResendIntegrationSigningInvitation() {
     ApiOperation({
       summary: 'Reenviar la invitación de firma a un firmante',
       description:
-        'Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante.',
+        'Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante. El correo sólo localiza al firmante dentro del documento. Reemplaza a `POST /documents/{documentId}/collaborators/{collaboratorId}/resend-invitation`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.',
     }),
     ApiParam({
       name: 'documentId',
       format: 'uuid',
       example: '2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
-    }),
-    ApiParam({
-      name: 'collaboratorId',
-      format: 'uuid',
-      example: '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f',
     }),
     ApiIntegrationCommonResponses(),
     ApiResponse({
@@ -52,21 +48,39 @@ export function ApiResendIntegrationSigningInvitation() {
     ApiResponse({
       status: 404,
       description:
-        '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o el colaborador no es su firmante',
+        '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o ningún firmante tiene ese correo',
       type: IntegrationErrorResponseDto,
       examples: { signerNotFound: SIGNER_NOT_FOUND_EXAMPLE },
     }),
     ApiResponse({
       status: 409,
       description:
-        '`INTEGRATION_INVITATION_NOT_RESENDABLE`: el documento ya no espera esa firma, no es su turno o firma desde su cuenta',
+        '`INTEGRATION_AMBIGUOUS_SIGNER` (más de un firmante con ese correo) o `INTEGRATION_INVITATION_NOT_RESENDABLE` (el documento ya no espera esa firma, no es su turno o firma desde su cuenta)',
       type: IntegrationErrorResponseDto,
       examples: {
+        ambiguous: integrationErrorExample(
+          'Correo de más de un firmante',
+          'INTEGRATION_AMBIGUOUS_SIGNER',
+          'El correo corresponde a más de un firmante del documento',
+        ),
         notResendable: NOT_RESENDABLE_EXAMPLE,
         notInTurn: integrationErrorExample(
           'No es su turno',
           'INTEGRATION_INVITATION_NOT_RESENDABLE',
           'Todavía no es el turno de este firmante',
+        ),
+      },
+    }),
+    ApiResponse({
+      status: 422,
+      description: '`INVALID_REQUEST`: falta `email` o no es un correo válido.',
+      type: IntegrationErrorResponseDto,
+      examples: {
+        invalidRequest: integrationErrorExample(
+          INVALID_REQUEST_EXAMPLE.summary,
+          'INVALID_REQUEST',
+          'La petición tiene campos inválidos.',
+          { errors: ['email debe ser un correo válido'] },
         ),
       },
     }),
