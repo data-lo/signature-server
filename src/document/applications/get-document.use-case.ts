@@ -182,6 +182,12 @@ export class GetDocumentUseCase {
             role: c.colaboratorType,
             status: c.status,
             cancellationReason: c.cancellationReason,
+            // Dato personal: sólo para quien creó el documento y para el propio firmante.
+            taxId:
+              c.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER &&
+              (isCreator || c.id === myParticipant?.id)
+                ? (c.taxId ?? null)
+                : null,
           })),
         myRole:
           myParticipant?.colaboratorType ?? (isCreator ? 'creator' : null),

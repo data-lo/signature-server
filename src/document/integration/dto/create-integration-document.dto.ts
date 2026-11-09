@@ -28,6 +28,8 @@ import { INTEGRATION_VALIDATION_CODE_ENUM } from '../validation/integration-vali
 /** Largo máximo de nombres y apellidos que se aceptan. */
 export const INTEGRATION_NAME_MAX_LENGTH = 100;
 
+import { RFC_FORMAT } from '../../utils/tax-id.util';
+
 /** Largo máximo de un correo (RFC 5321). */
 export const INTEGRATION_EMAIL_MAX_LENGTH = 254;
 
@@ -62,9 +64,6 @@ function normalizeEmail({ value }: { value: unknown }): unknown {
 function normalizeRfc({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? value.trim().toUpperCase() : value;
 }
-
-/** Forma de un RFC de persona física (13) o moral (12). */
-export const RFC_FORMAT = /^[A-ZÑ&]{3,4}\d{6}[A-Z\d]{3}$/;
 
 /** Recorta los espacios de un nombre. */
 function trimText({ value }: { value: unknown }): unknown {
