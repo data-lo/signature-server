@@ -22,7 +22,7 @@ import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
  * Un valor intermedio invertiría eso y le quemaría los documentos comprados teniendo gratuitos
  * sin usar.
  */
-const ADD_ON_LOT_PRIORITY = 0;
+export const ADD_ON_LOT_PRIORITY = 0;
 
 /**
  * Acredita los documentos de una compra suelta cuando Stripe confirma el pago.

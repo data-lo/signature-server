@@ -101,9 +101,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
 
   /**
    * Documento de firma SIMPLE (el tipo lo define `documentData`, no cada colaborador — ver
-   * historia "Selección de tipo de firma al crear documentos"). Juan trae un `taxId` que el backend
-   * debe descartar por ser SIGNER, y María trae requiresTwoFactorAuth:false que el backend debe
-   * forzar a true por ser un documento SIMPLE.
+   * historia "Selección de tipo de firma al crear documentos"). María trae
+   * requiresTwoFactorAuth:false que el backend debe forzar a true por ser un documento SIMPLE.
    */
   const baseDto: CreateDocumentSignaturesDto = {
     documentData: {
@@ -118,7 +117,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Juan',
         lastName: 'Pérez',
         email: 'juan.perez@mail.com',
-        taxId: 'PEAJ800101XXX',
         signatures: [
           {
             signatureId: 'sig-1',
@@ -138,7 +136,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'María',
         lastName: 'Gómez',
         email: 'maria.gomez@mail.com',
-        taxId: null,
         // Desde la historia "Hacer obligatorias las coordenadas de posición de firma" todo
         // firmante trae al menos una posición. En otra página que la de Juan, para no solaparse.
         signatures: [
@@ -160,7 +157,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Carlos',
         lastName: 'Solares',
         email: 'auditor@mail.com',
-        taxId: 'AUDI990101YYY',
       },
     ],
   };
@@ -710,20 +706,27 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
   });
 
-  it('historia "Selección de tipo de firma": descarta el taxId que venga en un SIGNER (el flujo avanzado lo saca del certificado al firmar)', async () => {
+  it('descarta el taxId que mande un cliente viejo, sea firmante o testigo', async () => {
     await useCase.execute(
       'creator-1',
       'account-1',
-      advancedDto,
+      {
+        ...baseDto,
+        collaborators: baseDto.collaborators.map((collaborator) => ({
+          ...collaborator,
+          taxId: 'AURU800101ABC',
+        })),
+      },
       file,
       '127.0.0.1',
     );
 
-    const juanCall = collaboratorRepo.create.mock.calls.find(
-      (call) => call[0].email === 'juan.perez@mail.com',
+    expect(collaboratorRepo.create).toHaveBeenCalledTimes(
+      baseDto.collaborators.length,
     );
-    // El payload trae taxId: 'PEAJ800101XXX' — un cliente viejo no puede reintroducir el campo.
-    expect(juanCall[0].taxId).toBeNull();
+    for (const [collaborator] of collaboratorRepo.create.mock.calls) {
+      expect(collaborator.taxId).toBeNull();
+    }
   });
 
   it('rechaza el RFC de un firmante en un documento sin firma avanzada', async () => {
@@ -947,7 +950,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     );
     expect(viewerCall[0].colaboratorType).toBe(COLABORATOR_TYPE_ENUM.WITNESS);
     expect(viewerCall[0].signatureType).toBeNull();
-    expect(viewerCall[0].taxId).toBe('AUDI990101YYY');
+    expect(viewerCall[0].taxId).toBeNull();
     // Solo 2 verification_codes en total (los 2 signers), ninguno para el viewer.
     expect(verificationCodeService.issue).toHaveBeenCalledTimes(2);
   });
@@ -1954,7 +1957,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       ).toHaveBeenCalledWith(expect.anything(), expect.anything(), []);
     });
 
-    it('un testigo MANUAL se crea con los datos del payload y su RFC', async () => {
+    it('un testigo MANUAL se crea con los datos del payload y sin RFC', async () => {
       await useCase.execute(
         'creator-1',
         'account-1',
@@ -1967,7 +1970,6 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
             lastName: 'Solares',
             email: 'carlos@mail.com',
             addToDirectory: false,
-            taxId: 'SOCA800101AAA',
           },
         ]),
         file,
@@ -1978,7 +1980,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         firstName: 'Carlos',
         lastName: 'Solares',
         email: 'carlos@mail.com',
-        taxId: 'SOCA800101AAA',
+        taxId: null,
         colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
       });
       expect(notificationEventsProducer.enqueueCreated).toHaveBeenCalledTimes(

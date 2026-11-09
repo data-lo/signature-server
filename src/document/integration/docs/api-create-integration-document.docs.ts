@@ -19,6 +19,8 @@ import {
 import { ApiIntegrationCommonResponses } from './api-integration-documents-common.docs';
 import {
   EXAMPLE_IDEMPOTENCY_KEY,
+  EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+  EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
   INVALID_REQUEST_EXAMPLE,
   integrationErrorExample,
 } from './api-integration-examples.docs';
@@ -58,6 +60,22 @@ const CREATED_DOCUMENT_EXAMPLE = {
 };
 
 /**
+ * Bloque Markdown con un payload de ejemplo. Los ejemplos van también en la descripción porque
+ * Swagger UI no ofrece el selector de `examples` en un cuerpo `multipart/form-data`.
+ *
+ * @param payload - Payload de ejemplo.
+ * @returns El payload como bloque de código JSON.
+ *
+ * @example
+ * ```ts
+ * payloadExampleBlock({ document: { isSequential: false } });
+ * ```
+ */
+function payloadExampleBlock(payload: unknown): string {
+  return ['```json', JSON.stringify(payload, null, 2), '```'].join('\n');
+}
+
+/**
  * `POST /api/v1/integration/documents` — alta de un documento con creador por correo.
  *
  * @returns Los decoradores de Swagger del endpoint.
@@ -72,9 +90,25 @@ export function ApiCreateIntegrationDocument() {
     ApiOperation({
       summary: 'Crear un documento PDF con su flujo de firmas',
       description: [
-        'Requiere `DOCUMENT.CREATE`. Es `multipart/form-data` con dos campos: `file` (el PDF, binario) y `payload` (texto con un JSON con `creator`, `document` y `participants`; su estructura es `IntegrationDocumentPayloadDto`).',
+        'Es `multipart/form-data` con dos campos: `file` (el PDF, binario) y `payload` (texto con un JSON con `creator`, `document` y `participants`; su estructura es `IntegrationDocumentPayloadDto`).',
         'La organización sale de la API key. El creador se identifica por su correo: si es miembro de la organización se usa su cuenta; si existe sin membresía, se le crea una con el rol `INTEGRATION_DOCUMENT_CREATOR`; si no existe, se crea como usuario provisional (sin contraseña). Sus datos nunca se sobrescriben.',
         'Cada documento creado consume un crédito de la organización. Los participantes se invitan por correo.',
+        [
+          '**Orden de firma.** `document.isSequential` decide si `participants[].order` es obligatorio:',
+          '',
+          '| `document.isSequential` | `SIGNER` | `WITNESS` |',
+          '| --- | --- | --- |',
+          '| `true` o se omite | `order` obligatorio: firman uno a la vez | No requiere `order` ni participa en él |',
+          '| `false` | `order` no es obligatorio: firman en cualquier momento | No requiere `order` ni participa en él |',
+          '',
+          'En un documento secuencial, `order` es un entero que inicia en `1` y debe ser único y consecutivo entre firmantes (`1`, `2`, `3`…). Es este valor, no la posición en `participants`, lo que define el orden. Si no se cumple, la respuesta es `422` con `INVALID_SIGNING_ORDER` o `DUPLICATE_SIGNING_ORDER`.',
+        ].join('\n'),
+        '**Ejemplo de `payload`: flujo secuencial** (dos firmantes y un testigo):',
+        payloadExampleBlock(EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD),
+        '**Ejemplo de `payload`: flujo no secuencial** (sin `order`):',
+        payloadExampleBlock(
+          EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+        ),
         'Ejemplo con curl:',
         [
           '```bash',
@@ -89,7 +123,21 @@ export function ApiCreateIntegrationDocument() {
     }),
     ApiConsumes('multipart/form-data'),
     ApiExtraModels(IntegrationDocumentPayloadDto),
-    ApiBody({ type: CreateIntegrationDocumentDto }),
+    ApiBody({
+      type: CreateIntegrationDocumentDto,
+      examples: {
+        sequential: {
+          summary: 'Flujo secuencial: dos firmantes y un testigo',
+          value: { payload: EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD },
+        },
+        nonSequential: {
+          summary: 'Flujo no secuencial: sin `order`',
+          value: {
+            payload: EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+          },
+        },
+      },
+    }),
     ApiHeader({
       name: 'Idempotency-Key',
       required: true,
@@ -97,7 +145,7 @@ export function ApiCreateIntegrationDocument() {
       description:
         'Valor único elegido por ti para este documento (1 a 255 caracteres ASCII visibles), por API key, durante 24 horas. Repetir la petición con la misma clave y el mismo contenido devuelve el documento original sin subir, crear, cobrar ni notificar nada.',
     }),
-    ApiIntegrationCommonResponses('DOCUMENT.CREATE', {
+    ApiIntegrationCommonResponses({
       badRequestExamples: {
         idempotencyKeyRequired: integrationErrorExample(
           'Falta Idempotency-Key',

@@ -30,7 +30,7 @@ export function ApiResendIntegrationSigningInvitation() {
     ApiOperation({
       summary: 'Reenviar la invitación de firma a un firmante',
       description:
-        'Requiere `DOCUMENT.CREATE`. Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante.',
+        'Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante.',
     }),
     ApiParam({
       name: 'documentId',
@@ -42,7 +42,7 @@ export function ApiResendIntegrationSigningInvitation() {
       format: 'uuid',
       example: '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f',
     }),
-    ApiIntegrationCommonResponses('DOCUMENT.CREATE'),
+    ApiIntegrationCommonResponses(),
     ApiResponse({
       status: 200,
       description:

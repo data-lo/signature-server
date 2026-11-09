@@ -12,6 +12,10 @@ import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,
 } from '../docs/api-integration-documents-common.docs';
+import {
+  EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+  EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+} from '../docs/api-integration-examples.docs';
 import { IntegrationDocumentsController } from '../integration-documents.controller';
 import {
   createIntegrationOpenApiDocument,
@@ -214,6 +218,67 @@ describe('createIntegrationOpenApiDocument', () => {
         schema: expect.objectContaining({ example: expect.any(String) }),
       }),
     ]);
+  });
+
+  describe('dependencias entre isSequential, role y order', () => {
+    const schemaProperty = (schemaName: string, property: string) =>
+      (
+        integration.components!.schemas![schemaName] as {
+          properties: Record<string, { description?: string }>;
+        }
+      ).properties[property];
+    const createOperation = () =>
+      integration.paths['/api/v1/integration/documents'].post!;
+
+    it('isSequential explica la regla condicional sobre order', () => {
+      const { description } = schemaProperty(
+        'IntegrationDocumentOptionsDto',
+        'isSequential',
+      );
+
+      expect(description).toContain('`role: SIGNER` debe incluir `order`');
+      expect(description).toContain('se omite');
+      expect(description).toContain('`order` no es obligatorio');
+    });
+
+    it('order explica formato, inicio, unicidad y consecutividad', () => {
+      const order = schemaProperty(
+        'IntegrationParticipantDto',
+        'order',
+      ) as Record<string, unknown>;
+
+      expect(order).toEqual(
+        expect.objectContaining({ type: 'integer', minimum: 1 }),
+      );
+      expect(order.description).toEqual(
+        expect.stringMatching(/inicia en 1.*único y consecutivo.*`WITNESS`/s),
+      );
+    });
+
+    it('la operación muestra el ejemplo secuencial y el no secuencial', () => {
+      const description = createOperation().description!;
+
+      expect(description).toContain(
+        JSON.stringify(EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD, null, 2),
+      );
+      expect(description).toContain(
+        JSON.stringify(
+          EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+          null,
+          2,
+        ),
+      );
+    });
+
+    it('el cuerpo multipart publica los dos ejemplos', () => {
+      const body = createOperation().requestBody as {
+        content: Record<string, { examples?: Record<string, unknown> }>;
+      };
+
+      expect(
+        Object.keys(body.content['multipart/form-data'].examples ?? {}),
+      ).toEqual(['sequential', 'nonSequential']);
+    });
   });
 
   it.each([
