@@ -230,7 +230,7 @@ export class IntegrationPayloadValidator {
       firstIndexByEmail.set(participant.email, index);
 
       this.assertPositionsForRole(participant, index);
-      this.assertRfcAllowed(payload, participant, index);
+      this.assertTaxIdAllowed(payload, participant, index);
     });
 
     if (payload.document.isSequential !== false) {
@@ -239,27 +239,33 @@ export class IntegrationPayloadValidator {
   }
 
   /**
-   * El `rfc` sólo tiene sentido para un firmante de firma avanzada: es contra lo que se compara su
-   * certificado. En cualquier otro participante se rechaza en lugar de ignorarlo en silencio.
+   * El RFC (`taxId`, o su nombre anterior `rfc`) sólo tiene sentido para un firmante de firma
+   * avanzada: es contra lo que se compara su certificado. En cualquier otro participante se rechaza
+   * en lugar de ignorarlo en silencio. `null` equivale a no mandarlo.
    *
    * @param payload - Payload completo (tipo de firma del documento).
-   * @param participant - Participante.
+   * @param participant - Participante, con los RFC ya normalizados.
    * @param index - Su posición en `participants`.
    * @returns Nada.
    *
-   * @throws {IntegrationValidationException} `PARTICIPANT_RFC_NOT_ALLOWED`.
+   * @throws {IntegrationValidationException} `PARTICIPANT_RFC_NOT_ALLOWED` si no es un firmante FIEL;
+   *   `INVALID_PARTICIPANT_RFC` si `taxId` y `rfc` llegan con valores distintos.
    *
    * @example
    * ```ts
-   * this.assertRfcAllowed(payload, participant, 0);
+   * this.assertTaxIdAllowed(payload, participant, 0);
    * ```
    */
-  private assertRfcAllowed(
+  private assertTaxIdAllowed(
     payload: IntegrationDocumentPayloadDto,
     participant: IntegrationParticipantDto,
     index: number,
   ): void {
-    if (participant.rfc === undefined || participant.rfc === null) return;
+    const { taxId, rfc } = participant;
+    const hasTaxId = taxId !== undefined && taxId !== null;
+    const hasRfc = rfc !== undefined && rfc !== null;
+    if (!hasTaxId && !hasRfc) return;
+
     if (
       participant.role !== INTEGRATION_PARTICIPANT_ROLE_ENUM.SIGNER ||
       payload.document.signatureType !== PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED
@@ -267,7 +273,18 @@ export class IntegrationPayloadValidator {
       throw new IntegrationValidationException(
         CODE.PARTICIPANT_RFC_NOT_ALLOWED,
         'El RFC sólo se admite en un firmante de un documento con firma avanzada (ADVANCED).',
-        { field: `participants[${index}].rfc` },
+        { field: `participants[${index}].${hasTaxId ? 'taxId' : 'rfc'}` },
+      );
+    }
+
+    if (hasTaxId && hasRfc && taxId !== rfc) {
+      throw new IntegrationValidationException(
+        CODE.INVALID_PARTICIPANT_RFC,
+        '`taxId` y `rfc` traen valores distintos; `rfc` es el nombre anterior de `taxId`: envía sólo `taxId`.',
+        {
+          field: `participants[${index}].rfc`,
+          reason: 'CONFLICTS_WITH_TAX_ID',
+        },
       );
     }
   }
