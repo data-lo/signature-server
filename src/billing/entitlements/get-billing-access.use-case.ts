@@ -13,9 +13,11 @@ import {
   NO_PLAN_ENTITLEMENTS,
   resolvePlanEntitlements,
 } from './plan-entitlements.config';
-import type {
-  BillingAccessResponse,
-  PlanEntitlements,
+import {
+  toBillingCredits,
+  type BillingAccessResponse,
+  type BillingCredits,
+  type PlanEntitlements,
 } from './plan-entitlements.types';
 
 /**
@@ -81,8 +83,8 @@ function accessWithoutProfile(owner: BillingOwner): BillingAccessResponse {
     cancelAtPeriodEnd: false,
     currentPeriodStart: null,
     currentPeriodEnd: null,
+    credits: toBillingCredits(),
     creditsAvailable: 0,
-    biometricCreditsAvailable: 0,
     actions,
     limits,
   };
@@ -99,7 +101,8 @@ function accessWithoutProfile(owner: BillingOwner): BillingAccessResponse {
  *    organización ajena.
  * 2. Busca su `billing_profile`. Si no existe, responde el plan gratuito a una cuenta personal y
  *    ningún acceso a una organización, que nace sin plan.
- * 3. Suma en paralelo el saldo de documentos vigente y el origen del último periodo cobrado.
+ * 3. Suma en paralelo el saldo documental y el biométrico (`credits.document` y
+ *    `credits.biometric`) y el origen del último periodo cobrado.
  * 4. Compone la respuesta resolviendo los beneficios del plan del perfil.
  *
  * **Es la fuente única del frontend, y por eso responde de más.** Antes hacían falta dos consultas
@@ -150,23 +153,22 @@ export class GetBillingAccessUseCase {
     }
 
     // No dependen entre sí, y este camino se recorre en cada carga del dashboard.
-    const [creditsAvailable, biometricCreditsAvailable, billingSource] =
-      await Promise.all([
-        this.contarCreditosDisponibles(
-          profile.id,
-          CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
-        ),
-        this.contarCreditosDisponibles(
-          profile.id,
-          CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
-        ),
-        this.resolverOrigenDelUltimoCobro(profile.id),
-      ]);
+    const [document, biometric, billingSource] = await Promise.all([
+      this.contarCreditosDisponibles(
+        profile.id,
+        CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+      ),
+      this.contarCreditosDisponibles(
+        profile.id,
+        CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+      ),
+      this.resolverOrigenDelUltimoCobro(profile.id),
+    ]);
 
     return this.construirRespuesta(
       profile,
       owner,
-      { creditsAvailable, biometricCreditsAvailable },
+      toBillingCredits({ document, biometric }),
       billingSource,
     );
   }
@@ -174,7 +176,7 @@ export class GetBillingAccessUseCase {
   private construirRespuesta(
     profile: BillingProfileEntity,
     owner: BillingOwner,
-    balances: { creditsAvailable: number; biometricCreditsAvailable: number },
+    credits: BillingCredits,
     billingSource: BILLING_SOURCE_ENUM | null,
   ): BillingAccessResponse {
     const { actions, limits } = resolveOwnerEntitlements(
@@ -194,8 +196,9 @@ export class GetBillingAccessUseCase {
       cancelAtPeriodEnd: profile.cancelAtPeriodEnd,
       currentPeriodStart: profile.currentPeriodStart,
       currentPeriodEnd: profile.currentPeriodEnd,
-      creditsAvailable: balances.creditsAvailable,
-      biometricCreditsAvailable: balances.biometricCreditsAvailable,
+      credits,
+      // Espejo obsoleto de `credits.document.available`, mientras el frontend migra.
+      creditsAvailable: credits.document.available,
       // Salen del plan del PERFIL: un PAST_DUE conserva sus acciones mientras Stripe reintenta.
       actions,
       limits,

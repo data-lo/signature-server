@@ -108,6 +108,8 @@ describe('Estado de facturación (e2e)', () => {
     billingProfileId: string;
     remaining: number;
     origin?: CREDIT_LOT_ORIGIN_ENUM;
+    creditType?: CREDIT_TYPE_ENUM;
+    reserved?: number;
     expiresAt?: Date | null;
   }) {
     await creditLots.save({
@@ -241,8 +243,8 @@ describe('Estado de facturación (e2e)', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: '2026-09-04T00:00:00.000Z',
         currentPeriodEnd: '2026-10-04T00:00:00.000Z',
+        credits: { document: { available: 18 }, biometric: { available: 0 } },
         creditsAvailable: 18,
-        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.plus.actions,
         limits: PLAN_ENTITLEMENTS.plus.limits,
       });
@@ -301,16 +303,69 @@ describe('Estado de facturación (e2e)', () => {
       expect(personal.body.data).toMatchObject({
         billingProfileId: 'perfil-personal',
         hasActiveSubscription: false,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
-        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
       });
       expect(organizacion.body.data).toMatchObject({
         billingProfileId: 'perfil-organizacion',
         hasActiveSubscription: true,
+        credits: { document: { available: 40 }, biometric: { available: 0 } },
         creditsAvailable: 40,
-        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.enterprise.actions,
+      });
+    });
+  });
+
+  describe('créditos por tipo', () => {
+    it('agrupa el saldo documental y el biométrico bajo credits, descontando lo reservado', async () => {
+      await darDeAltaPerfil({
+        id: 'perfil-personal',
+        personalAccountId: PERSONAL_ACCOUNT_ID,
+        status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        currentPlanType: 'plus',
+      });
+      await darDeAltaLote({
+        id: 'lote-documentos',
+        billingProfileId: 'perfil-personal',
+        remaining: 12,
+      });
+      await darDeAltaLote({
+        id: 'lote-biometrico',
+        billingProfileId: 'perfil-personal',
+        origin: CREDIT_LOT_ORIGIN_ENUM.ADD_ON,
+        creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+        remaining: 10,
+        reserved: 2,
+      });
+
+      const response = await consultarEstado();
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.credits).toEqual({
+        document: { available: 12 },
+        biometric: { available: 8 },
+      });
+      // Espejo obsoleto, mientras el frontend migra.
+      expect(response.body.data.creditsAvailable).toBe(12);
+      expect(response.body.data).not.toHaveProperty(
+        'biometricCreditsAvailable',
+      );
+    });
+
+    it('un perfil sin lotes recibe ceros en ambos tipos, no nulos', async () => {
+      await darDeAltaPerfil({
+        id: 'perfil-personal',
+        personalAccountId: PERSONAL_ACCOUNT_ID,
+        status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        currentPlanType: 'plus',
+      });
+
+      const response = await consultarEstado();
+
+      expect(response.body.data.credits).toEqual({
+        document: { available: 0 },
+        biometric: { available: 0 },
       });
     });
   });
@@ -329,8 +384,8 @@ describe('Estado de facturación (e2e)', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
-        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
         limits: PLAN_ENTITLEMENTS.free.limits,
       });
