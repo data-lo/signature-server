@@ -25,6 +25,7 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { ApiKeyModule } from 'src/api-key/api-key.module';
 import { DocumentReadService } from './services/document-read.service';
 import { IntegrationDocumentsController } from './integration/integration-documents.controller';
+import { IntegrationOrganizationController } from './integration/integration-organization.controller';
 import { ListOrganizationIntegrationDocumentsUseCase } from './integration/applications/list-organization-integration-documents.use-case';
 import { ListUserIntegrationDocumentsUseCase } from './integration/applications/list-user-integration-documents.use-case';
 import { CreateIntegrationDocumentUseCase } from './integration/applications/create-integration-document.use-case';
@@ -77,6 +78,10 @@ import { SigningInvitationModule } from 'src/signing-invitation/signing-invitati
 
 import { ResendIntegrationSigningInvitationUseCase } from './integration/applications/resend-integration-signing-invitation.use-case';
 import { IssueIntegrationSigningAccessUseCase } from './integration/applications/issue-integration-signing-access.use-case';
+import { GetIntegrationOrganizationContextUseCase } from './integration/applications/get-integration-organization-context.use-case';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
+import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entity';
 
 @Module({
   controllers: [
@@ -88,6 +93,7 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
      * de la organización en vez de JWT. Reutiliza los casos de uso de este módulo.
      */
     IntegrationDocumentsController,
+    IntegrationOrganizationController,
   ],
   providers: [
     DocumentService,
@@ -152,6 +158,7 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
     CreateIntegrationDocumentUseCase,
     ResendIntegrationSigningInvitationUseCase,
     IssueIntegrationSigningAccessUseCase,
+    GetIntegrationOrganizationContextUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -180,6 +187,10 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
       // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
       // pedido dentro de la organización de la API key.
       AccountEntity,
+      // Las lee `GetIntegrationOrganizationContextUseCase`: organización, plan y saldo de la llave.
+      OrganizationEntity,
+      BillingProfileEntity,
+      CreditLotEntity,
     ]),
     SharedModule,
     /** Enlace `/sign/:token` de los firmantes de documentos creados por integración. */

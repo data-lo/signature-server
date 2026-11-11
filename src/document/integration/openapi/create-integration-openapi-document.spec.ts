@@ -19,6 +19,7 @@ import {
   EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
 } from '../docs/api-integration-examples.docs';
 import { IntegrationDocumentsController } from '../integration-documents.controller';
+import { IntegrationOrganizationController } from '../integration-organization.controller';
 import {
   createIntegrationOpenApiDocument,
   findSchemaRefs,
@@ -61,6 +62,7 @@ describe('createIntegrationOpenApiDocument', () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [
         IntegrationDocumentsController,
+        IntegrationOrganizationController,
         OrganizationApiKeysController,
         InternalSubscriptionBillingController,
         AccountsController,
@@ -109,12 +111,13 @@ describe('createIntegrationOpenApiDocument', () => {
     );
   });
 
-  it('contiene exactamente los cinco endpoints de integración', () => {
+  it('contiene exactamente los seis endpoints de integración', () => {
     expect(operationsOf(integration)).toEqual(
       [
         'POST /api/v1/integration/documents',
         'GET /api/v1/integration/documents',
-        'GET /api/v1/integration/users/documents',
+        'GET /api/v1/integration/organization/context',
+        'GET /api/v1/integration/users/{userId}/documents',
         'POST /api/v1/integration/documents/{documentId}/signing-access',
         'POST /api/v1/integration/documents/{documentId}/collaborators/resend-invitation',
       ].sort(),
@@ -387,7 +390,47 @@ describe('createIntegrationOpenApiDocument', () => {
     });
   });
 
+  describe('contexto de la organización', () => {
+    const schemaOf = (name: string) =>
+      integration.components!.schemas![name] as {
+        properties: Record<string, unknown>;
+      };
+
+    it('no recibe ningún identificador de organización', () => {
+      expect(
+        integration.paths['/api/v1/integration/organization/context'].get!
+          .parameters ?? [],
+      ).toEqual([]);
+    });
+
+    it('publica el saldo y un resumen de facturación, sin datos sensibles', () => {
+      expect(
+        Object.keys(schemaOf('IntegrationSignatureQuotaData').properties),
+      ).toEqual([
+        'planLimit',
+        'documentsSigned',
+        'documentsRemaining',
+        'periodStart',
+        'periodEnd',
+      ]);
+      expect(
+        Object.keys(schemaOf('IntegrationBillingSummaryData').properties),
+      ).toEqual([
+        'plan',
+        'status',
+        'billingCycle',
+        'nextBillingDate',
+        'paymentStatus',
+      ]);
+    });
+  });
+
   it.each([
+    [
+      'GET',
+      '/api/v1/integration/organization/context',
+      ['200', '400', '401', '403'],
+    ],
     [
       'POST',
       '/api/v1/integration/documents',
