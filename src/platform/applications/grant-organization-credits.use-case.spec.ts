@@ -1,5 +1,15 @@
+/** El ledger real se prueba contra Postgres (`test/credit-reservations.e2e-spec.ts`). */
+jest.mock('src/billing/credits/credit-ledger.util', () => ({
+  ...jest.requireActual('src/billing/credits/credit-ledger.util'),
+  recordLotIssued: jest.fn().mockResolvedValue(true),
+  recordCreditLedgerEntry: jest.fn().mockResolvedValue(true),
+}));
+
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
+import { recordLotIssued } from 'src/billing/credits/credit-ledger.util';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from 'src/billing/enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from 'src/billing/enums/credit-type.enum';
 import { BILLING_PROFILE_SOURCE_ENUM } from 'src/billing/enums/billing-profile-source.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from 'src/billing/enums/billing-profile-status.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from 'src/billing/enums/credit-lot-origin.enum';
@@ -106,8 +116,10 @@ describe('GrantOrganizationCreditsUseCase', () => {
       expect(lots.create).toHaveBeenCalledWith({
         billingProfileId: 'bp-1',
         origin: CREDIT_LOT_ORIGIN_ENUM.ADD_ON,
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
         issued: 500,
         remaining: 500,
+        reserved: 0,
         priority: 0,
         stripeInvoiceId: null,
         stripePaymentIntentId: null,
@@ -130,6 +142,13 @@ describe('GrantOrganizationCreditsUseCase', () => {
           replayed: false,
         },
       });
+      // Recarga cobrada por fuera de la plataforma: en el ledger es una concesión.
+      expect(recordLotIssued).toHaveBeenCalledWith(
+        manager,
+        expect.objectContaining({ id: 'lot-1' }),
+        CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.GRANT,
+        expect.objectContaining({ externalReference: 'RECARGA-ACME-2026-001' }),
+      );
     });
 
     it('registra la constancia con el lote creado y la huella de la petición', async () => {

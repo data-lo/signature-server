@@ -6,6 +6,9 @@ import { DataSource, EntityManager } from 'typeorm';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
 import { countAvailableCredits } from 'src/billing/credits/count-available-credits.util';
 import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
+import { recordLotIssued } from 'src/billing/credits/credit-ledger.util';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from 'src/billing/enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from 'src/billing/enums/credit-type.enum';
 import { ADD_ON_LOT_PRIORITY } from 'src/billing/credits/register-document-credit-purchase.use-case';
 import { BILLING_PROFILE_SOURCE_ENUM } from 'src/billing/enums/billing-profile-source.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from 'src/billing/enums/billing-profile-status.enum';
@@ -208,8 +211,10 @@ export class GrantOrganizationCreditsUseCase {
       lots.create({
         billingProfileId: profile.id,
         origin: CREDIT_LOT_ORIGIN_ENUM.ADD_ON,
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
         issued: dto.documentsGranted,
         remaining: dto.documentsGranted,
+        reserved: 0,
         priority: ADD_ON_LOT_PRIORITY,
         stripeInvoiceId: null,
         stripePaymentIntentId: null,
@@ -218,6 +223,17 @@ export class GrantOrganizationCreditsUseCase {
         periodEnd: null,
         expiresAt: null,
       }),
+    );
+
+    // La recarga se cobra por fuera de la plataforma: en el ledger es una concesión.
+    await recordLotIssued(
+      manager,
+      lot,
+      CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.GRANT,
+      {
+        externalReference: dto.externalReference,
+        idempotencyKey: params.idempotencyKey,
+      },
     );
 
     const grants = manager.getRepository(PlatformCreditGrantEntity);

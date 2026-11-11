@@ -26,6 +26,7 @@ import { ACCOUNT_TYPE_ENUM } from './../src/account/enums/account-type.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from './../src/billing/enums/billing-profile-status.enum';
 import { BILLING_SOURCE_ENUM } from './../src/billing/enums/billing-source.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from './../src/billing/enums/credit-lot-origin.enum';
+import { CREDIT_TYPE_ENUM } from './../src/billing/enums/credit-type.enum';
 import { PLAN_ENTITLEMENTS } from './../src/billing/entitlements/plan-entitlements.config';
 import {
   createInMemoryRepository,
@@ -111,7 +112,9 @@ describe('Estado de facturación (e2e)', () => {
   }) {
     await creditLots.save({
       origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
+      creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
       issued: lote.remaining,
+      reserved: 0,
       expiresAt: null,
       ...lote,
     } as never);
@@ -239,6 +242,7 @@ describe('Estado de facturación (e2e)', () => {
         currentPeriodStart: '2026-09-04T00:00:00.000Z',
         currentPeriodEnd: '2026-10-04T00:00:00.000Z',
         creditsAvailable: 18,
+        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.plus.actions,
         limits: PLAN_ENTITLEMENTS.plus.limits,
       });
@@ -298,12 +302,14 @@ describe('Estado de facturación (e2e)', () => {
         billingProfileId: 'perfil-personal',
         hasActiveSubscription: false,
         creditsAvailable: 0,
+        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
       });
       expect(organizacion.body.data).toMatchObject({
         billingProfileId: 'perfil-organizacion',
         hasActiveSubscription: true,
         creditsAvailable: 40,
+        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.enterprise.actions,
       });
     });
@@ -324,6 +330,7 @@ describe('Estado de facturación (e2e)', () => {
         currentPeriodStart: null,
         currentPeriodEnd: null,
         creditsAvailable: 0,
+        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
         limits: PLAN_ENTITLEMENTS.free.limits,
       });

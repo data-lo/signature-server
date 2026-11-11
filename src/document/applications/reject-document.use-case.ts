@@ -26,6 +26,7 @@ import { isSignerTurn } from '../utils/next-signer.util';
 import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
 import { GuestSigningAccessService } from '../services/guest-signing-access.service';
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
 
 /**
  * `PATCH /document/:id/reject`: el firmante autenticado se niega a firmar, si es su turno.
@@ -55,6 +56,7 @@ export class RejectDocumentUseCase {
     private readonly documentService: DocumentService,
     private readonly witnessNotificationService: WitnessNotificationService,
     private readonly guestSigningAccessService: GuestSigningAccessService,
+    private readonly finalizeBiometricCredits: FinalizeBiometricSignatureCreditsUseCase,
   ) {}
 
   async execute(
@@ -152,6 +154,22 @@ export class RejectDocumentUseCase {
     } catch (error) {
       this.logger.warn(
         `No se pudieron revocar los accesos de invitado del documento ${documentId}: ${error}`,
+      );
+    }
+
+    /**
+     * Un documento biométrico rechazado ya no va a cobrarse: su crédito documental reservado, y el
+     * biométrico de cualquier intento que quedara abierto, vuelven al saldo. No bloquea el rechazo
+     * si falla: el job de reservas libera las de documentos rechazados que queden activas.
+     */
+    try {
+      await this.finalizeBiometricCredits.onDocumentClosed({
+        documentId,
+        reason: 'DOCUMENT_REJECTED',
+      });
+    } catch (error) {
+      this.logger.error(
+        `No se pudieron liberar las reservas de créditos del documento rechazado ${documentId}: ${error}`,
       );
     }
 

@@ -15,6 +15,7 @@ import { EmailService } from 'src/common/email/email.service';
 import { MinioService } from 'src/common/minio/minio.service';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
 
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
@@ -49,6 +50,7 @@ export class ConfirmDocumentCancellationUseCase {
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly documentService: DocumentService,
+    private readonly finalizeBiometricCredits: FinalizeBiometricSignatureCreditsUseCase,
   ) {}
 
   async execute(
@@ -93,6 +95,22 @@ export class ConfirmDocumentCancellationUseCase {
     }
     document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
     document.cancelledAt = cancelledAt;
+
+    /**
+     * Sólo se cancela un documento ya firmado, así que sus reservas normalmente ya se consumieron y
+     * esto no libera nada. Se llama igual para que ninguna reserva quede bloqueando saldo de un
+     * documento cancelado; si falla, la recoge el job de reservas.
+     */
+    try {
+      await this.finalizeBiometricCredits.onDocumentClosed({
+        documentId,
+        reason: 'DOCUMENT_CANCELLED',
+      });
+    } catch (error) {
+      this.logger.error(
+        `No se pudieron liberar las reservas de créditos del documento cancelado ${documentId}: ${error}`,
+      );
+    }
 
     // Se cancela sobre la versión definitiva (con la hoja de firmas anexada), que es la que el
     // usuario venía viendo: el sello "CANCELADO" queda entonces sobre TODAS sus páginas, hoja

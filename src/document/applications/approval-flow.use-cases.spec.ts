@@ -13,6 +13,7 @@ import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 
 import { ApproveDocumentUseCase } from './approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './reject-document-approval.use-case';
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
 import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
@@ -67,6 +68,8 @@ describe('flujo de aprobación', () => {
   let witnessNotificationService: Record<string, jest.Mock>;
   let managedDocumentRepository: Record<string, jest.Mock>;
   let managedCollaboratorRepository: Record<string, jest.Mock>;
+  let finalizeBiometricCredits: { onDocumentClosed: jest.Mock };
+  let transactionManager: Record<string, unknown>;
 
   beforeEach(async () => {
     documentRepository = { findOne: jest.fn() };
@@ -91,16 +94,20 @@ describe('flujo de aprobación', () => {
     managedCollaboratorRepository = {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
+    finalizeBiometricCredits = {
+      onDocumentClosed: jest.fn().mockResolvedValue(0),
+    };
+    transactionManager = {
+      getRepository: (entity: unknown) =>
+        entity === DocumentEntity
+          ? managedDocumentRepository
+          : managedCollaboratorRepository,
+    };
 
     const dataSource = {
       transaction: jest.fn(
         async (runInTransaction: (manager: unknown) => Promise<unknown>) =>
-          runInTransaction({
-            getRepository: (entity: unknown) =>
-              entity === DocumentEntity
-                ? managedDocumentRepository
-                : managedCollaboratorRepository,
-          }),
+          runInTransaction(transactionManager),
       ),
     };
 
@@ -124,6 +131,10 @@ describe('flujo de aprobación', () => {
         {
           provide: WitnessNotificationService,
           useValue: witnessNotificationService,
+        },
+        {
+          provide: FinalizeBiometricSignatureCreditsUseCase,
+          useValue: finalizeBiometricCredits,
         },
       ],
     }).compile();
@@ -357,6 +368,15 @@ describe('flujo de aprobación', () => {
         }),
       );
       expect(result.data.status).toBe(DOCUMENT_STATUS_ENUM.REJECTED);
+    });
+
+    it('libera las reservas de créditos del documento dentro de la misma transacción', async () => {
+      await rejectApproval.execute('doc-1', REVIEWER_USER_ID);
+
+      expect(finalizeBiometricCredits.onDocumentClosed).toHaveBeenCalledWith(
+        { documentId: 'doc-1', reason: 'DOCUMENT_APPROVAL_REJECTED' },
+        transactionManager,
+      );
     });
 
     /** Criterio de aceptación: un documento rechazado no inicia el flujo de firma. */

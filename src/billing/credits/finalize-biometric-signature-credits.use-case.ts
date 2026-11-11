@@ -1,0 +1,271 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource, EntityManager } from 'typeorm';
+
+import { documentConsumptionLedgerKey } from './credit-ledger.util';
+import { CreditReservationEntity } from './credit-reservation.entity';
+import { CreditReservationService } from './credit-reservation.service';
+import { DocumentCreditConsumptionEntity } from './document-credit-consumption.entity';
+import { BILLING_SIGNATURE_TYPE_ENUM } from '../enums/billing-signature-type.enum';
+import { CREDIT_RESERVATION_STATUS_ENUM } from '../enums/credit-reservation-status.enum';
+
+/** Firma biométrica registrada: qué se cobra. */
+export interface BiometricSignatureSucceededInput {
+  biometricSignatureAttemptId: string;
+  documentId: string;
+  /** `true` si esta firma completó el documento (`SignedDocumentData.documentCompleted`). */
+  documentCompleted: boolean;
+}
+
+/** Lo que se cobró en una firma exitosa. */
+export interface BiometricSignatureSettlement {
+  /** `true` si esta llamada consumió el crédito biométrico del intento. */
+  biometricConsumed: boolean;
+  /** `true` si esta llamada consumió el crédito documental del documento. */
+  documentConsumed: boolean;
+}
+
+/**
+ * Cierra las reservas de créditos de la firma biométrica según su desenlace.
+ *
+ * - **Firma registrada** (`onSignatureSucceeded`): consume el crédito biométrico del intento y, si
+ *   esa firma completó el documento, también el documental, dejando el recibo en
+ *   `document_credit_consumptions`. Todo en una transacción.
+ * - **Intento fallido** (`onAttemptFailed`): Didit rechazó, venció o falló, o el intento se cerró
+ *   sin firmar; libera el crédito biométrico.
+ * - **Documento cerrado sin completarse** (`onDocumentClosed`): rechazado o cancelado; libera el
+ *   crédito documental y los biométricos de intentos que hubieran quedado abiertos.
+ *
+ * **Idempotente ante reintentos del webhook**: cada reserva sólo se resuelve una vez (ver
+ * `CreditReservationService`), así que una segunda entrega no cobra ni devuelve de nuevo.
+ */
+@Injectable()
+export class FinalizeBiometricSignatureCreditsUseCase {
+  private readonly logger = new Logger(
+    FinalizeBiometricSignatureCreditsUseCase.name,
+  );
+
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly credits: CreditReservationService,
+  ) {}
+
+  /**
+   * Cobra la firma biométrica registrada y, si completó el documento, el crédito documental.
+   *
+   * @param input - Intento, documento y si quedó completo.
+   * @returns Qué se consumió en esta llamada; en un reintento, nada.
+   *
+   * @throws {Error} Si un lote no cuadra con su reserva (la transacción se deshace y el webhook se
+   *   reintenta).
+   *
+   * @example
+   * ```ts
+   * await finalize.onSignatureSucceeded({ biometricSignatureAttemptId: 'att-1', documentId: 'doc-1', documentCompleted: true });
+   * ```
+   */
+  onSignatureSucceeded(
+    input: BiometricSignatureSucceededInput,
+  ): Promise<BiometricSignatureSettlement> {
+    return this.dataSource.transaction(async (tx) => {
+      const biometricConsumed = await this.consumeBiometric(tx, input);
+      const documentConsumed = input.documentCompleted
+        ? await this.consumeDocument(tx, input.documentId)
+        : false;
+
+      return { biometricConsumed, documentConsumed };
+    });
+  }
+
+  /**
+   * Libera el crédito biométrico de un intento que terminó sin firma.
+   *
+   * @param input.biometricSignatureAttemptId - Intento.
+   * @param input.reason - Motivo (p. ej. `DIDIT_DECLINED`), que queda en el ledger.
+   * @returns `true` si esta llamada lo liberó; `false` si no había reserva activa.
+   *
+   * @throws {Error} Si el lote no cuadra con la reserva.
+   *
+   * @example
+   * ```ts
+   * await finalize.onAttemptFailed({ biometricSignatureAttemptId: 'att-1', reason: 'DIDIT_DECLINED' });
+   * ```
+   */
+  async onAttemptFailed(input: {
+    biometricSignatureAttemptId: string;
+    reason: string;
+  }): Promise<boolean> {
+    const reservation = await this.credits.findByAttempt(
+      input.biometricSignatureAttemptId,
+    );
+    if (
+      !reservation ||
+      reservation.status !== CREDIT_RESERVATION_STATUS_ENUM.ACTIVE
+    ) {
+      return false;
+    }
+
+    const { applied } = await this.credits.release({
+      reservationId: reservation.id,
+      reason: input.reason,
+    });
+    return applied;
+  }
+
+  /**
+   * Libera las reservas activas de un documento que ya no va a completarse.
+   *
+   * @param input.documentId - Documento rechazado o cancelado.
+   * @param input.reason - Motivo (p. ej. `DOCUMENT_REJECTED`).
+   * @param manager - Transacción del llamador (p. ej. la del rechazo); sin ella abre una propia.
+   * @returns Cuántas reservas liberó esta llamada.
+   *
+   * @throws {Error} Si un lote no cuadra con su reserva.
+   *
+   * @example
+   * ```ts
+   * await finalize.onDocumentClosed({ documentId: 'doc-1', reason: 'DOCUMENT_REJECTED' });
+   * ```
+   */
+  async onDocumentClosed(
+    input: { documentId: string; reason: string },
+    manager?: EntityManager,
+  ): Promise<number> {
+    const run = async (tx: EntityManager): Promise<number> => {
+      const active = await this.credits.findActiveByDocument(
+        input.documentId,
+        tx,
+      );
+      let released = 0;
+      for (const reservation of active) {
+        const { applied } = await this.credits.release(
+          { reservationId: reservation.id, reason: input.reason },
+          tx,
+        );
+        if (applied) released += 1;
+      }
+      return released;
+    };
+
+    return manager ? run(manager) : this.dataSource.transaction(run);
+  }
+
+  /**
+   * Consume la reserva biométrica del intento.
+   *
+   * @param tx - Transacción.
+   * @param input - Intento y documento.
+   * @returns `true` si esta llamada la consumió.
+   *
+   * @example
+   * ```ts
+   * await this.consumeBiometric(tx, input);
+   * ```
+   */
+  private async consumeBiometric(
+    tx: EntityManager,
+    input: BiometricSignatureSucceededInput,
+  ): Promise<boolean> {
+    const reservation = await this.credits.findByAttempt(
+      input.biometricSignatureAttemptId,
+      tx,
+    );
+
+    if (!reservation) {
+      // Intentos abiertos antes de las reservas: su firma no se puede cobrar retroactivamente.
+      this.logger.warn(
+        `La firma biométrica del intento ${input.biometricSignatureAttemptId} se registró sin reserva de crédito.`,
+      );
+      return false;
+    }
+
+    return this.consumeReservation(tx, reservation);
+  }
+
+  /**
+   * Consume la reserva documental del documento completado y escribe su recibo.
+   *
+   * @param tx - Transacción.
+   * @param documentId - Documento completado.
+   * @returns `true` si esta llamada la consumió.
+   *
+   * @example
+   * ```ts
+   * await this.consumeDocument(tx, 'doc-1');
+   * ```
+   */
+  private async consumeDocument(
+    tx: EntityManager,
+    documentId: string,
+  ): Promise<boolean> {
+    const reservation = await this.credits.findDocumentReservation(
+      documentId,
+      tx,
+    );
+
+    if (!reservation) {
+      // Documento biométrico creado antes de las reservas: se cobró al crearse.
+      return false;
+    }
+
+    const consumed = await this.consumeReservation(
+      tx,
+      reservation,
+      documentConsumptionLedgerKey(documentId),
+    );
+
+    if (consumed) {
+      await tx
+        .createQueryBuilder()
+        .insert()
+        .into(DocumentCreditConsumptionEntity)
+        .values({
+          documentId,
+          billingProfileId: reservation.billingProfileId,
+          creditLotId: reservation.creditLotId,
+          creditsConsumed: reservation.quantity,
+          signatureType: BILLING_SIGNATURE_TYPE_ENUM.BIOMETRIC,
+          consumedAt: new Date(),
+        })
+        .orIgnore()
+        .execute();
+    }
+
+    return consumed;
+  }
+
+  /**
+   * Consume una reserva si sigue activa; registra por qué no si ya no lo está.
+   *
+   * @param tx - Transacción.
+   * @param reservation - Reserva a consumir.
+   * @param idempotencyKey - Clave del movimiento, si no es la de la reserva.
+   * @returns `true` si esta llamada la consumió.
+   *
+   * @example
+   * ```ts
+   * await this.consumeReservation(tx, reservation);
+   * ```
+   */
+  private async consumeReservation(
+    tx: EntityManager,
+    reservation: CreditReservationEntity,
+    idempotencyKey?: string,
+  ): Promise<boolean> {
+    const { reservation: current, applied } = await this.credits.consume(
+      { reservationId: reservation.id, idempotencyKey },
+      tx,
+    );
+
+    if (
+      !applied &&
+      current.status !== CREDIT_RESERVATION_STATUS_ENUM.CONSUMED
+    ) {
+      this.logger.error(
+        `La reserva ${current.id} (${current.creditType}) ya estaba en ${current.status} al registrarse la firma: no se cobró.`,
+      );
+    }
+
+    return applied;
+  }
+}

@@ -288,6 +288,34 @@ export class InsufficientDocumentCreditsException extends HttpException {
 }
 
 /**
+ * El propietario no tiene créditos biométricos disponibles para iniciar una firma biométrica.
+ *
+ * Mismo status y misma lógica que `InsufficientDocumentCreditsException` (402: falta saldo, no
+ * plan), con otro mensaje porque lo que hay que recargar es otro producto. La lanza la reserva del
+ * crédito biométrico ANTES de abrir la sesión de Didit, así que no se gasta una sesión del
+ * proveedor que no se va a poder cobrar.
+ *
+ * `detail` viaja en `cause` y se queda en el log: hacia fuera la respuesta es idéntica tenga o no
+ * perfil de facturación el documento.
+ */
+export class InsufficientBiometricCreditsException extends HttpException {
+  constructor(required: number, available: number, detail?: string) {
+    super(
+      {
+        statusCode: HttpStatus.PAYMENT_REQUIRED,
+        message:
+          'No hay créditos de firma biométrica disponibles para este documento. Pide al creador del documento que compre más.',
+        error: 'Payment Required',
+      },
+      HttpStatus.PAYMENT_REQUIRED,
+    );
+    this.cause =
+      `Se requieren ${required} crédito(s) biométrico(s) y hay ${available} disponible(s).` +
+      (detail ? ` ${detail}` : '');
+  }
+}
+
+/**
  * La cantidad de documentos pedida para una compra suelta no es válida: no es entera, es cero o
  * negativa, o supera el máximo por compra.
  *
