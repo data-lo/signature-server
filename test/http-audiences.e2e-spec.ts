@@ -468,9 +468,10 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
     it('403 si la llave no tiene el permiso del endpoint (reenvío exige DOCUMENT.CREATE)', async () => {
       await request(app.getHttpServer())
         .post(
-          `/api/v1/integration/documents/${DOC_ID}/collaborators/${COLLAB_ID}/resend-invitation`,
+          `/api/v1/integration/documents/${DOC_ID}/collaborators/resend-invitation`,
         )
         .set('X-API-Key', readOnlyKey.key)
+        .send({ email: 'ana@correo.com' })
         .expect(403);
       expect(integration.resend.execute).not.toHaveBeenCalled();
     });
@@ -478,10 +479,11 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
     it('reenvía con la organización de la llave', async () => {
       await request(app.getHttpServer())
         .post(
-          `/api/v1/integration/documents/${DOC_ID}/collaborators/${COLLAB_ID}/resend-invitation`,
+          `/api/v1/integration/documents/${DOC_ID}/collaborators/resend-invitation`,
         )
         .set('X-API-Key', fullKey.key)
         .set('User-Agent', 'erp/1.0')
+        .send({ email: 'ana@correo.com' })
         .expect(200);
       expect(integration.resend.execute).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -489,7 +491,7 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
           apiKeyId: 'key-full',
         }),
         DOC_ID,
-        COLLAB_ID,
+        'ana@correo.com',
         expect.objectContaining({ userAgent: 'erp/1.0' }),
       );
     });
@@ -505,10 +507,10 @@ describe('Audiencias HTTP: interna, integración y firma pública (e2e)', () => 
     ])('400 si el tercero manda %s', async (_case, query, body) => {
       await request(app.getHttpServer())
         .post(
-          `/api/v1/integration/documents/${DOC_ID}/collaborators/${COLLAB_ID}/resend-invitation${query}`,
+          `/api/v1/integration/documents/${DOC_ID}/collaborators/resend-invitation${query}`,
         )
         .set('X-API-Key', fullKey.key)
-        .send(body)
+        .send({ email: 'ana@correo.com', ...body })
         .expect(400);
       expect(integration.resend.execute).not.toHaveBeenCalled();
     });

@@ -114,9 +114,9 @@ describe('createIntegrationOpenApiDocument', () => {
       [
         'POST /api/v1/integration/documents',
         'GET /api/v1/integration/documents',
-        'GET /api/v1/integration/users/{userId}/documents',
+        'GET /api/v1/integration/users/documents',
         'POST /api/v1/integration/documents/{documentId}/signing-access',
-        'POST /api/v1/integration/documents/{documentId}/collaborators/{collaboratorId}/resend-invitation',
+        'POST /api/v1/integration/documents/{documentId}/collaborators/resend-invitation',
       ].sort(),
     );
     for (const path of Object.keys(integration.paths)) {
@@ -341,6 +341,52 @@ describe('createIntegrationOpenApiDocument', () => {
     });
   });
 
+  describe('identificación por correo', () => {
+    it('el listado por usuario exige email en el query y no publica userId', () => {
+      const { parameters } = integration.paths[
+        '/api/v1/integration/users/documents'
+      ].get as unknown as { parameters: Record<string, unknown>[] };
+      const names = parameters.map(({ name }) => name);
+
+      expect(names).not.toContain('userId');
+      expect(parameters.find(({ name }) => name === 'email')).toEqual(
+        expect.objectContaining({ in: 'query', required: true }),
+      );
+    });
+
+    it('el reenvío recibe email en el cuerpo y no publica collaboratorId', () => {
+      const path =
+        '/api/v1/integration/documents/{documentId}/collaborators/resend-invitation';
+      const operation = integration.paths[path].post as {
+        parameters: { name: string }[];
+        requestBody: Record<string, any>;
+      };
+      const schemaRef = operation.requestBody.content['application/json'].schema
+        .$ref as string;
+      const schema = integration.components!.schemas![
+        schemaRef.split('/').pop()!
+      ] as { properties: Record<string, unknown>; required: string[] };
+
+      expect(operation.parameters.map(({ name }) => name)).toEqual([
+        'documentId',
+      ]);
+      expect(schema.required).toEqual(['email']);
+      expect(Object.keys(schema.properties)).toEqual(['email']);
+    });
+
+    it('ninguna respuesta exitosa publica ids internos de usuario o colaborador', () => {
+      const data = integration.components!.schemas![
+        'IntegrationResentInvitationData'
+      ] as { properties: Record<string, unknown> };
+
+      expect(Object.keys(data.properties)).toContain('email');
+      expect(data.properties).not.toHaveProperty('collaboratorId');
+      for (const path of Object.keys(integration.paths)) {
+        expect(path).not.toMatch(/\{(userId|collaboratorId)\}/);
+      }
+    });
+  });
+
   it.each([
     [
       'POST',
@@ -350,12 +396,12 @@ describe('createIntegrationOpenApiDocument', () => {
     [
       'GET',
       '/api/v1/integration/documents',
-      ['200', '400', '401', '403', '404', '422'],
+      ['200', '400', '401', '403', '404', '409', '422'],
     ],
     [
       'GET',
-      '/api/v1/integration/users/{userId}/documents',
-      ['200', '400', '401', '403', '404', '422'],
+      '/api/v1/integration/users/documents',
+      ['200', '400', '401', '403', '404', '409', '422'],
     ],
     [
       'POST',
@@ -364,8 +410,8 @@ describe('createIntegrationOpenApiDocument', () => {
     ],
     [
       'POST',
-      '/api/v1/integration/documents/{documentId}/collaborators/{collaboratorId}/resend-invitation',
-      ['200', '400', '401', '403', '404', '409', '429'],
+      '/api/v1/integration/documents/{documentId}/collaborators/resend-invitation',
+      ['200', '400', '401', '403', '404', '409', '422', '429'],
     ],
   ])(
     '%s %s documenta sus respuestas con ejemplos',

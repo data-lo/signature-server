@@ -230,13 +230,13 @@ export class IntegrationSigningAccessResponse extends BaseResponse<IntegrationSi
   data: IntegrationSigningAccessData;
 }
 
-/** Resultado de `POST …/collaborators/:collaboratorId/resend-invitation`. Nunca trae el enlace. */
+/** Resultado de `POST …/collaborators/resend-invitation`. Nunca trae el enlace ni ids internos. */
 export class IntegrationResentInvitationData {
   @ApiProperty({
-    format: 'uuid',
-    example: '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f',
+    example: 'ana@correo.com',
+    description: 'Correo del firmante al que se reenvió la invitación',
   })
-  collaboratorId: string;
+  email: string;
 
   @ApiProperty({
     example: '2026-11-02T12:00:00.000Z',
