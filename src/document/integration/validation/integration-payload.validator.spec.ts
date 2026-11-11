@@ -593,6 +593,66 @@ describe('IntegrationPayloadValidator', () => {
         ),
       ).toMatchObject({ code: CODE.UNSUPPORTED_PARTICIPANT_FIELD });
     });
+
+    it('lo rechaza aunque valga null', () => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[0].rfc = null;
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: CODE.UNSUPPORTED_PARTICIPANT_FIELD });
+    });
+  });
+
+  describe('normalización y opcionalidad del taxId FIEL', () => {
+    it('lo acepta sin distinguir mayúsculas ni espacios internos y lo deja normalizado', () => {
+      const result = validator().validatePayload(
+        payload((value) => {
+          value.document.signatureType = 'ADVANCED';
+          value.participants[0].taxId = ' lopa 800101 ab1 ';
+        }),
+      );
+      expect(result.participants[0].taxId).toBe('LOPA800101AB1');
+    });
+
+    it.each([undefined, null])('es opcional: acepta %p', (taxId) => {
+      expect(() =>
+        validator().validatePayload(
+          payload((value) => {
+            value.document.signatureType = 'ADVANCED';
+            value.participants[0].taxId = taxId;
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it.each(['', '   ', 'LOPA800101'])('rechaza el formato de %p', (taxId) => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[0].taxId = taxId;
+            }),
+          ),
+        ),
+      ).toMatchObject({
+        code: CODE.INVALID_PARTICIPANT_TAX_ID,
+        details: { field: 'participants[0].taxId' },
+      });
+    });
+
+    it('taxId: null no estorba a un firmante que no es FIEL', () => {
+      expect(() =>
+        validator().validatePayload(
+          payload((value) => (value.participants[0].taxId = null)),
+        ),
+      ).not.toThrow();
+    });
   });
 
   describe('orden de firma', () => {

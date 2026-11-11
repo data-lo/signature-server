@@ -23,7 +23,8 @@ import { IntegrationApprovalNotSupportedException } from '../exceptions/integrat
  *   conserva el orden del arreglo.
  * - El nombre del documento es el del PDF recibido.
  * - El `taxId` de un firmante (sólo `ADVANCED`, ya validado) viaja como `signerTaxId`: es contra lo
- *   que se compara el titular de su certificado al firmar.
+ *   que se compara el RFC de su certificado al firmar. `rfc` ya no llega aquí: el validador lo
+ *   rechaza con `UNSUPPORTED_PARTICIPANT_FIELD`.
  *
  * @param payload - Payload ya validado.
  * @param fileName - Nombre del archivo PDF recibido.

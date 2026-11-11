@@ -8,7 +8,7 @@ import { AuthController } from 'src/auth/auth.controller';
 import { InternalSubscriptionBillingController } from 'src/billing/subscriptions/internal-subscription-billing.controller';
 import { applyGlobalApiPrefix } from 'src/common/constants/api-prefix.constants';
 
-import { RFC_FORMAT } from '../dto/create-integration-document.dto';
+import { RFC_FORMAT } from '../../utils/tax-id.util';
 import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,

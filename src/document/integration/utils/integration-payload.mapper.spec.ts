@@ -169,6 +169,15 @@ describe('toCreateDocumentSignaturesDto', () => {
     expect(eva.signerTaxId).toBeUndefined();
   });
 
+  it('un firmante sin taxId viaja sin RFC', () => {
+    const [luis] = toCreateDocumentSignaturesDto(
+      payload(),
+      'contrato.pdf',
+    ).collaborators;
+
+    expect(luis.signerTaxId).toBeNull();
+  });
+
   it('rechaza requiresApproval: true, que la integración todavía no admite', () => {
     expect(() =>
       toCreateDocumentSignaturesDto(

@@ -242,10 +242,11 @@ export class IntegrationPayloadValidator {
   /**
    * El `taxId` (RFC) sólo tiene sentido para un firmante de firma avanzada: es contra lo que se
    * compara su certificado. En cualquier otro participante se rechaza en lugar de ignorarlo en
-   * silencio.
+   * silencio. `null` equivale a no mandarlo. (`rfc`, su nombre anterior, ya lo rechazó
+   * `assertNoRemovedParticipantFields`.)
    *
    * @param payload - Payload completo (tipo de firma del documento).
-   * @param participant - Participante.
+   * @param participant - Participante, con el `taxId` ya normalizado.
    * @param index - Su posición en `participants`.
    * @returns Nada.
    *

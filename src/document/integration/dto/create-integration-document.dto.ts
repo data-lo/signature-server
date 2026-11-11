@@ -22,6 +22,7 @@ import {
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   SignaturePositionDto,
 } from '../../dto/create-document-signatures.dto';
+import { RFC_FORMAT, normalizeTaxId } from '../../utils/tax-id.util';
 import { EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD } from '../docs/api-integration-examples.docs';
 import { INTEGRATION_VALIDATION_CODE_ENUM } from '../validation/integration-validation.exception';
 
@@ -58,16 +59,13 @@ function normalizeEmail({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? value.trim().toLowerCase() : value;
 }
 
-/** Recorta y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
-function normalizeTaxId({ value }: { value: unknown }): unknown {
-  return typeof value === 'string' ? value.trim().toUpperCase() : value;
+/** Quita los espacios y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
+function normalizeTaxIdValue({ value }: { value: unknown }): unknown {
+  return typeof value === 'string' ? normalizeTaxId(value) : value;
 }
 
-/** Forma de un RFC de persona física (13) o moral (12). */
-export const RFC_FORMAT = /^[A-ZÑ&]{3,4}\d{6}[A-Z\d]{3}$/;
-
 /** El mismo `RFC_FORMAT`, como texto para el `pattern` de OpenAPI. */
-const RFC_FORMAT_PATTERN = '^[A-ZÑ&]{3,4}\\d{6}[A-Z\\d]{3}$';
+const RFC_FORMAT_PATTERN = RFC_FORMAT.source;
 
 /** Recorta los espacios de un nombre. */
 function trimText({ value }: { value: unknown }): unknown {
@@ -226,13 +224,13 @@ export class IntegrationParticipantDto {
     maxLength: 13,
     pattern: RFC_FORMAT_PATTERN,
     description: [
-      'RFC mexicano del firmante: 13 caracteres para persona física o 12 para persona moral (3 o 4 letras, fecha AAMMDD y homoclave de 3). Se recortan los espacios y se pasa a mayúsculas.',
+      'RFC mexicano del firmante: 13 caracteres para persona física o 12 para persona moral (3 o 4 letras, fecha AAMMDD y homoclave de 3). Se quitan los espacios y se pasa a mayúsculas.',
       'Sólo se admite en un participante con `role: SIGNER` de un documento con `document.signatureType: ADVANCED`; en cualquier otro caso la respuesta es `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`, y con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.',
       'Si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.',
     ].join(' '),
   })
   @IsOptional()
-  @Transform(normalizeTaxId)
+  @Transform(normalizeTaxIdValue)
   @IsString(TAX_ID)
   @Matches(RFC_FORMAT, TAX_ID)
   taxId?: string;
@@ -270,10 +268,10 @@ export class IntegrationDocumentPayloadDto {
  * regla. Lo valida `IntegrationPayloadValidator`.
  *
  * No existe —ni se acepta— ningún campo de organización, cuenta, usuario o permisos
- * (`organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `permissionIds`), ni el PDF en
- * base64 (`documentBase64`): la organización sale de la API key y el creador, de su correo. Si
- * alguno llega, se responde 400 en vez de ignorarlo (ver `assertNoTenantOverrides`). La excepción
- * es `taxId` dentro de un participante: ahí es el RFC del firmante, no el de la organización.
+ * (`organizationId`, `taxId` fuera de un participante, `userId`, `accountId`, `createdBy`,
+ * `permissionIds`), ni el PDF en base64 (`documentBase64`): la organización sale de la API key y el
+ * creador, de su correo. Si alguno llega, se responde 400 en vez de ignorarlo (ver
+ * `assertNoTenantOverrides`). El `taxId` de un participante es otra cosa: el RFC del firmante.
  */
 export class CreateIntegrationDocumentDto {
   /**

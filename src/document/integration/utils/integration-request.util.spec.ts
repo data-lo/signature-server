@@ -98,6 +98,28 @@ describe('integration-request.util', () => {
       ).toThrow(TenantOverrideNotAllowedException);
     });
 
+    it.each([
+      ['en el query', { query: { taxId: 'RFC' } }],
+      ['como campo multipart', { body: { taxId: 'RFC' } }],
+      ['en el payload', withPayload((p) => (p.taxId = 'RFC'))],
+      ['en creator', withPayload((p) => (p.creator.taxId = 'RFC'))],
+    ])('sigue rechazando taxId %s', (_label, request) => {
+      expect(() => assertNoTenantOverrides(request)).toThrow(
+        TenantOverrideNotAllowedException,
+      );
+    });
+
+    it('un participante con taxId no tapa otro campo de tenant en ese mismo participante', () => {
+      expect(() =>
+        assertNoTenantOverrides(
+          withPayload((p) => {
+            p.participants[0].taxId = 'LOPA800101AB1';
+            p.participants[0].accountId = 'acc-2';
+          }),
+        ),
+      ).toThrow(TenantOverrideNotAllowedException);
+    });
+
     it('un payload que no es JSON no rompe la revisión: lo rechaza la validación', () => {
       expect(() =>
         assertNoTenantOverrides({ body: { payload: '{no es json' } }),

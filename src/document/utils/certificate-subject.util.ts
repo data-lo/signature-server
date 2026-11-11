@@ -1,4 +1,5 @@
 import { personNameMatches } from 'src/common/utils/person-name-match.util';
+import { normalizeTaxId } from './tax-id.util';
 
 /** A quién se espera como titular del certificado. */
 export interface ExpectedCertificateSubject {
@@ -6,6 +7,28 @@ export interface ExpectedCertificateSubject {
   taxId: string | null;
   /** Nombre y apellidos del colaborador. */
   fullName: string;
+}
+
+/**
+ * Compara el RFC de un certificado con el registrado para el firmante, sin distinguir mayúsculas
+ * ni espacios.
+ *
+ * @param certificateTaxId - RFC extraído del certificado.
+ * @param registeredTaxId - RFC registrado para el firmante.
+ * @returns `true` si son el mismo RFC.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * certificateTaxIdMatches('LOPA800101AB1', ' lopa800101ab1 '); // true
+ * ```
+ */
+export function certificateTaxIdMatches(
+  certificateTaxId: string,
+  registeredTaxId: string,
+): boolean {
+  return normalizeTaxId(certificateTaxId) === normalizeTaxId(registeredTaxId);
 }
 
 /**
@@ -31,9 +54,8 @@ export function certificateSubjectMatches(
   certificate: { rfc: string; name: string },
   expected: ExpectedCertificateSubject,
 ): boolean {
-  const normalize = (value: string) => value.replace(/\s+/g, '').toUpperCase();
   if (expected.taxId) {
-    return normalize(certificate.rfc) === normalize(expected.taxId);
+    return certificateTaxIdMatches(certificate.rfc, expected.taxId);
   }
   return personNameMatches(expected.fullName, certificate.name);
 }

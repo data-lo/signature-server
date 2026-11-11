@@ -22,11 +22,9 @@ export const TENANT_OVERRIDE_FIELDS = [
   'documentBase64',
 ] as const;
 
-/**
- * Nombres de `TENANT_OVERRIDE_FIELDS` que, dentro de un participante, son campos legítimos de su
- * contrato: `taxId` es el RFC del firmante de firma avanzada.
- */
-const PARTICIPANT_FIELDS: ReadonlySet<string> = new Set(['taxId']);
+/** En un participante, `taxId` no elige organización: es el RFC del firmante. */
+const PARTICIPANT_OVERRIDE_FIELDS: readonly string[] =
+  TENANT_OVERRIDE_FIELDS.filter((field) => field !== 'taxId');
 
 /** Headers de cuenta activa de la plataforma, que esta API no usa. */
 export const TENANT_OVERRIDE_HEADERS = ['x-account-id', 'x-organization-id'];
@@ -73,26 +71,22 @@ export function assertNoTenantOverrides(request: IntegrationRawRequest): void {
   const participants = Array.isArray(payload?.participants)
     ? (payload.participants as unknown[])
     : [];
-  const containers: [Record<string, unknown> | null | undefined, boolean][] = [
-    [request.query, false],
-    [request.body, false],
-    [payload, false],
-    [asObject(payload?.creator), false],
-    [asObject(payload?.document), false],
-    ...participants.map(
-      (participant): [Record<string, unknown> | null, boolean] => [
-        asObject(participant),
-        true,
-      ],
-    ),
+  const containers = [
+    request.query,
+    request.body,
+    payload,
+    asObject(payload?.creator),
+    asObject(payload?.document),
   ];
-  for (const [container, isParticipant] of containers) {
-    for (const field of TENANT_OVERRIDE_FIELDS) {
-      if (isParticipant && PARTICIPANT_FIELDS.has(field)) continue;
-      if (container && Object.prototype.hasOwnProperty.call(container, field)) {
-        found.add(field);
-      }
-    }
+  for (const container of containers) {
+    collectPresentFields(container, TENANT_OVERRIDE_FIELDS, found);
+  }
+  for (const participant of participants) {
+    collectPresentFields(
+      asObject(participant),
+      PARTICIPANT_OVERRIDE_FIELDS,
+      found,
+    );
   }
 
   if (found.size > 0) {
@@ -148,6 +142,34 @@ export function buildRequestFingerprint(
   return createHash('sha256')
     .update(JSON.stringify([fileHash, body?.payload ?? null]))
     .digest('hex');
+}
+
+/**
+ * Anota en `found` los campos de la lista que el objeto trae como propios, aunque valgan `null`.
+ *
+ * @param container - Objeto a revisar; `null` o `undefined` no aportan nada.
+ * @param fields - Campos que se buscan.
+ * @param found - Conjunto donde se acumulan los encontrados.
+ * @returns Nada.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * const found = new Set<string>();
+ * collectPresentFields({ userId: 'u-1' }, ['userId', 'taxId'], found); // found: { 'userId' }
+ * ```
+ */
+function collectPresentFields(
+  container: Record<string, unknown> | null | undefined,
+  fields: readonly string[],
+  found: Set<string>,
+): void {
+  for (const field of fields) {
+    if (container && Object.prototype.hasOwnProperty.call(container, field)) {
+      found.add(field);
+    }
+  }
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {

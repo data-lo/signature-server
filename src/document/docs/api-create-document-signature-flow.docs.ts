@@ -40,7 +40,7 @@ export function ApiCreateDocumentSignatureFlow() {
     ApiResponse({
       status: 400,
       description:
-        'Payload inválido, archivo no proporcionado, tipo de firma del documento ausente o distinto de SIMPLE/ADVANCED, o documento sin ningún SIGNER',
+        'Payload inválido, archivo no proporcionado, tipo de firma del documento ausente o distinto de SIMPLE/ADVANCED, documento sin ningún SIGNER, RFC de firmante inválido o en un documento sin firma avanzada, o colaborador WITNESS con taxId mal tipado',
       type: BadRequestResponse,
     }),
     ApiResponse({
