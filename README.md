@@ -733,7 +733,12 @@ curl -X POST http://localhost:3000/api/v1/platform/organizations/provision   -H 
 
 # 2. Crear un documento con la llave: consume 1 crédito (creditsAvailable → 1599)
 curl -X POST http://localhost:3000/api/v1/integration/documents   -H "X-API-Key: fma_live_…" -H "Idempotency-Key: doc-acme-001"   -F 'payload={"creator":{"email":"ana@acme.test","firstName":"Ana","lastName":"López"},"document":{"signatureType":"SIMPLE","isSequential":true,"isIndexable":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis@correo.test","order":1,"signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.1,"widthRatio":0.2,"heightRatio":0.08}]}]}'   -F "file=@contrato.pdf;type=application/pdf"
+
+# 2b. Lo mismo con firma avanzada: el RFC del firmante va en participants[].taxId (opcional)
+curl -X POST http://localhost:3000/api/v1/integration/documents   -H "X-API-Key: fma_live_…" -H "Idempotency-Key: doc-acme-002"   -F 'payload={"creator":{"email":"ana@acme.test","firstName":"Ana","lastName":"López"},"document":{"signatureType":"ADVANCED","isSequential":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis@correo.test","order":1,"taxId":"MAGL800101AB1","signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.1,"widthRatio":0.2,"heightRatio":0.08}]}]}'   -F "file=@contrato.pdf;type=application/pdf"
 ```
+
+**RFC del firmante en `POST /api/v1/integration/documents`:** `participants[].taxId` (RFC mexicano de 12 o 13 caracteres, se normaliza a mayúsculas) sólo se admite en un `SIGNER` de un documento `ADVANCED`; viaja al flujo como `signerTaxId` y queda en `collaborators.tax_id`, contra el que se compara el titular del certificado al firmar (sin él, se compara por nombre). Fuera de ese caso responde `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`; con mal formato, `422 INVALID_PARTICIPANT_TAX_ID`. El nombre anterior, `rfc`, salió del contrato: enviarlo responde `422 UNSUPPORTED_PARTICIPANT_FIELD` con `details.replacedBy`. Ojo: `taxId` sigue prohibido (400 `INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`) en el query, el body, el primer nivel de `payload`, `creator` y `document`; sólo dentro de un participante es legítimo.
 
 ### `platform` (`POST /api/v1/platform/organizations/:organizationId/credits`) — recarga de créditos Enterprise
 

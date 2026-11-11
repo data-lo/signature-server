@@ -63,7 +63,7 @@ export function ApiIntegrationCommonResponses(
     ApiResponse({
       status: 400,
       description:
-        '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave).',
+        '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.',
       type: IntegrationErrorResponseDto,
       examples: {
         tenantOverride: integrationErrorExample(

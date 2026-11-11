@@ -79,12 +79,23 @@ describe('integration-request.util', () => {
       );
     });
 
-    it('el taxId de un participante es el RFC del firmante: no cuenta como elegir tenant', () => {
+    it('admite taxId dentro de un participante: es el RFC del firmante, no el de la organización', () => {
       expect(() =>
         assertNoTenantOverrides(
           withPayload((p) => (p.participants[0].taxId = 'LOPA800101AB1')),
         ),
       ).not.toThrow();
+    });
+
+    it('un participante con taxId no tapa un taxId en document', () => {
+      expect(() =>
+        assertNoTenantOverrides(
+          withPayload((p) => {
+            p.participants[0].taxId = 'LOPA800101AB1';
+            p.document.taxId = 'ACM010101AB1';
+          }),
+        ),
+      ).toThrow(TenantOverrideNotAllowedException);
     });
 
     it.each([

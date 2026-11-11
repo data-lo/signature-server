@@ -30,10 +30,12 @@ export enum INTEGRATION_VALIDATION_CODE_ENUM {
   INVALID_SIGNATURE_POSITION = 'INVALID_SIGNATURE_POSITION',
   SIGNATURE_POSITION_PAGE_OUT_OF_RANGE = 'SIGNATURE_POSITION_PAGE_OUT_OF_RANGE',
   SIGNATURE_POSITION_OVERLAP = 'SIGNATURE_POSITION_OVERLAP',
-  /** `taxId` (o `rfc`, su nombre anterior) no tiene el formato de un RFC, o los dos no coinciden. */
-  INVALID_PARTICIPANT_RFC = 'INVALID_PARTICIPANT_RFC',
-  /** `taxId` (o `rfc`) sólo se admite en un firmante de un documento `ADVANCED`. */
-  PARTICIPANT_RFC_NOT_ALLOWED = 'PARTICIPANT_RFC_NOT_ALLOWED',
+  /** `taxId` no tiene el formato de un RFC mexicano. */
+  INVALID_PARTICIPANT_TAX_ID = 'INVALID_PARTICIPANT_TAX_ID',
+  /** `taxId` sólo se admite en un firmante de un documento `ADVANCED`. */
+  PARTICIPANT_TAX_ID_NOT_ALLOWED = 'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+  /** El participante trae un campo que salió del contrato (hoy, `rfc`, reemplazado por `taxId`). */
+  UNSUPPORTED_PARTICIPANT_FIELD = 'UNSUPPORTED_PARTICIPANT_FIELD',
 }
 
 /** Detalles del error: el campo afectado (si aplica) y los datos que lo explican. */

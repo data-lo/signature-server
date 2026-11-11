@@ -29,8 +29,6 @@ import { INTEGRATION_VALIDATION_CODE_ENUM } from '../validation/integration-vali
 /** Largo máximo de nombres y apellidos que se aceptan. */
 export const INTEGRATION_NAME_MAX_LENGTH = 100;
 
-import { RFC_FORMAT } from '../../utils/tax-id.util';
-
 /** Largo máximo de un correo (RFC 5321). */
 export const INTEGRATION_EMAIL_MAX_LENGTH = 254;
 
@@ -62,9 +60,12 @@ function normalizeEmail({ value }: { value: unknown }): unknown {
 }
 
 /** Quita los espacios y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
-function normalizeRfc({ value }: { value: unknown }): unknown {
+function normalizeTaxIdValue({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? normalizeTaxId(value) : value;
 }
+
+/** El mismo `RFC_FORMAT`, como texto para el `pattern` de OpenAPI. */
+const RFC_FORMAT_PATTERN = RFC_FORMAT.source;
 
 /** Recorta los espacios de un nombre. */
 function trimText({ value }: { value: unknown }): unknown {
@@ -82,7 +83,9 @@ const ORDER = coded(INTEGRATION_VALIDATION_CODE_ENUM.INVALID_SIGNING_ORDER);
 const POSITIONS = coded(
   INTEGRATION_VALIDATION_CODE_ENUM.INVALID_SIGNATURE_POSITION,
 );
-const RFC = coded(INTEGRATION_VALIDATION_CODE_ENUM.INVALID_PARTICIPANT_RFC);
+const TAX_ID = coded(
+  INTEGRATION_VALIDATION_CODE_ENUM.INVALID_PARTICIPANT_TAX_ID,
+);
 
 /** Quién crea el documento. Se identifica SÓLO por su correo. */
 export class IntegrationCreatorDto {
@@ -217,26 +220,20 @@ export class IntegrationParticipantDto {
 
   @ApiPropertyOptional({
     example: 'LOPA800101AB1',
-    description:
-      'RFC del firmante, sin distinguir mayúsculas ni espacios. Sólo para un SIGNER de un documento `ADVANCED` (FIEL); en cualquier otro participante responde 422 `PARTICIPANT_RFC_NOT_ALLOWED`. Si viene, el RFC del certificado de su e.firma tiene que coincidir o la firma se rechaza; si no viene, el flujo de firma no cambia.',
+    minLength: 12,
+    maxLength: 13,
+    pattern: RFC_FORMAT_PATTERN,
+    description: [
+      'RFC mexicano del firmante: 13 caracteres para persona física o 12 para persona moral (3 o 4 letras, fecha AAMMDD y homoclave de 3). Se quitan los espacios y se pasa a mayúsculas.',
+      'Sólo se admite en un participante con `role: SIGNER` de un documento con `document.signatureType: ADVANCED`; en cualquier otro caso la respuesta es `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`, y con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.',
+      'Si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.',
+    ].join(' '),
   })
   @IsOptional()
-  @Transform(normalizeRfc)
-  @IsString(RFC)
-  @Matches(RFC_FORMAT, RFC)
+  @Transform(normalizeTaxIdValue)
+  @IsString(TAX_ID)
+  @Matches(RFC_FORMAT, TAX_ID)
   taxId?: string;
-
-  @ApiPropertyOptional({
-    example: 'LOPA800101AB1',
-    deprecated: true,
-    description:
-      'Nombre anterior de `taxId`, con las mismas reglas. Si llegan los dos, deben tener el mismo valor.',
-  })
-  @IsOptional()
-  @Transform(normalizeRfc)
-  @IsString(RFC)
-  @Matches(RFC_FORMAT, RFC)
-  rfc?: string;
 }
 
 /**

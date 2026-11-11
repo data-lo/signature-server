@@ -46,7 +46,9 @@ export interface IntegrationRawRequest {
  * campos en silencio, y un cliente que los manda tiene que enterarse de que no sirven. Se mira el
  * query, los headers de cuenta activa, el primer nivel del body y, dentro de `payload` (que en
  * multipart llega como JSON en texto), su primer nivel, `creator`, `document` y cada participante.
- * `taxId` sólo se admite dentro de un participante, donde es el RFC del firmante.
+ *
+ * En un participante, `taxId` no cuenta: ahí es el RFC del firmante avanzado (contrato propio,
+ * validado por `IntegrationPayloadValidator`), no el de la organización.
  *
  * @param request - Headers, query y body tal como llegaron.
  * @returns Nada.

@@ -22,8 +22,9 @@ import { IntegrationApprovalNotSupportedException } from '../exceptions/integrat
  *   colaboradores, que es lo que el flujo necesita para respetarlo. En uno no secuencial se
  *   conserva el orden del arreglo.
  * - El nombre del documento es el del PDF recibido.
- * - El `taxId` de un firmante (o `rfc`, su nombre anterior; sólo `ADVANCED`, ya validado) viaja como
- *   `signerTaxId`: es contra lo que se compara el RFC de su certificado al firmar.
+ * - El `taxId` de un firmante (sólo `ADVANCED`, ya validado) viaja como `signerTaxId`: es contra lo
+ *   que se compara el RFC de su certificado al firmar. `rfc` ya no llega aquí: el validador lo
+ *   rechaza con `UNSUPPORTED_PARTICIPANT_FIELD`.
  *
  * @param payload - Payload ya validado.
  * @param fileName - Nombre del archivo PDF recibido.
@@ -83,9 +84,7 @@ export function toCreateDocumentSignaturesDto(
         signatures: isSigner ? participant.signaturePositions : undefined,
         requiresTwoFactorAuth: participant.requiresTwoFactorAuth,
         orderIndex: isSequential ? position : undefined,
-        signerTaxId: isSigner
-          ? (participant.taxId ?? participant.rfc ?? null)
-          : undefined,
+        signerTaxId: isSigner ? (participant.taxId ?? null) : undefined,
       };
     }),
   } as CreateDocumentSignaturesDto;
