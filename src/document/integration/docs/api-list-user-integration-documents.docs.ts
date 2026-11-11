@@ -1,5 +1,5 @@
 import { applyDecorators } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 import {
   IntegrationDocumentsPageResponse,
@@ -8,13 +8,14 @@ import {
 import { ApiIntegrationCommonResponses } from './api-integration-documents-common.docs';
 import { INVALID_REQUEST_EXAMPLE } from './api-integration-examples.docs';
 import {
+  AMBIGUOUS_USER_EXAMPLE,
   DOCUMENTS_PAGE_EXAMPLE,
   SCOPE_DENIED_EXAMPLE,
   USER_NOT_FOUND_EXAMPLE,
 } from './api-list-organization-integration-documents.docs';
 
 /**
- * `GET /api/v1/integration/users/:userId/documents` — documentos creados por un miembro.
+ * `GET /api/v1/integration/users/documents?email=` — documentos creados por un miembro.
  *
  * @returns Los decoradores de Swagger del endpoint.
  *
@@ -29,13 +30,7 @@ export function ApiListUserIntegrationDocuments() {
       summary:
         'Listar los documentos creados por un usuario de la organización',
       description:
-        'Devuelve una página de documentos creados por el usuario indicado. Admite la misma paginación y filtros por estatus y fechas que el listado de la organización.',
-    }),
-    ApiParam({
-      name: 'userId',
-      format: 'uuid',
-      example: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
-      description: '`users.id` del creador',
+        'Devuelve una página de documentos creados por el usuario con ese `email`, obligatorio. Admite la misma paginación y filtros por estatus y fechas que el listado de la organización. Reemplaza a `GET /users/{userId}/documents`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.',
     }),
     ApiIntegrationCommonResponses({
       forbiddenNote:
@@ -54,14 +49,21 @@ export function ApiListUserIntegrationDocuments() {
     ApiResponse({
       status: 404,
       description:
-        '`INTEGRATION_USER_NOT_FOUND`: el usuario no es miembro activo de la organización de la llave (o el id no es un UUID)',
+        '`INTEGRATION_USER_NOT_FOUND`: el correo no es de un miembro activo de la organización de la llave',
       type: IntegrationErrorResponseDto,
       examples: { userNotFound: USER_NOT_FOUND_EXAMPLE },
     }),
     ApiResponse({
+      status: 409,
+      description:
+        '`INTEGRATION_AMBIGUOUS_USER`: el correo corresponde a más de un miembro de la organización',
+      type: IntegrationErrorResponseDto,
+      examples: { ambiguousUser: AMBIGUOUS_USER_EXAMPLE },
+    }),
+    ApiResponse({
       status: 422,
       description:
-        '`INVALID_REQUEST`: algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).',
+        '`INVALID_REQUEST`: falta `email` o no es un correo válido, o algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).',
       type: IntegrationErrorResponseDto,
       examples: { invalidRequest: INVALID_REQUEST_EXAMPLE },
     }),

@@ -44,6 +44,13 @@ export const USER_NOT_FOUND_EXAMPLE = integrationErrorExample(
   'El usuario no existe en la organización',
 );
 
+/** 409 de un correo que corresponde a más de un miembro de la organización. */
+export const AMBIGUOUS_USER_EXAMPLE = integrationErrorExample(
+  'Correo de más de un usuario',
+  'INTEGRATION_AMBIGUOUS_USER',
+  'El correo corresponde a más de un usuario de la organización',
+);
+
 /**
  * `GET /api/v1/integration/documents` — documentos de la organización de la llave, o de un creador
  * con `?creatorEmail=`.
@@ -79,6 +86,13 @@ export function ApiListOrganizationIntegrationDocuments() {
         '`INTEGRATION_USER_NOT_FOUND`: `creatorEmail` no es de un miembro activo de la organización',
       type: IntegrationErrorResponseDto,
       examples: { userNotFound: USER_NOT_FOUND_EXAMPLE },
+    }),
+    ApiResponse({
+      status: 409,
+      description:
+        '`INTEGRATION_AMBIGUOUS_USER`: `creatorEmail` corresponde a más de un miembro de la organización',
+      type: IntegrationErrorResponseDto,
+      examples: { ambiguousUser: AMBIGUOUS_USER_EXAMPLE },
     }),
     ApiResponse({
       status: 422,

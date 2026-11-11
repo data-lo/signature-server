@@ -309,8 +309,12 @@ describe('API de integración de documentos (e2e)', () => {
       createdBy: string,
       accountId: string,
       dto: {
-        documentData: { fileName: string };
-        collaborators: { email: string; collaboratorType: string }[];
+        documentData: { fileName: string; signatureType?: string };
+        collaborators: {
+          email: string;
+          collaboratorType: string;
+          signerTaxId?: string | null;
+        }[];
       },
       file: Express.Multer.File,
       ip: string,
@@ -341,9 +345,21 @@ describe('API de integración de documentos (e2e)', () => {
           );
           await origin?.onDocumentSaved?.(manager, saved);
           for (const collaborator of dto.collaborators) {
+            // Del flujo real sólo se imita lo que decide el RFC: el tipo FIEL del firmante y su
+            // `signerTaxId`. En los demás casos, el tipo queda sin guardar.
+            const isFielSigner =
+              collaborator.collaboratorType === 'SIGNER' &&
+              dto.documentData.signatureType === 'ADVANCED';
             await manager.query(
-              `INSERT INTO collaborators (document_id, email, colaborator_type, ip_address) VALUES ($1, $2, $3, $4)`,
-              [saved.id, collaborator.email, collaborator.collaboratorType, ip],
+              `INSERT INTO collaborators (document_id, email, colaborator_type, ip_address, signature_type, tax_id) VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                saved.id,
+                collaborator.email,
+                collaborator.collaboratorType,
+                ip,
+                isFielSigner ? 'FIEL' : null,
+                collaborator.signerTaxId ?? null,
+              ],
             );
           }
           if (flowFailures > 0) {
@@ -888,54 +904,110 @@ describe('API de integración de documentos (e2e)', () => {
     });
   });
 
-  describe('GET /integration/users/:userId/documents', () => {
-    const userUrl = (userKey: string) =>
-      `/api/v1/integration/users/${ids[`user:${userKey}`] ?? userKey}/documents`;
+  describe('GET /integration/users/documents?email=', () => {
+    const userUrl = (email: string) =>
+      `/api/v1/integration/users/documents?email=${encodeURIComponent(email)}`;
+    const emailOf = (userKey: string) => `${userKey}@integration-e2e.test`;
 
-    it('con ORGANIZATION devuelve los documentos creados por cualquier miembro activo', async () => {
+    it('con ORGANIZATION devuelve los documentos del miembro, sin distinguir mayúsculas ni exponer su id', async () => {
       const response = await request(app.getHttpServer())
-        .get(userUrl('beto'))
+        .get(userUrl('Beto@Integration-E2E.test'))
         .set(api('org1-full'))
         .expect(200);
 
       expect(
         response.body.data.items.map((item: { id: string }) => item.id),
       ).toEqual([ids['doc:beto-1']]);
+      expect(JSON.stringify(response.body)).not.toContain(ids['user:beto']);
+      expect(JSON.stringify(response.body)).not.toContain(ids['account:beto']);
     });
 
     it.each([
-      ['un usuario de otra organización', 'carla'],
-      ['una membresía dada de baja', 'dario'],
-      ['un usuario que no existe', randomUUID()],
-      ['un id que no es UUID', 'no-es-uuid'],
-    ])('responde 404 a %s, sin revelar nada', async (_label, userKey) => {
+      ['un usuario de otra organización', 'carla@integration-e2e.test'],
+      ['una membresía dada de baja', 'dario@integration-e2e.test'],
+      ['un correo que no existe', 'nadie@integration-e2e.test'],
+    ])('responde 404 a %s, sin revelar nada', async (_label, email) => {
       const response = await request(app.getHttpServer())
-        .get(userUrl(userKey))
+        .get(userUrl(email))
         .set(api('org1-full'))
         .expect(404);
       expect(response.body.error.code).toBe('INTEGRATION_USER_NOT_FOUND');
+    });
+
+    it('responde 409 si el correo es de dos miembros que difieren en mayúsculas', async () => {
+      await seedMember('gemelo', 'org1');
+      await seedMember('gemelo2', 'org1');
+      await dataSource.query(`UPDATE users SET email = $1 WHERE id = $2`, [
+        'GEMELO@integration-e2e.test',
+        ids['user:gemelo2'],
+      ]);
+
+      const response = await request(app.getHttpServer())
+        .get(userUrl('gemelo@integration-e2e.test'))
+        .set(api('org1-full'))
+        .expect(409);
+      expect(response.body.error.code).toBe('INTEGRATION_AMBIGUOUS_USER');
+    });
+
+    it.each([
+      ['sin email', '/api/v1/integration/users/documents'],
+      ['con un email inválido', '/api/v1/integration/users/documents?email=no'],
+    ])('responde 422 %s', async (_label, url) => {
+      const response = await request(app.getHttpServer())
+        .get(url)
+        .set(api('org1-full'))
+        .expect(422);
+      expect(response.body.error.code).toBe('INVALID_REQUEST');
+    });
+
+    it('rechaza userId en el query en vez de ignorarlo', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`${userUrl(emailOf('beto'))}&userId=${ids['user:beto']}`)
+        .set(api('org1-full'))
+        .expect(400);
+      expect(response.body.error.code).toBe(
+        'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
+      );
     });
 
     it('con sólo OWN consulta al actor de la llave', async () => {
       await activateOnly('org1-own');
 
       const response = await request(app.getHttpServer())
-        .get(userUrl('ana'))
+        .get(userUrl(emailOf('ana')))
         .set(api('org1-own'))
         .expect(200);
       expect(response.body.data.pagination.total).toBe(2);
     });
 
-    it('con sólo OWN no puede consultar a otro usuario, ni de su organización', async () => {
+    it('con sólo OWN responde 403 a cualquier otro correo, exista o no', async () => {
       await activateOnly('org1-own');
 
-      for (const userKey of ['beto', 'carla']) {
+      for (const userKey of ['beto', 'carla', 'nadie']) {
         const response = await request(app.getHttpServer())
-          .get(userUrl(userKey))
+          .get(userUrl(emailOf(userKey)))
           .set(api('org1-own'))
           .expect(403);
         expect(response.body.error.code).toBe('INTEGRATION_SCOPE_DENIED');
       }
+    });
+
+    it('la ruta anterior por userId responde 410 y dice cuál usar', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/api/v1/integration/users/${ids['user:beto']}/documents`)
+        .set(api('org1-full'))
+        .expect(410);
+
+      expect(response.body).toEqual({
+        success: false,
+        error: {
+          code: 'INTEGRATION_ENDPOINT_RETIRED',
+          message: expect.any(String),
+          details: {
+            replacedBy: 'GET /api/v1/integration/users/documents?email={email}',
+          },
+        },
+      });
     });
   });
 
@@ -984,9 +1056,10 @@ describe('API de integración de documentos (e2e)', () => {
     });
   });
 
-  describe('POST /integration/documents/:documentId/collaborators/:collaboratorId/resend-invitation', () => {
-    const resendUrl = (documentKey: string, collaboratorId: string) =>
-      `/api/v1/integration/documents/${ids[`doc:${documentKey}`] ?? documentKey}/collaborators/${collaboratorId}/resend-invitation`;
+  describe('POST /integration/documents/:documentId/collaborators/resend-invitation', () => {
+    const resendUrl = (documentKey: string) =>
+      `/api/v1/integration/documents/${ids[`doc:${documentKey}`] ?? documentKey}/collaborators/resend-invitation`;
+    const emailOf = (signerKey: string) => `${signerKey}@externo.test`;
     const signers: Record<string, string> = {};
 
     beforeAll(async () => {
@@ -1018,17 +1091,19 @@ describe('API de integración de documentos (e2e)', () => {
       delivered.length = 0;
     });
 
-    it('reenvía al firmante en turno, con la llave de la petición en la auditoría', async () => {
+    it('reenvía al firmante en turno por su correo, sin exponer su id y con la llave en la auditoría', async () => {
       const response = await request(app.getHttpServer())
-        .post(resendUrl('beto-1', signers['beto-fiel']))
+        .post(resendUrl('beto-1'))
         .set(api('org1-full'))
+        .send({ email: 'Beto-Fiel@Externo.test' })
         .expect(200);
 
       expect(response.body.data).toEqual({
-        collaboratorId: signers['beto-fiel'],
+        email: emailOf('beto-fiel'),
         invitationExpiresAt: '2026-12-01T00:00:00.000Z',
         emailDelivered: true,
       });
+      expect(JSON.stringify(response.body)).not.toContain(signers['beto-fiel']);
       expect(delivered).toEqual([
         {
           documentId: ids['doc:beto-1'],
@@ -1040,8 +1115,9 @@ describe('API de integración de documentos (e2e)', () => {
 
     it('409 a un firmante que todavía no está en turno', async () => {
       const response = await request(app.getHttpServer())
-        .post(resendUrl('beto-1', signers['beto-fiel-2']))
+        .post(resendUrl('beto-1'))
         .set(api('org1-full'))
+        .send({ email: emailOf('beto-fiel-2') })
         .expect(409);
       expect(response.body.error.code).toBe(
         'INTEGRATION_INVITATION_NOT_RESENDABLE',
@@ -1049,30 +1125,77 @@ describe('API de integración de documentos (e2e)', () => {
       expect(delivered).toEqual([]);
     });
 
+    it('409 si el correo es de más de un firmante del documento', async () => {
+      const [duplicate] = await dataSource.query(
+        `INSERT INTO collaborators (document_id, email, colaborator_type, signature_type, status, signing_order, ip_address)
+         VALUES ($1, $2, 'SIGNER', 'FIEL', 'PENDING', 3, '127.0.0.1') RETURNING id`,
+        [ids['doc:beto-1'], emailOf('beto-fiel-2').toUpperCase()],
+      );
+
+      try {
+        const response = await request(app.getHttpServer())
+          .post(resendUrl('beto-1'))
+          .set(api('org1-full'))
+          .send({ email: emailOf('beto-fiel-2') })
+          .expect(409);
+        expect(response.body.error.code).toBe('INTEGRATION_AMBIGUOUS_SIGNER');
+        expect(delivered).toEqual([]);
+      } finally {
+        await dataSource.query(`DELETE FROM collaborators WHERE id = $1`, [
+          duplicate.id,
+        ]);
+      }
+    });
+
     it.each([
-      [
-        'un documento de otra organización',
-        () => resendUrl('carla-1', signers['carla-fiel']),
-      ],
-      [
-        'un colaborador que no es de ese documento',
-        () => resendUrl('beto-1', signers['carla-fiel']),
-      ],
-      ['ids que no son UUID', () => resendUrl('no-es-uuid', 'tampoco')],
-    ])('404 a %s, sin revelar nada', async (_label, url) => {
+      ['un documento de otra organización', 'carla-1', 'carla-fiel'],
+      ['un correo que no firma ese documento', 'beto-1', 'carla-fiel'],
+      ['un documento que no es UUID', 'no-es-uuid', 'beto-fiel'],
+    ])('404 a %s, sin revelar nada', async (_label, documentKey, signerKey) => {
       const response = await request(app.getHttpServer())
-        .post(url())
+        .post(resendUrl(documentKey))
         .set(api('org1-full'))
+        .send({ email: emailOf(signerKey) })
         .expect(404);
       expect(response.body.error.code).toBe('INTEGRATION_SIGNER_NOT_FOUND');
+      expect(delivered).toEqual([]);
+    });
+
+    it.each([
+      ['sin email', {}],
+      ['con un email inválido', { email: 'no-es-correo' }],
+      ['con collaboratorId en lugar de email', { collaboratorId: 'abc-123' }],
+    ])('422 %s', async (_label, body) => {
+      const response = await request(app.getHttpServer())
+        .post(resendUrl('beto-1'))
+        .set(api('org1-full'))
+        .send(body)
+        .expect(422);
+      expect(response.body.error.code).toBe('INVALID_REQUEST');
+      expect(delivered).toEqual([]);
+    });
+
+    it('la ruta anterior por collaboratorId responde 410, dice cuál usar y no reenvía', async () => {
+      const response = await request(app.getHttpServer())
+        .post(
+          `/api/v1/integration/documents/${ids['doc:beto-1']}/collaborators/${signers['beto-fiel']}/resend-invitation`,
+        )
+        .set(api('org1-full'))
+        .expect(410);
+
+      expect(response.body.error.code).toBe('INTEGRATION_ENDPOINT_RETIRED');
+      expect(response.body.error.details.replacedBy).toContain(
+        '/collaborators/resend-invitation',
+      );
       expect(delivered).toEqual([]);
     });
 
     it('403 a una llave sin DOCUMENT.CREATE', async () => {
       await activateOnly('org1-own');
       const response = await request(app.getHttpServer())
-        .post(resendUrl('beto-1', signers['beto-fiel']))
+        .post(resendUrl('beto-1'))
         .set(api('org1-own'))
+        .send({ email: emailOf('beto-fiel') })
         .expect(403);
       expect(response.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
     });
@@ -1173,9 +1296,130 @@ describe('API de integración de documentos (e2e)', () => {
                 status: 'PENDING',
                 signatureType: null,
                 order: 1,
+                taxId: null,
               },
             ],
           },
+        });
+      });
+
+      describe('taxId del firmante', () => {
+        const fielSigner =
+          (taxId?: unknown) => (value: Record<string, any>) => {
+            value.document.signatureType = 'ADVANCED';
+            if (taxId !== undefined) value.participants[0].taxId = taxId;
+          };
+
+        async function storedTaxId(documentId: string) {
+          const [row] = await dataSource.query(
+            `SELECT tax_id FROM collaborators WHERE document_id = $1 AND colaborator_type = 'SIGNER'`,
+            [documentId],
+          );
+          return row.tax_id as string | null;
+        }
+
+        it('un firmante FIEL lo registra normalizado y se devuelve, también en un reintento', async () => {
+          const idempotencyKey = `tax-id-${randomUUID()}`;
+          const options = { body: payload(fielSigner(' lopa 800101 ab1 ')) };
+
+          const created = await postDocument(
+            'org1-full',
+            idempotencyKey,
+            options,
+          ).expect(201);
+          expect(created.body.data.participants[0]).toMatchObject({
+            signatureType: 'FIEL',
+            taxId: 'LOPA800101AB1',
+          });
+          expect(await storedTaxId(created.body.data.id)).toBe('LOPA800101AB1');
+
+          const replay = await postDocument(
+            'org1-full',
+            idempotencyKey,
+            options,
+          ).expect(200);
+          expect(replay.body.data.participants[0].taxId).toBe('LOPA800101AB1');
+        });
+
+        it('un firmante FIEL sin taxId se crea sin RFC', async () => {
+          const created = await postDocument(
+            'org1-full',
+            `sin-tax-id-${randomUUID()}`,
+            { body: payload(fielSigner()) },
+          ).expect(201);
+
+          expect(created.body.data.participants[0].taxId).toBeNull();
+          expect(await storedTaxId(created.body.data.id)).toBeNull();
+        });
+
+        it('no se devuelve el de un firmante que no es FIEL, aunque la columna traiga uno anterior', async () => {
+          const idempotencyKey = `no-fiel-${randomUUID()}`;
+          const created = await postDocument(
+            'org1-full',
+            idempotencyKey,
+          ).expect(201);
+          await dataSource.query(
+            `UPDATE collaborators SET tax_id = 'LOPA800101AB1', signature_type = 'SIMPLE' WHERE document_id = $1 AND colaborator_type = 'SIGNER'`,
+            [created.body.data.id],
+          );
+
+          const replay = await postDocument('org1-full', idempotencyKey).expect(
+            200,
+          );
+          expect(replay.body.data.participants[0]).toMatchObject({
+            signatureType: 'SIMPLE',
+            taxId: null,
+          });
+        });
+
+        it.each([
+          [
+            'en un firmante SIMPLE',
+            (value: Record<string, any>) => {
+              value.participants[0].taxId = 'LOPA800101AB1';
+            },
+            'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+            'participants[0].taxId',
+          ],
+          [
+            'en un firmante BIOMETRIC',
+            (value: Record<string, any>) => {
+              value.document.signatureType = 'BIOMETRIC';
+              value.participants[0].taxId = 'LOPA800101AB1';
+            },
+            'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+            'participants[0].taxId',
+          ],
+          [
+            'en un testigo de un documento FIEL',
+            (value: Record<string, any>) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[1].taxId = 'LOPA800101AB1';
+            },
+            'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+            'participants[1].taxId',
+          ],
+          [
+            'con formato inválido en un firmante FIEL',
+            fielSigner('NO-ES-RFC'),
+            'INVALID_PARTICIPANT_TAX_ID',
+            'participants[0].taxId',
+          ],
+        ])('lo rechaza %s, sin cobrar', async (_label, patch, code, field) => {
+          const before = creditsCharged;
+
+          const response = await postDocument(
+            'org1-full',
+            `tax-id-rechazado-${randomUUID()}`,
+            { body: payload(patch) },
+          ).expect(422);
+
+          expect(response.body.error).toEqual({
+            code,
+            message: expect.any(String),
+            details: expect.objectContaining({ field }),
+          });
+          expect(creditsCharged).toBe(before);
         });
       });
 
@@ -1691,6 +1935,115 @@ describe('API de integración de documentos (e2e)', () => {
           });
         });
 
+        describe('RFC del firmante avanzado (taxId)', () => {
+          const advanced = (patch: (v: Record<string, any>) => void) =>
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              patch(value);
+            });
+
+          it('acepta taxId en un firmante ADVANCED y lo guarda normalizado en el colaborador', async () => {
+            const response = await postDocument(
+              'org1-full',
+              `tax-id-${randomUUID()}`,
+              {
+                body: advanced(
+                  (v) => (v.participants[0].taxId = ' lopa800101ab1 '),
+                ),
+              },
+            ).expect(201);
+
+            const rows = await dataSource.query(
+              `SELECT email, tax_id FROM collaborators WHERE document_id = $1 ORDER BY email`,
+              [response.body.data.id],
+            );
+            expect(rows).toEqual([
+              { email: 'eva@correo.test', tax_id: null },
+              { email: 'luis@correo.test', tax_id: 'LOPA800101AB1' },
+            ]);
+          });
+
+          it.each([
+            [
+              'rfc (campo retirado) en un firmante',
+              (v: any) => {
+                v.document.signatureType = 'ADVANCED';
+                v.participants[0].rfc = 'LOPA800101AB1';
+              },
+              'UNSUPPORTED_PARTICIPANT_FIELD',
+              'participants[0].rfc',
+            ],
+            [
+              'rfc (campo retirado) en un documento simple',
+              (v: any) => (v.participants[0].rfc = 'LOPA800101AB1'),
+              'UNSUPPORTED_PARTICIPANT_FIELD',
+              'participants[0].rfc',
+            ],
+            [
+              'un taxId con formato inválido',
+              (v: any) => {
+                v.document.signatureType = 'ADVANCED';
+                v.participants[0].taxId = 'NO-ES-RFC';
+              },
+              'INVALID_PARTICIPANT_TAX_ID',
+              'participants[0].taxId',
+            ],
+            [
+              'taxId en un documento simple',
+              (v: any) => (v.participants[0].taxId = 'LOPA800101AB1'),
+              'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+              'participants[0].taxId',
+            ],
+            [
+              'taxId en un testigo',
+              (v: any) => {
+                v.document.signatureType = 'ADVANCED';
+                v.participants[1].taxId = 'LOPA800101AB1';
+              },
+              'PARTICIPANT_TAX_ID_NOT_ALLOWED',
+              'participants[1].taxId',
+            ],
+          ])(
+            'rechaza %s con 422, sin cobrar ni crear nada',
+            async (_label, patch, code, field) => {
+              const before = creditsCharged;
+
+              const response = await postDocument(
+                'org1-full',
+                `tax-id-invalido-${randomUUID()}`,
+                { body: payload(patch) },
+              ).expect(422);
+
+              expect(response.body).toEqual({
+                success: false,
+                error: {
+                  code,
+                  message: expect.any(String),
+                  details: expect.objectContaining({ field }),
+                },
+              });
+              expect(creditsCharged).toBe(before);
+            },
+          );
+
+          it('el error de rfc dice qué campo usar', async () => {
+            const response = await postDocument(
+              'org1-full',
+              `rfc-retirado-${randomUUID()}`,
+              {
+                body: advanced(
+                  (v) => (v.participants[0].rfc = 'LOPA800101AB1'),
+                ),
+              },
+            ).expect(422);
+
+            expect(response.body.error.details).toEqual({
+              field: 'participants[0].rfc',
+              replacedBy: 'participants[0].taxId',
+            });
+          });
+        });
+
         it('un documento no secuencial puede omitir order', async () => {
           await postDocument('org1-full', `no-secuencial-${randomUUID()}`, {
             body: payload((value) => {
@@ -2022,17 +2375,17 @@ describe('API de integración de documentos (e2e)', () => {
       [
         '/api/v1/integration/documents',
         'get',
-        ['200', '400', '401', '403', '404', '422'],
+        ['200', '400', '401', '403', '404', '409', '422'],
       ],
       [
-        '/api/v1/integration/documents/{documentId}/collaborators/{collaboratorId}/resend-invitation',
+        '/api/v1/integration/documents/{documentId}/collaborators/resend-invitation',
         'post',
-        ['200', '400', '401', '403', '404', '409', '429'],
+        ['200', '400', '401', '403', '404', '409', '422', '429'],
       ],
       [
-        '/api/v1/integration/users/{userId}/documents',
+        '/api/v1/integration/users/documents',
         'get',
-        ['200', '400', '401', '403', '404', '422'],
+        ['200', '400', '401', '403', '404', '409', '422'],
       ],
       [
         '/api/v1/integration/documents',
@@ -2069,6 +2422,29 @@ describe('API de integración de documentos (e2e)', () => {
         ).toEqual(expect.objectContaining({ in: 'header', name: 'X-API-Key' }));
       },
     );
+
+    it('el participante documenta taxId (RFC, 12 o 13 caracteres) y ya no rfc', () => {
+      const participant = swagger.components?.schemas?.[
+        'IntegrationParticipantDto'
+      ] as Record<string, any>;
+
+      expect(participant.properties).not.toHaveProperty('rfc');
+      expect(participant.properties.taxId).toEqual(
+        expect.objectContaining({
+          type: 'string',
+          minLength: 12,
+          maxLength: 13,
+          pattern: expect.any(String),
+          description: expect.stringContaining('ADVANCED'),
+        }),
+      );
+      expect(participant.required ?? []).not.toContain('taxId');
+      // Ningún ejemplo ni descripción publicada vuelve a enseñar el campo retirado como válido.
+      const operation = (
+        swagger.paths['/api/v1/integration/documents'] as Record<string, any>
+      ).post;
+      expect(JSON.stringify(operation.requestBody)).not.toMatch(/"rfc"/);
+    });
 
     it('la creación documenta Idempotency-Key y multipart', () => {
       const operation = (

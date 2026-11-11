@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  GoneException,
   HttpStatus,
   NotFoundException,
   UnprocessableEntityException,
@@ -23,6 +24,8 @@ export enum INTEGRATION_DOCUMENT_ERROR_CODE_ENUM {
   SIGNER_NOT_FOUND = 'INTEGRATION_SIGNER_NOT_FOUND',
   INVITATION_NOT_RESENDABLE = 'INTEGRATION_INVITATION_NOT_RESENDABLE',
   AMBIGUOUS_SIGNER = 'INTEGRATION_AMBIGUOUS_SIGNER',
+  AMBIGUOUS_USER = 'INTEGRATION_AMBIGUOUS_USER',
+  ENDPOINT_RETIRED = 'INTEGRATION_ENDPOINT_RETIRED',
   WAITING_FOR_PREVIOUS_SIGNER = 'WAITING_FOR_PREVIOUS_SIGNER',
 }
 
@@ -57,6 +60,42 @@ export class IntegrationUserNotFoundException extends NotFoundException {
         INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.USER_NOT_FOUND,
       ),
     );
+  }
+}
+
+/**
+ * El correo corresponde a más de un miembro de la organización. `users.email` es único pero distingue
+ * mayúsculas, así que dos cuentas pueden diferir sólo en eso: no se adivina a cuál se refiere.
+ */
+export class IntegrationAmbiguousUserException extends ConflictException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.CONFLICT,
+        'Conflict',
+        'El correo corresponde a más de un usuario de la organización',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.AMBIGUOUS_USER,
+      ),
+    );
+  }
+}
+
+/**
+ * Una ruta que identificaba al usuario o al colaborador por su id interno se retiró del contrato:
+ * ahora se identifican por correo. Responde `410` y dice qué ruta usar, para que un cliente
+ * desactualizado no confunda el error con «ese usuario no existe».
+ */
+export class IntegrationEndpointRetiredException extends GoneException {
+  constructor(replacedBy: string) {
+    super({
+      ...buildApiKeyErrorBody(
+        HttpStatus.GONE,
+        'Gone',
+        'Esta ruta ya no forma parte de la API: ahora se identifica a la persona por su correo',
+        INTEGRATION_DOCUMENT_ERROR_CODE_ENUM.ENDPOINT_RETIRED,
+      ),
+      details: { replacedBy },
+    });
   }
 }
 

@@ -37,9 +37,55 @@ function errorsFor(
  * dejaron de existir en el contrato. Un cliente viejo que los siga mandando no recibe un error:
  * `whitelist: true` del `ValidationPipe` global los descarta antes de llegar al caso de uso.
  */
-describe('CollaboratorPayloadDto sin identificador fiscal', () => {
-  it('acepta un testigo sin RFC', async () => {
-    expect(await validateDto(baseWitness())).toHaveLength(0);
+/** Historia "Validar RFC del firmante FIEL contra el certificado al momento de firmar". */
+describe('CollaboratorPayloadDto.signerTaxId', () => {
+  const signerWith = (signerTaxId: unknown) =>
+    baseWitness({
+      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+      signerTaxId,
+    });
+
+  it('normaliza espacios y mayúsculas antes de validar', async () => {
+    const dto = plainToInstance(
+      CollaboratorPayloadDto,
+      signerWith(' peaj 800101 abc '),
+    );
+
+    expect(dto.signerTaxId).toBe('PEAJ800101ABC');
+    expect(errorsFor(await validate(dto), 'signerTaxId')).toHaveLength(0);
+  });
+
+  it.each([
+    ['ausente', undefined],
+    ['en null', null],
+    ['vacío', ''],
+    ['solo espacios', '   '],
+    ['de persona moral', 'ACM010101AAA'],
+  ])('acepta un RFC %s', async (_name, value) => {
+    const errors = await validateDto(signerWith(value));
+
+    expect(errorsFor(errors, 'signerTaxId')).toHaveLength(0);
+  });
+
+  it.each(['ABC', 'PEAJ80010', 'PEAJ800101ABCD', '1234567890123', 12345])(
+    'rechaza el formato inválido %s',
+    async (value) => {
+      const errors = await validateDto(signerWith(value));
+
+      expect(errorsFor(errors, 'signerTaxId').length).toBeGreaterThan(0);
+    },
+  );
+});
+
+describe('CollaboratorPayloadDto.taxId', () => {
+  it.each([
+    ['sin el campo', baseWitness()],
+    ['en null', baseWitness({ taxId: null })],
+    ['vacío', baseWitness({ taxId: '' })],
+  ])('acepta un VIEWER %s de taxId', async (_name, payload) => {
+    const errors = await validateDto(payload);
+
+    expect(errorsFor(errors, 'taxId')).toHaveLength(0);
   });
 
   it.each([

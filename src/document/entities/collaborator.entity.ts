@@ -82,10 +82,9 @@ export class CollaboratorEntity {
   lastName: string | null;
 
   /**
-   * Identificador fiscal esperado del firmante avanzado (en México, su RFC). Sólo lo llena la API
-   * de integración, para compararlo contra el titular del certificado de e.firma; en la
-   * plataforma no se pide a nadie. Testigos anteriores a la historia "Eliminar campo RFC de la
-   * sección de Testigos" pueden conservar el que se capturó entonces; ya no se lee ni se escribe.
+   * Identificador fiscal del colaborador (en México, su RFC). En un firmante FIEL es opcional y,
+   * si está, al firmar debe coincidir con el del certificado de e.firma. Un firmante sin firma
+   * avanzada nunca lo lleva.
    */
   @Column({ name: 'tax_id', nullable: true })
   taxId: string | null;

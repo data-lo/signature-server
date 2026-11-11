@@ -4,6 +4,7 @@ import { DOCUMENT_STATUS_ENUM } from '../../enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
 import { USER_LIFECYCLE_STATUS_ENUM } from 'src/user/enums/user-lifecycle-status.enum';
 import {
+  IntegrationAmbiguousSignerException,
   IntegrationInvitationNotResendableException,
   IntegrationSignerNotFoundException,
 } from '../exceptions/integration-document.exceptions';
@@ -36,17 +37,22 @@ describe('ResendIntegrationSigningInvitationUseCase', () => {
     signers = [
       {
         id: 'c-1',
+        email: 'prov@correo.com',
         colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
         status: COLLABORATOR_STATUS_ENUM.PENDING,
         signatureType: SIGNATURE_TYPE_ENUM.SIMPLE,
         signingOrder: 1,
         accountId: 'acc-prov',
         account: {
-          user: { lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED },
+          user: {
+            email: 'prov@correo.com',
+            lifecycleStatus: USER_LIFECYCLE_STATUS_ENUM.PROVISIONED,
+          },
         },
       },
       {
         id: 'c-2',
+        email: 'fiel@correo.com',
         colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
         status: COLLABORATOR_STATUS_ENUM.PENDING,
         signatureType: SIGNATURE_TYPE_ENUM.FIEL,
@@ -72,12 +78,12 @@ describe('ResendIntegrationSigningInvitationUseCase', () => {
 
   it('busca el documento sólo en la organización de la llave y reenvía con el apiKeyId en la auditoría', async () => {
     await expect(
-      useCase.execute(API_CLIENT, 'd-1', 'c-1', METADATA),
+      useCase.execute(API_CLIENT, 'd-1', ' PROV@correo.com ', METADATA),
     ).resolves.toEqual({
       success: true,
       message: 'Invitación reenviada al correo del firmante',
       data: {
-        collaboratorId: 'c-1',
+        email: 'prov@correo.com',
         invitationExpiresAt: new Date('2026-11-26T00:00:00.000Z'),
         emailDelivered: true,
       },
@@ -99,18 +105,34 @@ describe('ResendIntegrationSigningInvitationUseCase', () => {
     );
   });
 
-  it('la respuesta nunca lleva el enlace ni el token', async () => {
-    const result = await useCase.execute(API_CLIENT, 'd-1', 'c-1', METADATA);
-    expect(JSON.stringify(result)).not.toMatch(/sign\/|token|url/i);
+  it('la respuesta nunca lleva el enlace, el token ni el id del colaborador', async () => {
+    const result = await useCase.execute(
+      API_CLIENT,
+      'd-1',
+      'prov@correo.com',
+      METADATA,
+    );
+    expect(JSON.stringify(result)).not.toMatch(
+      /sign\/|token|url|collaboratorId|c-1/i,
+    );
+  });
+
+  it('409 si más de un firmante tiene ese correo, sin reenviar nada', async () => {
+    signers[1].email = 'PROV@correo.com';
+
+    await expect(
+      useCase.execute(API_CLIENT, 'd-1', 'prov@correo.com', METADATA),
+    ).rejects.toBeInstanceOf(IntegrationAmbiguousSignerException);
+    expect(delivery.deliver).not.toHaveBeenCalled();
   });
 
   it.each([
     ['el documento es de otra organización', () => (document = null)],
-    ['el colaborador no es firmante del documento', () => (signers = [])],
+    ['ningún firmante del documento tiene ese correo', () => (signers = [])],
   ])('404 si %s', async (_case, mutate) => {
     mutate();
     await expect(
-      useCase.execute(API_CLIENT, 'd-1', 'c-1', METADATA),
+      useCase.execute(API_CLIENT, 'd-1', 'prov@correo.com', METADATA),
     ).rejects.toBeInstanceOf(IntegrationSignerNotFoundException);
   });
 
@@ -118,25 +140,25 @@ describe('ResendIntegrationSigningInvitationUseCase', () => {
     [
       'el documento ya no espera firmas',
       () => (document!.status = DOCUMENT_STATUS_ENUM.SIGNED),
-      'c-1',
+      'prov@correo.com',
     ],
     [
       'el firmante ya respondió',
       () => (signers[0].status = COLLABORATOR_STATUS_ENUM.SIGNED),
-      'c-1',
+      'prov@correo.com',
     ],
-    ['todavía no es su turno', () => undefined, 'c-2'],
+    ['todavía no es su turno', () => undefined, 'fiel@correo.com'],
     [
       'firma desde su cuenta',
       () =>
         (signers[0].account.user.lifecycleStatus =
           USER_LIFECYCLE_STATUS_ENUM.ACTIVE),
-      'c-1',
+      'prov@correo.com',
     ],
-  ])('409 si %s', async (_case, mutate, collaboratorId) => {
+  ])('409 si %s', async (_case, mutate, email) => {
     mutate();
     await expect(
-      useCase.execute(API_CLIENT, 'd-1', collaboratorId, METADATA),
+      useCase.execute(API_CLIENT, 'd-1', email, METADATA),
     ).rejects.toBeInstanceOf(IntegrationInvitationNotResendableException);
     expect(delivery.deliver).not.toHaveBeenCalled();
   });
