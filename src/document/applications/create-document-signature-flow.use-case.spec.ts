@@ -16,6 +16,8 @@ import { NotificationEventsProducer } from 'src/kafka/notification-events.produc
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
+import { ReserveDocumentCreditUseCase } from 'src/billing/credits/reserve-document-credit.use-case';
+import { InsufficientDocumentCreditsException } from 'src/billing/exceptions/billing.exceptions';
 import { FILE_STATUS_ENUM } from 'src/common/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { ACCOUNT_TYPE_ENUM } from 'src/account/enums/account-type.enum';
@@ -84,6 +86,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let documentEventsProducer: Record<string, jest.Mock>;
   let documentTransactionService: Record<string, jest.Mock>;
   let consumeDocumentCredit: Record<string, jest.Mock>;
+  let reserveDocumentCredit: Record<string, jest.Mock>;
   let documentReviewerService: Record<string, jest.Mock>;
   let assertPlanAction: Record<string, jest.Mock>;
   let directoryCollaborators: Record<string, jest.Mock>;
@@ -272,6 +275,9 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     consumeDocumentCredit = {
       execute: jest.fn().mockResolvedValue({ id: 'consumo-1' }),
     };
+    reserveDocumentCredit = {
+      execute: jest.fn().mockResolvedValue({ id: 'reserva-1' }),
+    };
     /**
      * Devuelve la cuenta PERSONAL del aprobador ya validado: qué hace que un aprobador sea válido
      * —miembro activo con `DOCUMENT.APPROVE`— tiene su propia suite en
@@ -326,6 +332,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         {
           provide: ConsumeDocumentCreditUseCase,
           useValue: consumeDocumentCredit,
+        },
+        {
+          provide: ReserveDocumentCreditUseCase,
+          useValue: reserveDocumentCredit,
         },
         {
           provide: DocumentReviewerService,
@@ -501,7 +511,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       ).toBe(true);
     });
 
-    it('anota el consumo de crédito como BIOMETRIC', async () => {
+    it('anota la reserva del crédito como BIOMETRIC', async () => {
       await useCase.execute(
         'creator-1',
         'account-1',
@@ -510,7 +520,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
         '127.0.0.1',
       );
 
-      expect(consumeDocumentCredit.execute).toHaveBeenCalledWith(
+      expect(reserveDocumentCredit.execute).toHaveBeenCalledWith(
         expect.objectContaining({
           signatureType: BILLING_SIGNATURE_TYPE_ENUM.BIOMETRIC,
         }),
@@ -648,6 +658,55 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       }),
       expect.anything(),
     );
+  });
+
+  /**
+   * Un documento biométrico no se cobra al crearse: su crédito documental se RESERVA en la misma
+   * transacción y se consume cuando se completa (`FinalizeBiometricSignatureCreditsUseCase`).
+   */
+  it('un documento biométrico reserva su crédito documental en la transacción del alta, sin consumirlo', async () => {
+    await useCase.execute(
+      'creator-1',
+      'account-1',
+      biometricDto,
+      file,
+      '127.0.0.1',
+    );
+
+    expect(reserveDocumentCredit.execute).toHaveBeenCalledWith(
+      {
+        documentId: expect.any(String),
+        accountId: 'account-1',
+        userId: 'creator-1',
+        signatureType: BILLING_SIGNATURE_TYPE_ENUM.BIOMETRIC,
+      },
+      manager,
+    );
+    expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+  });
+
+  it('sin saldo para la reserva, el documento biométrico no se crea', async () => {
+    reserveDocumentCredit.execute.mockRejectedValue(
+      new InsufficientDocumentCreditsException(1, 0),
+    );
+
+    await expect(
+      useCase.execute(
+        'creator-1',
+        'account-1',
+        biometricDto,
+        file,
+        '127.0.0.1',
+      ),
+    ).rejects.toBeInstanceOf(InsufficientDocumentCreditsException);
+    expect(collaboratorRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('los documentos no biométricos conservan el consumo inmediato', async () => {
+    await useCase.execute('creator-1', 'account-1', baseDto, file, '127.0.0.1');
+
+    expect(consumeDocumentCredit.execute).toHaveBeenCalledTimes(1);
+    expect(reserveDocumentCredit.execute).not.toHaveBeenCalled();
   });
 
   /**

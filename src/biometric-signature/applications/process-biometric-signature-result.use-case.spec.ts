@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
+import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
 import { BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM } from '../enums/biometric-signature-attempt-status.enum';
 import { ProcessBiometricSignatureResultUseCase } from './process-biometric-signature-result.use-case';
 
@@ -27,36 +28,58 @@ function payload(overrides: Record<string, unknown> = {}) {
 
 describe('ProcessBiometricSignatureResultUseCase', () => {
   let attempt: Record<string, unknown>;
-  let attemptRepository: { update: jest.Mock };
+  let attemptRepository: { update: jest.Mock; find: jest.Mock };
   let collaboratorRepository: { findOne: jest.Mock };
+  let documentRepository: { findOne: jest.Mock };
   let signDocument: { executeBiometric: jest.Mock };
+  let finalizeCredits: {
+    onSignatureSucceeded: jest.Mock;
+    onAttemptFailed: jest.Mock;
+  };
   let useCase: ProcessBiometricSignatureResultUseCase;
 
   beforeEach(() => {
     attempt = {
       id: 'a-1',
+      documentId: 'd-1',
       collaboratorId: 'c-1',
       userId: 'u-1',
       status: BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.IN_PROGRESS,
     };
     attemptRepository = {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      find: jest.fn().mockResolvedValue([]),
     };
-    collaboratorRepository = {
+    documentRepository = {
       findOne: jest
         .fn()
-        .mockResolvedValue({
-          id: 'c-1',
-          status: COLLABORATOR_STATUS_ENUM.PENDING,
-        }),
+        .mockResolvedValue({ id: 'd-1', status: DOCUMENT_STATUS_ENUM.SIGNED }),
+    };
+    finalizeCredits = {
+      onSignatureSucceeded: jest.fn().mockResolvedValue({
+        biometricConsumed: true,
+        documentConsumed: false,
+      }),
+      onAttemptFailed: jest.fn().mockResolvedValue(true),
+    };
+    collaboratorRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'c-1',
+        status: COLLABORATOR_STATUS_ENUM.PENDING,
+      }),
     };
     signDocument = {
-      executeBiometric: jest.fn().mockResolvedValue({ success: true }),
+      executeBiometric: jest.fn().mockResolvedValue({
+        success: true,
+        data: { id: 'd-1', documentCompleted: false },
+      }),
     };
     useCase = new ProcessBiometricSignatureResultUseCase(
       attemptRepository as never,
       collaboratorRepository as never,
+      documentRepository as never,
       signDocument as never,
+      finalizeCredits as never,
     );
   });
 
@@ -199,6 +222,145 @@ describe('ProcessBiometricSignatureResultUseCase', () => {
       signDocument.executeBiometric.mockRejectedValue(new Error('MinIO caído'));
 
       await expect(run()).rejects.toThrow('MinIO caído');
+    });
+  });
+
+  describe('créditos biométricos', () => {
+    it('firma biométrica exitosa: consume el crédito del intento, sin el documental si faltan firmantes', async () => {
+      await run();
+
+      expect(finalizeCredits.onSignatureSucceeded).toHaveBeenCalledWith({
+        biometricSignatureAttemptId: 'a-1',
+        documentId: 'd-1',
+        documentCompleted: false,
+      });
+      expect(finalizeCredits.onAttemptFailed).not.toHaveBeenCalled();
+    });
+
+    it('documento biométrico completado: pide consumir también el crédito documental', async () => {
+      signDocument.executeBiometric.mockResolvedValue({
+        success: true,
+        data: { id: 'd-1', documentCompleted: true },
+      });
+
+      await run();
+
+      expect(finalizeCredits.onSignatureSucceeded).toHaveBeenCalledWith(
+        expect.objectContaining({ documentCompleted: true }),
+      );
+    });
+
+    it('webhook de aprobación repetido: no vuelve a firmar y sólo reintenta el cobro idempotente', async () => {
+      attempt.status = BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.APPROVED;
+      collaboratorRepository.findOne.mockResolvedValue({
+        id: 'c-1',
+        status: COLLABORATOR_STATUS_ENUM.SIGNED,
+      });
+
+      await run();
+      await run();
+
+      expect(signDocument.executeBiometric).not.toHaveBeenCalled();
+      expect(finalizeCredits.onSignatureSucceeded).toHaveBeenCalledTimes(2);
+      expect(finalizeCredits.onSignatureSucceeded).toHaveBeenLastCalledWith({
+        biometricSignatureAttemptId: 'a-1',
+        documentId: 'd-1',
+        documentCompleted: true,
+      });
+    });
+
+    it('si el cobro falla, el error se propaga para que Didit reintente', async () => {
+      finalizeCredits.onSignatureSucceeded.mockRejectedValue(
+        new Error('lote inconsistente'),
+      );
+
+      await expect(run()).rejects.toThrow('lote inconsistente');
+    });
+
+    it('perder el claim contra otra entrega que sí firmó cobra igual (idempotente) y no libera', async () => {
+      signDocument.executeBiometric.mockRejectedValue(
+        new BadRequestException('Ya respondiste a esta solicitud de firma'),
+      );
+      collaboratorRepository.findOne
+        .mockResolvedValueOnce({
+          id: 'c-1',
+          status: COLLABORATOR_STATUS_ENUM.PENDING,
+        })
+        .mockResolvedValueOnce({
+          id: 'c-1',
+          status: COLLABORATOR_STATUS_ENUM.SIGNED,
+        });
+
+      await run();
+
+      expect(finalizeCredits.onSignatureSucceeded).toHaveBeenCalledTimes(1);
+      expect(finalizeCredits.onAttemptFailed).not.toHaveBeenCalled();
+    });
+
+    it('aprobada pero sin firma registrada (rechazo de negocio): libera el crédito del intento', async () => {
+      signDocument.executeBiometric.mockRejectedValue(
+        new BadRequestException('El documento cambió'),
+      );
+
+      await run();
+
+      expect(finalizeCredits.onSignatureSucceeded).not.toHaveBeenCalled();
+      expect(finalizeCredits.onAttemptFailed).toHaveBeenCalledWith({
+        biometricSignatureAttemptId: 'a-1',
+        reason: 'SIGNATURE_NOT_REGISTERED',
+      });
+    });
+
+    it('libera el crédito de las otras sesiones abiertas que la firma deja sin uso', async () => {
+      attemptRepository.find.mockResolvedValue([{ id: 'a-2' }]);
+
+      await run();
+
+      expect(finalizeCredits.onAttemptFailed).toHaveBeenCalledWith({
+        biometricSignatureAttemptId: 'a-2',
+        reason: 'SIGNED_WITH_ANOTHER_ATTEMPT',
+      });
+    });
+
+    it.each([
+      ['Declined', 'DIDIT_DECLINED'],
+      ['Expired', 'DIDIT_EXPIRED'],
+      ['Algo Nuevo', 'DIDIT_FAILED'],
+    ])('%s libera el crédito biométrico del intento', async (didit, reason) => {
+      await run({ status: didit, decision: undefined });
+
+      expect(finalizeCredits.onAttemptFailed).toHaveBeenCalledWith({
+        biometricSignatureAttemptId: 'a-1',
+        reason,
+      });
+      expect(finalizeCredits.onSignatureSucceeded).not.toHaveBeenCalled();
+    });
+
+    it('webhook de rechazo repetido: la segunda entrega no libera de nuevo', async () => {
+      await run({ status: 'Declined', decision: undefined });
+      attempt.status = BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.DECLINED;
+
+      await run({ status: 'Declined', decision: undefined });
+
+      expect(finalizeCredits.onAttemptFailed).toHaveBeenCalledTimes(1);
+    });
+
+    it('si otra entrega ganó el cierre, ésta no libera', async () => {
+      attemptRepository.update.mockResolvedValue({ affected: 0 });
+
+      await run({ status: 'Declined', decision: undefined });
+
+      expect(finalizeCredits.onAttemptFailed).not.toHaveBeenCalled();
+    });
+
+    it('un fallo al liberar no tumba la entrega de un rechazo', async () => {
+      finalizeCredits.onAttemptFailed.mockRejectedValue(
+        new Error('base caída'),
+      );
+
+      await expect(
+        run({ status: 'Declined', decision: undefined }),
+      ).resolves.toBeUndefined();
     });
   });
 

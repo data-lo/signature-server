@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, MoreThan, Repository } from 'typeorm';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { SubscriptionBillingHistoryEntity } from '../subscriptions/subscription-billing-history.entity';
 import { BillingOwnerService } from '../profiles/billing-owner.service';
@@ -81,6 +82,7 @@ function accessWithoutProfile(owner: BillingOwner): BillingAccessResponse {
     currentPeriodStart: null,
     currentPeriodEnd: null,
     creditsAvailable: 0,
+    biometricCreditsAvailable: 0,
     actions,
     limits,
   };
@@ -148,15 +150,23 @@ export class GetBillingAccessUseCase {
     }
 
     // No dependen entre sí, y este camino se recorre en cada carga del dashboard.
-    const [creditsAvailable, billingSource] = await Promise.all([
-      this.contarCreditosDisponibles(profile.id),
-      this.resolverOrigenDelUltimoCobro(profile.id),
-    ]);
+    const [creditsAvailable, biometricCreditsAvailable, billingSource] =
+      await Promise.all([
+        this.contarCreditosDisponibles(
+          profile.id,
+          CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+        ),
+        this.contarCreditosDisponibles(
+          profile.id,
+          CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+        ),
+        this.resolverOrigenDelUltimoCobro(profile.id),
+      ]);
 
     return this.construirRespuesta(
       profile,
       owner,
-      creditsAvailable,
+      { creditsAvailable, biometricCreditsAvailable },
       billingSource,
     );
   }
@@ -164,7 +174,7 @@ export class GetBillingAccessUseCase {
   private construirRespuesta(
     profile: BillingProfileEntity,
     owner: BillingOwner,
-    creditsAvailable: number,
+    balances: { creditsAvailable: number; biometricCreditsAvailable: number },
     billingSource: BILLING_SOURCE_ENUM | null,
   ): BillingAccessResponse {
     const { actions, limits } = resolveOwnerEntitlements(
@@ -184,7 +194,8 @@ export class GetBillingAccessUseCase {
       cancelAtPeriodEnd: profile.cancelAtPeriodEnd,
       currentPeriodStart: profile.currentPeriodStart,
       currentPeriodEnd: profile.currentPeriodEnd,
-      creditsAvailable,
+      creditsAvailable: balances.creditsAvailable,
+      biometricCreditsAvailable: balances.biometricCreditsAvailable,
       // Salen del plan del PERFIL: un PAST_DUE conserva sus acciones mientras Stripe reintenta.
       actions,
       limits,
@@ -192,33 +203,44 @@ export class GetBillingAccessUseCase {
   }
 
   /**
-   * Documentos que la cuenta puede consumir HOY.
+   * Créditos de un tipo que la cuenta puede consumir HOY.
    *
    * @remarks
-   * Suma `remaining` de todos los lotes sin distinguir su origen: para quien va a firmar, un
-   * documento del periodo, uno arrastrado y uno comprado suelto valen lo mismo. El origen decide
-   * el ORDEN en que se gastan, y eso lo resuelve el consumo.
+   * Suma `remaining - reserved` de los lotes del tipo sin distinguir su origen: para quien va a
+   * firmar, un documento del periodo, uno arrastrado y uno comprado suelto valen lo mismo. El
+   * origen decide el ORDEN en que se gastan, y eso lo resuelve el consumo. Lo reservado por un
+   * proceso pendiente (un documento biométrico sin completar, un intento de Didit abierto) no está
+   * disponible.
    *
    * Se filtra por `expires_at` y no por `period_end`: un lote `ROLLOVER` es, por definición, uno
    * cuyo periodo ya terminó y que sigue siendo bueno, así que filtrar por el periodo le borraría
    * al cliente el saldo que se le prometió arrastrar.
    *
+   * Dos sumas sobre el mismo conjunto en vez de una de la diferencia: `reserved <= remaining` en
+   * cada lote (CHECK de la base), así que restarlas da lo mismo y se queda en la API del repositorio.
+   *
    * @param billingProfileId Perfil cuyo saldo se suma.
+   * @param creditType Tipo de crédito.
    * @returns El total utilizable hoy; `0` cuando no hay ningún lote vigente.
    */
   private async contarCreditosDisponibles(
     billingProfileId: string,
+    creditType: CREDIT_TYPE_ENUM,
   ): Promise<number> {
-    const vigente = { billingProfileId, remaining: MoreThan(0) };
+    const vigente = { billingProfileId, creditType, remaining: MoreThan(0) };
 
     // El arreglo es un OR: `NULL > NOW()` es nulo, no falso, y dejaría fuera los que no caducan.
-    const total = await this.creditLotRepository.sum('remaining', [
+    const where = [
       { ...vigente, expiresAt: IsNull() },
       { ...vigente, expiresAt: MoreThan(new Date()) },
+    ];
+    const [remaining, reserved] = await Promise.all([
+      this.creditLotRepository.sum('remaining', where),
+      this.creditLotRepository.sum('reserved', where),
     ]);
 
     /** `null` cuando ninguna fila casa: para el consumidor eso es no tener saldo, que es `0`. */
-    return total ?? 0;
+    return Math.max(0, (remaining ?? 0) - (reserved ?? 0));
   }
 
   /**

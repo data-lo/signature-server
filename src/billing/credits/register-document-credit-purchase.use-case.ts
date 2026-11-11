@@ -9,6 +9,9 @@ import { CheckoutOrderEntity } from '../checkout/checkout-order.entity';
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from '../enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
+import { recordLotIssued } from './credit-ledger.util';
 
 /**
  * Prioridad de gasto de un lote comprado suelto.
@@ -37,8 +40,12 @@ export const ADD_ON_LOT_PRIORITY = 0;
  * 4. Lee de Stripe las líneas cobradas y las concilia con la orden: una sola línea, el mismo
  *    Price, la misma cantidad, el mismo importe y la misma moneda. Si no cuadran, no acredita.
  * 5. Calcula los créditos: `documentsGranted × cantidad pagada`.
- * 6. En una transacción: emite el `credit_lot` con origen `ADD_ON` (`issued` = `remaining` = los
- *    créditos calculados), cierra la orden como `COMPLETED` y la vincula al lote.
+ * 6. En una transacción: emite el `credit_lot` con origen `ADD_ON` y el tipo de crédito del paquete
+ *    (`issued` = `remaining` = los créditos calculados), registra el movimiento `PURCHASE` en el
+ *    ledger, cierra la orden como `COMPLETED` y la vincula al lote.
+ *
+ * El perfil que recibe el lote es el de `metadata.billingProfileId`, que el checkout resolvió desde
+ * la cuenta activa: una cuenta personal compra para sí y una organización para todos sus miembros.
  *
  * Es la mitad de atrás de `CreateDocumentCreditCheckoutUseCase`. **No toca el plan ni el estado
  * del perfil**: comprar documentos no crea ni modifica una suscripción.
@@ -139,8 +146,9 @@ export class RegisterDocumentCreditPurchaseUseCase {
       return;
     }
 
-    const documentsGranted =
-      order.catalogPrice?.catalogItem?.documentCreditPack?.documentsGranted;
+    const pack = order.catalogPrice?.catalogItem?.documentCreditPack;
+    const documentsGranted = pack?.documentsGranted;
+    const creditType = pack?.creditType ?? CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE;
 
     // No se elige un número por defecto: de menos estafa al que pagó, de más regala documentos.
     if (!documentsGranted) {
@@ -173,8 +181,17 @@ export class RegisterDocumentCreditPurchaseUseCase {
       const creditLot = await this.issueLot(manager, {
         billingProfileId,
         creditsIssued,
+        creditType,
         stripePaymentIntentId,
       });
+
+      // Idempotente por lote: un lote reutilizado por una reentrega no duplica la compra.
+      await recordLotIssued(
+        manager,
+        creditLot,
+        CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.PURCHASE,
+        { checkoutOrderId: order.id, stripeCheckoutSessionId: session.id },
+      );
 
       await this.checkoutOrderService.markCompleted(
         {
@@ -194,7 +211,7 @@ export class RegisterDocumentCreditPurchaseUseCase {
       );
 
       this.logger.log(
-        `Compra de documentos confirmada: ${creditsIssued} documento(s) ` +
+        `Compra de créditos ${creditType} confirmada: ${creditsIssued} crédito(s) ` +
           `(${quantityPaid} × ${documentsGranted}) acreditados al perfil ${billingProfileId} ` +
           `en el lote ${creditLot.id} (orden ${order.id}).`,
       );
@@ -286,7 +303,7 @@ export class RegisterDocumentCreditPurchaseUseCase {
    * @param manager - Transacción en curso; el lote, el cierre de la orden y el vínculo entre ambos
    *   quedan o no quedan los tres juntos.
    * @param input - Perfil al que se acredita, créditos a emitir (`documentsGranted × cantidad
-   *   pagada`) y el pago que los originó.
+   *   pagada`), su tipo y el pago que los originó.
    * @returns El lote emitido, o el que ya existía para ese `payment_intent`.
    *
    * @example
@@ -294,6 +311,7 @@ export class RegisterDocumentCreditPurchaseUseCase {
    * const lot = await this.issueLot(manager, {
    *   billingProfileId: 'perfil-1',
    *   creditsIssued: 5,
+   *   creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
    *   stripePaymentIntentId: 'pi_123',
    * });
    * ```
@@ -303,6 +321,7 @@ export class RegisterDocumentCreditPurchaseUseCase {
     input: {
       billingProfileId: string;
       creditsIssued: number;
+      creditType: CREDIT_TYPE_ENUM;
       stripePaymentIntentId: string | null;
     },
   ): Promise<CreditLotEntity> {
@@ -327,8 +346,10 @@ export class RegisterDocumentCreditPurchaseUseCase {
       creditLotRepository.create({
         billingProfileId: input.billingProfileId,
         origin: CREDIT_LOT_ORIGIN_ENUM.ADD_ON,
+        creditType: input.creditType,
         issued: input.creditsIssued,
         remaining: input.creditsIssued,
+        reserved: 0,
         priority: ADD_ON_LOT_PRIORITY,
         stripePaymentIntentId: input.stripePaymentIntentId,
         stripeInvoiceId: null,

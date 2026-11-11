@@ -1,3 +1,10 @@
+/** El ledger real se prueba contra Postgres (`test/credit-reservations.e2e-spec.ts`). */
+jest.mock('../credits/credit-ledger.util', () => ({
+  ...jest.requireActual('../credits/credit-ledger.util'),
+  recordLotIssued: jest.fn().mockResolvedValue(true),
+  recordCreditLedgerEntry: jest.fn().mockResolvedValue(true),
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';

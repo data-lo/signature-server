@@ -29,6 +29,7 @@ function accesoCon(
     currentPeriodStart: null,
     currentPeriodEnd: null,
     creditsAvailable,
+    biometricCreditsAvailable: 0,
     actions,
     limits,
   };

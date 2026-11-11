@@ -46,6 +46,7 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
+import { ReserveDocumentCreditUseCase } from 'src/billing/credits/reserve-document-credit.use-case';
 import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
@@ -241,6 +242,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
+    private readonly reserveDocumentCredit: ReserveDocumentCreditUseCase,
     private readonly documentReviewerService: DocumentReviewerService,
     private readonly assertPlanAction: AssertPlanActionUseCase,
     private readonly directoryCollaborators: DirectoryCollaboratorsService,
@@ -360,8 +362,8 @@ export class CreateDocumentSignatureFlowUseCase {
      * La firma biométrica es una capacidad del plan (`graphSignatureBiometrics`), y la pantalla
      * esconde la opción cuando falta; esto la rechaza para el cliente que no la esconda. Va antes
      * de subir el archivo, como el resto de las validaciones baratas. Sin `requiredCredits`: el
-     * saldo lo decide `consumeDocumentCredit` dentro de la transacción, igual que en los otros
-     * tipos.
+     * saldo lo decide la reserva documental dentro de la transacción (`reserveDocumentCredit`),
+     * igual que el consumo en los otros tipos.
      */
     if (documentSignatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
       await this.assertPlanAction.execute({
@@ -516,21 +518,30 @@ export class CreateDocumentSignatureFlowUseCase {
        * confirmado aunque el resto del alta —los colaboradores, las notificaciones— reventara
        * después, y el usuario habría pagado por un documento que no existe.
        */
-      await this.consumeDocumentCredit.execute(
-        {
-          documentId: document.id,
-          accountId,
-          userId: createdBy,
-          /**
-           * Del documento ya guardado, no de `documentSignatureType` ni del payload: el recibo
-           * tiene que decir con qué se firma el documento que realmente quedó escrito. Si una
-           * regla futura corrigiera el tipo al guardar, el cobro seguiría contando lo mismo que
-           * la fila.
-           */
-          signatureType: toBillingSignatureType(document.signatureType),
-        },
-        manager,
-      );
+      const creditInput = {
+        documentId: document.id,
+        accountId,
+        userId: createdBy,
+        /**
+         * Del documento ya guardado, no de `documentSignatureType` ni del payload: el recibo
+         * tiene que decir con qué se firma el documento que realmente quedó escrito. Si una
+         * regla futura corrigiera el tipo al guardar, el cobro seguiría contando lo mismo que
+         * la fila.
+         */
+        signatureType: toBillingSignatureType(document.signatureType),
+      };
+
+      /**
+       * Un documento biométrico no se cobra al crearse: su crédito queda RESERVADO y se consume
+       * cuando el documento se completa, o vuelve al saldo si se rechaza o se cancela antes (ver
+       * `FinalizeBiometricSignatureCreditsUseCase`). Los demás tipos se cobran en el acto, como
+       * siempre. Los dos caminos corren en esta misma transacción: sin saldo, no hay documento.
+       */
+      if (document.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+        await this.reserveDocumentCredit.execute(creditInput, manager);
+      } else {
+        await this.consumeDocumentCredit.execute(creditInput, manager);
+      }
 
       await this.documentTransactionService.createInitial(
         document.id,

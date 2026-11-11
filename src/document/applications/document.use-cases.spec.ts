@@ -63,6 +63,7 @@ import { GetDocumentsUseCase } from './get-documents.use-case';
 import { GetDocumentUseCase } from './get-document.use-case';
 import { SignDocumentUseCase } from './sign-document.use-case';
 import { RejectDocumentUseCase } from './reject-document.use-case';
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
 import { RequestDocumentVerificationCodeUseCase } from './request-document-verification-code.use-case';
 import { VerifyDocumentCodeUseCase } from './verify-document-code.use-case';
 import { SubmitDocumentForCancellationUseCase } from './submit-document-for-cancellation.use-case';
@@ -233,6 +234,7 @@ describe('casos de uso de documentos', () => {
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
   let guestSigningAccessService: Record<string, jest.Mock>;
+  let finalizeBiometricCredits: { onDocumentClosed: jest.Mock };
   let signingInvitations: { issue: jest.Mock };
   let biometricAttemptRepository: ReturnType<typeof createMockRepository>;
   let createDocument: CreateDocumentUseCase;
@@ -433,6 +435,9 @@ describe('casos de uso de documentos', () => {
         .mockResolvedValue({ url: 'https://app.test/sign/token' }),
     };
     biometricAttemptRepository = createMockRepository();
+    finalizeBiometricCredits = {
+      onDocumentClosed: jest.fn().mockResolvedValue(0),
+    };
     signatureQrService = {
       generateAdvancedSignaturePng: jest
         .fn()
@@ -478,6 +483,10 @@ describe('casos de uso de documentos', () => {
         { provide: EmailService, useValue: emailService },
         { provide: AuditService, useValue: auditService },
         { provide: DocumentEventsProducer, useValue: documentEventsProducer },
+        {
+          provide: FinalizeBiometricSignatureCreditsUseCase,
+          useValue: finalizeBiometricCredits,
+        },
         { provide: AccountMemberService, useValue: accountMemberService },
         {
           provide: WitnessNotificationService,
@@ -3687,6 +3696,30 @@ describe('casos de uso de documentos', () => {
       expect(documentSigningService.stampRejectedWatermark).toHaveBeenCalled();
       expect(emailService.sendDocumentRejectedNotification).toHaveBeenCalled();
       expect(documentEventsProducer.emitRejected).toHaveBeenCalled();
+      // Un documento biométrico rechazado devuelve sus créditos reservados.
+      expect(finalizeBiometricCredits.onDocumentClosed).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        reason: 'DOCUMENT_REJECTED',
+      });
+    });
+
+    it('un fallo al liberar las reservas no bloquea el rechazo', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      collaboratorRepository.find.mockResolvedValue([
+        buildSigner({ userId: 'user-1' }),
+      ]);
+      finalizeBiometricCredits.onDocumentClosed.mockRejectedValue(
+        new Error('base caída'),
+      );
+
+      const result = await rejectDocument.execute(
+        'doc-1',
+        'user-1',
+        'No es válido',
+      );
+
+      expect(result.success).toBe(true);
+      expect(documentEventsProducer.emitRejected).toHaveBeenCalled();
     });
 
     /** Historia "Corregir notificaciones por correo para testigos". */
@@ -4085,6 +4118,11 @@ describe('casos de uso de documentos', () => {
         expect.objectContaining({ status: DOCUMENT_STATUS_ENUM.CANCELLED }),
       );
       expect(documentEventsProducer.emitCancelled).toHaveBeenCalled();
+      // Documento cancelado: ninguna reserva activa puede quedar bloqueando saldo.
+      expect(finalizeBiometricCredits.onDocumentClosed).toHaveBeenCalledWith({
+        documentId: 'doc-1',
+        reason: 'DOCUMENT_CANCELLED',
+      });
     });
 
     /**

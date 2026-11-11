@@ -7,6 +7,7 @@ import { AuditAction } from 'src/audit/schema/audit-document';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
 
 import { DocumentService } from '../document.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
@@ -34,6 +35,7 @@ export class RejectDocumentApprovalUseCase {
     private readonly documentService: DocumentService,
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
+    private readonly finalizeBiometricCredits: FinalizeBiometricSignatureCreditsUseCase,
   ) {}
 
   /**
@@ -90,6 +92,13 @@ export class RejectDocumentApprovalUseCase {
           status: DOCUMENT_STATUS_ENUM.REJECTED,
           rejectedAt: resolvedAt,
         },
+      );
+
+      // En la misma transacción: un documento biométrico rechazado antes de salir a firma devuelve
+      // su crédito documental reservado, o no se rechaza.
+      await this.finalizeBiometricCredits.onDocumentClosed(
+        { documentId, reason: 'DOCUMENT_APPROVAL_REJECTED' },
+        manager,
       );
 
       // Dentro de la transacción, por lo mismo que al aprobar (ver `OutboxService`).

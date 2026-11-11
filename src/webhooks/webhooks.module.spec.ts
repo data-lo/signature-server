@@ -17,6 +17,8 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
 import { CheckoutOrderEntity } from 'src/billing/checkout/checkout-order.entity';
 import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from 'src/billing/credits/document-credit-consumption.entity';
+import { CreditLedgerEntryEntity } from 'src/billing/credits/credit-ledger-entry.entity';
+import { CreditReservationEntity } from 'src/billing/credits/credit-reservation.entity';
 import { SubscriptionBillingHistoryEntity } from 'src/billing/subscriptions/subscription-billing-history.entity';
 import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
 import { ProcessBiometricSignatureResultUseCase } from 'src/biometric-signature/applications/process-biometric-signature-result.use-case';
@@ -120,6 +122,10 @@ describe('WebhooksModule', () => {
       .overrideProvider(getRepositoryToken(CreditLotEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(DocumentCreditConsumptionEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CreditLedgerEntryEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CreditReservationEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(SubscriptionBillingHistoryEntity))
       .useValue(repositoryStub)

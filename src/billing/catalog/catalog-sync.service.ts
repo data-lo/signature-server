@@ -16,6 +16,7 @@ import {
 import { CatalogItemEntity } from './catalog-item.entity';
 import { CatalogPriceEntity } from './catalog-price.entity';
 import { DocumentCreditPackEntity } from './document-credit-pack.entity';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
 import { PlanEntity } from './plan.entity';
 
 const DEFAULT_NEW_PLAN_MONTHLY_DOCUMENT_LIMIT = 1;
@@ -355,6 +356,7 @@ export class CatalogSyncService {
     price: Stripe.Price | null,
   ): Promise<DocumentCreditPackEntity | null> {
     const documentsGranted = this.resolveDocumentsGranted(price, product);
+    const creditType = this.resolveCreditType(price, product);
     const existing = await this.documentCreditPackRepository.findOne({
       where: { catalogItemId: item.id },
     });
@@ -371,6 +373,7 @@ export class CatalogSyncService {
     if (existing) {
       if (item.source === CATALOG_SOURCE_ENUM.STRIPE) {
         existing.documentsGranted = documentsGranted;
+        existing.creditType = creditType;
         return this.documentCreditPackRepository.save(existing);
       }
       return existing;
@@ -379,6 +382,7 @@ export class CatalogSyncService {
     const pack = this.documentCreditPackRepository.create({
       catalogItemId: item.id,
       documentsGranted,
+      creditType,
     });
     const created = await this.documentCreditPackRepository.save(pack);
     this.logger.log(
@@ -404,6 +408,45 @@ export class CatalogSyncService {
       );
     }
     return value;
+  }
+
+  /**
+   * Tipo de crédito que acredita el paquete, de `metadata.creditType` del Price o del Product.
+   *
+   * Sin la clave, el paquete es documental: es lo que eran todos los paquetes antes de los
+   * créditos biométricos, así que los productos existentes no necesitan tocarse en Stripe.
+   *
+   * @param price - Price recibido, si lo hay.
+   * @param product - Product del paquete.
+   * @returns `DOCUMENT_SIGNATURE` o `BIOMETRIC_SIGNATURE`.
+   *
+   * @throws {MissingDocumentPackMetadataException} Si `creditType` trae un valor desconocido:
+   *   acreditar el tipo equivocado regalaría o escatimaría un producto distinto del que se pagó.
+   *
+   * @example
+   * ```ts
+   * this.resolveCreditType(price, product); // CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE
+   * ```
+   */
+  private resolveCreditType(
+    price: Stripe.Price | null,
+    product: Stripe.Product,
+  ): CREDIT_TYPE_ENUM {
+    const raw = (
+      price?.metadata?.creditType ?? product.metadata?.creditType
+    )?.trim();
+    if (!raw) {
+      return CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE;
+    }
+
+    const value = raw.toUpperCase();
+    if (!Object.values<string>(CREDIT_TYPE_ENUM).includes(value)) {
+      throw new MissingDocumentPackMetadataException(
+        price?.id ?? product.id,
+        'creditType',
+      );
+    }
+    return value as CREDIT_TYPE_ENUM;
   }
 
   private async resolveEligiblePlanType(

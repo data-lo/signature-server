@@ -1,3 +1,13 @@
+/**
+ * Esta e2e persiste en memoria, sin query builder de inserción: el ledger real se prueba contra
+ * Postgres en `credit-reservations.e2e-spec.ts`.
+ */
+jest.mock('./../src/billing/credits/credit-ledger.util', () => ({
+  ...jest.requireActual('./../src/billing/credits/credit-ledger.util'),
+  recordLotIssued: jest.fn().mockResolvedValue(true),
+  recordCreditLedgerEntry: jest.fn().mockResolvedValue(true),
+}));
+
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';

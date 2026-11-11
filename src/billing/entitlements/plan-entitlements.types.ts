@@ -87,8 +87,16 @@ export interface BillingAccessResponse {
   cancelAtPeriodEnd: boolean;
   currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
-  /** Documentos que la cuenta puede consumir HOY, sumando todos sus lotes vigentes. */
+  /**
+   * Documentos que la cuenta puede consumir HOY: `remaining - reserved` de sus lotes documentales
+   * vigentes. Lo bloqueado por documentos biométricos pendientes no cuenta.
+   */
   creditsAvailable: number;
+  /**
+   * Créditos de firma biométrica disponibles HOY (`remaining - reserved` de sus lotes biométricos
+   * vigentes). Cada intento de Didit reserva uno; se cobra sólo si la firma queda registrada.
+   */
+  biometricCreditsAvailable: number;
   actions: PlanActions;
   limits: PlanLimits;
 }

@@ -1,0 +1,835 @@
+import { Test } from '@nestjs/testing';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
+import { config } from 'dotenv';
+import { join } from 'path';
+import { Client } from 'pg';
+import { DataSource } from 'typeorm';
+
+import { AccountEntity } from './../src/account/entities/account.entity';
+import { ConsumeDocumentCreditUseCase } from './../src/billing/credits/consume-document-credit.use-case';
+import { countAvailableCredits } from './../src/billing/credits/count-available-credits.util';
+import { recordLotIssued } from './../src/billing/credits/credit-ledger.util';
+import { CreditLotEntity } from './../src/billing/credits/credit-lot.entity';
+import { CreditReservationService } from './../src/billing/credits/credit-reservation.service';
+import { FinalizeBiometricSignatureCreditsUseCase } from './../src/billing/credits/finalize-biometric-signature-credits.use-case';
+import { ReleaseExpiredCreditReservationsUseCase } from './../src/billing/credits/release-expired-credit-reservations.use-case';
+import { ReserveBiometricSignatureCreditsUseCase } from './../src/billing/credits/reserve-biometric-signature-credits.use-case';
+import { ReserveDocumentCreditUseCase } from './../src/billing/credits/reserve-document-credit.use-case';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from './../src/billing/enums/credit-ledger-movement-type.enum';
+import { CREDIT_LOT_ORIGIN_ENUM } from './../src/billing/enums/credit-lot-origin.enum';
+import { CREDIT_TYPE_ENUM } from './../src/billing/enums/credit-type.enum';
+import {
+  InsufficientBiometricCreditsException,
+  InsufficientDocumentCreditsException,
+} from './../src/billing/exceptions/billing.exceptions';
+import { BillingOwnerService } from './../src/billing/profiles/billing-owner.service';
+import { BillingProfileEntity } from './../src/billing/profiles/billing-profile.entity';
+
+config();
+
+const DOC = CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE;
+const BIO = CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE;
+
+/**
+ * Reservas de créditos contra Postgres real (base desechable con TODAS las migraciones).
+ *
+ * Lo que sólo se prueba aquí y no con dobles: la carrera por el último crédito (la resuelve el
+ * motor), los `CHECK` que impiden saldos negativos, la FK compuesta lote–perfil–tipo, el trigger
+ * que hace inmutable el ledger, el backfill de la migración y que el saldo de cada lote puede
+ * reconstruirse sumando sus movimientos.
+ */
+describe('Reservas de créditos biométricos (e2e)', () => {
+  const DATABASE_NAME = `signature_credit_reservations_e2e_${process.pid}_${Date.now()}`;
+  const baseUrl = process.env.POSTGRES_DB_URL as string;
+  const adminUrl = baseUrl.replace(/\/[^/?]+(\?.*)?$/, '/postgres$1');
+  const databaseUrl = baseUrl.replace(
+    /\/[^/?]+(\?.*)?$/,
+    `/${DATABASE_NAME}$1`,
+  );
+  const entities = [join(__dirname, '..', 'src', '**', '*.entity{.ts,.js}')];
+
+  let dataSource: DataSource;
+  let moduleClose: () => Promise<void>;
+  let credits: CreditReservationService;
+  let reserveDocument: ReserveDocumentCreditUseCase;
+  let reserveBiometric: ReserveBiometricSignatureCreditsUseCase;
+  let finalize: FinalizeBiometricSignatureCreditsUseCase;
+  let releaseExpired: ReleaseExpiredCreditReservationsUseCase;
+  let consumeDocument: ConsumeDocumentCreditUseCase;
+
+  /** Usuario con cuenta personal y miembro de una organización, cada una con su perfil. */
+  const ids: Record<string, string> = {};
+
+  async function adminQuery(sql: string): Promise<void> {
+    const client = new Client({ connectionString: adminUrl });
+    await client.connect();
+    try {
+      await client.query(sql);
+    } finally {
+      await client.end();
+    }
+  }
+
+  async function insertReturningId(
+    sql: string,
+    params: unknown[],
+  ): Promise<string> {
+    const [row] = await dataSource.query(`${sql} RETURNING id`, params);
+    return row.id as string;
+  }
+
+  /** Emite un lote y su movimiento PURCHASE, como lo haría una compra confirmada. */
+  async function issueLot(
+    billingProfileId: string,
+    creditType: CREDIT_TYPE_ENUM,
+    quantity: number,
+  ): Promise<string> {
+    return dataSource.transaction(async (manager) => {
+      const lots = manager.getRepository(CreditLotEntity);
+      const lot = await lots.save(
+        lots.create({
+          billingProfileId,
+          origin: CREDIT_LOT_ORIGIN_ENUM.ADD_ON,
+          creditType,
+          issued: quantity,
+          remaining: quantity,
+          reserved: 0,
+          stripePaymentIntentId: `pi_${randomUUID()}`,
+        }),
+      );
+      await recordLotIssued(
+        manager,
+        lot,
+        CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.PURCHASE,
+      );
+      return lot.id;
+    });
+  }
+
+  async function lot(
+    id: string,
+  ): Promise<{ remaining: number; reserved: number }> {
+    const [row] = await dataSource.query(
+      `SELECT remaining, reserved FROM credit_lots WHERE id = $1`,
+      [id],
+    );
+    return { remaining: row.remaining, reserved: row.reserved };
+  }
+
+  async function createDocument(
+    accountId: string,
+    status = 'PENDING_SIGNATURE',
+  ): Promise<string> {
+    return insertReturningId(
+      `INSERT INTO documents (object_key, file_name, file_type, total_pages, ip_address, original_hash, created_by, account_id, total_signers, status, signature_type)
+       VALUES ($1, 'contrato.pdf', 'application/pdf', 1, '127.0.0.1', 'hash', $2, $3, 1, $4, 'BIOMETRIC')`,
+      [`${randomUUID()}.pdf`, ids.user, accountId, status],
+    );
+  }
+
+  async function createAttempt(
+    documentId: string,
+    status = 'PENDING',
+  ): Promise<string> {
+    const collaboratorId = await insertReturningId(
+      `INSERT INTO collaborators (document_id, ip_address, colaborator_type) VALUES ($1, '127.0.0.1', 'SIGNER')`,
+      [documentId],
+    );
+    return insertReturningId(
+      `INSERT INTO biometric_signature_attempts (document_id, collaborator_id, email_snapshot, provider, provider_workflow_id, document_hash, geolocation, consented_at, status)
+       VALUES ($1, $2, 'firmante@correo.mx', 'DIDIT', 'wf-kyc', 'hash', '{}', now(), $3)`,
+      [documentId, collaboratorId, status],
+    );
+  }
+
+  /** Documento biométrico con su crédito documental reservado por la cuenta indicada. */
+  async function reservedDocument(accountId: string): Promise<string> {
+    const documentId = await createDocument(accountId);
+    await reserveDocument.execute({
+      documentId,
+      accountId,
+      userId: ids.user,
+    });
+    return documentId;
+  }
+
+  async function ledgerCount(): Promise<number> {
+    const [row] = await dataSource.query(
+      `SELECT count(*)::int AS n FROM credit_ledger_entries`,
+    );
+    return row.n;
+  }
+
+  beforeAll(async () => {
+    await adminQuery(`CREATE DATABASE "${DATABASE_NAME}"`);
+
+    dataSource = new DataSource({
+      type: 'postgres',
+      url: databaseUrl,
+      entities,
+      migrations: [join(__dirname, '..', 'src', 'migrations', '*{.ts,.js}')],
+      migrationsTransactionMode: 'each',
+    });
+    await dataSource.initialize();
+    await dataSource.runMigrations();
+
+    ids.user = await insertReturningId(
+      // PROVISIONED: el CHECK de credenciales sólo aplica a usuarios activos.
+      `INSERT INTO users (first_name, last_name, email, roles, lifecycle_status) VALUES ('Ana', 'López', $1, 'user', 'PROVISIONED')`,
+      [`ana-${randomUUID()}@correo.mx`],
+    );
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        TypeOrmModule.forRoot({ type: 'postgres', url: databaseUrl, entities }),
+        TypeOrmModule.forFeature([BillingProfileEntity, AccountEntity]),
+      ],
+      providers: [
+        BillingOwnerService,
+        CreditReservationService,
+        ReserveDocumentCreditUseCase,
+        ReserveBiometricSignatureCreditsUseCase,
+        FinalizeBiometricSignatureCreditsUseCase,
+        ReleaseExpiredCreditReservationsUseCase,
+        ConsumeDocumentCreditUseCase,
+      ],
+    }).compile();
+    await moduleRef.init();
+    moduleClose = () => moduleRef.close();
+
+    credits = moduleRef.get(CreditReservationService);
+    reserveDocument = moduleRef.get(ReserveDocumentCreditUseCase);
+    reserveBiometric = moduleRef.get(ReserveBiometricSignatureCreditsUseCase);
+    finalize = moduleRef.get(FinalizeBiometricSignatureCreditsUseCase);
+    releaseExpired = moduleRef.get(ReleaseExpiredCreditReservationsUseCase);
+    consumeDocument = moduleRef.get(ConsumeDocumentCreditUseCase);
+  }, 180_000);
+
+  afterAll(async () => {
+    await moduleClose?.();
+    await dataSource?.destroy();
+    await adminQuery(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${DATABASE_NAME}' AND pid <> pg_backend_pid()`,
+    );
+    await adminQuery(`DROP DATABASE IF EXISTS "${DATABASE_NAME}"`);
+  });
+
+  /**
+   * Cada prueba trabaja con una cuenta personal y una organización nuevas, cada una con su perfil
+   * y sin lotes: así el saldo y el lote elegido dependen sólo de lo que siembra la prueba, y el
+   * ledger nunca se toca a mano.
+   */
+  beforeEach(async () => {
+    ids.personalAccount = await insertReturningId(
+      `INSERT INTO accounts (user_id, account_type, email) VALUES ($1, 'PERSONAL', 'ana@correo.mx')`,
+      [ids.user],
+    );
+    ids.organization = await insertReturningId(
+      `INSERT INTO organizations (name, display_name) VALUES ($1, 'ACME')`,
+      [`acme-${randomUUID()}`],
+    );
+    ids.organizationAccount = await insertReturningId(
+      `INSERT INTO accounts (user_id, account_type, email, organization_id) VALUES ($1, 'ORGANIZATION', 'ana@acme.mx', $2)`,
+      [ids.user, ids.organization],
+    );
+    ids.personalProfile = await insertReturningId(
+      `INSERT INTO billing_profiles (personal_account_id) VALUES ($1)`,
+      [ids.personalAccount],
+    );
+    ids.organizationProfile = await insertReturningId(
+      `INSERT INTO billing_profiles (organization_id) VALUES ($1)`,
+      [ids.organization],
+    );
+  });
+
+  describe('migración', () => {
+    it('respalda en el ledger los lotes y consumos históricos, y se revierte y se vuelve a aplicar', async () => {
+      // Un lote y un consumo "de antes": se escriben con el esquema sin la 093.
+      await dataSource.undoLastMigration({ transaction: 'each' });
+      const legacyLot = await insertReturningId(
+        `INSERT INTO credit_lots (billing_profile_id, origin, issued, remaining, stripe_invoice_id) VALUES ($1, 'CURRENT_PERIOD', 10, 9, $2)`,
+        [ids.personalProfile, `in_${randomUUID()}`],
+      );
+      const legacyDocument = await insertReturningId(
+        `INSERT INTO documents (object_key, file_name, file_type, total_pages, ip_address, original_hash, created_by, account_id, total_signers, status)
+         VALUES ($1, 'viejo.pdf', 'application/pdf', 1, '127.0.0.1', 'hash', $2, $3, 1, 'SIGNED')`,
+        [`${randomUUID()}.pdf`, ids.user, ids.personalAccount],
+      );
+      await dataSource.query(
+        `INSERT INTO document_credit_consumptions (document_id, billing_profile_id, credit_lot_id, credits_consumed, signature_type) VALUES ($1, $2, $3, 1, 'SIMPLE')`,
+        [legacyDocument, ids.personalProfile, legacyLot],
+      );
+
+      await dataSource.runMigrations({ transaction: 'each' });
+
+      const entries = await dataSource.query(
+        `SELECT movement_type, credit_type, quantity, idempotency_key FROM credit_ledger_entries WHERE credit_lot_id = $1 ORDER BY created_at`,
+        [legacyLot],
+      );
+      expect(entries).toEqual([
+        {
+          movement_type: 'PURCHASE',
+          credit_type: DOC,
+          quantity: 10,
+          idempotency_key: `issue:lot:${legacyLot}`,
+        },
+        {
+          movement_type: 'CONSUME',
+          credit_type: DOC,
+          quantity: 1,
+          idempotency_key: `consume:document:${legacyDocument}`,
+        },
+      ]);
+      expect(await lot(legacyLot)).toEqual({ remaining: 9, reserved: 0 });
+    });
+
+    it('el ledger es inmutable: rechaza UPDATE, DELETE y TRUNCATE', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+
+      await expect(
+        dataSource.query(`UPDATE credit_ledger_entries SET quantity = 99`),
+      ).rejects.toThrow(/inmutable/);
+      await expect(
+        dataSource.query(`DELETE FROM credit_ledger_entries`),
+      ).rejects.toThrow(/inmutable/);
+      await expect(
+        dataSource.query(`TRUNCATE credit_ledger_entries`),
+      ).rejects.toThrow(/inmutable/);
+    });
+  });
+
+  describe('compras y saldos', () => {
+    it('una compra acreditada a un perfil personal suma sólo a su saldo y a su tipo', async () => {
+      await issueLot(ids.personalProfile, BIO, 5);
+
+      expect(
+        await countAvailableCredits(
+          dataSource.manager,
+          ids.personalProfile,
+          BIO,
+        ),
+      ).toBe(5);
+      expect(
+        await countAvailableCredits(
+          dataSource.manager,
+          ids.personalProfile,
+          DOC,
+        ),
+      ).toBe(0);
+      expect(
+        await countAvailableCredits(
+          dataSource.manager,
+          ids.organizationProfile,
+          BIO,
+        ),
+      ).toBe(0);
+    });
+
+    it('una compra acreditada a un perfil organizacional la usan sus miembros y no toca el personal', async () => {
+      await issueLot(ids.organizationProfile, DOC, 1);
+      await issueLot(ids.organizationProfile, BIO, 7);
+
+      // El miembro reserva desde su cuenta de organización: paga el perfil compartido.
+      const documentId = await reservedDocument(ids.organizationAccount);
+      const attemptId = await createAttempt(documentId);
+      const reservation = await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+
+      expect(reservation.billingProfileId).toBe(ids.organizationProfile);
+      expect(
+        await countAvailableCredits(
+          dataSource.manager,
+          ids.organizationProfile,
+          BIO,
+        ),
+      ).toBe(6);
+      expect(
+        await countAvailableCredits(
+          dataSource.manager,
+          ids.personalProfile,
+          BIO,
+        ),
+      ).toBe(0);
+    });
+
+    it('el disponible es remaining menos lo reservado', async () => {
+      await issueLot(ids.organizationProfile, DOC, 3);
+      await reservedDocument(ids.organizationAccount);
+
+      expect(
+        await countAvailableCredits(
+          dataSource.manager,
+          ids.organizationProfile,
+          DOC,
+        ),
+      ).toBe(2);
+    });
+  });
+
+  describe('reserva documental', () => {
+    it('reserva un crédito por documento y es idempotente por documento', async () => {
+      const lotId = await issueLot(ids.personalProfile, DOC, 2);
+      const documentId = await createDocument(ids.personalAccount);
+
+      const first = await reserveDocument.execute({
+        documentId,
+        accountId: ids.personalAccount,
+        userId: ids.user,
+      });
+      const retry = await reserveDocument.execute({
+        documentId,
+        accountId: ids.personalAccount,
+        userId: ids.user,
+      });
+
+      expect(retry.id).toBe(first.id);
+      expect(first).toMatchObject({
+        billingProfileId: ids.personalProfile,
+        creditLotId: lotId,
+        creditType: DOC,
+        status: 'ACTIVE',
+        expiresAt: null,
+      });
+      expect(await lot(lotId)).toEqual({ remaining: 2, reserved: 1 });
+    });
+
+    it('sin saldo documental responde 402 y no deja nada reservado', async () => {
+      const documentId = await createDocument(ids.personalAccount);
+
+      await expect(
+        reserveDocument.execute({
+          documentId,
+          accountId: ids.personalAccount,
+          userId: ids.user,
+        }),
+      ).rejects.toBeInstanceOf(InsufficientDocumentCreditsException);
+      expect(await credits.findDocumentReservation(documentId)).toBeNull();
+    });
+  });
+
+  describe('reserva biométrica', () => {
+    it('la paga el perfil de la reserva documental del documento', async () => {
+      await issueLot(ids.organizationProfile, DOC, 1);
+      const bioLot = await issueLot(ids.organizationProfile, BIO, 1);
+      const documentId = await reservedDocument(ids.organizationAccount);
+      const attemptId = await createAttempt(documentId);
+
+      const reservation = await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+
+      expect(reservation).toMatchObject({
+        billingProfileId: ids.organizationProfile,
+        creditLotId: bioLot,
+        creditType: BIO,
+        biometricSignatureAttemptId: attemptId,
+        status: 'ACTIVE',
+      });
+      expect(reservation.expiresAt).toBeInstanceOf(Date);
+    });
+
+    it('reintento de creación de sesión: el mismo intento reutiliza su reserva, también en paralelo', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+      const bioLot = await issueLot(ids.personalProfile, BIO, 3);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const attemptId = await createAttempt(documentId);
+
+      const [a, b, c] = await Promise.all([
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+        }),
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+        }),
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+        }),
+      ]);
+
+      expect(new Set([a.id, b.id, c.id]).size).toBe(1);
+      expect(await lot(bioLot)).toEqual({ remaining: 3, reserved: 1 });
+    });
+
+    it('reserva concurrente del último crédito: sólo uno lo obtiene, el otro recibe 402', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+      const bioLot = await issueLot(ids.personalProfile, BIO, 1);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const attemptA = await createAttempt(documentId);
+      const attemptB = await createAttempt(documentId);
+
+      const results = await Promise.allSettled([
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptA,
+          documentId,
+        }),
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptB,
+          documentId,
+        }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toBeInstanceOf(
+        InsufficientBiometricCreditsException,
+      );
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 1 });
+    });
+
+    it('un documento biométrico anterior a las reservas lo paga el perfil de su recibo de consumo', async () => {
+      await issueLot(ids.organizationProfile, DOC, 1);
+      const bioLot = await issueLot(ids.organizationProfile, BIO, 1);
+      const legacyDocument = await createDocument(ids.organizationAccount);
+      await consumeDocument.execute({
+        documentId: legacyDocument,
+        accountId: ids.organizationAccount,
+        userId: ids.user,
+      });
+      const attemptId = await createAttempt(legacyDocument);
+
+      const reservation = await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId: legacyDocument,
+      });
+
+      expect(reservation).toMatchObject({
+        billingProfileId: ids.organizationProfile,
+        creditLotId: bioLot,
+      });
+    });
+
+    it('sin saldo biométrico bloquea el inicio (402)', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const attemptId = await createAttempt(documentId);
+
+      await expect(
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+        }),
+      ).rejects.toBeInstanceOf(InsufficientBiometricCreditsException);
+    });
+
+    it('falla de Didit antes de crear la sesión: la reserva se libera y el saldo vuelve', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+      const bioLot = await issueLot(ids.personalProfile, BIO, 1);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const attemptId = await createAttempt(documentId);
+      await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+
+      await expect(
+        finalize.onAttemptFailed({
+          biometricSignatureAttemptId: attemptId,
+          reason: 'DIDIT_SESSION_NOT_CREATED',
+        }),
+      ).resolves.toBe(true);
+
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
+      expect((await credits.findByAttempt(attemptId))?.status).toBe('RELEASED');
+    });
+  });
+
+  describe('resultado de Didit', () => {
+    async function signingScenario() {
+      const docLot = await issueLot(ids.personalProfile, DOC, 1);
+      const bioLot = await issueLot(ids.personalProfile, BIO, 1);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const attemptId = await createAttempt(documentId, 'APPROVED');
+      await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+      return { docLot, bioLot, documentId, attemptId };
+    }
+
+    it('firma biométrica exitosa: consume el crédito biométrico y deja el documental reservado', async () => {
+      const { docLot, bioLot, documentId, attemptId } = await signingScenario();
+
+      await expect(
+        finalize.onSignatureSucceeded({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+          documentCompleted: false,
+        }),
+      ).resolves.toEqual({ biometricConsumed: true, documentConsumed: false });
+
+      expect(await lot(bioLot)).toEqual({ remaining: 0, reserved: 0 });
+      expect(await lot(docLot)).toEqual({ remaining: 1, reserved: 1 });
+    });
+
+    it('webhook de aprobación repetido: no consume dos veces ni duplica movimientos', async () => {
+      const { bioLot, documentId, attemptId } = await signingScenario();
+      const input = {
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+        documentCompleted: true,
+      };
+
+      await finalize.onSignatureSucceeded(input);
+      const movements = await ledgerCount();
+      const [second, third] = await Promise.all([
+        finalize.onSignatureSucceeded(input),
+        finalize.onSignatureSucceeded(input),
+      ]);
+
+      expect(second).toEqual({
+        biometricConsumed: false,
+        documentConsumed: false,
+      });
+      expect(third).toEqual({
+        biometricConsumed: false,
+        documentConsumed: false,
+      });
+      expect(await ledgerCount()).toBe(movements);
+      expect(await lot(bioLot)).toEqual({ remaining: 0, reserved: 0 });
+    });
+
+    it('documento biométrico completado: consume el crédito documental una sola vez y deja su recibo', async () => {
+      const { docLot, documentId, attemptId } = await signingScenario();
+
+      await finalize.onSignatureSucceeded({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+        documentCompleted: true,
+      });
+
+      expect(await lot(docLot)).toEqual({ remaining: 0, reserved: 0 });
+      const receipts = await dataSource.query(
+        `SELECT credit_lot_id, signature_type, credits_consumed FROM document_credit_consumptions WHERE document_id = $1`,
+        [documentId],
+      );
+      expect(receipts).toEqual([
+        {
+          credit_lot_id: docLot,
+          signature_type: 'BIOMETRIC',
+          credits_consumed: 1,
+        },
+      ]);
+
+      // Ni el consumo inmediato puede volver a cobrar ese documento.
+      const consumes = await dataSource.query(
+        `SELECT count(*)::int AS n FROM credit_ledger_entries WHERE idempotency_key = $1`,
+        [`consume:document:${documentId}`],
+      );
+      expect(consumes[0].n).toBe(1);
+    });
+
+    it('webhook de rechazo repetido: libera una sola vez', async () => {
+      const { bioLot, attemptId } = await signingScenario();
+      const input = {
+        biometricSignatureAttemptId: attemptId,
+        reason: 'DIDIT_DECLINED',
+      };
+
+      const results = await Promise.all([
+        finalize.onAttemptFailed(input),
+        finalize.onAttemptFailed(input),
+      ]);
+      const late = await finalize.onAttemptFailed(input);
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(late).toBe(false);
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
+    });
+
+    it('documento cancelado con reservas activas: libera la documental y la biométrica', async () => {
+      const { docLot, bioLot, documentId } = await signingScenario();
+
+      await expect(
+        finalize.onDocumentClosed({ documentId, reason: 'DOCUMENT_REJECTED' }),
+      ).resolves.toBe(2);
+      await expect(
+        finalize.onDocumentClosed({ documentId, reason: 'DOCUMENT_REJECTED' }),
+      ).resolves.toBe(0);
+
+      expect(await lot(docLot)).toEqual({ remaining: 1, reserved: 0 });
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
+    });
+  });
+
+  describe('expiración', () => {
+    it('libera las vencidas cuyo intento terminó, respeta las de intentos abiertos y las de documentos cerrados se recogen', async () => {
+      await issueLot(ids.organizationProfile, DOC, 2);
+      const bioLot = await issueLot(ids.organizationProfile, BIO, 2);
+
+      const documentId = await reservedDocument(ids.organizationAccount);
+      const failedAttempt = await createAttempt(documentId, 'PENDING');
+      const openAttempt = await createAttempt(documentId, 'PENDING');
+      await reserveBiometric.execute({
+        biometricSignatureAttemptId: failedAttempt,
+        documentId,
+      });
+      await reserveBiometric.execute({
+        biometricSignatureAttemptId: openAttempt,
+        documentId,
+      });
+      await dataSource.query(
+        `UPDATE biometric_signature_attempts SET status = 'FAILED' WHERE id = $1`,
+        [failedAttempt],
+      );
+      await dataSource.query(
+        `UPDATE credit_reservations SET expires_at = now() - interval '1 minute' WHERE biometric_signature_attempt_id IN ($1, $2)`,
+        [failedAttempt, openAttempt],
+      );
+
+      const rejectedDocument = await reservedDocument(ids.organizationAccount);
+      await dataSource.query(
+        `UPDATE documents SET status = 'REJECTED' WHERE id = $1`,
+        [rejectedDocument],
+      );
+
+      const first = await releaseExpired.execute();
+      const second = await releaseExpired.execute();
+
+      expect(first).toEqual({ expired: 1, orphaned: 1, failed: 0 });
+      expect(second).toEqual({ expired: 0, orphaned: 0, failed: 0 });
+      expect((await credits.findByAttempt(failedAttempt))?.status).toBe(
+        'EXPIRED',
+      );
+      expect((await credits.findByAttempt(openAttempt))?.status).toBe('ACTIVE');
+      expect(
+        (await credits.findDocumentReservation(rejectedDocument))?.status,
+      ).toBe('RELEASED');
+      expect(await lot(bioLot)).toEqual({ remaining: 2, reserved: 1 });
+    });
+  });
+
+  describe('saldos negativos', () => {
+    it('la base rechaza reservar más de lo que queda o dejar remaining negativo', async () => {
+      const lotId = await issueLot(ids.personalProfile, BIO, 1);
+
+      await expect(
+        dataSource.query(`UPDATE credit_lots SET reserved = 2 WHERE id = $1`, [
+          lotId,
+        ]),
+      ).rejects.toThrow(/CHK_credit_lots_reserved/);
+      await expect(
+        dataSource.query(
+          `UPDATE credit_lots SET remaining = -1 WHERE id = $1`,
+          [lotId],
+        ),
+      ).rejects.toThrow(/CHK_credit_lots_(remaining|reserved)/);
+    });
+
+    it('si el lote no tiene bloqueado lo que la reserva dice, consumir falla y no cambia nada', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+      const bioLot = await issueLot(ids.personalProfile, BIO, 1);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const attemptId = await createAttempt(documentId, 'APPROVED');
+      const reservation = await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+      await dataSource.query(
+        `UPDATE credit_lots SET reserved = 0 WHERE id = $1`,
+        [bioLot],
+      );
+
+      await expect(
+        credits.consume({ reservationId: reservation.id }),
+      ).rejects.toThrow(/no tiene bloqueados/);
+      expect((await credits.findByAttempt(attemptId))?.status).toBe('ACTIVE');
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
+    });
+
+    it('una reserva no puede apuntar a un lote de otro perfil (FK compuesta)', async () => {
+      const otherLot = await issueLot(ids.organizationProfile, DOC, 1);
+      const documentId = await createDocument(ids.personalAccount);
+
+      await expect(
+        dataSource.query(
+          `INSERT INTO credit_reservations (billing_profile_id, credit_lot_id, credit_type, document_id, quantity) VALUES ($1, $2, 'DOCUMENT_SIGNATURE', $3, 1)`,
+          [ids.personalProfile, otherLot, documentId],
+        ),
+      ).rejects.toThrow(/FK_credit_reservations_credit_lot/);
+    });
+  });
+
+  it('el saldo de cada lote se reconstruye desde credit_ledger_entries', async () => {
+    // Un poco de todo: consumo inmediato, reservas consumidas, liberadas y activas.
+    await issueLot(ids.personalProfile, DOC, 3);
+    await issueLot(ids.personalProfile, BIO, 2);
+    const immediate = await createDocument(ids.personalAccount);
+    await consumeDocument.execute({
+      documentId: immediate,
+      accountId: ids.personalAccount,
+      userId: ids.user,
+    });
+    const signed = await reservedDocument(ids.personalAccount);
+    const signedAttempt = await createAttempt(signed, 'APPROVED');
+    await reserveBiometric.execute({
+      biometricSignatureAttemptId: signedAttempt,
+      documentId: signed,
+    });
+    await finalize.onSignatureSucceeded({
+      biometricSignatureAttemptId: signedAttempt,
+      documentId: signed,
+      documentCompleted: true,
+    });
+    const pending = await reservedDocument(ids.personalAccount);
+    const declined = await createAttempt(pending);
+    await reserveBiometric.execute({
+      biometricSignatureAttemptId: declined,
+      documentId: pending,
+    });
+    await finalize.onAttemptFailed({
+      biometricSignatureAttemptId: declined,
+      reason: 'DIDIT_DECLINED',
+    });
+
+    const lotsReplayed = await dataSource.query(
+      `SELECT count(*)::int AS n FROM credit_lots WHERE billing_profile_id = $1`,
+      [ids.personalProfile],
+    );
+    expect(lotsReplayed[0].n).toBe(2);
+
+    const mismatches = await dataSource.query(
+      `
+      WITH replay AS (
+        SELECT credit_lot_id,
+          SUM(CASE
+                WHEN movement_type IN ('PURCHASE', 'GRANT', 'REFUND') THEN quantity
+                WHEN movement_type = 'CONSUME' THEN -quantity
+                ELSE 0 END) AS remaining,
+          SUM(CASE
+                WHEN movement_type = 'RESERVE' THEN quantity
+                WHEN movement_type = 'RELEASE' THEN -quantity
+                WHEN movement_type = 'CONSUME' AND credit_reservation_id IS NOT NULL THEN -quantity
+                ELSE 0 END) AS reserved
+        FROM credit_ledger_entries
+        GROUP BY credit_lot_id
+      )
+      SELECT l.id, l.remaining, l.reserved, r.remaining AS replay_remaining, r.reserved AS replay_reserved
+        FROM credit_lots l
+        LEFT JOIN replay r ON r.credit_lot_id = l.id
+       WHERE l.billing_profile_id = $1
+         AND (r.credit_lot_id IS NULL OR l.remaining <> r.remaining OR l.reserved <> r.reserved)
+    `,
+      [ids.personalProfile],
+    );
+
+    expect(mismatches).toEqual([]);
+    // Y el estado final es el esperado: 3 − 1 inmediato − 1 completado, con 1 aún reservado.
+    expect(
+      await countAvailableCredits(dataSource.manager, ids.personalProfile, DOC),
+    ).toBe(0);
+    expect(
+      await countAvailableCredits(dataSource.manager, ids.personalProfile, BIO),
+    ).toBe(1);
+  });
+});
