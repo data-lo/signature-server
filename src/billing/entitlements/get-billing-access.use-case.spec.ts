@@ -153,8 +153,8 @@ describe('GetBillingAccessUseCase', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
-        biometricCreditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
         limits: PLAN_ENTITLEMENTS.free.limits,
       });
@@ -205,8 +205,8 @@ describe('GetBillingAccessUseCase', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
-        biometricCreditsAvailable: 0,
         actions: NO_ACTIONS,
         limits: {
           [PLAN_LIMIT_ENUM.DOCUMENTS_INCLUDED_PER_PERIOD]: null,
@@ -397,8 +397,8 @@ describe('GetBillingAccessUseCase', () => {
       });
 
       await expect(execute()).resolves.toMatchObject({
+        credits: { document: { available: 18 }, biometric: { available: 0 } },
         creditsAvailable: 18,
-        biometricCreditsAvailable: 0,
       });
     });
 
@@ -410,8 +410,8 @@ describe('GetBillingAccessUseCase', () => {
       });
 
       await expect(execute()).resolves.toMatchObject({
+        credits: { document: { available: 15 }, biometric: { available: 6 } },
         creditsAvailable: 15,
-        biometricCreditsAvailable: 6,
       });
     });
 
@@ -442,12 +442,34 @@ describe('GetBillingAccessUseCase', () => {
       }
     });
 
-    /** Sin lotes, `SUM` vuelve nulo; para el consumidor eso es no tener saldo. */
-    it('devuelve 0 cuando no hay ningún lote', async () => {
+    /** Sin lotes, `SUM` vuelve nulo; para el consumidor eso es no tener saldo: ceros, no nulos. */
+    it('devuelve ceros en ambos tipos cuando no hay ningún lote', async () => {
       perfil();
       creditLotRepository.sum.mockResolvedValue(null);
 
-      await expect(execute()).resolves.toMatchObject({ creditsAvailable: 0 });
+      await expect(execute()).resolves.toMatchObject({
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
+        creditsAvailable: 0,
+      });
+    });
+
+    it('creditsAvailable (obsoleto) refleja siempre credits.document.available', async () => {
+      perfil();
+      saldos({
+        [CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE]: { remaining: 9, reserved: 2 },
+        [CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE]: { remaining: 5, reserved: 0 },
+      });
+
+      const access = await execute();
+
+      expect(access.creditsAvailable).toBe(access.credits.document.available);
+      expect(access.credits).toEqual({
+        document: { available: 7 },
+        biometric: { available: 5 },
+      });
+      // El nombre público es `biometric`: ningún nombre derivado del enum interno.
+      expect(Object.keys(access.credits)).toEqual(['document', 'biometric']);
+      expect(access).not.toHaveProperty('biometricCreditsAvailable');
     });
   });
 

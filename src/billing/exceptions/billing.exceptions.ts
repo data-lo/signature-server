@@ -258,7 +258,7 @@ export class PlanActionNotIncludedException extends ForbiddenException {
  * así que se construye a mano sobre `HttpException`.
  *
  * **La lanzan los dos lados del saldo y a propósito con el mismo status**: la comprobación previa
- * de `AssertPlanActionUseCase` —que mira `creditsAvailable` para que la pantalla no ofrezca lo
+ * de `AssertPlanActionUseCase` —que mira `credits.document.available` para que la pantalla no ofrezca lo
  * que no se puede— y el descuento real de `ConsumeDocumentCreditUseCase`, que es el único que
  * decide de verdad porque corre dentro de la transacción del alta. Entre una y otra el saldo
  * puede haberse agotado en otra pestaña, así que el segundo NO es redundante; para quien recibe

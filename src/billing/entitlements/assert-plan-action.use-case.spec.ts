@@ -28,8 +28,11 @@ function accesoCon(
     cancelAtPeriodEnd: false,
     currentPeriodStart: null,
     currentPeriodEnd: null,
+    credits: {
+      document: { available: creditsAvailable },
+      biometric: { available: 0 },
+    },
     creditsAvailable,
-    biometricCreditsAvailable: 0,
     actions,
     limits,
   };
