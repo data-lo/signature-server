@@ -1,0 +1,57 @@
+---
+title: "Manejo de errores"
+description: "Cómo interpretar las respuestas de error de la API."
+---
+
+Todos los errores tienen la misma forma:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "DUPLICATE_PARTICIPANT_EMAIL",
+    "message": "Un colaborador sólo puede participar una vez en el documento.",
+    "details": {
+      "field": "participants[1].email",
+      "email": "luis.martinez@correo.example"
+    }
+  }
+}
+```
+
+Decide qué hacer a partir de `code`, que es estable. `message` es texto legible y puede cambiar. `details` es opcional y, en los errores de validación, `details.field` indica el campo afectado.
+
+## Códigos de estado
+
+| Estado | Cuándo ocurre | Qué hacer |
+| --- | --- | --- |
+| `400` | La petición está mal formada, por ejemplo, falta `Idempotency-Key` o intenta elegir la organización. | Corrige la petición. |
+| `401` | La API key falta, es inválida, venció o fue revocada. | Revisa la [autenticación](/authentication). |
+| `402` | `INSUFFICIENT_DOCUMENT_CREDITS`: la organización no tiene créditos. | Adquiere créditos y reintenta con la misma `Idempotency-Key`. |
+| `403` | La llave no está autorizada, o la organización o quien emitió la llave están inactivos. | Revisa la llave en Integraciones. |
+| `404` | El recurso no existe en tu organización. | Verifica los identificadores. |
+| `409` | Conflicto con el estado actual; consulta los casos abajo. | Depende del código. |
+| `422` | El contenido no pasó la validación. | Corrige el campo de `details.field`. |
+| `429` | `TOO_MANY_REQUESTS`: demasiados intentos para ese firmante. | Espera antes de reintentar. |
+| `500` | `INTERNAL_ERROR`: fallo inesperado. | Reintenta más tarde con la misma `Idempotency-Key`. |
+
+## Conflictos al crear documentos
+
+| Código | Qué significa | Qué hacer |
+| --- | --- | --- |
+| `INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS` | Otra petición con la misma clave sigue en curso. | Espera unos segundos y repite la petición. |
+| `INTEGRATION_IDEMPOTENCY_KEY_MISMATCH` | La clave ya se usó con otro archivo o con otros datos. | Usa una clave nueva para un documento nuevo. |
+
+## Errores de validación frecuentes
+
+| Código | Qué significa |
+| --- | --- |
+| `INVALID_PAYLOAD` | `payload` falta, no es JSON o no es un objeto. |
+| `INVALID_DOCUMENT_FILE` | El archivo no es un PDF legible. |
+| `SIGNER_REQUIRED` | El documento no tiene ningún participante con rol `SIGNER`. |
+| `DUPLICATE_PARTICIPANT_EMAIL` | Un correo aparece más de una vez en `participants`. |
+| `INVALID_SIGNING_ORDER` | Falta `order` o no es un entero válido en un documento secuencial. |
+| `SIGNER_SIGNATURE_POSITION_REQUIRED` | Un firmante no tiene posición de firma. |
+| `SIGNATURE_POSITION_OVERLAP` | Dos posiciones de firma se traslapan en la misma página. |
+
+La referencia de API lista los errores de cada endpoint.
