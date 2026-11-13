@@ -40,6 +40,7 @@ import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
 import { PlatformModule } from './platform/platform.module';
 import { MetricsModule } from './metrics/metrics.module';
+import { OutboundWebhooksModule } from './outbound-webhooks/outbound-webhooks.module';
 
 @Module({
   imports: [
@@ -122,6 +123,7 @@ import { MetricsModule } from './metrics/metrics.module';
     ApiKeyModule,
     PlatformModule,
     MetricsModule.forRoot(),
+    OutboundWebhooksModule,
   ],
   controllers: [AppController],
   providers: [
