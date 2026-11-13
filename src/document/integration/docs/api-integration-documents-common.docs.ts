@@ -11,8 +11,27 @@ import {
 /** Nombre del esquema de seguridad de Swagger para la API key de organización. */
 export const INTEGRATION_API_KEY_SECURITY = 'integration-api-key';
 
-/** Tag de Swagger de la API de integración: el único que publica su documentación propia. */
+/** Tag de Swagger de los documentos, firmantes y accesos de firma de la API de integración. */
 export const INTEGRATION_DOCUMENTS_TAG = 'Integration Documents';
+
+/** Tag de Swagger de la consulta de la organización de la API key, su saldo y su plan. */
+export const INTEGRATION_ORGANIZATION_TAG = 'Organización';
+
+/**
+ * Tags que publica el contrato de integración, en el orden en que se muestran en Swagger UI y en
+ * Mintlify. Una operación de integración con otro tag (o sin tag) cae en el de documentos.
+ */
+export const INTEGRATION_OPENAPI_TAGS = [
+  {
+    name: INTEGRATION_DOCUMENTS_TAG,
+    description: 'Documentos, firmantes y accesos de firma de tu organización',
+  },
+  {
+    name: INTEGRATION_ORGANIZATION_TAG,
+    description:
+      'La organización de la API key, su saldo de documentos, su plan y su ciclo de facturación',
+  },
+] as const;
 
 /**
  * Esquema `X-API-Key` de la API de integración. Lo declaran los dos documentos Swagger (el general

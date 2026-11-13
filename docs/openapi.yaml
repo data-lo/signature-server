@@ -17,6 +17,8 @@ info:
 tags:
   - name: Integration Documents
     description: Documentos, firmantes y accesos de firma de tu organización
+  - name: Organización
+    description: La organización de la API key, su saldo de documentos, su plan y su ciclo de facturación
 security:
   - integration-api-key: []
 paths:
@@ -139,7 +141,7 @@ paths:
                     total: 1
                     totalPages: 1
         '400':
-          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave).'
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
           content:
             application/json:
               schema:
@@ -215,6 +217,20 @@ paths:
                     error:
                       code: INTEGRATION_USER_NOT_FOUND
                       message: El usuario no existe en la organización
+        '409':
+          description: '`INTEGRATION_AMBIGUOUS_USER`: `creatorEmail` corresponde a más de un miembro de la organización'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                ambiguousUser:
+                  summary: Correo de más de un usuario
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_AMBIGUOUS_USER
+                      message: El correo corresponde a más de un usuario de la organización
         '422':
           description: '`INVALID_REQUEST`: algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).'
           content:
@@ -253,6 +269,13 @@ paths:
         | `false` | `order` no es obligatorio: firman en cualquier momento | No requiere `order` ni participa en él |
 
         En un documento secuencial, `order` es un entero que inicia en `1` y debe ser único y consecutivo entre firmantes (`1`, `2`, `3`…). Es este valor, no la posición en `participants`, lo que define el orden. Si no se cumple, la respuesta es `422` con `INVALID_SIGNING_ORDER` o `DUPLICATE_SIGNING_ORDER`.
+
+        **RFC del firmante (`participants[].taxId`).** Sólo aplica a un `SIGNER` de un documento con `document.signatureType: ADVANCED` y es opcional:
+
+        - Formato: RFC mexicano de 13 caracteres (persona física) o 12 (persona moral): 3 o 4 letras, fecha `AAMMDD` y homoclave de 3, p. ej. `MAGL800101AB1`. Se recortan los espacios y se pasa a mayúsculas.
+        - Si viene, el titular del certificado de la e.firma con que firme tiene que tener exactamente ese RFC; si no viene, se compara el nombre del participante con el del certificado.
+        - En un `WITNESS` o en un documento `SIMPLE` o `BIOMETRIC` se rechaza con `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`; con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.
+        - El campo anterior, `rfc`, ya no forma parte del contrato: enviarlo responde `422 UNSUPPORTED_PARTICIPANT_FIELD`.
 
         **Ejemplo de `payload`: flujo secuencial** (dos firmantes y un testigo):
 
@@ -366,6 +389,64 @@ paths:
         }
         ```
 
+        **Ejemplo de `payload`: firma avanzada** (el primer firmante con `taxId`):
+
+        ```json
+        {
+          "creator": {
+            "email": "ana.lopez@cliente.example",
+            "firstName": "Ana",
+            "lastName": "López"
+          },
+          "document": {
+            "signatureType": "ADVANCED",
+            "isSequential": true,
+            "isIndexable": true
+          },
+          "participants": [
+            {
+              "role": "SIGNER",
+              "firstName": "Luis",
+              "lastName": "Martínez",
+              "email": "luis.martinez@correo.example",
+              "order": 1,
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.1,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ],
+              "taxId": "MAGL800101AB1"
+            },
+            {
+              "role": "SIGNER",
+              "firstName": "Marta",
+              "lastName": "Gómez",
+              "email": "marta.gomez@correo.example",
+              "order": 2,
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.55,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ]
+            },
+            {
+              "role": "WITNESS",
+              "firstName": "Eva",
+              "lastName": "Ruiz",
+              "email": "eva.ruiz@correo.example"
+            }
+          ]
+        }
+        ```
+
         Ejemplo con curl:
 
         ```bash
@@ -374,6 +455,16 @@ paths:
           -H "Idempotency-Key: erp-contrato-2026-000184" \
           -F "file=@contrato.pdf;type=application/pdf" \
           -F 'payload={"creator":{"email":"ana.lopez@cliente.example","firstName":"Ana","lastName":"López"},"document":{"signatureType":"SIMPLE","isSequential":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis.martinez@correo.example","order":1,"signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.8,"widthRatio":0.25,"heightRatio":0.08}]}]}'
+        ```
+
+        Ejemplo con curl, firma avanzada con el RFC del firmante:
+
+        ```bash
+        curl -X POST https://<host>/api/v1/integration/documents \
+          -H "X-API-Key: $FIRMALO_API_KEY" \
+          -H "Idempotency-Key: erp-contrato-2026-000185" \
+          -F "file=@contrato.pdf;type=application/pdf" \
+          -F 'payload={"creator":{"email":"ana.lopez@cliente.example","firstName":"Ana","lastName":"López"},"document":{"signatureType":"ADVANCED","isSequential":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis.martinez@correo.example","order":1,"taxId":"MAGL800101AB1","signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.8,"widthRatio":0.25,"heightRatio":0.08}]}]}'
         ```
       operationId: IntegrationDocumentsController_createDocument
       parameters:
@@ -467,6 +558,46 @@ paths:
                         firstName: Eva
                         lastName: Ruiz
                         email: eva.ruiz@correo.example
+              advanced:
+                summary: 'Firma avanzada: RFC del firmante en `taxId`'
+                value:
+                  payload:
+                    creator:
+                      email: ana.lopez@cliente.example
+                      firstName: Ana
+                      lastName: López
+                    document:
+                      signatureType: ADVANCED
+                      isSequential: true
+                      isIndexable: true
+                    participants:
+                      - role: SIGNER
+                        firstName: Luis
+                        lastName: Martínez
+                        email: luis.martinez@correo.example
+                        order: 1
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.1
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                        taxId: MAGL800101AB1
+                      - role: SIGNER
+                        firstName: Marta
+                        lastName: Gómez
+                        email: marta.gomez@correo.example
+                        order: 2
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.55
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                      - role: WITNESS
+                        firstName: Eva
+                        lastName: Ruiz
+                        email: eva.ruiz@correo.example
       responses:
         '200':
           description: 'Repetición de una petición anterior con el mismo `Idempotency-Key`: el documento original (`Idempotent-Replayed: true`)'
@@ -498,6 +629,7 @@ paths:
                       status: PENDING
                       signatureType: SIMPLE
                       order: 1
+                      taxId: null
         '201':
           description: Documento creado, con su URL pública de consulta
           headers:
@@ -528,8 +660,9 @@ paths:
                       status: PENDING
                       signatureType: SIMPLE
                       order: 1
+                      taxId: null
         '400':
-          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave).'
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
           content:
             application/json:
               schema:
@@ -634,7 +767,7 @@ paths:
                       code: INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS
                       message: Ya hay una petición en curso con este Idempotency-Key. Vuelve a intentarlo en unos segundos.
         '422':
-          description: 'Validación del payload o del archivo, con `error.details.field` apuntando al campo (p. ej. `participants[2].email`). Se valida antes de subir el archivo, aprovisionar al creador o reservar la `Idempotency-Key`: `INVALID_PAYLOAD`, `INVALID_CREATOR`, `INVALID_DOCUMENT_OPTIONS`, `INVALID_DOCUMENT_FILE` (no es un PDF legible o pesa de más); `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED` (50 por omisión), `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_NAME`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL` (sin espacios y en minúsculas, aunque cambie el rol); `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `MAX_SIGNATURE_POSITIONS_EXCEEDED`, `INVALID_SIGNING_ORDER` / `DUPLICATE_SIGNING_ORDER` (con `isSequential`, `order` único y consecutivo desde 1 entre firmantes); `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`; y `INTEGRATION_CREATOR_UNAVAILABLE` / `INTEGRATION_CREATOR_MEMBERSHIP_REVOKED` para el creador.'
+          description: 'Validación del payload o del archivo, con `error.details.field` apuntando al campo (p. ej. `participants[2].email`). Se valida antes de subir el archivo, aprovisionar al creador o reservar la `Idempotency-Key`: `INVALID_PAYLOAD`, `INVALID_CREATOR`, `INVALID_DOCUMENT_OPTIONS`, `INVALID_DOCUMENT_FILE` (no es un PDF legible o pesa de más); `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED` (50 por omisión), `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_NAME`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL` (sin espacios y en minúsculas, aunque cambie el rol); `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `MAX_SIGNATURE_POSITIONS_EXCEEDED`, `INVALID_SIGNING_ORDER` / `DUPLICATE_SIGNING_ORDER` (con `isSequential`, `order` único y consecutivo desde 1 entre firmantes); `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`; `INVALID_PARTICIPANT_TAX_ID` (`taxId` no es un RFC de 12 o 13 caracteres), `PARTICIPANT_TAX_ID_NOT_ALLOWED` (`taxId` fuera de un `SIGNER` de un documento `ADVANCED`), `UNSUPPORTED_PARTICIPANT_FIELD` (un campo retirado del contrato, como `rfc`; `details.replacedBy` dice cuál usar); y `INTEGRATION_CREATOR_UNAVAILABLE` / `INTEGRATION_CREATOR_MEMBERSHIP_REVOKED` para el creador.'
           content:
             application/json:
               schema:
@@ -661,6 +794,25 @@ paths:
                         field: participants[0].signaturePositions[0].page
                         page: 3
                         totalPages: 2
+                invalidTaxId:
+                  summary: RFC del firmante inválido
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_PARTICIPANT_TAX_ID
+                      message: 'El taxId del firmante no es un RFC válido: 12 o 13 caracteres (letras, fecha AAMMDD y homoclave).'
+                      details:
+                        field: participants[0].taxId
+                unsupportedParticipantField:
+                  summary: Campo retirado del contrato
+                  value:
+                    success: false
+                    error:
+                      code: UNSUPPORTED_PARTICIPANT_FIELD
+                      message: 'El campo `rfc` ya no forma parte del contrato: envía el RFC del firmante en `taxId`.'
+                      details:
+                        field: participants[0].rfc
+                        replacedBy: participants[0].taxId
                 invalidFile:
                   summary: El archivo no es un PDF
                   value:
@@ -685,19 +837,11 @@ paths:
       summary: Crear un documento PDF con su flujo de firmas
       tags:
         - Integration Documents
-  /api/v1/integration/users/{userId}/documents:
+  /api/v1/integration/users/documents:
     get:
-      description: Devuelve una página de documentos creados por el usuario indicado. Admite la misma paginación y filtros por estatus y fechas que el listado de la organización.
+      description: Devuelve una página de documentos creados por el usuario con ese `email`, obligatorio. Admite la misma paginación y filtros por estatus y fechas que el listado de la organización. Reemplaza a `GET /users/{userId}/documents`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.
       operationId: IntegrationDocumentsController_listUserDocuments
       parameters:
-        - name: userId
-          required: true
-          in: path
-          description: '`users.id` del creador'
-          schema:
-            format: uuid
-            example: 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
-            type: string
         - name: statuses
           required: false
           in: query
@@ -781,6 +925,13 @@ paths:
             maximum: 100
             default: 25
             type: number
+        - name: email
+          required: true
+          in: query
+          description: Correo del usuario, miembro activo de la organización de la API key. No distingue mayúsculas.
+          schema:
+            example: ana@acme.mx
+            type: string
       responses:
         '200':
           description: Página de documentos del usuario
@@ -805,7 +956,7 @@ paths:
                     total: 1
                     totalPages: 1
         '400':
-          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave).'
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
           content:
             application/json:
               schema:
@@ -868,7 +1019,7 @@ paths:
                       code: INTEGRATION_SCOPE_DENIED
                       message: La API key sólo puede consultar los documentos de su propio usuario
         '404':
-          description: '`INTEGRATION_USER_NOT_FOUND`: el usuario no es miembro activo de la organización de la llave (o el id no es un UUID)'
+          description: '`INTEGRATION_USER_NOT_FOUND`: el correo no es de un miembro activo de la organización de la llave'
           content:
             application/json:
               schema:
@@ -881,8 +1032,22 @@ paths:
                     error:
                       code: INTEGRATION_USER_NOT_FOUND
                       message: El usuario no existe en la organización
+        '409':
+          description: '`INTEGRATION_AMBIGUOUS_USER`: el correo corresponde a más de un miembro de la organización'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                ambiguousUser:
+                  summary: Correo de más de un usuario
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_AMBIGUOUS_USER
+                      message: El correo corresponde a más de un usuario de la organización
         '422':
-          description: '`INVALID_REQUEST`: algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).'
+          description: '`INVALID_REQUEST`: falta `email` o no es un correo válido, o algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).'
           content:
             application/json:
               schema:
@@ -903,9 +1068,9 @@ paths:
       summary: Listar los documentos creados por un usuario de la organización
       tags:
         - Integration Documents
-  /api/v1/integration/documents/{documentId}/collaborators/{collaboratorId}/resend-invitation:
+  /api/v1/integration/documents/{documentId}/collaborators/resend-invitation:
     post:
-      description: Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante.
+      description: Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante. El correo sólo localiza al firmante dentro del documento. Reemplaza a `POST /documents/{documentId}/collaborators/{collaboratorId}/resend-invitation`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.
       operationId: IntegrationDocumentsController_resendInvitation
       parameters:
         - name: documentId
@@ -915,13 +1080,12 @@ paths:
             format: uuid
             example: 2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
             type: string
-        - name: collaboratorId
-          required: true
-          in: path
-          schema:
-            format: uuid
-            example: 5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f
-            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendIntegrationSigningInvitationDto'
       responses:
         '200':
           description: 'Invitación emitida. Con `emailDelivered: false` la invitación existe pero el correo no salió; se puede reintentar.'
@@ -930,7 +1094,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IntegrationResentInvitationResponse'
         '400':
-          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave).'
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
           content:
             application/json:
               schema:
@@ -986,7 +1150,7 @@ paths:
                       code: API_KEY_ORGANIZATION_INACTIVE
                       message: La organización de esta API key está desactivada
         '404':
-          description: '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o el colaborador no es su firmante'
+          description: '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o ningún firmante tiene ese correo'
           content:
             application/json:
               schema:
@@ -1000,12 +1164,19 @@ paths:
                       code: INTEGRATION_SIGNER_NOT_FOUND
                       message: No existe ese firmante en un documento de la organización
         '409':
-          description: '`INTEGRATION_INVITATION_NOT_RESENDABLE`: el documento ya no espera esa firma, no es su turno o firma desde su cuenta'
+          description: '`INTEGRATION_AMBIGUOUS_SIGNER` (más de un firmante con ese correo) o `INTEGRATION_INVITATION_NOT_RESENDABLE` (el documento ya no espera esa firma, no es su turno o firma desde su cuenta)'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IntegrationErrorResponseDto'
               examples:
+                ambiguous:
+                  summary: Correo de más de un firmante
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_AMBIGUOUS_SIGNER
+                      message: El correo corresponde a más de un firmante del documento
                 notResendable:
                   summary: El firmante ya no espera firma
                   value:
@@ -1020,6 +1191,23 @@ paths:
                     error:
                       code: INTEGRATION_INVITATION_NOT_RESENDABLE
                       message: Todavía no es el turno de este firmante
+        '422':
+          description: '`INVALID_REQUEST`: falta `email` o no es un correo válido.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalidRequest:
+                  summary: Campos inválidos
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_REQUEST
+                      message: La petición tiene campos inválidos.
+                      details:
+                        errors:
+                          - email debe ser un correo válido
         '429':
           description: '`TOO_MANY_REQUESTS`: ya se reenvió en los últimos 10 minutos o se alcanzaron diez reenvíos en el día.'
           content:
@@ -1065,7 +1253,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IntegrationSigningAccessResponse'
         '400':
-          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave).'
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
           content:
             application/json:
               schema:
@@ -1198,6 +1386,108 @@ paths:
       summary: Generar un acceso temporal de firma para un firmante
       tags:
         - Integration Documents
+  /api/v1/integration/organization/context:
+    get:
+      description: |-
+        Devuelve la organización de la API key, su saldo de documentos (`signatureQuota.documentsRemaining`), los documentos firmados en el periodo (`signatureQuota.documentsSigned`), el límite del plan (`signatureQuota.planLimit`), el periodo vigente y un resumen de su plan y ciclo de facturación.
+
+        La organización se resuelve exclusivamente desde la API key: no se envía ningún identificador.
+
+        **Autenticación:** `X-API-Key`.
+
+        **Permiso requerido:** `DOCUMENT.READ` con alcance `ORGANIZATION`. Una llave con alcance `OWN` responde `403 API_KEY_PERMISSION_DENIED`.
+
+        Nunca incluye datos de tarjeta, tokens de pago, facturas ni datos bancarios.
+      operationId: IntegrationOrganizationController_getContext
+      parameters: []
+      responses:
+        '200':
+          description: Contexto de la organización. Sin plan ni facturación, los contadores van en `0` y los datos del plan en `null`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationOrganizationContextResponse'
+              example:
+                success: true
+                message: Contexto de la organización obtenido correctamente
+                data:
+                  organization:
+                    id: 1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b
+                    name: Empresa Ejemplo S.A. de C.V.
+                    status: active
+                  signatureQuota:
+                    planLimit: 1000
+                    documentsSigned: 725
+                    documentsRemaining: 275
+                    periodStart: '2026-11-01'
+                    periodEnd: '2026-11-30'
+                  billing:
+                    plan: Business
+                    status: active
+                    billingCycle: monthly
+                    nextBillingDate: '2026-12-01'
+                    paymentStatus: paid
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo). Este endpoint exige `DOCUMENT.READ` con alcance `ORGANIZATION`; con alcance `OWN` responde `API_KEY_PERMISSION_DENIED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+      security:
+        - integration-api-key: []
+      summary: Consultar la organización, su saldo de documentos y su plan
+      tags:
+        - Organización
 components:
   securitySchemes:
     integration-api-key:
@@ -1270,6 +1560,55 @@ components:
           description: Correo del firmante
       required:
         - email
+    IntegrationBillingSummaryData:
+      type: object
+      properties:
+        plan:
+          type: string
+          nullable: true
+          example: Business
+          description: Nombre del plan; `null` si la organización no tiene plan
+        status:
+          type: string
+          enum:
+            - free
+            - incomplete
+            - active
+            - past_due
+            - canceled
+          nullable: true
+          example: active
+          description: '`null` si la organización nunca pasó por facturación'
+        billingCycle:
+          type: string
+          enum:
+            - monthly
+            - yearly
+            - custom
+          nullable: true
+          example: monthly
+          description: Según la duración del periodo vigente; `custom` si no es mensual ni anual, y `null` sin periodo
+        nextBillingDate:
+          type: string
+          format: date
+          nullable: true
+          example: '2026-12-01'
+          description: 'Fecha de renovación (UTC); `null` si no habrá otro cobro: sin plan de pago o con la baja programada'
+        paymentStatus:
+          type: string
+          enum:
+            - paid
+            - past_due
+            - pending
+            - not_applicable
+          example: paid
+          description: '`paid` (al corriente), `past_due` (cobro fallido), `pending` (contratación sin confirmar) o `not_applicable` (sin plan de pago)'
+      required:
+        - plan
+        - status
+        - billingCycle
+        - nextBillingDate
+        - paymentStatus
     IntegrationCreatedDocumentData:
       type: object
       properties:
@@ -1482,11 +1821,17 @@ components:
           type: number
           example: 1
           description: Orden de firma, desde 1
+        taxId:
+          type: string
+          nullable: true
+          example: null
+          description: RFC registrado para el firmante. Sólo de un firmante `FIEL` que lo tenga; `null` en cualquier otro caso
       required:
         - email
         - status
         - signatureType
         - order
+        - taxId
     IntegrationDocumentPayloadDto:
       type: object
       properties:
@@ -1569,7 +1914,7 @@ components:
         code:
           type: string
           example: DUPLICATE_PARTICIPANT_EMAIL
-          description: Código estable del error (p. ej. `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED`, `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`, `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`, `API_KEY_INVALID`, `INTERNAL_ERROR`)
+          description: Código estable del error (p. ej. `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED`, `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`, `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`, `INVALID_PARTICIPANT_TAX_ID`, `PARTICIPANT_TAX_ID_NOT_ALLOWED`, `UNSUPPORTED_PARTICIPANT_FIELD`, `API_KEY_INVALID`, `INTERNAL_ERROR`)
         message:
           type: string
           example: Un colaborador sólo puede participar una vez en el documento.
@@ -1593,6 +1938,68 @@ components:
       required:
         - success
         - error
+    IntegrationOrganizationContextData:
+      type: object
+      properties:
+        organization:
+          $ref: '#/components/schemas/IntegrationOrganizationData'
+        signatureQuota:
+          $ref: '#/components/schemas/IntegrationSignatureQuotaData'
+        billing:
+          $ref: '#/components/schemas/IntegrationBillingSummaryData'
+      required:
+        - organization
+        - signatureQuota
+        - billing
+    IntegrationOrganizationContextResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Contexto de la organización obtenido correctamente
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationOrganizationContextData'
+      required:
+        - success
+        - message
+        - data
+    IntegrationOrganizationData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b
+        name:
+          type: string
+          example: Empresa Ejemplo S.A. de C.V.
+          description: Razón social
+        status:
+          type: string
+          enum:
+            - active
+          example: active
+          description: 'Siempre `active`: una llave de una organización desactivada responde `403 API_KEY_ORGANIZATION_INACTIVE`'
+      required:
+        - id
+        - name
+        - status
     IntegrationParticipantDto:
       type: object
       properties:
@@ -1627,10 +2034,13 @@ components:
         requiresTwoFactorAuth:
           type: boolean
           description: Código de verificación al firmar. En SIMPLE siempre se exige; en ADVANCED y BIOMETRIC, sólo si es true.
-        rfc:
+        taxId:
           type: string
           example: LOPA800101AB1
-          description: 'RFC del firmante. Sólo para un SIGNER de un documento `ADVANCED`: si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.'
+          minLength: 12
+          maxLength: 13
+          pattern: ^[A-ZÑ&]{3,4}\d{6}[A-Z\d]{3}$
+          description: 'RFC mexicano del firmante: 13 caracteres para persona física o 12 para persona moral (3 o 4 letras, fecha AAMMDD y homoclave de 3). Se quitan los espacios y se pasa a mayúsculas. Sólo se admite en un participante con `role: SIGNER` de un documento con `document.signatureType: ADVANCED`; en cualquier otro caso la respuesta es `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`, y con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`. Si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.'
       required:
         - role
         - firstName
@@ -1639,10 +2049,10 @@ components:
     IntegrationResentInvitationData:
       type: object
       properties:
-        collaboratorId:
+        email:
           type: string
-          format: uuid
-          example: 5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f
+          example: ana@correo.com
+          description: Correo del firmante al que se reenvió la invitación
         invitationExpiresAt:
           format: date-time
           type: string
@@ -1653,7 +2063,7 @@ components:
           example: true
           description: '`false` si la invitación se emitió pero el correo no se pudo entregar; se puede reintentar más tarde'
       required:
-        - collaboratorId
+        - email
         - invitationExpiresAt
         - emailDelivered
     IntegrationResentInvitationResponse:
@@ -1684,6 +2094,39 @@ components:
         - success
         - message
         - data
+    IntegrationSignatureQuotaData:
+      type: object
+      properties:
+        planLimit:
+          type: number
+          example: 1000
+          description: Documentos que incluye el periodo vigente del plan
+        documentsSigned:
+          type: number
+          example: 725
+          description: Documentos que terminaron de firmarse durante el periodo vigente; `0` si no hay periodo vigente
+        documentsRemaining:
+          type: number
+          example: 275
+          description: 'Documentos que todavía se pueden crear para firma: suma los créditos vigentes del plan, los arrastrados y los comprados aparte, así que puede superar a `planLimit`. Un crédito se consume al crear el documento, no al firmarlo, por lo que no equivale a `planLimit - documentsSigned`. `0` si se agotó.'
+        periodStart:
+          type: string
+          format: date
+          nullable: true
+          example: '2026-11-01'
+          description: Primer día del periodo vigente (UTC)
+        periodEnd:
+          type: string
+          format: date
+          nullable: true
+          example: '2026-11-30'
+          description: Último día cubierto por el periodo vigente (UTC)
+      required:
+        - planLimit
+        - documentsSigned
+        - documentsRemaining
+        - periodStart
+        - periodEnd
     IntegrationSigningAccessData:
       type: object
       properties:
@@ -1727,6 +2170,15 @@ components:
         - success
         - message
         - data
+    ResendIntegrationSigningInvitationDto:
+      type: object
+      properties:
+        email:
+          type: string
+          example: ana@correo.com
+          description: Correo del firmante
+      required:
+        - email
     SignaturePositionDto:
       type: object
       properties:

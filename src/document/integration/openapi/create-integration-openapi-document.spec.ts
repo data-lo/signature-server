@@ -12,6 +12,8 @@ import { RFC_FORMAT } from '../../utils/tax-id.util';
 import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,
+  INTEGRATION_DOCUMENTS_TAG,
+  INTEGRATION_ORGANIZATION_TAG,
 } from '../docs/api-integration-documents-common.docs';
 import {
   EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD,
@@ -117,7 +119,7 @@ describe('createIntegrationOpenApiDocument', () => {
         'POST /api/v1/integration/documents',
         'GET /api/v1/integration/documents',
         'GET /api/v1/integration/organization/context',
-        'GET /api/v1/integration/users/{userId}/documents',
+        'GET /api/v1/integration/users/documents',
         'POST /api/v1/integration/documents/{documentId}/signing-access',
         'POST /api/v1/integration/documents/{documentId}/collaborators/resend-invitation',
       ].sort(),
@@ -177,7 +179,7 @@ describe('createIntegrationOpenApiDocument', () => {
         expect(operation.security).toEqual([
           { [INTEGRATION_API_KEY_SECURITY]: [] },
         ]);
-        expect(operation.tags).toEqual(['Integration Documents']);
+        expect(operation.tags).toHaveLength(1);
         // La llave se pega una vez en «Authorize»; no se repite como parámetro.
         const headerNames = (operation.parameters ?? []).map((parameter) =>
           'name' in parameter ? parameter.name.toLowerCase() : '',
@@ -189,6 +191,77 @@ describe('createIntegrationOpenApiDocument', () => {
         expect(new Set(headerNames).size).toBe(headerNames.length);
       }
     }
+  });
+
+  it('publica los tags Integration Documents y Organización, en ese orden y sin otros', () => {
+    expect(integration.tags!.map((tag) => tag.name)).toEqual([
+      INTEGRATION_DOCUMENTS_TAG,
+      INTEGRATION_ORGANIZATION_TAG,
+    ]);
+    for (const tag of integration.tags!) {
+      expect(tag.description).toBeTruthy();
+    }
+  });
+
+  it('agrupa GET /integration/organization/context bajo Organización y el resto bajo documentos', () => {
+    for (const operation of operationsOf(integration)) {
+      const [method, path] = operation.split(' ');
+      const tags =
+        integration.paths[path][
+          method.toLowerCase() as (typeof HTTP_METHODS)[number]
+        ]!.tags;
+      expect(tags).toEqual([
+        path === '/api/v1/integration/organization/context'
+          ? INTEGRATION_ORGANIZATION_TAG
+          : INTEGRATION_DOCUMENTS_TAG,
+      ]);
+    }
+  });
+
+  it('GET /integration/organization/context documenta X-API-Key, el permiso y el saldo sin datos de pago', () => {
+    const operation =
+      integration.paths['/api/v1/integration/organization/context'].get!;
+
+    expect(operation.security).toEqual([
+      { [INTEGRATION_API_KEY_SECURITY]: [] },
+    ]);
+    expect(operation.description).toContain('`X-API-Key`');
+    expect(operation.description).toContain(
+      '`DOCUMENT.READ` con alcance `ORGANIZATION`',
+    );
+    expect(operation.parameters ?? []).toEqual([]);
+
+    const schemas = integration.components!.schemas! as Record<
+      string,
+      { properties?: Record<string, unknown> }
+    >;
+    expect(
+      Object.keys(schemas.IntegrationSignatureQuotaData.properties!),
+    ).toEqual(
+      expect.arrayContaining([
+        'planLimit',
+        'documentsSigned',
+        'documentsRemaining',
+        'periodStart',
+        'periodEnd',
+      ]),
+    );
+    expect(
+      Object.keys(schemas.IntegrationBillingSummaryData.properties!).sort(),
+    ).toEqual(
+      [
+        'billingCycle',
+        'nextBillingDate',
+        'paymentStatus',
+        'plan',
+        'status',
+      ].sort(),
+    );
+
+    const response = JSON.stringify(operation.responses['200']);
+    expect(response).not.toMatch(
+      /card|last4|iban|clabe|bank|invoice|stripe|customerId|paymentMethod/i,
+    );
   });
 
   it('POST /integration/documents conserva multipart/form-data y Idempotency-Key', () => {
