@@ -309,6 +309,7 @@ describe('syncStaticPermissionCatalog', () => {
       'MEMBER',
       'ORGANIZATION',
       'ROLE',
+      'WEBHOOK',
     ]);
     expect(
       repositories.actions.rows.map((action) => action.key).sort(),
@@ -572,7 +573,7 @@ describe('syncStaticPermissionCatalog', () => {
     );
 
     // DOCUMENT y ORGANIZATION ya estaban, con la descripción en minúsculas de `seed:roles`.
-    expect(summary.resources.created).toBe(5); // BILLING, MEMBER, ROLE, DIRECTORY, API_KEY
+    expect(summary.resources.created).toBe(6); // BILLING, MEMBER, ROLE, DIRECTORY, API_KEY, WEBHOOK
     expect(summary.resources.updated).toBe(2); // DOCUMENT y ORGANIZATION, pasadas a MAYÚSCULAS
     expect(summary.actions.created).toBe(8);
     expect(summary.actions.updated).toBe(3); // CREATE, READ y UPDATE ya estaban

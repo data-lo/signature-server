@@ -8,7 +8,8 @@ import { STATIC_PERMISSION_KEY_ENUM } from 'src/roles/static-permission-catalog'
  * integraciones hasta que alguien lo agregue aquí. Una lista negra fallaría al revés, regalando
  * cualquier capacidad futura.
  *
- * Entra lo que una integración hace sobre los documentos y el directorio de la organización.
+ * Entra lo que una integración hace sobre los documentos, el directorio y el endpoint de webhooks
+ * de la organización.
  * Quedan fuera, además de todo lo administrativo (ver `API_KEY_FORBIDDEN_RESOURCES`):
  * - `DOCUMENT.SIGN_SELF`: firmar es un acto de una persona identificada; una llave no lo es.
  * - `DOCUMENT.APPROVE`: el flujo de aprobación exige un aprobador miembro de la organización.
@@ -24,6 +25,10 @@ export const API_KEY_ASSIGNABLE_PERMISSION_KEYS: ReadonlySet<string> =
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
+    // Separados de los de documentos: una llave que crea documentos no puede, por eso, cambiar a
+    // dónde se notifican ni leer cómo se firman las notificaciones.
+    STATIC_PERMISSION_KEY_ENUM.WEBHOOK_READ,
+    STATIC_PERMISSION_KEY_ENUM.WEBHOOK_MANAGE,
   ]);
 
 /**

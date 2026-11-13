@@ -88,6 +88,14 @@ const CATALOG_TABLE: ReadonlyArray<[STATIC_PERMISSION_KEY_ENUM, string]> = [
     STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE,
     'CREAR, CONSULTAR, ROTAR Y REVOCAR LA API KEY DE LA ORGANIZACIÓN',
   ],
+  [
+    STATIC_PERMISSION_KEY_ENUM.WEBHOOK_READ,
+    'CONSULTAR EL ENDPOINT DE WEBHOOKS DE LA ORGANIZACIÓN',
+  ],
+  [
+    STATIC_PERMISSION_KEY_ENUM.WEBHOOK_MANAGE,
+    'CONFIGURAR, DESACTIVAR Y ROTAR EL SECRETO DEL ENDPOINT DE WEBHOOKS DE LA ORGANIZACIÓN',
+  ],
 ];
 
 const DIRECTORY_KEYS = [
@@ -206,6 +214,27 @@ describe('static-permission-catalog', () => {
         STATIC_PERMISSION_CATALOG[STATIC_PERMISSION_KEY_ENUM.API_KEY_MANAGE]
           .organizationOnly,
       ).toBe(true);
+    });
+
+    it('OWNER y ADMIN traen WEBHOOK.READ y WEBHOOK.MANAGE; MEMBER, no', () => {
+      const keys = [
+        STATIC_PERMISSION_KEY_ENUM.WEBHOOK_READ,
+        STATIC_PERMISSION_KEY_ENUM.WEBHOOK_MANAGE,
+      ];
+      for (const role of [
+        SYSTEM_ROLE_NAME_ENUM.OWNER,
+        SYSTEM_ROLE_NAME_ENUM.ADMIN,
+      ]) {
+        expect(STATIC_ROLE_PERMISSION_MATRIX[role]).toEqual(
+          expect.arrayContaining(keys),
+        );
+      }
+      for (const key of keys) {
+        expect(
+          STATIC_ROLE_PERMISSION_MATRIX[SYSTEM_ROLE_NAME_ENUM.MEMBER],
+        ).not.toContain(key);
+        expect(STATIC_PERMISSION_CATALOG[key].organizationOnly).toBe(true);
+      }
     });
 
     it('ningún rol recibe una clave que no exista en el catálogo', () => {

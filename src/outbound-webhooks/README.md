@@ -11,8 +11,34 @@ El primer caso de uso cubre los documentos creados mediante la API de integraci�
 pero el modelo admite otros tipos de sujeto sin cambiar las tablas de entregas.
 
 **Estado actual:** existen el contrato (este documento), los enums, las interfaces, las constantes
-(`outbound-webhooks.constants.ts`), las entidades y la migración `1784300000094`. Los casos de uso,
-servicios, worker y controladores están descritos abajo y llegan en las siguientes tareas.
+(`outbound-webhooks.constants.ts`), las entidades, la migración `1784300000094` y la
+**configuración del endpoint desde la API de integración** (ver abajo), con sus permisos
+(migración `1784300000097`). El registro y el envío de entregas (worker, firma, reintentos) están
+descritos abajo y llegan en las siguientes tareas.
+
+## Configuración desde la API de integración
+
+`IntegrationWebhookEndpointController`, con `X-API-Key` y el mismo formato de error que el resto
+de la API de integración. La organización sale de la llave; no hay identificador en la ruta.
+
+| Ruta | Permiso | Caso de uso | Respuesta |
+| --- | --- | --- | --- |
+| `GET /api/v1/integration/webhooks/endpoint` | `WEBHOOK.READ` | `GetWebhookEndpointUseCase` | `200` sin secreto; `404 WEBHOOK_ENDPOINT_NOT_FOUND` |
+| `PUT /api/v1/integration/webhooks/endpoint` | `WEBHOOK.MANAGE` | `UpsertWebhookEndpointUseCase` | `201` con `secret` al crear; `200` sin él al actualizar (reactiva uno `DISABLED`) |
+| `POST /api/v1/integration/webhooks/endpoint/rotate-secret` | `WEBHOOK.MANAGE` | `RotateWebhookSecretUseCase` | `200` con el `secret` nuevo |
+| `DELETE /api/v1/integration/webhooks/endpoint` | `WEBHOOK.MANAGE` | `DisableWebhookEndpointUseCase` | `200` con `status: DISABLED`; idempotente |
+
+- `WEBHOOK.READ` y `WEBHOOK.MANAGE` (alcance `ANY`) son de OWNER y ADMIN y se pueden conceder a
+  una API key; los de documentos no dan acceso.
+- `WebhookEndpointUrlPolicy` valida la URL al configurar (`422 WEBHOOK_URL_NOT_ALLOWED`, con
+  `details.reason`). El envío deberá volver a comprobarla resolviendo el DNS.
+- `WebhookSecretCipherService` cifra con AES-256-GCM y la llave `WEBHOOK_SECRET_ENCRYPTION_KEY`
+  (32 bytes en base64). Sin ella, crear o rotar responde `503
+  WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE` y el resto del servidor funciona igual.
+- En Swagger (`/api/v1/integration/docs`) van bajo el tag **Webhooks**, cuya descripción resume
+  este contrato. Los payloads se publican como `callbacks` de `PUT` (esquemas en
+  `docs/webhook-payload-v1.models.ts`); la prueba del contrato comprueba que coincidan con los
+  ejemplos de este documento y que no traigan campos sensibles.
 
 ## Eventos
 
@@ -242,7 +268,9 @@ src/outbound-webhooks/
 └── metrics/                         Métricas y backlog
 ```
 
-Hoy existen `entities/`, `enums/` e `interfaces/`; el resto se crea con su primera pieza.
+Hoy existen `entities/`, `enums/`, `interfaces/`, `applications/` (configuración del endpoint),
+`controllers/`, `services/` (cifrado y política de URL), `dto/`, `docs/` y `exceptions/`; el resto
+se crea con su primera pieza.
 
 ### Casos de uso previstos
 
