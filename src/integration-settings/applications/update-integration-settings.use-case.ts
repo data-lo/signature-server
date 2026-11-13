@@ -1,15 +1,16 @@
 import { Injectable } from '@nestjs/common';
 
-import { IntegrationApiClient } from 'src/api-key/interfaces/integration-api-client.interface';
+import { BaseResponse } from 'src/interfaces/api-response.dto';
 
 import { UpdateIntegrationSettingsDto } from '../dto/update-integration-settings.dto';
+import { IntegrationSettingsOrganizationNotFoundException } from '../exceptions/integration-settings.exceptions';
 import {
-  IntegrationSettingsResponse,
-  toIntegrationSettingsResponse,
+  IntegrationSettingsData,
+  toIntegrationSettingsData,
 } from '../interfaces/integration-settings-response.interface';
 import { IntegrationSettingsService } from '../services/integration-settings.service';
 
-/** Activa o desactiva los webhooks de la integración de la organización de la API key. */
+/** Activa o desactiva la integración de una organización. */
 @Injectable()
 export class UpdateIntegrationSettingsUseCase {
   constructor(
@@ -17,30 +18,43 @@ export class UpdateIntegrationSettingsUseCase {
   ) {}
 
   /**
-   * Fija `webhooksEnabled` de forma idempotente: crea la fila si no existe y repetir el mismo valor
-   * no crea filas ni cambia nada. No toca las API keys.
+   * Fija el estado de la integración de forma idempotente: repetir el mismo estado no crea filas
+   * ni cambia `updatedAt`. No toca las API keys de la organización; desactivar sólo hace que
+   * `OrganizationApiKeyGuard` rechace las peticiones nuevas.
    *
-   * @param apiClient - Cliente autenticado; la organización sale sólo de aquí.
-   * @param dto - Valor deseado, ya validado.
-   * @returns `{ success: true, data: { webhooksEnabled } }` con el valor guardado.
+   * @param organizationId - `:organizationId` de la ruta, ya autorizado por `PermissionsGuard`.
+   * @param dto - Estado deseado.
+   * @returns La configuración resultante.
    *
-   * @throws {QueryFailedError} Si la organización de la llave ya no existe (FK); el guard lo
-   *   impide antes en condiciones normales.
+   * @throws {IntegrationSettingsOrganizationNotFoundException} (404) Si la organización no existe
+   *   o está desactivada.
    *
    * @example
    * ```ts
-   * await updateIntegrationSettings.execute(apiClient, { webhooksEnabled: true });
+   * await updateIntegrationSettings.execute('org-1', { status: INTEGRATION_STATUS_ENUM.DISABLED });
    * ```
    */
   async execute(
-    apiClient: IntegrationApiClient,
+    organizationId: string,
     dto: UpdateIntegrationSettingsDto,
-  ): Promise<IntegrationSettingsResponse> {
-    const settings = await this.integrationSettingsService.setWebhooksEnabled(
-      apiClient.organizationId,
-      dto.webhooksEnabled,
+  ): Promise<BaseResponse<IntegrationSettingsData>> {
+    if (
+      !(await this.integrationSettingsService.isActiveOrganization(
+        organizationId,
+      ))
+    ) {
+      throw new IntegrationSettingsOrganizationNotFoundException();
+    }
+
+    const settings = await this.integrationSettingsService.setStatus(
+      organizationId,
+      dto.status,
     );
 
-    return toIntegrationSettingsResponse(settings);
+    return {
+      success: true,
+      message: 'Configuración de integración actualizada correctamente',
+      data: toIntegrationSettingsData(organizationId, settings),
+    };
   }
 }

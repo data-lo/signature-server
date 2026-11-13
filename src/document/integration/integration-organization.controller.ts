@@ -13,7 +13,7 @@ import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 
 import { GetIntegrationOrganizationContextUseCase } from './applications/get-integration-organization-context.use-case';
-import { INTEGRATION_DOCUMENTS_TAG } from './docs/api-integration-documents-common.docs';
+import { INTEGRATION_ORGANIZATION_TAG } from './docs/api-integration-documents-common.docs';
 import { ApiGetIntegrationOrganizationContext } from './docs/api-get-integration-organization-context.docs';
 import { IntegrationErrorFilter } from './filters/integration-error.filter';
 import { assertNoTenantOverrides } from './utils/integration-request.util';
@@ -23,7 +23,7 @@ import { assertNoTenantOverrides } from './utils/integration-request.util';
  * organización sale siempre de la llave, con los mismos guards y el mismo formato de error que
  * `IntegrationDocumentsController`.
  */
-@ApiTags(INTEGRATION_DOCUMENTS_TAG)
+@ApiTags(INTEGRATION_ORGANIZATION_TAG)
 @SkipJwtAuth()
 @UseGuards(OrganizationApiKeyGuard, ApiKeyPermissionGuard)
 @UseFilters(IntegrationErrorFilter)

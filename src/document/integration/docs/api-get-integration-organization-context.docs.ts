@@ -45,10 +45,18 @@ export function ApiGetIntegrationOrganizationContext() {
   return applyDecorators(
     ApiOperation({
       summary: 'Consultar la organización, su saldo de documentos y su plan',
-      description:
-        'La organización se resuelve exclusivamente desde la API key: no se envía ningún identificador. Requiere `DOCUMENT.READ` con alcance `ORGANIZATION`. Nunca incluye datos de tarjeta, tokens de pago, facturas ni datos bancarios.',
+      description: [
+        'Devuelve la organización de la API key, su saldo de documentos (`signatureQuota.documentsRemaining`), los documentos firmados en el periodo (`signatureQuota.documentsSigned`), el límite del plan (`signatureQuota.planLimit`), el periodo vigente y un resumen de su plan y ciclo de facturación.',
+        'La organización se resuelve exclusivamente desde la API key: no se envía ningún identificador.',
+        '**Autenticación:** `X-API-Key`.',
+        '**Permiso requerido:** `DOCUMENT.READ` con alcance `ORGANIZATION`. Una llave con alcance `OWN` responde `403 API_KEY_PERMISSION_DENIED`.',
+        'Nunca incluye datos de tarjeta, tokens de pago, facturas ni datos bancarios.',
+      ].join('\n\n'),
     }),
-    ApiIntegrationCommonResponses(),
+    ApiIntegrationCommonResponses({
+      forbiddenNote:
+        'Este endpoint exige `DOCUMENT.READ` con alcance `ORGANIZATION`; con alcance `OWN` responde `API_KEY_PERMISSION_DENIED`.',
+    }),
     ApiResponse({
       status: 200,
       description:

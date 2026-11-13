@@ -5,8 +5,8 @@ import { ApiIntegrationCommonResponses } from 'src/document/integration/docs/api
 import { integrationErrorExample } from 'src/document/integration/docs/api-integration-examples.docs';
 import { IntegrationErrorResponseDto } from 'src/document/integration/interfaces/integration-document-response';
 
-import { UpdateIntegrationSettingsDto } from '../dto/update-integration-settings.dto';
-import { IntegrationSettingsResponse } from '../interfaces/integration-settings-response.interface';
+import { UpdateIntegrationApiSettingsDto } from '../dto/update-integration-api-settings.dto';
+import { IntegrationApiSettingsResponse } from '../interfaces/integration-api-settings-response.interface';
 
 /** Ejemplo de llave sin el permiso que exige cada endpoint. */
 function permissionDeniedExample(permission: string) {
@@ -47,7 +47,7 @@ export function ApiGetIntegrationSettings() {
       status: 200,
       description:
         'Configuración de la organización, o sus valores por defecto.',
-      type: IntegrationSettingsResponse,
+      type: IntegrationApiSettingsResponse,
       example: { success: true, data: { webhooksEnabled: false } },
     }),
   );
@@ -73,7 +73,7 @@ export function ApiUpdateIntegrationSettings() {
         'Fija `webhooksEnabled` para los procesos de firma que tu organización crea con la API; no se configura por documento. Es idempotente: repetir el mismo valor no cambia nada. Rotar o revocar la API key no modifica esta configuración. El cuerpo sólo admite `webhooksEnabled`: la organización sale de la llave, y la URL, el secreto y los eventos se configurarán aparte. Requiere `INTEGRATION_SETTINGS.UPDATE`.',
     }),
     ApiBody({
-      type: UpdateIntegrationSettingsDto,
+      type: UpdateIntegrationApiSettingsDto,
       examples: {
         enable: { summary: 'Activar', value: { webhooksEnabled: true } },
         disable: { summary: 'Desactivar', value: { webhooksEnabled: false } },
@@ -87,7 +87,7 @@ export function ApiUpdateIntegrationSettings() {
     ApiResponse({
       status: 200,
       description: 'Configuración guardada.',
-      type: IntegrationSettingsResponse,
+      type: IntegrationApiSettingsResponse,
       example: { success: true, data: { webhooksEnabled: true } },
     }),
     ApiResponse({

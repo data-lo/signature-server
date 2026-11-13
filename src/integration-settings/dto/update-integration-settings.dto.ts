@@ -1,25 +1,23 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean } from 'class-validator';
+import { IsEnum } from 'class-validator';
+
+import { INTEGRATION_STATUS_ENUM } from '../enums/integration-status.enum';
 
 /**
- * Cuerpo de `PATCH /integration/settings`.
+ * Cuerpo de `PATCH /organizations/:organizationId/integration-settings`.
  *
- * Sólo admite `webhooksEnabled`. La organización sale de la API key: un `organizationId` responde
- * `400 INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`, y cualquier otro campo (URL, secreto…) `422
- * INVALID_REQUEST` (ver `assertOnlyIntegrationSettingsFields`).
+ * No acepta `organizationId`: la organización sale de la ruta autorizada, y el `ValidationPipe`
+ * global (`whitelist`) descarta cualquier otro campo.
  */
 export class UpdateIntegrationSettingsDto {
   @ApiProperty({
-    type: Boolean,
-    example: true,
+    enum: INTEGRATION_STATUS_ENUM,
+    example: INTEGRATION_STATUS_ENUM.DISABLED,
     description:
-      'Si los eventos de firma de los documentos creados con la API generan webhooks hacia tu sistema.',
+      '`DISABLED` rechaza las peticiones nuevas de la API de integración con `403 INTEGRATION_DISABLED`; `ACTIVE` las vuelve a aceptar. No modifica las API keys.',
   })
-  @IsBoolean({ message: 'webhooksEnabled debe ser true o false' })
-  webhooksEnabled: boolean;
+  @IsEnum(INTEGRATION_STATUS_ENUM, {
+    message: `status debe ser uno de: ${Object.values(INTEGRATION_STATUS_ENUM).join(', ')}`,
+  })
+  status: INTEGRATION_STATUS_ENUM;
 }
-
-/** Campos que acepta el cuerpo de `PATCH /integration/settings`. */
-export const UPDATE_INTEGRATION_SETTINGS_FIELDS: ReadonlySet<string> = new Set([
-  'webhooksEnabled',
-]);

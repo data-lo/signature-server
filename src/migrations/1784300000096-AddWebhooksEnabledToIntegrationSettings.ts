@@ -1,50 +1,39 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /**
- * Configuración de la API de integración por organización y sus permisos.
+ * Envío de webhooks configurable desde la API de integración, y sus permisos.
  *
- * - `integration_settings`: una fila como máximo por organización
- *   (`UQ_integration_settings_organization_id`), que se borra con ella (`ON DELETE CASCADE`). Es una
- *   restricción `UNIQUE` —Postgres la respalda con un índice único— y no un `CREATE UNIQUE INDEX`
- *   suelto, porque la relación `OneToOne` de la entidad exige una restricción.
- * - `webhooks_enabled` nace en `false` y **no hay backfill**: ninguna organización existente recibe
- *   webhooks por esta migración. Sin fila, la organización se comporta como `false`.
+ * - Agrega `webhooks_enabled` a `integration_settings`, la tabla que crea
+ *   `CreateIntegrationSettings1784300000095` (una fila por organización con su `status`).
+ * - `webhooks_enabled` nace en `false` para todas las filas existentes: **no hay backfill a
+ *   `true`**, ninguna organización empieza a recibir webhooks por esta migración. Sin fila, la
+ *   organización también se comporta como `false`.
  * - Recurso `INTEGRATION_SETTINGS` con `READ` y `UPDATE` (alcance `ANY`), otorgados a los roles de
  *   sistema OWNER y ADMIN, igual que `STATIC_ROLE_PERMISSION_MATRIX`. Se siembran aquí porque el
  *   despliegue no corre el seed; todo es idempotente (`WHERE NOT EXISTS`). Las API keys no los
  *   reciben solas: hay que concederlos al emitir o rotar la llave.
  */
-export class CreateIntegrationSettings1784300000096 implements MigrationInterface {
-  name = 'CreateIntegrationSettings1784300000096';
+export class AddWebhooksEnabledToIntegrationSettings1784300000096 implements MigrationInterface {
+  name = 'AddWebhooksEnabledToIntegrationSettings1784300000096';
 
   /**
-   * Crea la tabla y siembra los permisos con sus asignaciones.
+   * Agrega la columna y siembra los permisos con sus asignaciones.
    *
    * @param queryRunner - Conexión de la migración.
    * @returns Nada.
    *
-   * @throws {QueryFailedError} Si no existen `organizations` o las tablas del catálogo, o si la
-   *   tabla ya existe.
+   * @throws {QueryFailedError} Si no existen `integration_settings` (falta la 095) o las tablas del
+   *   catálogo, o si la columna ya existe.
    *
    * @example
    * ```ts
-   * await new CreateIntegrationSettings1784300000096().up(queryRunner);
+   * await new AddWebhooksEnabledToIntegrationSettings1784300000096().up(queryRunner);
    * ```
    */
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`
-      CREATE TABLE "integration_settings" (
-        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "organization_id" uuid NOT NULL,
-        "webhooks_enabled" boolean NOT NULL DEFAULT false,
-        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-        CONSTRAINT "PK_integration_settings" PRIMARY KEY ("id"),
-        CONSTRAINT "UQ_integration_settings_organization_id" UNIQUE ("organization_id"),
-        CONSTRAINT "FK_integration_settings_organization_id" FOREIGN KEY ("organization_id")
-          REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE NO ACTION
-      )
-    `);
+    await queryRunner.query(
+      `ALTER TABLE "integration_settings" ADD "webhooks_enabled" boolean NOT NULL DEFAULT false`,
+    );
 
     for (const roleName of ['OWNER', 'ADMIN']) {
       await queryRunner.query(
@@ -112,19 +101,20 @@ export class CreateIntegrationSettings1784300000096 implements MigrationInterfac
   }
 
   /**
-   * Borra la tabla, los permisos y el recurso. Primero quita esos permisos de las API keys que los
-   * tengan (`api_key_permissions` es `RESTRICT`); las asignaciones a roles se van por la cascada de
-   * `role_permissions`. No toca roles ni acciones: los comparten otros recursos.
+   * Quita la columna, los permisos y el recurso; la tabla y su `status` (095) se conservan. Primero
+   * quita esos permisos de las API keys que los tengan (`api_key_permissions` es `RESTRICT`); las
+   * asignaciones a roles se van por la cascada de `role_permissions`. No toca roles ni acciones:
+   * los comparten otros recursos.
    *
    * @param queryRunner - Conexión de la migración.
    * @returns Nada.
    *
-   * @throws {QueryFailedError} Si la tabla no existe. Las llaves que tenían estos permisos los
-   *   pierden.
+   * @throws {QueryFailedError} Si la columna no existe. Las llaves que tenían estos permisos los
+   *   pierden, y se pierde la preferencia de webhooks de cada organización.
    *
    * @example
    * ```ts
-   * await new CreateIntegrationSettings1784300000096().down(queryRunner);
+   * await new AddWebhooksEnabledToIntegrationSettings1784300000096().down(queryRunner);
    * ```
    */
   public async down(queryRunner: QueryRunner): Promise<void> {
@@ -144,6 +134,8 @@ export class CreateIntegrationSettings1784300000096 implements MigrationInterfac
     await queryRunner.query(
       `DELETE FROM "resources" WHERE "key" = 'INTEGRATION_SETTINGS'`,
     );
-    await queryRunner.query(`DROP TABLE "integration_settings"`);
+    await queryRunner.query(
+      `ALTER TABLE "integration_settings" DROP COLUMN "webhooks_enabled"`,
+    );
   }
 }

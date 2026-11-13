@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { INTEGRATION_STATUS_ENUM } from 'src/integration-settings/enums/integration-status.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
@@ -14,6 +15,7 @@ import {
   ApiKeyActorInactiveException,
   ApiKeyOrganizationInactiveException,
   ExpiredApiKeyException,
+  IntegrationDisabledException,
   InvalidApiKeyException,
 } from '../exceptions/api-key.exceptions';
 import {
@@ -182,6 +184,81 @@ describe('OrganizationApiKeyGuard', () => {
     await expect(
       guard.canActivate(context({ 'x-api-key': issued.key }).ctx),
     ).rejects.toBeInstanceOf(ApiKeyOrganizationInactiveException);
+  });
+
+  describe('configuración de integración', () => {
+    function keyWithIntegration(status: INTEGRATION_STATUS_ENUM | null) {
+      return storedKey({
+        organization: {
+          id: 'org-1',
+          isActive: true,
+          integrationSettings: status === null ? null : { status },
+        } as never,
+      });
+    }
+
+    it('carga la configuración en la misma consulta que la llave', async () => {
+      await guard.canActivate(context({ 'x-api-key': issued.key }).ctx);
+
+      expect(apiKeyRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relations: expect.objectContaining({
+            organization: { integrationSettings: true },
+          }),
+        }),
+      );
+    });
+
+    it('con DISABLED rechaza 403 INTEGRATION_DISABLED sin marcar uso ni revisar el actor', async () => {
+      apiKeyRepository.findOne.mockResolvedValue(
+        keyWithIntegration(INTEGRATION_STATUS_ENUM.DISABLED),
+      );
+      const { request, ctx } = context({ 'x-api-key': issued.key });
+
+      const error = await guard.canActivate(ctx).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(IntegrationDisabledException);
+      expect(error.getStatus()).toBe(403);
+      expect(error.getResponse()).toMatchObject({
+        code: 'INTEGRATION_DISABLED',
+      });
+      expect(request.apiClient).toBeUndefined();
+      expect(apiKeyRepository.update).not.toHaveBeenCalled();
+      expect(accountRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('la organización desactivada tiene prioridad sobre la integración desactivada', async () => {
+      apiKeyRepository.findOne.mockResolvedValue(
+        storedKey({
+          organization: {
+            id: 'org-1',
+            isActive: false,
+            integrationSettings: { status: INTEGRATION_STATUS_ENUM.DISABLED },
+          } as never,
+        }),
+      );
+
+      await expect(
+        guard.canActivate(context({ 'x-api-key': issued.key }).ctx),
+      ).rejects.toBeInstanceOf(ApiKeyOrganizationInactiveException);
+    });
+
+    it.each([
+      ['ACTIVE', INTEGRATION_STATUS_ENUM.ACTIVE],
+      ['sin fila (se considera ACTIVE)', null],
+    ])('con %s autentica normalmente', async (_label, status) => {
+      apiKeyRepository.findOne.mockResolvedValue(keyWithIntegration(status));
+      const { request, ctx } = context({ 'x-api-key': issued.key });
+
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect(request.apiClient).toMatchObject({
+        apiKeyId: 'key-1',
+        organizationId: 'org-1',
+      });
+      expect(apiKeyRepository.update).toHaveBeenCalledWith('key-1', {
+        lastUsedAt: expect.any(Date),
+      });
+    });
   });
 
   it('rechaza con 403 si el actor ya no es miembro activo de la organización', async () => {

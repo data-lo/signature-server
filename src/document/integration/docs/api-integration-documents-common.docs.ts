@@ -11,8 +11,27 @@ import {
 /** Nombre del esquema de seguridad de Swagger para la API key de organización. */
 export const INTEGRATION_API_KEY_SECURITY = 'integration-api-key';
 
-/** Tag de Swagger de la API de integración: el único que publica su documentación propia. */
+/** Tag de Swagger de los documentos, firmantes y accesos de firma de la API de integración. */
 export const INTEGRATION_DOCUMENTS_TAG = 'Integration Documents';
+
+/** Tag de Swagger de la consulta de la organización de la API key, su saldo y su plan. */
+export const INTEGRATION_ORGANIZATION_TAG = 'Organización';
+
+/**
+ * Tags que publica el contrato de integración, en el orden en que se muestran en Swagger UI y en
+ * Mintlify. Una operación de integración con otro tag (o sin tag) cae en el de documentos.
+ */
+export const INTEGRATION_OPENAPI_TAGS = [
+  {
+    name: INTEGRATION_DOCUMENTS_TAG,
+    description: 'Documentos, firmantes y accesos de firma de tu organización',
+  },
+  {
+    name: INTEGRATION_ORGANIZATION_TAG,
+    description:
+      'La organización de la API key, su saldo de documentos, su plan y su ciclo de facturación',
+  },
+] as const;
 
 /**
  * Esquema `X-API-Key` de la API de integración. Lo declaran los dos documentos Swagger (el general
@@ -95,7 +114,7 @@ export function ApiIntegrationCommonResponses(
     ApiResponse({
       status: 403,
       description: [
-        '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).',
+        '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE`, `INTEGRATION_DISABLED` (un administrador desactivó la integración de la organización; la llave no se revoca y vuelve a servir al reactivarla) o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).',
         options.forbiddenNote,
       ]
         .filter(Boolean)
@@ -111,6 +130,11 @@ export function ApiIntegrationCommonResponses(
           'Organización desactivada',
           'API_KEY_ORGANIZATION_INACTIVE',
           'La organización de esta API key está desactivada',
+        ),
+        integrationDisabled: integrationErrorExample(
+          'Integración desactivada',
+          'INTEGRATION_DISABLED',
+          'La integración de la organización de esta API key está desactivada',
         ),
         ...options.forbiddenExamples,
       },

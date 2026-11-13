@@ -1,4 +1,12 @@
-import { INestApplication, Module, ValidationPipe } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  INestApplication,
+  Module,
+  UseFilters,
+  UseGuards,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule, JwtService } from '@nestjs/jwt';
@@ -12,19 +20,22 @@ import * as request from 'supertest';
 import { DataSource } from 'typeorm';
 
 import { ApiKeyModule } from './../src/api-key/api-key.module';
+import { OrganizationApiKeyGuard } from './../src/api-key/guards/organization-api-key.guard';
+import { SkipJwtAuth } from './../src/auth/decorators/skip-jwt-auth.decorator';
 import { JwtAuthGuard } from './../src/auth/guards/jwt-auth.guard';
 import { AuthorizationModule } from './../src/authorization/authorization.module';
 import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
 import { RedisService } from './../src/common/redis/redis.service';
+import { IntegrationErrorFilter } from './../src/document/integration/filters/integration-error.filter';
 import { IntegrationSettingsModule } from './../src/integration-settings/integration-settings.module';
-import { CreateIntegrationSettings1784300000096 } from './../src/migrations/1784300000096-CreateIntegrationSettings';
+import { CreateIntegrationSettings1784300000095 } from './../src/migrations/1784300000095-CreateIntegrationSettings';
+import { AddWebhooksEnabledToIntegrationSettings1784300000096 } from './../src/migrations/1784300000096-AddWebhooksEnabledToIntegrationSettings';
 
 config({ path: join(__dirname, '..', '.env') });
 
 const JWT_SECRET = 'jwt-secret-de-la-e2e-de-integration-settings';
 const INTEGRATION_API_KEY_HMAC_SECRET =
   'secret-hmac-de-la-e2e-de-integration-settings-con-mas-de-32-caracteres';
-const SETTINGS_URL = '/api/v1/integration/settings';
 
 @Module({
   imports: [JwtModule.register({ secret: JWT_SECRET })],
@@ -38,7 +49,25 @@ const SETTINGS_URL = '/api/v1/integration/settings';
 })
 class E2eJwtModule {}
 
-describe('Configuración de integración en Integration API (e2e)', () => {
+/**
+ * Ruta mínima protegida por `OrganizationApiKeyGuard` y con el filtro de errores de la API de
+ * integración: es lo que comparten todos los controllers de `/integration/...`.
+ */
+@SkipJwtAuth()
+@UseGuards(OrganizationApiKeyGuard)
+@UseFilters(IntegrationErrorFilter)
+@Controller('integration/e2e-ping')
+class IntegrationPingController {
+  @Get()
+  ping() {
+    return { success: true };
+  }
+}
+
+@Module({ imports: [ApiKeyModule], controllers: [IntegrationPingController] })
+class IntegrationPingModule {}
+
+describe('Configuración de integración por organización (e2e)', () => {
   const DATABASE_NAME = `signature_integration_settings_e2e_${process.pid}_${Date.now()}`;
   const baseUrl = process.env.POSTGRES_DB_URL as string;
   const adminUrl = baseUrl.replace(/\/[^/?]+(\?.*)?$/, '/postgres$1');
@@ -63,15 +92,21 @@ describe('Configuración de integración en Integration API (e2e)', () => {
     }
   }
 
-  async function seedOrganization(key: string): Promise<void> {
+  async function seedOrganization(key: string): Promise<string> {
     const [organization] = await dataSource.query(
       `INSERT INTO organizations (name, display_name) VALUES ($1, $1) RETURNING id`,
       [`Org ${key} ${randomUUID()}`],
     );
     ids[`org:${key}`] = organization.id;
+    return organization.id;
   }
 
-  async function seedOwner(userKey: string, organizationKey: string) {
+  async function seedMember(
+    userKey: string,
+    organizationKey: string,
+    roleName: 'OWNER' | 'ADMIN' | 'MEMBER',
+    isActive = true,
+  ): Promise<void> {
     const [info] = await dataSource.query(
       `INSERT INTO personal_information (name, last_name, curp) VALUES ($1, 'E2E', $2) RETURNING id`,
       [userKey, `CURP${userKey}`.slice(0, 18)],
@@ -88,24 +123,36 @@ describe('Configuración de integración en Integration API (e2e)', () => {
     );
     await dataSource.query(
       `INSERT INTO accounts (user_id, account_type, organization_id, role_id, email, password, is_active)
-       SELECT $1, 'ORGANIZATION', $2, r.id, $3, 'x', true FROM roles r WHERE r.name = 'OWNER' AND r.is_system_role = true`,
+       SELECT $1, 'ORGANIZATION', $2, r.id, $3, 'x', $5 FROM roles r WHERE r.name = $4 AND r.is_system_role = true`,
       [
         user.id,
         ids[`org:${organizationKey}`],
         `${userKey}@integration-settings.test`,
+        roleName,
+        isActive,
       ],
     );
     ids[`user:${userKey}`] = user.id;
   }
 
-  async function permissionId(resource: string, action: string) {
-    const [row] = await dataSource.query(
-      `SELECT p.id FROM permissions p
-       JOIN resources r ON r.id = p.resource_id JOIN actions a ON a.id = p.action_id
-       WHERE r.key = $1 AND a.key = $2 AND p.scope = 'ANY'`,
-      [resource, action],
+  /** Inserta una llave directamente, como las que existían antes de la migración. */
+  async function seedRawApiKey(
+    organizationKey: string,
+    status: 'ACTIVE' | 'REVOKED',
+  ): Promise<void> {
+    const publicId = randomUUID().replace(/-/g, '').slice(0, 16);
+    await dataSource.query(
+      `INSERT INTO api_keys (organization_id, public_id, key_prefix, secret_hash, name, status, revoked_at)
+       VALUES ($1, $2, $3, $4, 'Llave previa', $5, $6)`,
+      [
+        ids[`org:${organizationKey}`],
+        publicId,
+        `fma_live_${publicId}`,
+        'a'.repeat(64),
+        status,
+        status === 'REVOKED' ? new Date() : null,
+      ],
     );
-    return row?.id as string | undefined;
   }
 
   function as(userKey: string): Record<string, string> {
@@ -119,39 +166,28 @@ describe('Configuración de integración en Integration API (e2e)', () => {
     return { Authorization: `Bearer ${token}` };
   }
 
-  /** Emite la llave de la organización con los permisos dados y devuelve la llave en claro. */
-  async function issueKey(
-    organizationKey: string,
-    owner: string,
-    permissions: string[],
-  ): Promise<string> {
+  function settingsUrl(organizationKey: string): string {
+    return `/api/v1/organizations/${ids[`org:${organizationKey}`]}/integration-settings`;
+  }
+
+  async function settingsRows(organizationKey: string) {
+    return dataSource.query(
+      `SELECT status, created_at, updated_at FROM integration_settings WHERE organization_id = $1`,
+      [ids[`org:${organizationKey}`]],
+    );
+  }
+
+  /** Emite la llave de la organización por la API administrativa y devuelve la llave en claro. */
+  async function issueKey(organizationKey: string, owner: string) {
     const response = await request(app.getHttpServer())
       .post(`/api/v1/organizations/${ids[`org:${organizationKey}`]}/api-keys`)
       .set(as(owner))
       .send({
         name: 'Integración ERP',
-        permissionIds: permissions.map((key) => ids[`permission:${key}`]),
+        permissionIds: [ids['permission:directory-read']],
       })
       .expect(201);
-    return response.body.data.key;
-  }
-
-  async function settingsRows(organizationKey: string) {
-    return dataSource.query(
-      `SELECT webhooks_enabled, updated_at FROM integration_settings WHERE organization_id = $1`,
-      [ids[`org:${organizationKey}`]],
-    );
-  }
-
-  function getSettings(key: string) {
-    return request(app.getHttpServer()).get(SETTINGS_URL).set('X-API-Key', key);
-  }
-
-  function patchSettings(key: string, body: Record<string, unknown>) {
-    return request(app.getHttpServer())
-      .patch(SETTINGS_URL)
-      .set('X-API-Key', key)
-      .send(body);
+    return response.body.data as { id: string; key: string };
   }
 
   beforeAll(async () => {
@@ -171,15 +207,17 @@ describe('Configuración de integración en Integration API (e2e)', () => {
 
     await seedOrganization('org1');
     await seedOrganization('org2');
-    await seedOwner('ana', 'org1');
-    await seedOwner('eva', 'org2');
-    for (const [key, resource, action] of [
-      ['settings-read', 'INTEGRATION_SETTINGS', 'READ'],
-      ['settings-update', 'INTEGRATION_SETTINGS', 'UPDATE'],
-      ['document-create', 'DOCUMENT', 'CREATE'],
-    ]) {
-      ids[`permission:${key}`] = (await permissionId(resource, action))!;
-    }
+    await seedMember('ana', 'org1', 'OWNER');
+    await seedMember('beto', 'org1', 'ADMIN');
+    await seedMember('carla', 'org1', 'MEMBER');
+    await seedMember('dario', 'org1', 'ADMIN', false);
+    await seedMember('eva', 'org2', 'OWNER');
+    const [permission] = await dataSource.query(
+      `SELECT p.id FROM permissions p
+       JOIN resources r ON r.id = p.resource_id JOIN actions a ON a.id = p.action_id
+       WHERE r.key = 'DIRECTORY' AND a.key = 'READ' AND p.scope = 'ANY'`,
+    );
+    ids['permission:directory-read'] = permission.id;
 
     @Module({
       imports: [
@@ -193,6 +231,7 @@ describe('Configuración de integración en Integration API (e2e)', () => {
         AuthorizationModule,
         ApiKeyModule,
         IntegrationSettingsModule,
+        IntegrationPingModule,
       ],
     })
     class IntegrationSettingsE2eModule {}
@@ -225,245 +264,283 @@ describe('Configuración de integración en Integration API (e2e)', () => {
   });
 
   describe('migración', () => {
-    it('no crea configuración para organizaciones existentes: quedan con webhooks desactivados', async () => {
-      const migration = new CreateIntegrationSettings1784300000096();
+    it('da configuración ACTIVE a las organizaciones con llaves (activas o revocadas) y no a las demás', async () => {
+      await seedOrganization('legacy-active');
+      await seedOrganization('legacy-revoked');
+      await seedOrganization('legacy-none');
+      await seedRawApiKey('legacy-active', 'ACTIVE');
+      await seedRawApiKey('legacy-revoked', 'REVOKED');
+      await seedRawApiKey('legacy-revoked', 'REVOKED');
+
+      // La 096 agrega una columna a esta tabla: se revierte antes y se reaplica después, como haría
+      // `migration:revert` en orden inverso.
+      const migration = new CreateIntegrationSettings1784300000095();
+      const webhooksMigration =
+        new AddWebhooksEnabledToIntegrationSettings1784300000096();
       const queryRunner = dataSource.createQueryRunner();
       try {
+        await webhooksMigration.down(queryRunner);
         await migration.down(queryRunner);
         await migration.up(queryRunner);
+        await webhooksMigration.up(queryRunner);
       } finally {
         await queryRunner.release();
       }
-      for (const [key, resource, action] of [
-        ['settings-read', 'INTEGRATION_SETTINGS', 'READ'],
-        ['settings-update', 'INTEGRATION_SETTINGS', 'UPDATE'],
-      ]) {
-        ids[`permission:${key}`] = (await permissionId(resource, action))!;
-      }
 
-      const [{ count }] = await dataSource.query(
-        `SELECT count(*)::int AS count FROM integration_settings`,
-      );
-      expect(count).toBe(0);
-    });
-
-    it('siembra INTEGRATION_SETTINGS.READ y UPDATE para OWNER y ADMIN, no para MEMBER', async () => {
-      const rows: Array<{ role: string; action: string }> =
-        await dataSource.query(
-          `SELECT ro.name AS role, a.key AS action
-           FROM role_permissions rp
-           JOIN roles ro ON ro.id = rp.role_id AND ro.is_system_role = true
-           JOIN permissions p ON p.id = rp.permission_id
-           JOIN resources r ON r.id = p.resource_id
-           JOIN actions a ON a.id = p.action_id
-           WHERE r.key = 'INTEGRATION_SETTINGS'
-           ORDER BY ro.name, a.key`,
-        );
-
-      expect(rows).toEqual([
-        { role: 'ADMIN', action: 'READ' },
-        { role: 'ADMIN', action: 'UPDATE' },
-        { role: 'OWNER', action: 'READ' },
-        { role: 'OWNER', action: 'UPDATE' },
+      expect(await settingsRows('legacy-active')).toEqual([
+        expect.objectContaining({ status: 'ACTIVE' }),
       ]);
+      expect(await settingsRows('legacy-revoked')).toEqual([
+        expect.objectContaining({ status: 'ACTIVE' }),
+      ]);
+      expect(await settingsRows('legacy-none')).toEqual([]);
     });
 
-    it('admite una sola configuración por organización y la borra con ella', async () => {
+    it('admite una sola configuración por organización', async () => {
+      await dataSource.query(
+        `INSERT INTO integration_settings (organization_id) VALUES ($1)`,
+        [ids['org:org1']],
+      );
+
+      await expect(
+        dataSource.query(
+          `INSERT INTO integration_settings (organization_id, status) VALUES ($1, 'DISABLED')`,
+          [ids['org:org1']],
+        ),
+      ).rejects.toThrow(/UQ_integration_settings_organization_id/);
+    });
+
+    it('borra la configuración con la organización', async () => {
       await seedOrganization('to-delete');
       await dataSource.query(
         `INSERT INTO integration_settings (organization_id) VALUES ($1)`,
         [ids['org:to-delete']],
       );
 
-      await expect(
-        dataSource.query(
-          `INSERT INTO integration_settings (organization_id, webhooks_enabled) VALUES ($1, true)`,
-          [ids['org:to-delete']],
-        ),
-      ).rejects.toThrow(/UQ_integration_settings_organization_id/);
-      const [row] = await settingsRows('to-delete');
-      expect(row.webhooks_enabled).toBe(false);
-
       await dataSource.query(`DELETE FROM organizations WHERE id = $1`, [
         ids['org:to-delete'],
       ]);
+
       expect(await settingsRows('to-delete')).toEqual([]);
     });
   });
 
-  describe('consulta y actualización', () => {
-    it('sin configuración GET devuelve webhooksEnabled: false sin crear la fila', async () => {
-      const key = await issueKey('org1', 'ana', ['settings-read']);
+  describe('autorización', () => {
+    it.each([
+      ['OWNER', 'ana'],
+      ['ADMIN', 'beto'],
+    ])(
+      'un %s con API_KEY.MANAGE puede consultar y actualizar',
+      async (_role, user) => {
+        await request(app.getHttpServer())
+          .get(settingsUrl('org1'))
+          .set(as(user))
+          .expect(200);
+        await request(app.getHttpServer())
+          .patch(settingsUrl('org1'))
+          .set(as(user))
+          .send({ status: 'DISABLED' })
+          .expect(200);
+      },
+    );
 
-      const response = await getSettings(key).expect(200);
+    it.each([
+      ['un MEMBER sin API_KEY.MANAGE', 'carla'],
+      ['un ADMIN dado de baja', 'dario'],
+      ['el OWNER de otra organización', 'eva'],
+    ])('%s recibe 403 y no cambia nada', async (_label, user) => {
+      await request(app.getHttpServer())
+        .get(settingsUrl('org1'))
+        .set(as(user))
+        .expect(403);
+      await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as(user))
+        .send({ status: 'DISABLED' })
+        .expect(403);
 
-      expect(response.body).toEqual({
-        success: true,
-        data: { webhooksEnabled: false },
-      });
       expect(await settingsRows('org1')).toEqual([]);
     });
 
-    it('PATCH activa y desactiva, y GET refleja el valor', async () => {
-      const key = await issueKey('org1', 'ana', [
-        'settings-read',
-        'settings-update',
-      ]);
-
-      const enabled = await patchSettings(key, {
-        webhooksEnabled: true,
-      }).expect(200);
-      expect(enabled.body).toEqual({
-        success: true,
-        data: { webhooksEnabled: true },
-      });
-      expect((await getSettings(key).expect(200)).body.data).toEqual({
-        webhooksEnabled: true,
-      });
-
-      await patchSettings(key, { webhooksEnabled: false }).expect(200);
-      expect((await getSettings(key).expect(200)).body.data).toEqual({
-        webhooksEnabled: false,
-      });
+    it('sin sesión responde 401', async () => {
+      await request(app.getHttpServer()).get(settingsUrl('org1')).expect(401);
     });
 
-    it('repetir el mismo PATCH no crea filas ni cambia updated_at', async () => {
-      const key = await issueKey('org1', 'ana', ['settings-update']);
+    it('ignora un organizationId en el body: sólo cambia la organización de la ruta', async () => {
+      await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'DISABLED', organizationId: ids['org:org2'] })
+        .expect(200);
 
-      await patchSettings(key, { webhooksEnabled: true }).expect(200);
+      expect(await settingsRows('org1')).toEqual([
+        expect.objectContaining({ status: 'DISABLED' }),
+      ]);
+      expect(await settingsRows('org2')).toEqual([]);
+    });
+
+    it('rechaza un status inválido con 422 INTEGRATION_SETTINGS_INVALID_BODY', async () => {
+      const response = await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'PAUSED' })
+        .expect(422);
+
+      expect(response.body.code).toBe('INTEGRATION_SETTINGS_INVALID_BODY');
+    });
+  });
+
+  describe('consulta y actualización', () => {
+    it('sin configuración responde ACTIVE sin crear la fila', async () => {
+      const response = await request(app.getHttpServer())
+        .get(settingsUrl('org1'))
+        .set(as('ana'))
+        .expect(200);
+
+      expect(response.body.data).toEqual({
+        organizationId: ids['org:org1'],
+        status: 'ACTIVE',
+        createdAt: null,
+        updatedAt: null,
+      });
+      expect(response.body.data).not.toHaveProperty('apiKeys');
+      expect(await settingsRows('org1')).toEqual([]);
+    });
+
+    it('repetir el mismo estado no crea filas ni cambia updated_at', async () => {
+      const first = await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'DISABLED' })
+        .expect(200);
       const [before] = await settingsRows('org1');
-      await patchSettings(key, { webhooksEnabled: true }).expect(200);
+
+      const second = await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'DISABLED' })
+        .expect(200);
       const rows = await settingsRows('org1');
 
       expect(rows).toHaveLength(1);
       expect(rows[0].updated_at).toEqual(before.updated_at);
+      expect(second.body.data).toEqual(first.body.data);
     });
 
-    it.each([
-      ['falta webhooksEnabled', {}],
-      ['webhooksEnabled no es booleano', { webhooksEnabled: 'yes' }],
-      [
-        'trae una URL',
-        { webhooksEnabled: true, url: 'https://cliente.example' },
-      ],
-      ['trae un secreto', { webhooksEnabled: true, secret: 'whsec_x' }],
-    ])('rechaza con 422 INVALID_REQUEST cuando %s', async (_label, body) => {
-      const key = await issueKey('org1', 'ana', ['settings-update']);
-
-      const response = await patchSettings(key, body).expect(422);
-
-      expect(response.body.error.code).toBe('INVALID_REQUEST');
-      expect(await settingsRows('org1')).toEqual([]);
-    });
-  });
-
-  describe('autorización', () => {
-    it('sin X-API-Key responde 401', async () => {
-      await request(app.getHttpServer()).get(SETTINGS_URL).expect(401);
+    it('cambiar de estado sí actualiza updated_at', async () => {
       await request(app.getHttpServer())
-        .patch(SETTINGS_URL)
-        .send({ webhooksEnabled: true })
-        .expect(401);
-    });
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'DISABLED' })
+        .expect(200);
+      const [before] = await settingsRows('org1');
 
-    it('una llave que sólo crea documentos no puede consultar ni cambiar la configuración', async () => {
-      const key = await issueKey('org1', 'ana', ['document-create']);
+      const response = await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'ACTIVE' })
+        .expect(200);
+      const [after] = await settingsRows('org1');
 
-      const read = await getSettings(key).expect(403);
-      const write = await patchSettings(key, { webhooksEnabled: true }).expect(
-        403,
+      expect(response.body.data.status).toBe('ACTIVE');
+      expect(after.updated_at.getTime()).toBeGreaterThan(
+        before.updated_at.getTime(),
       );
-
-      expect(read.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
-      expect(write.body.error.code).toBe('API_KEY_PERMISSION_DENIED');
-      expect(await settingsRows('org1')).toEqual([]);
-    });
-
-    it('READ sin UPDATE consulta pero no modifica', async () => {
-      const key = await issueKey('org1', 'ana', ['settings-read']);
-
-      await getSettings(key).expect(200);
-      const response = await patchSettings(key, {
-        webhooksEnabled: true,
-      }).expect(403);
-
-      expect(response.body.error.message).toContain(
-        'INTEGRATION_SETTINGS.UPDATE',
-      );
-      expect(await settingsRows('org1')).toEqual([]);
-    });
-
-    it('UPDATE sin READ modifica pero no consulta', async () => {
-      const key = await issueKey('org1', 'ana', ['settings-update']);
-
-      await patchSettings(key, { webhooksEnabled: true }).expect(200);
-      await getSettings(key).expect(403);
-    });
-
-    it('rechaza un organizationId en el cuerpo o el query con 400 INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED', async () => {
-      const key = await issueKey('org1', 'ana', [
-        'settings-read',
-        'settings-update',
-      ]);
-
-      const write = await patchSettings(key, {
-        webhooksEnabled: true,
-        organizationId: ids['org:org2'],
-      }).expect(400);
-      const read = await request(app.getHttpServer())
-        .get(`${SETTINGS_URL}?organizationId=${ids['org:org2']}`)
-        .set('X-API-Key', key)
-        .expect(400);
-
-      expect(write.body.error.code).toBe(
-        'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
-      );
-      expect(read.body.error.code).toBe(
-        'INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED',
-      );
-      expect(await settingsRows('org1')).toEqual([]);
-      expect(await settingsRows('org2')).toEqual([]);
     });
   });
 
-  describe('aislamiento y API keys', () => {
-    it('cada llave sólo ve y cambia la configuración de su organización', async () => {
-      const permissions = ['settings-read', 'settings-update'];
-      const key1 = await issueKey('org1', 'ana', permissions);
-      const key2 = await issueKey('org2', 'eva', permissions);
+  describe('compatibilidad con la emisión de llaves', () => {
+    it('la primera llave deja la integración ACTIVE', async () => {
+      await issueKey('org1', 'ana');
 
-      await patchSettings(key1, { webhooksEnabled: true }).expect(200);
-
-      expect((await getSettings(key2).expect(200)).body.data).toEqual({
-        webhooksEnabled: false,
-      });
-      expect(await settingsRows('org2')).toEqual([]);
-
-      await patchSettings(key2, { webhooksEnabled: false }).expect(200);
-      expect((await getSettings(key1).expect(200)).body.data).toEqual({
-        webhooksEnabled: true,
-      });
+      expect(await settingsRows('org1')).toEqual([
+        expect.objectContaining({ status: 'ACTIVE' }),
+      ]);
     });
 
-    it('rotar la llave conserva la configuración de la organización', async () => {
-      const oldKey = await issueKey('org1', 'ana', [
-        'settings-read',
-        'settings-update',
-      ]);
-      await patchSettings(oldKey, { webhooksEnabled: true }).expect(200);
+    it('rotar la llave no reactiva una integración DISABLED', async () => {
+      await issueKey('org1', 'ana');
+      await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'DISABLED' })
+        .expect(200);
 
-      const rotated = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .post(`/api/v1/organizations/${ids['org:org1']}/api-keys/rotate`)
         .set(as('ana'))
         .send({})
         .expect(201);
-      const newKey: string = rotated.body.data.key;
 
-      await getSettings(oldKey).expect(401);
-      expect((await getSettings(newKey).expect(200)).body.data).toEqual({
-        webhooksEnabled: true,
+      expect(await settingsRows('org1')).toEqual([
+        expect.objectContaining({ status: 'DISABLED' }),
+      ]);
+    });
+  });
+
+  describe('OrganizationApiKeyGuard', () => {
+    function ping(key: string) {
+      return request(app.getHttpServer())
+        .get('/api/v1/integration/e2e-ping')
+        .set('X-API-Key', key);
+    }
+
+    it('acepta la llave con la integración ACTIVE', async () => {
+      const { key } = await issueKey('org1', 'ana');
+
+      await ping(key).expect(200);
+    });
+
+    it('con DISABLED rechaza 403 INTEGRATION_DISABLED sin revocar ni rotar la llave, y al reactivar vuelve a aceptarla', async () => {
+      const { id, key } = await issueKey('org1', 'ana');
+      const [keyBefore] = await dataSource.query(
+        `SELECT status, secret_hash, revoked_at FROM api_keys WHERE id = $1`,
+        [id],
+      );
+
+      await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'DISABLED' })
+        .expect(200);
+
+      const rejected = await ping(key).expect(403);
+      expect(rejected.body).toEqual({
+        success: false,
+        error: expect.objectContaining({ code: 'INTEGRATION_DISABLED' }),
       });
-      expect(await settingsRows('org1')).toHaveLength(1);
+
+      const [keyWhileDisabled] = await dataSource.query(
+        `SELECT status, secret_hash, revoked_at FROM api_keys WHERE id = $1`,
+        [id],
+      );
+      expect(keyWhileDisabled).toEqual(keyBefore);
+      const [{ count }] = await dataSource.query(
+        `SELECT count(*)::int AS count FROM api_keys WHERE organization_id = $1`,
+        [ids['org:org1']],
+      );
+      expect(count).toBe(1);
+
+      await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'ACTIVE' })
+        .expect(200);
+
+      await ping(key).expect(200);
+    });
+
+    it('desactivar una organización no afecta a la llave de otra', async () => {
+      await issueKey('org1', 'ana');
+      const { key: otherKey } = await issueKey('org2', 'eva');
+
+      await request(app.getHttpServer())
+        .patch(settingsUrl('org1'))
+        .set(as('ana'))
+        .send({ status: 'DISABLED' })
+        .expect(200);
+
+      await ping(otherKey).expect(200);
     });
   });
 });

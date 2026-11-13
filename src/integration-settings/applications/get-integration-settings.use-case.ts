@@ -1,14 +1,15 @@
 import { Injectable } from '@nestjs/common';
 
-import { IntegrationApiClient } from 'src/api-key/interfaces/integration-api-client.interface';
+import { BaseResponse } from 'src/interfaces/api-response.dto';
 
+import { IntegrationSettingsOrganizationNotFoundException } from '../exceptions/integration-settings.exceptions';
 import {
-  IntegrationSettingsResponse,
-  toIntegrationSettingsResponse,
+  IntegrationSettingsData,
+  toIntegrationSettingsData,
 } from '../interfaces/integration-settings-response.interface';
 import { IntegrationSettingsService } from '../services/integration-settings.service';
 
-/** Consulta la configuración de integración de la organización de la API key. */
+/** Consulta la configuración de integración de una organización. */
 @Injectable()
 export class GetIntegrationSettingsUseCase {
   constructor(
@@ -16,24 +17,38 @@ export class GetIntegrationSettingsUseCase {
   ) {}
 
   /**
-   * Devuelve la configuración de la organización, o los valores por defecto si nunca se guardó.
-   * No escribe.
+   * Devuelve el estado de la integración de la organización de la ruta, sin datos de API keys.
+   * No escribe: si la organización nunca tuvo configuración responde `ACTIVE` sin crearla.
    *
-   * @param apiClient - Cliente autenticado; la organización sale sólo de aquí.
-   * @returns `{ success: true, data: { webhooksEnabled } }`.
+   * @param organizationId - `:organizationId` de la ruta, ya autorizado por `PermissionsGuard`.
+   * @returns La configuración.
+   *
+   * @throws {IntegrationSettingsOrganizationNotFoundException} (404) Si la organización no existe
+   *   o está desactivada.
    *
    * @example
    * ```ts
-   * const { data } = await getIntegrationSettings.execute(apiClient); // data.webhooksEnabled === false
+   * const { data } = await getIntegrationSettings.execute('org-1'); // data.status === 'ACTIVE'
    * ```
    */
   async execute(
-    apiClient: IntegrationApiClient,
-  ): Promise<IntegrationSettingsResponse> {
-    const settings = await this.integrationSettingsService.findByOrganization(
-      apiClient.organizationId,
-    );
+    organizationId: string,
+  ): Promise<BaseResponse<IntegrationSettingsData>> {
+    if (
+      !(await this.integrationSettingsService.isActiveOrganization(
+        organizationId,
+      ))
+    ) {
+      throw new IntegrationSettingsOrganizationNotFoundException();
+    }
 
-    return toIntegrationSettingsResponse(settings);
+    const settings =
+      await this.integrationSettingsService.findByOrganization(organizationId);
+
+    return {
+      success: true,
+      message: 'Configuración de integración obtenida correctamente',
+      data: toIntegrationSettingsData(organizationId, settings),
+    };
   }
 }
