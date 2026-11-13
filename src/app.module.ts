@@ -41,6 +41,7 @@ import { ApiKeyModule } from './api-key/api-key.module';
 import { PlatformModule } from './platform/platform.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { IntegrationSettingsModule } from './integration-settings/integration-settings.module';
+import { OutboundWebhooksModule } from './outbound-webhooks/outbound-webhooks.module';
 
 @Module({
   imports: [
@@ -124,6 +125,7 @@ import { IntegrationSettingsModule } from './integration-settings/integration-se
     PlatformModule,
     MetricsModule.forRoot(),
     IntegrationSettingsModule,
+    OutboundWebhooksModule,
   ],
   controllers: [AppController],
   providers: [
