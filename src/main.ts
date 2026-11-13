@@ -12,6 +12,7 @@ import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
+import { IntegrationSettingsModule } from './integration-settings/integration-settings.module';
 import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,
@@ -105,6 +106,7 @@ async function bootstrap() {
         AuthModule,
         DirectoryModule,
         ApiKeyModule,
+        IntegrationSettingsModule,
       ],
     },
   );
