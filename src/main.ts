@@ -12,6 +12,7 @@ import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
+import { IntegrationSettingsModule } from './integration-settings/integration-settings.module';
 import { OutboundWebhooksModule } from './outbound-webhooks/outbound-webhooks.module';
 import {
   INTEGRATION_API_KEY_SECURITY,
@@ -106,6 +107,7 @@ async function bootstrap() {
         AuthModule,
         DirectoryModule,
         ApiKeyModule,
+        IntegrationSettingsModule,
         // Configuración del endpoint de webhooks salientes (`/integration/webhooks/endpoint`).
         OutboundWebhooksModule,
       ],

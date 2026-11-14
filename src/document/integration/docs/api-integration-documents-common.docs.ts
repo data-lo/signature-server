@@ -123,7 +123,7 @@ export function ApiIntegrationCommonResponses(
     ApiResponse({
       status: 403,
       description: [
-        '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).',
+        '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE`, `INTEGRATION_DISABLED` (un administrador desactivó la integración de la organización; la llave no se revoca y vuelve a servir al reactivarla) o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).',
         options.forbiddenNote,
       ]
         .filter(Boolean)
@@ -139,6 +139,11 @@ export function ApiIntegrationCommonResponses(
           'Organización desactivada',
           'API_KEY_ORGANIZATION_INACTIVE',
           'La organización de esta API key está desactivada',
+        ),
+        integrationDisabled: integrationErrorExample(
+          'Integración desactivada',
+          'INTEGRATION_DISABLED',
+          'La integración de la organización de esta API key está desactivada',
         ),
         ...options.forbiddenExamples,
       },
