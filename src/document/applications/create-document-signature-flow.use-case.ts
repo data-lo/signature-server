@@ -47,6 +47,7 @@ import { MAX_PDF_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.consta
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { ReserveDocumentCreditUseCase } from 'src/billing/credits/reserve-document-credit.use-case';
+import { AssertBiometricCreditsAvailableUseCase } from 'src/billing/credits/assert-biometric-credits-available.use-case';
 import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
@@ -247,6 +248,7 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly assertPlanAction: AssertPlanActionUseCase,
     private readonly directoryCollaborators: DirectoryCollaboratorsService,
     private readonly documentIndexRequest: DocumentIndexRequestService,
+    private readonly assertBiometricCredits: AssertBiometricCreditsAvailableUseCase,
   ) {}
 
   async execute(
@@ -372,6 +374,23 @@ export class CreateDocumentSignatureFlowUseCase {
         action: PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS,
       });
     }
+
+    /**
+     * Cada firmante de un documento biométrico necesita su crédito biométrico. Se comprueba aquí,
+     * antes de subir el PDF y de abrir la transacción: sin saldo para todos, el documento no se
+     * crea, no se reserva nada y Didit no se llama. 402 `INSUFFICIENT_BIOMETRIC_CREDITS` con
+     * cuántos hacen falta y cuántos hay. Se repite dentro de la transacción por si el saldo cambió
+     * mientras se subía el archivo.
+     */
+    const biometricSigners =
+      documentSignatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC
+        ? totalSigners
+        : 0;
+    await this.assertBiometricCredits.execute({
+      accountId,
+      userId: createdBy,
+      biometricSigners,
+    });
 
     /**
      * Mandar aprobador y a la vez decir que no hace falta aprobación es una contradicción, y se
@@ -538,6 +557,10 @@ export class CreateDocumentSignatureFlowUseCase {
        * siempre. Los dos caminos corren en esta misma transacción: sin saldo, no hay documento.
        */
       if (document.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+        await this.assertBiometricCredits.execute(
+          { accountId, userId: createdBy, biometricSigners },
+          manager,
+        );
         await this.reserveDocumentCredit.execute(creditInput, manager);
       } else {
         await this.consumeDocumentCredit.execute(creditInput, manager);

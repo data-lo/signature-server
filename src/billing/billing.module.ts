@@ -35,6 +35,7 @@ import { CreditReservationEntity } from './credits/credit-reservation.entity';
 import { CreditReservationService } from './credits/credit-reservation.service';
 import { ReserveDocumentCreditUseCase } from './credits/reserve-document-credit.use-case';
 import { ReserveBiometricSignatureCreditsUseCase } from './credits/reserve-biometric-signature-credits.use-case';
+import { AssertBiometricCreditsAvailableUseCase } from './credits/assert-biometric-credits-available.use-case';
 import { FinalizeBiometricSignatureCreditsUseCase } from './credits/finalize-biometric-signature-credits.use-case';
 import { ReleaseExpiredCreditReservationsUseCase } from './credits/release-expired-credit-reservations.use-case';
 import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-credit-reservations.job';
@@ -109,6 +110,7 @@ import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-c
     CreditReservationService,
     ReserveDocumentCreditUseCase,
     ReserveBiometricSignatureCreditsUseCase,
+    AssertBiometricCreditsAvailableUseCase,
     FinalizeBiometricSignatureCreditsUseCase,
     ReleaseExpiredCreditReservationsUseCase,
     ReleaseExpiredCreditReservationsJob,
@@ -133,6 +135,8 @@ import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-c
     // `DocumentModule` (alta, rechazo y cancelación) y `BiometricSignatureModule` (sesión y webhook).
     ReserveDocumentCreditUseCase,
     ReserveBiometricSignatureCreditsUseCase,
+    // `DocumentModule`: saldo biométrico antes de crear un documento con firmantes biométricos.
+    AssertBiometricCreditsAvailableUseCase,
     FinalizeBiometricSignatureCreditsUseCase,
   ],
 })

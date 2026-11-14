@@ -17,6 +17,11 @@ import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
 import { ReserveDocumentCreditUseCase } from 'src/billing/credits/reserve-document-credit.use-case';
+import { AssertBiometricCreditsAvailableUseCase } from 'src/billing/credits/assert-biometric-credits-available.use-case';
+import {
+  INSUFFICIENT_BIOMETRIC_CREDITS_ON_CREATE_MESSAGE,
+  InsufficientBiometricCreditsException,
+} from 'src/billing/exceptions/billing.exceptions';
 import { InsufficientDocumentCreditsException } from 'src/billing/exceptions/billing.exceptions';
 import { FILE_STATUS_ENUM } from 'src/common/minio/enums/file-status-enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
@@ -89,6 +94,7 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
   let reserveDocumentCredit: Record<string, jest.Mock>;
   let documentReviewerService: Record<string, jest.Mock>;
   let assertPlanAction: Record<string, jest.Mock>;
+  let assertBiometricCredits: Record<string, jest.Mock>;
   let directoryCollaborators: Record<string, jest.Mock>;
   let manager: { getRepository: jest.Mock };
 
@@ -288,6 +294,8 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
     };
     /** Por omisión el plan incluye la acción, como todos los planes contratables hoy. */
     assertPlanAction = { execute: jest.fn().mockResolvedValue({}) };
+    /** Por omisión hay saldo biométrico de sobra; su regla tiene su propia suite. */
+    assertBiometricCredits = { execute: jest.fn().mockResolvedValue(10) };
     /**
      * Qué hace válido a un `linkedUserId` —contacto vigente del Directorio activo, usuario no
      * borrado— tiene su propia suite (`directory-collaborators.service.spec.ts`). Aquí basta con
@@ -342,6 +350,10 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
           useValue: documentReviewerService,
         },
         { provide: AssertPlanActionUseCase, useValue: assertPlanAction },
+        {
+          provide: AssertBiometricCreditsAvailableUseCase,
+          useValue: assertBiometricCredits,
+        },
         {
           provide: DirectoryCollaboratorsService,
           useValue: directoryCollaborators,
@@ -575,6 +587,121 @@ describe('CreateDocumentSignatureFlowUseCase', () => {
       ).rejects.toBeInstanceOf(PlanActionNotIncludedException);
       expect(minioService.uploadObject).not.toHaveBeenCalled();
       expect(consumeDocumentCredit.execute).not.toHaveBeenCalled();
+    });
+
+    describe('saldo biométrico', () => {
+      /** Dos firmantes biométricos y un saldo de uno. */
+      const insufficient = () =>
+        new InsufficientBiometricCreditsException(2, 1, undefined, {
+          message: INSUFFICIENT_BIOMETRIC_CREDITS_ON_CREATE_MESSAGE,
+          biometricSigners: 2,
+        });
+
+      it('con saldo suficiente pide un crédito por firmante (sin contar testigos) y crea el documento', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          biometricDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(assertBiometricCredits.execute).toHaveBeenNthCalledWith(1, {
+          accountId: 'account-1',
+          userId: 'creator-1',
+          biometricSigners: 2,
+        });
+        // Se repite dentro de la transacción, por si el saldo cambió durante la subida.
+        expect(assertBiometricCredits.execute).toHaveBeenNthCalledWith(
+          2,
+          { accountId: 'account-1', userId: 'creator-1', biometricSigners: 2 },
+          expect.anything(),
+        );
+        expect(documentRepo.save).toHaveBeenCalledTimes(1);
+      });
+
+      it('con saldo insuficiente responde 402 INSUFFICIENT_BIOMETRIC_CREDITS y no sube, crea ni reserva nada', async () => {
+        assertBiometricCredits.execute.mockRejectedValue(insufficient());
+
+        const error = await useCase
+          .execute('creator-1', 'account-1', biometricDto, file, '127.0.0.1')
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(InsufficientBiometricCreditsException);
+        const exception = error as InsufficientBiometricCreditsException;
+        expect(exception.getStatus()).toBe(402);
+        expect(exception.getResponse()).toMatchObject({
+          success: false,
+          message: 'Saldo insuficiente para firmas biométricas.',
+          error: {
+            code: 'INSUFFICIENT_BIOMETRIC_CREDITS',
+            details: { required: 2, available: 1, biometricSigners: 2 },
+          },
+        });
+        expect(minioService.uploadObject).not.toHaveBeenCalled();
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+        expect(reserveDocumentCredit.execute).not.toHaveBeenCalled();
+        expect(documentRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('si el saldo se agota durante la subida, la transacción se deshace sin reservar', async () => {
+        assertBiometricCredits.execute
+          .mockResolvedValueOnce(2)
+          .mockRejectedValueOnce(insufficient());
+
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            biometricDto,
+            file,
+            '127.0.0.1',
+          ),
+        ).rejects.toBeInstanceOf(InsufficientBiometricCreditsException);
+        expect(reserveDocumentCredit.execute).not.toHaveBeenCalled();
+        expect(
+          notificationEventsProducer.enqueueCreated,
+        ).not.toHaveBeenCalled();
+      });
+
+      it('reintento posterior: tras recargar saldo, el mismo payload crea el documento', async () => {
+        assertBiometricCredits.execute.mockRejectedValueOnce(insufficient());
+        await expect(
+          useCase.execute(
+            'creator-1',
+            'account-1',
+            biometricDto,
+            file,
+            '127.0.0.1',
+          ),
+        ).rejects.toBeInstanceOf(InsufficientBiometricCreditsException);
+
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          biometricDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(documentRepo.save).toHaveBeenCalledTimes(1);
+        expect(reserveDocumentCredit.execute).toHaveBeenCalledTimes(1);
+      });
+
+      it('un documento no biométrico no pide créditos biométricos', async () => {
+        await useCase.execute(
+          'creator-1',
+          'account-1',
+          baseDto,
+          file,
+          '127.0.0.1',
+        );
+
+        expect(assertBiometricCredits.execute).toHaveBeenCalledTimes(1);
+        expect(assertBiometricCredits.execute).toHaveBeenCalledWith(
+          expect.objectContaining({ biometricSigners: 0 }),
+        );
+      });
     });
 
     it('acepta requiresDifferentSignatures=BIOMETRIC y rechaza uno que lo contradiga', async () => {
