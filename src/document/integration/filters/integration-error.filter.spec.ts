@@ -16,12 +16,17 @@ import {
   IntegrationValidationException,
 } from '../validation/integration-validation.exception';
 import { IntegrationErrorFilter } from './integration-error.filter';
+import { getIntegrationAccessAnnotations } from 'src/observability/integration-access-log/integration-access-log.annotations';
 
 function run(exception: unknown) {
+  const request = {};
   const response = { status: jest.fn(), json: jest.fn() };
   response.status.mockReturnValue(response);
   const host = {
-    switchToHttp: () => ({ getResponse: () => response }),
+    switchToHttp: () => ({
+      getResponse: () => response,
+      getRequest: () => request,
+    }),
   } as unknown as ArgumentsHost;
 
   new IntegrationErrorFilter().catch(exception, host);
@@ -32,12 +37,55 @@ function run(exception: unknown) {
   };
 }
 
+/** Lo que el filtro anotó para el log de acceso al atender `exception`. */
+function annotationsOf(exception: unknown) {
+  const request = {};
+  const response = { status: jest.fn(), json: jest.fn() };
+  response.status.mockReturnValue(response);
+  new IntegrationErrorFilter().catch(exception, {
+    switchToHttp: () => ({
+      getResponse: () => response,
+      getRequest: () => request,
+    }),
+  } as unknown as ArgumentsHost);
+  return getIntegrationAccessAnnotations(request);
+}
+
 describe('IntegrationErrorFilter', () => {
   beforeEach(() => {
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => jest.restoreAllMocks());
+
+  describe('anotación para el log de acceso', () => {
+    it('anota el code respondido y la clase de la excepción', () => {
+      expect(annotationsOf(new InvalidApiKeyException())).toEqual({
+        errorCode: 'API_KEY_INVALID',
+        errorType: 'InvalidApiKeyException',
+      });
+    });
+
+    it('un error no controlado anota INTERNAL_ERROR sin el mensaje ni el stack', () => {
+      const annotations = annotationsOf(
+        new Error('duplicate key ana@correo.test fma_live_secreto'),
+      );
+      expect(annotations).toEqual({
+        errorCode: 'INTERNAL_ERROR',
+        errorType: 'Error',
+      });
+      expect(JSON.stringify(annotations)).not.toMatch(/ana@|fma_live_|stack/);
+    });
+
+    it('un 400 de validación anota el 422 INVALID_REQUEST que responde', () => {
+      expect(
+        annotationsOf(new BadRequestException(['name must be a string'])),
+      ).toEqual({
+        errorCode: 'INVALID_REQUEST',
+        errorType: 'BadRequestException',
+      });
+    });
+  });
 
   it('un error de validación conserva su 422, su código y sus detalles', () => {
     expect(

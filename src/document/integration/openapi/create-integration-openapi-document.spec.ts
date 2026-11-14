@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import { Test } from '@nestjs/testing';
+import { OperationObject } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
 
 import { AccountsController } from 'src/account/accounts.controller';
 import { OrganizationApiKeysController } from 'src/api-key/organization-api-keys.controller';
@@ -28,7 +29,13 @@ import { IntegrationWebhookEndpointController } from 'src/outbound-webhooks/cont
 import { INTEGRATION_WEBHOOKS_TAG } from 'src/outbound-webhooks/docs/integration-webhooks-tag.docs';
 import { OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM } from 'src/outbound-webhooks/enums/outbound-webhook-event-type.enum';
 import {
+  REQUEST_ID_HEADER,
+  REQUEST_ID_MAX_LENGTH,
+  REQUEST_ID_PATTERN,
+} from 'src/observability/request-context/request-context.constants';
+import {
   createIntegrationOpenApiDocument,
+  EXAMPLE_REQUEST_ID,
   findSchemaRefs,
   INTEGRATION_OPENAPI_PATH_PREFIX,
 } from './create-integration-openapi-document';
@@ -43,6 +50,16 @@ const ENV_SECRETS = {
     'secret-hmac-que-no-debe-aparecer-en-el-contrato-publico',
   JWT_SECRET: 'jwt-secreto-que-no-debe-aparecer',
 };
+
+/** Los parámetros de una operación sin el `X-Request-Id`, que llevan todas. */
+function withoutRequestId(
+  parameters: NonNullable<OperationObject['parameters']> | undefined,
+) {
+  return (parameters ?? []).filter(
+    (parameter) =>
+      !('name' in parameter && parameter.name === REQUEST_ID_HEADER),
+  );
+}
 
 /** Las operaciones de un documento como `MÉTODO ruta`, ordenadas. */
 function operationsOf(document: OpenAPIObject): string[] {
@@ -433,7 +450,8 @@ describe('createIntegrationOpenApiDocument', () => {
     expect(operation.description).toContain(
       '`DOCUMENT.READ` con alcance `ORGANIZATION`',
     );
-    expect(operation.parameters ?? []).toEqual([]);
+    // Lo único que recibe es el `X-Request-Id` opcional, común a todas las operaciones.
+    expect(withoutRequestId(operation.parameters)).toEqual([]);
 
     const schemas = integration.components!.schemas! as Record<
       string,
@@ -499,7 +517,97 @@ describe('createIntegrationOpenApiDocument', () => {
         description: expect.any(String),
         schema: expect.objectContaining({ example: expect.any(String) }),
       }),
+      expect.objectContaining({ name: 'X-Request-Id', required: false }),
     ]);
+  });
+
+  describe('X-Request-Id', () => {
+    /** Todas las operaciones publicadas como `[MÉTODO ruta, operación]`. */
+    function operations() {
+      return Object.entries(integration.paths).flatMap(([path, item]) =>
+        HTTP_METHODS.filter((method) => item[method]).map(
+          (method) =>
+            [`${method.toUpperCase()} ${path}`, item[method]!] as const,
+        ),
+      );
+    }
+
+    it('toda operación acepta X-Request-Id opcional, una sola vez, con formato y largo', () => {
+      for (const [name, operation] of operations()) {
+        const requestIds = (operation.parameters ?? []).filter(
+          (parameter) =>
+            'in' in parameter &&
+            parameter.in === 'header' &&
+            parameter.name.toLowerCase() === 'x-request-id',
+        );
+        expect({ name, requestIds }).toEqual({
+          name,
+          requestIds: [
+            expect.objectContaining({
+              name: REQUEST_ID_HEADER,
+              required: false,
+              description: expect.stringContaining('UUID'),
+              schema: {
+                type: 'string',
+                maxLength: REQUEST_ID_MAX_LENGTH,
+                pattern: REQUEST_ID_PATTERN.source,
+              },
+            }),
+          ],
+        });
+      }
+    });
+
+    it('toda respuesta, incluidas las de error, documenta el header X-Request-Id', () => {
+      for (const [name, operation] of operations()) {
+        const statuses = Object.keys(operation.responses);
+        expect(statuses.some((status) => status.startsWith('4'))).toBe(true);
+        for (const status of statuses) {
+          const response = operation.responses[status] as {
+            headers?: Record<string, { description?: string }>;
+          };
+          expect({
+            name,
+            status,
+            header: response.headers?.[REQUEST_ID_HEADER],
+          }).toEqual({
+            name,
+            status,
+            header: expect.objectContaining({
+              description: expect.any(String),
+            }),
+          });
+        }
+      }
+    });
+
+    it('no pisa los otros headers de respuesta (Idempotent-Replayed)', () => {
+      const responses = integration.paths['/api/v1/integration/documents'].post!
+        .responses as Record<string, { headers?: object }>;
+      const documented = Object.values(responses).flatMap((response) =>
+        Object.keys(response.headers ?? {}),
+      );
+      expect(documented).toContain(REQUEST_ID_HEADER);
+      expect(
+        documented.filter((header) => header !== REQUEST_ID_HEADER),
+      ).toContain('Idempotent-Replayed');
+    });
+
+    it('la descripción del contrato explica la correlación', () => {
+      expect(integration.info.description).toContain('**Correlación.**');
+      expect(integration.info.description).toContain(
+        `${REQUEST_ID_HEADER}: ${EXAMPLE_REQUEST_ID}`,
+      );
+    });
+
+    it('los callbacks de webhooks no declaran X-Request-Id: esas respuestas son del cliente', () => {
+      expect(
+        JSON.stringify(
+          integration.paths['/api/v1/integration/webhooks/endpoint'].put!
+            .callbacks,
+        ),
+      ).not.toContain(REQUEST_ID_HEADER);
+    });
   });
 
   describe('dependencias entre isSequential, role y order', () => {
@@ -649,6 +757,7 @@ describe('createIntegrationOpenApiDocument', () => {
 
       expect(operation.parameters.map(({ name }) => name)).toEqual([
         'documentId',
+        REQUEST_ID_HEADER,
       ]);
       expect(schema.required).toEqual(['email']);
       expect(Object.keys(schema.properties)).toEqual(['email']);
@@ -675,8 +784,10 @@ describe('createIntegrationOpenApiDocument', () => {
 
     it('no recibe ningún identificador de organización', () => {
       expect(
-        integration.paths['/api/v1/integration/organization/context'].get!
-          .parameters ?? [],
+        withoutRequestId(
+          integration.paths['/api/v1/integration/organization/context'].get!
+            .parameters,
+        ),
       ).toEqual([]);
     });
 
