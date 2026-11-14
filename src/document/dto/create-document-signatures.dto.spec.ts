@@ -33,13 +33,50 @@ function errorsFor(
 }
 
 /**
- * El campo se llamaba `rfc` hasta la historia "Estandarizar campos de colaboradores"; la regla de
- * validación es la misma y sólo cambió el nombre.
- *
- * Historia "Eliminar campo RFC de la sección de Espectadores": antes era obligatorio SOLO para
- * VIEWER; ahora es opcional también para VIEWER, pero si llega con valor se sigue validando como
- * string.
+ * Historia "Eliminar campo RFC de la sección de Testigos": `taxId` (y su nombre anterior, `rfc`)
+ * dejaron de existir en el contrato. Un cliente viejo que los siga mandando no recibe un error:
+ * `whitelist: true` del `ValidationPipe` global los descarta antes de llegar al caso de uso.
  */
+/** Historia "Validar RFC del firmante FIEL contra el certificado al momento de firmar". */
+describe('CollaboratorPayloadDto.signerTaxId', () => {
+  const signerWith = (signerTaxId: unknown) =>
+    baseWitness({
+      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
+      signerTaxId,
+    });
+
+  it('normaliza espacios y mayúsculas antes de validar', async () => {
+    const dto = plainToInstance(
+      CollaboratorPayloadDto,
+      signerWith(' peaj 800101 abc '),
+    );
+
+    expect(dto.signerTaxId).toBe('PEAJ800101ABC');
+    expect(errorsFor(await validate(dto), 'signerTaxId')).toHaveLength(0);
+  });
+
+  it.each([
+    ['ausente', undefined],
+    ['en null', null],
+    ['vacío', ''],
+    ['solo espacios', '   '],
+    ['de persona moral', 'ACM010101AAA'],
+  ])('acepta un RFC %s', async (_name, value) => {
+    const errors = await validateDto(signerWith(value));
+
+    expect(errorsFor(errors, 'signerTaxId')).toHaveLength(0);
+  });
+
+  it.each(['ABC', 'PEAJ80010', 'PEAJ800101ABCD', '1234567890123', 12345])(
+    'rechaza el formato inválido %s',
+    async (value) => {
+      const errors = await validateDto(signerWith(value));
+
+      expect(errorsFor(errors, 'signerTaxId').length).toBeGreaterThan(0);
+    },
+  );
+});
+
 describe('CollaboratorPayloadDto.taxId', () => {
   it.each([
     ['sin el campo', baseWitness()],
@@ -51,46 +88,20 @@ describe('CollaboratorPayloadDto.taxId', () => {
     expect(errorsFor(errors, 'taxId')).toHaveLength(0);
   });
 
-  it('acepta un VIEWER con taxId válido', async () => {
-    const errors = await validateDto(baseWitness({ taxId: 'AURU800101ABC' }));
-
-    expect(errorsFor(errors, 'taxId')).toHaveLength(0);
-  });
-
-  it('rechaza un VIEWER cuyo taxId no es un string', async () => {
-    const errors = await validateDto(baseWitness({ taxId: 12345 }));
-
-    expect(errorsFor(errors, 'taxId').length).toBeGreaterThan(0);
-  });
-
-  it('nunca valida el taxId de un SIGNER, aunque venga mal tipado', async () => {
-    const errors = await validateDto({
-      source: PAYLOAD_COLLABORATOR_SOURCE_ENUM.MANUAL,
-      addToDirectory: false,
-      collaboratorType: PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER,
-      firstName: 'Juan',
-      lastName: 'Pérez',
-      email: 'juan@correo.com',
-      taxId: 12345,
-    });
-
-    expect(errorsFor(errors, 'taxId')).toHaveLength(0);
-  });
-
-  /**
-   * El nombre viejo deja de existir como campo del contrato: `whitelist: true` del
-   * `ValidationPipe` global lo descarta antes de llegar al caso de uso, así que un cliente que
-   * siga mandando `rfc` no reintroduce el dato por la puerta de atrás — simplemente no lo manda.
-   */
-  it('ignora por completo un `rfc` heredado en el payload', async () => {
-    const errors = await validateDto(baseWitness({ rfc: 'AURU800101ABC' }));
+  it.each([
+    ['taxId', 12345],
+    ['taxId', 'AURU800101ABC'],
+    ['rfc', 'AURU800101ABC'],
+  ])('descarta sin validarlo un %s heredado (%s)', async (field, value) => {
     const dto = plainToInstance(
       CollaboratorPayloadDto,
-      baseWitness({ rfc: 'AURU800101ABC' }),
+      baseWitness({ [field]: value }),
     );
 
-    expect(errorsFor(errors, 'rfc')).toHaveLength(0);
-    expect(dto.taxId).toBeUndefined();
+    const errors = await validate(dto, { whitelist: true });
+
+    expect(errors).toHaveLength(0);
+    expect(dto).not.toHaveProperty(field);
   });
 });
 

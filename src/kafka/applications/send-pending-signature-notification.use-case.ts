@@ -20,7 +20,10 @@ import {
   collaboratorDisplayName,
   collaboratorEmail,
 } from 'src/document/utils/collaborator-display.util';
-import { buildDocumentAccessUrl } from 'src/document/utils/document-access-url.util';
+import {
+  buildDocumentAccessUrl,
+  buildWitnessDocumentUrl,
+} from 'src/document/utils/document-access-url.util';
 import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
 import { getNextPendingSigner } from 'src/document/utils/next-signer.util';
 
@@ -393,6 +396,9 @@ export class SendPendingSignatureNotificationUseCase {
   }
 
   /**
+   * El enlace del correo es la vista pública del documento (`buildWitnessDocumentUrl`), no
+   * `/access-document`: el testigo consulta sin cuenta ni sesión.
+   *
    * El claim `PENDING → NOTIFIED` se hace ANTES de enviar, condicionado a `status: PENDING` —mismo
    * patrón que `reject-document.use-case.ts` usa para el rechazo—, y sólo quien lo gana manda el
    * correo. Antes se enviaba primero y se marcaba después: dos entregas simultáneas del mismo
@@ -455,7 +461,8 @@ export class SendPendingSignatureNotificationUseCase {
         `${creator.firstName ?? ''} ${creator.lastName ?? ''}`.trim() ||
           creator.email,
         creator.email,
-        buildDocumentAccessUrl(document.id, collaborator.id, recipientEmail),
+        // Vista pública, sin sesión: el testigo sólo consulta (ver `buildWitnessDocumentUrl`).
+        buildWitnessDocumentUrl(document.id),
       );
     } catch (error) {
       await this.collaboratorRepository.update(

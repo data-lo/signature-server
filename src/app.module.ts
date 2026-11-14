@@ -38,7 +38,10 @@ import { PublicSigningModule } from './public-signing/public-signing.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
-import { PlatformProvisioningModule } from './platform-provisioning/platform-provisioning.module';
+import { PlatformModule } from './platform/platform.module';
+import { MetricsModule } from './metrics/metrics.module';
+import { IntegrationSettingsModule } from './integration-settings/integration-settings.module';
+import { OutboundWebhooksModule } from './outbound-webhooks/outbound-webhooks.module';
 
 @Module({
   imports: [
@@ -119,7 +122,10 @@ import { PlatformProvisioningModule } from './platform-provisioning/platform-pro
     AuthorizationModule,
     DirectoryModule,
     ApiKeyModule,
-    PlatformProvisioningModule,
+    PlatformModule,
+    MetricsModule.forRoot(),
+    IntegrationSettingsModule,
+    OutboundWebhooksModule,
   ],
   controllers: [AppController],
   providers: [

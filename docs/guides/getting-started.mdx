@@ -1,0 +1,91 @@
+---
+title: "Primeros pasos"
+description: "Crea tu primer documento con flujo de firmas."
+---
+
+En esta guía creas un documento con un firmante y consultas su estado.
+
+## Antes de empezar
+
+Necesitas una [API key](/authentication) autorizada para crear y consultar documentos, créditos de documento disponibles en tu organización y un PDF.
+
+```bash
+export FIRMALO_API_URL="https://<host>"
+export FIRMALO_API_KEY="<tu-api-key>"
+```
+
+## Crea el documento
+
+La petición es `multipart/form-data` con dos campos: `file`, el PDF, y `payload`, un texto con un JSON.
+
+```bash
+curl -X POST "$FIRMALO_API_URL/api/v1/integration/documents" \
+  -H "X-API-Key: $FIRMALO_API_KEY" \
+  -H "Idempotency-Key: erp-contrato-2026-000184" \
+  -F "file=@contrato.pdf;type=application/pdf" \
+  -F 'payload={
+    "creator": { "email": "ana.lopez@cliente.example", "firstName": "Ana", "lastName": "López" },
+    "document": { "signatureType": "SIMPLE", "isSequential": true },
+    "participants": [
+      {
+        "role": "SIGNER",
+        "firstName": "Luis",
+        "lastName": "Martínez",
+        "email": "luis.martinez@correo.example",
+        "order": 1,
+        "signaturePositions": [
+          { "page": 1, "xRatio": 0.1, "yRatio": 0.8, "widthRatio": 0.25, "heightRatio": 0.08 }
+        ]
+      }
+    ]
+  }'
+```
+
+- `creator` identifica por correo a quien crea el documento. Si no existe, se le da de alta como usuario provisional.
+- `order` indica el turno de cada firmante en un documento secuencial: enteros consecutivos desde `1`.
+- `signaturePositions` indica dónde va la firma. Los valores son proporciones de la página, de `0` a `1`.
+
+La respuesta es `201` con el identificador del documento:
+
+```json
+{
+  "success": true,
+  "message": "Documento y flujo de firmas creados correctamente",
+  "data": {
+    "id": "2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+    "status": "PENDING_SIGNATURE",
+    "signatureType": "SIMPLE",
+    "fileName": "contrato.pdf",
+    "createdAt": "2026-10-26T12:00:00.000Z",
+    "creator": { "email": "ana.lopez@cliente.example" },
+    "participantsCount": 1,
+    "publicUrl": "https://app.firmalo.com/public/documents/2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+    "participants": [
+      {
+        "email": "luis.martinez@correo.example",
+        "status": "PENDING",
+        "signatureType": "SIMPLE",
+        "order": 1
+      }
+    ]
+  }
+}
+```
+
+## Reintenta sin duplicar
+
+`Idempotency-Key` es obligatorio al crear un documento. Usa un valor único por documento, como el folio de tu sistema.
+
+Si repites la petición con la misma clave y el mismo contenido en las siguientes 24 horas, la API responde `200` con el documento original y el header `Idempotent-Replayed: true`, sin crear ni cobrar otro.
+
+## Consulta el estado
+
+```bash
+curl "$FIRMALO_API_URL/api/v1/integration/documents?statuses=SIGNED&limit=25" \
+  -H "X-API-Key: $FIRMALO_API_KEY"
+```
+
+## Siguientes pasos
+
+- Revisa el [manejo de errores](/guides/errors).
+- Consulta todos los campos y endpoints en la referencia de API.

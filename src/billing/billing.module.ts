@@ -30,6 +30,16 @@ import { CancelSubscriptionUseCase } from './subscriptions/cancel-subscription.u
 import { ResumeSubscriptionUseCase } from './subscriptions/resume-subscription.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './subscriptions/finalize-subscription-from-stripe.use-case';
 import { InternalSubscriptionBillingController } from './subscriptions/internal-subscription-billing.controller';
+import { CreditLedgerEntryEntity } from './credits/credit-ledger-entry.entity';
+import { CreditReservationEntity } from './credits/credit-reservation.entity';
+import { CreditReservationService } from './credits/credit-reservation.service';
+import { ReserveDocumentCreditUseCase } from './credits/reserve-document-credit.use-case';
+import { ReserveBiometricSignatureCreditsUseCase } from './credits/reserve-biometric-signature-credits.use-case';
+import { AssertBiometricCreditsAvailableUseCase } from './credits/assert-biometric-credits-available.use-case';
+import { CloseBiometricReservationsUseCase } from './credits/close-biometric-reservations.use-case';
+import { FinalizeBiometricSignatureCreditsUseCase } from './credits/finalize-biometric-signature-credits.use-case';
+import { ReleaseExpiredCreditReservationsUseCase } from './credits/release-expired-credit-reservations.use-case';
+import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-credit-reservations.job';
 
 /**
  * Dominio de facturación: catálogo comercial, perfiles, órdenes de compra y saldo de documentos.
@@ -58,6 +68,8 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
       CheckoutOrderEntity,
       CreditLotEntity,
       DocumentCreditConsumptionEntity,
+      CreditLedgerEntryEntity,
+      CreditReservationEntity,
       SubscriptionBillingHistoryEntity,
       // Sólo para comprobar la membresía de la cuenta activa (ver `BillingOwnerService`);
       // este módulo nunca escribe en `accounts`.
@@ -92,6 +104,17 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     CancelSubscriptionUseCase,
     ResumeSubscriptionUseCase,
     FinalizeSubscriptionFromStripeUseCase,
+    /**
+     * Reservas de créditos (documento biométrico e intento de Didit). El servicio es técnico y sólo
+     * lo usan estos casos de uso; no se exporta para que ningún módulo cobre por fuera de ellos.
+     */
+    CreditReservationService,
+    ReserveDocumentCreditUseCase,
+    ReserveBiometricSignatureCreditsUseCase,
+    AssertBiometricCreditsAvailableUseCase,
+    FinalizeBiometricSignatureCreditsUseCase,
+    ReleaseExpiredCreditReservationsUseCase,
+    ReleaseExpiredCreditReservationsJob,
   ],
   exports: [
     BillingEntitlementsModule,
@@ -110,6 +133,14 @@ import { InternalSubscriptionBillingController } from './subscriptions/internal-
     CancelSubscriptionUseCase,
     ResumeSubscriptionUseCase,
     FinalizeSubscriptionFromStripeUseCase,
+    // `DocumentModule` (alta, rechazo y cancelación) y `BiometricSignatureModule` (sesión y webhook).
+    ReserveDocumentCreditUseCase,
+    ReserveBiometricSignatureCreditsUseCase,
+    // `DocumentModule`: saldo biométrico antes de crear un documento con firmantes biométricos.
+    AssertBiometricCreditsAvailableUseCase,
+    // `DocumentService`: consume las biométricas en la misma transacción que marca SIGNED.
+    CloseBiometricReservationsUseCase,
+    FinalizeBiometricSignatureCreditsUseCase,
   ],
 })
 export class BillingModule {}

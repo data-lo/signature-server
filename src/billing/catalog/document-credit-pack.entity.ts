@@ -7,8 +7,15 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { CatalogItemEntity } from './catalog-item.entity';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
 
-/** Datos propios de un ítem que acredita documentos; el dinero vive en catalog_prices. */
+/**
+ * Datos propios de un ítem que acredita créditos; el dinero vive en catalog_prices.
+ *
+ * `documentsGranted` es cuántos créditos concede una unidad, y `creditType` de qué tipo son: un
+ * paquete biométrico acredita créditos `BIOMETRIC_SIGNATURE` con la misma compra suelta que uno de
+ * documentos.
+ */
 @Entity('document_credit_packs')
 @Check('CHK_document_credit_packs_documents', '"documents_granted" > 0')
 export class DocumentCreditPackEntity {
@@ -26,4 +33,13 @@ export class DocumentCreditPackEntity {
 
   @Column({ name: 'documents_granted', type: 'integer' })
   documentsGranted: number;
+
+  @Column({
+    name: 'credit_type',
+    type: 'enum',
+    enum: CREDIT_TYPE_ENUM,
+    enumName: 'credit_type_enum',
+    default: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+  })
+  creditType: CREDIT_TYPE_ENUM;
 }

@@ -25,6 +25,7 @@ import { AccountEntity } from 'src/account/entities/account.entity';
 import { ApiKeyModule } from 'src/api-key/api-key.module';
 import { DocumentReadService } from './services/document-read.service';
 import { IntegrationDocumentsController } from './integration/integration-documents.controller';
+import { IntegrationOrganizationController } from './integration/integration-organization.controller';
 import { ListOrganizationIntegrationDocumentsUseCase } from './integration/applications/list-organization-integration-documents.use-case';
 import { ListUserIntegrationDocumentsUseCase } from './integration/applications/list-user-integration-documents.use-case';
 import { CreateIntegrationDocumentUseCase } from './integration/applications/create-integration-document.use-case';
@@ -61,6 +62,7 @@ import { GetDocumentApproversUseCase } from './applications/get-document-approve
 import { ArchiveCompletedDocumentUseCase } from './applications/archive-document.use-case';
 import { RestoreArchivedDocumentUseCase } from './applications/restore-archived-document.use-case';
 import { DocumentReviewerService } from './services/document-reviewer.service';
+import { DocumentIndexRequestService } from './services/document-index-request.service';
 import { WitnessNotificationService } from './services/witness-notification.service';
 import { NotificationEntity } from './entities/notification.entity';
 import { DocumentApprovalService } from './services/document-approval.service';
@@ -70,11 +72,16 @@ import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entitie
 import { PublicSigningController } from './public-signing.controller';
 import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
 import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
+import { DocumentIndexingJobEntity } from './entities/document-indexing-job.entity';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
 import { ResendIntegrationSigningInvitationUseCase } from './integration/applications/resend-integration-signing-invitation.use-case';
 import { IssueIntegrationSigningAccessUseCase } from './integration/applications/issue-integration-signing-access.use-case';
+import { GetIntegrationOrganizationContextUseCase } from './integration/applications/get-integration-organization-context.use-case';
+import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
+import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entity';
 
 @Module({
   controllers: [
@@ -86,6 +93,7 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
      * de la organización en vez de JWT. Reutiliza los casos de uso de este módulo.
      */
     IntegrationDocumentsController,
+    IntegrationOrganizationController,
   ],
   providers: [
     DocumentService,
@@ -127,6 +135,8 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
     RestoreArchivedDocumentUseCase,
     /** Flujo de aprobación previo a la firma (ver historia del mismo nombre). */
     DocumentReviewerService,
+    /** Pide la indexación de los documentos indexables (`document.index`) al crearlos. */
+    DocumentIndexRequestService,
     DocumentApprovalService,
     /** Avisos por correo a los testigos (ver el servicio para qué recibe el testigo y cuándo). */
     WitnessNotificationService,
@@ -148,6 +158,7 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
     CreateIntegrationDocumentUseCase,
     ResendIntegrationSigningInvitationUseCase,
     IssueIntegrationSigningAccessUseCase,
+    GetIntegrationOrganizationContextUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([
@@ -170,10 +181,16 @@ import { IssueIntegrationSigningAccessUseCase } from './integration/applications
       // entidad: el módulo `biometric-signature` depende de éste, nunca al revés.
       BiometricSignatureAttemptEntity,
       GuestSigningAccessEntity,
+      // Trabajos de indexación: estado técnico del envío al indexador, aparte de `DocumentEntity`.
+      DocumentIndexingJobEntity,
       IntegrationIdempotencyKeyEntity,
       // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
       // pedido dentro de la organización de la API key.
       AccountEntity,
+      // Las lee `GetIntegrationOrganizationContextUseCase`: organización, plan y saldo de la llave.
+      OrganizationEntity,
+      BillingProfileEntity,
+      CreditLotEntity,
     ]),
     SharedModule,
     /** Enlace `/sign/:token` de los firmantes de documentos creados por integración. */

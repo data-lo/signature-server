@@ -82,9 +82,9 @@ export class CollaboratorEntity {
   lastName: string | null;
 
   /**
-   * Identificador fiscal del colaborador (en México, su RFC). Solo lo guarda el WITNESS: al
-   * firmante no se le pide en ningún flujo, y en firma avanzada el dato real sale del
-   * certificado de e.firma al momento de firmar.
+   * Identificador fiscal del colaborador (en México, su RFC). En un firmante FIEL es opcional y,
+   * si está, al firmar debe coincidir con el del certificado de e.firma. Un firmante sin firma
+   * avanzada nunca lo lleva.
    */
   @Column({ name: 'tax_id', nullable: true })
   taxId: string | null;

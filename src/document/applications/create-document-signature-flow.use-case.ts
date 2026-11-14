@@ -46,9 +46,12 @@ import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { MAX_PDF_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.constants';
 import { DocumentTransactionService } from '../document-transaction.service';
 import { ConsumeDocumentCreditUseCase } from 'src/billing/credits/consume-document-credit.use-case';
+import { ReserveDocumentCreditUseCase } from 'src/billing/credits/reserve-document-credit.use-case';
+import { AssertBiometricCreditsAvailableUseCase } from 'src/billing/credits/assert-biometric-credits-available.use-case';
 import { BILLING_SIGNATURE_TYPE_ENUM } from 'src/billing/enums/billing-signature-type.enum';
 import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { DocumentReviewerService } from '../services/document-reviewer.service';
+import { DocumentIndexRequestService } from '../services/document-index-request.service';
 import { AssertPlanActionUseCase } from 'src/billing/entitlements/assert-plan-action.use-case';
 import { PLAN_ACTION_ENUM } from 'src/billing/entitlements/plan-entitlements.types';
 import {
@@ -240,9 +243,12 @@ export class CreateDocumentSignatureFlowUseCase {
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly consumeDocumentCredit: ConsumeDocumentCreditUseCase,
+    private readonly reserveDocumentCredit: ReserveDocumentCreditUseCase,
     private readonly documentReviewerService: DocumentReviewerService,
     private readonly assertPlanAction: AssertPlanActionUseCase,
     private readonly directoryCollaborators: DirectoryCollaboratorsService,
+    private readonly documentIndexRequest: DocumentIndexRequestService,
+    private readonly assertBiometricCredits: AssertBiometricCreditsAvailableUseCase,
   ) {}
 
   async execute(
@@ -302,6 +308,20 @@ export class CreateDocumentSignatureFlowUseCase {
       );
     }
 
+    // El RFC se compara contra el certificado de la e.firma: sin firma avanzada no hay contra qué.
+    if (
+      payloadSignatureType !== PAYLOAD_SIGNATURE_TYPE_ENUM.ADVANCED &&
+      dto.collaborators.some(
+        (c) =>
+          c.collaboratorType === PAYLOAD_COLABORATOR_TYPE_ENUM.SIGNER &&
+          c.signerTaxId,
+      )
+    ) {
+      throw new BadRequestException(
+        'El RFC del firmante sólo se admite en documentos con firma avanzada',
+      );
+    }
+
     /**
      * Historia "Hacer obligatorias las coordenadas de posición de firma". El DTO ya lo exige para
      * las peticiones HTTP; se repite aquí porque el caso de uso no debe depender de que alguien
@@ -344,8 +364,8 @@ export class CreateDocumentSignatureFlowUseCase {
      * La firma biométrica es una capacidad del plan (`graphSignatureBiometrics`), y la pantalla
      * esconde la opción cuando falta; esto la rechaza para el cliente que no la esconda. Va antes
      * de subir el archivo, como el resto de las validaciones baratas. Sin `requiredCredits`: el
-     * saldo lo decide `consumeDocumentCredit` dentro de la transacción, igual que en los otros
-     * tipos.
+     * saldo lo decide la reserva documental dentro de la transacción (`reserveDocumentCredit`),
+     * igual que el consumo en los otros tipos.
      */
     if (documentSignatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
       await this.assertPlanAction.execute({
@@ -354,6 +374,23 @@ export class CreateDocumentSignatureFlowUseCase {
         action: PLAN_ACTION_ENUM.GRAPH_SIGNATURE_BIOMETRICS,
       });
     }
+
+    /**
+     * Cada firmante de un documento biométrico necesita su crédito biométrico. Se comprueba aquí,
+     * antes de subir el PDF y de abrir la transacción: sin saldo para todos, el documento no se
+     * crea, no se reserva nada y Didit no se llama. 402 `INSUFFICIENT_BIOMETRIC_CREDITS` con
+     * cuántos hacen falta y cuántos hay. Se repite dentro de la transacción por si el saldo cambió
+     * mientras se subía el archivo.
+     */
+    const biometricSigners =
+      documentSignatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC
+        ? totalSigners
+        : 0;
+    await this.assertBiometricCredits.execute({
+      accountId,
+      userId: createdBy,
+      biometricSigners,
+    });
 
     /**
      * Mandar aprobador y a la vez decir que no hace falta aprobación es una contradicción, y se
@@ -426,9 +463,10 @@ export class CreateDocumentSignatureFlowUseCase {
      * cliente mande `isIndexable: true`. La pantalla ya esconde la opción en ese caso; esto cubre
      * a un cliente que no la esconda o que tenga el catálogo de cuentas desactualizado.
      */
+    const { allowsIndexing, organizationName } =
+      await this.findOrganizationIndexing(activeAccount.organizationId);
     const isIndexable =
-      (await this.organizationAllowsIndexing(activeAccount.organizationId)) &&
-      (dto.documentData.isIndexable ?? true);
+      allowsIndexing && (dto.documentData.isIndexable ?? true);
 
     // Defensa en profundidad (ver signature-collision.util.ts): valida ANTES de tocar la base de
     // datos, agrupando por página todas las posiciones de todos los firmantes del payload.
@@ -499,21 +537,34 @@ export class CreateDocumentSignatureFlowUseCase {
        * confirmado aunque el resto del alta —los colaboradores, las notificaciones— reventara
        * después, y el usuario habría pagado por un documento que no existe.
        */
-      await this.consumeDocumentCredit.execute(
-        {
-          documentId: document.id,
-          accountId,
-          userId: createdBy,
-          /**
-           * Del documento ya guardado, no de `documentSignatureType` ni del payload: el recibo
-           * tiene que decir con qué se firma el documento que realmente quedó escrito. Si una
-           * regla futura corrigiera el tipo al guardar, el cobro seguiría contando lo mismo que
-           * la fila.
-           */
-          signatureType: toBillingSignatureType(document.signatureType),
-        },
-        manager,
-      );
+      const creditInput = {
+        documentId: document.id,
+        accountId,
+        userId: createdBy,
+        /**
+         * Del documento ya guardado, no de `documentSignatureType` ni del payload: el recibo
+         * tiene que decir con qué se firma el documento que realmente quedó escrito. Si una
+         * regla futura corrigiera el tipo al guardar, el cobro seguiría contando lo mismo que
+         * la fila.
+         */
+        signatureType: toBillingSignatureType(document.signatureType),
+      };
+
+      /**
+       * Un documento biométrico no se cobra al crearse: su crédito queda RESERVADO y se consume
+       * cuando el documento se completa, o vuelve al saldo si se rechaza o se cancela antes (ver
+       * `FinalizeBiometricSignatureCreditsUseCase`). Los demás tipos se cobran en el acto, como
+       * siempre. Los dos caminos corren en esta misma transacción: sin saldo, no hay documento.
+       */
+      if (document.signatureType === SIGNATURE_TYPE_ENUM.BIOMETRIC) {
+        await this.assertBiometricCredits.execute(
+          { accountId, userId: createdBy, biometricSigners },
+          manager,
+        );
+        await this.reserveDocumentCredit.execute(creditInput, manager);
+      } else {
+        await this.consumeDocumentCredit.execute(creditInput, manager);
+      }
 
       await this.documentTransactionService.createInitial(
         document.id,
@@ -603,7 +654,7 @@ export class CreateDocumentSignatureFlowUseCase {
             lastName: identity.lastName,
             // El WITNESS guarda su identificador fiscal; para un firmante se descarta lo que mande
             // el cliente en `taxId` (ver `CollaboratorPayloadDto.taxId`). La única excepción es el
-            // RFC que manda la integración para un firmante avanzado (`signerTaxId`): no se
+            // RFC registrado para un firmante avanzado (`signerTaxId`): no se
             // captura por capturar, es contra lo que se compara el titular de su certificado.
             taxId: isSigner
               ? (participant.signerTaxId ?? null)
@@ -744,7 +795,6 @@ export class CreateDocumentSignatureFlowUseCase {
             reviewerNotification.notificationChannelSource,
           actorUserId: createdBy,
         });
-
         /**
          * El anuncio de que hay una aprobación esperando se registra dentro de esta transacción y
          * se publica después del commit (ver `OutboxService`): un documento que no llegue a
@@ -754,6 +804,7 @@ export class CreateDocumentSignatureFlowUseCase {
           manager,
           DOCUMENT_KAFKA_TOPICS.APPROVAL_REQUESTED,
           {
+            organization: organizationName,
             documentId: document.id,
             fileName: document.fileName,
             actorUserId: createdBy,
@@ -761,6 +812,13 @@ export class CreateDocumentSignatureFlowUseCase {
           },
         );
       }
+
+      await this.documentIndexRequest.enqueue(
+        manager,
+        document,
+        organizationName,
+        createdBy,
+      );
 
       return {
         document,
@@ -771,18 +829,10 @@ export class CreateDocumentSignatureFlowUseCase {
 
     const { document, notificationEvents, verificationCodesCount } = created;
 
-    // Fuera de la transacción a propósito: si cualquier paso de arriba lanza, el rollback ya
-    // ocurrió y esta línea nunca se alcanza — cero eventos publicados a Kafka.
-    //
-    // Bug corregido: este endpoint nunca publicaba DOCUMENT_KAFKA_TOPICS.CREATED (solo el tópico
-    // de NotificationEventsProducer, uno por colaborador, para el envío de correo) — por lo que
-    // DocumentEventsConsumer.handleCreated() nunca corría para documentos creados por esta vía
-    // (la única que usa el frontend), y el ledger global de auditoría (AuditChainService, ver
-    // historia "Módulo de Auditoría e Integridad Global de BD") arrancaba su cadena directo en el
-    // primer evento de firma en vez de en la creación del documento.
     this.documentEventsProducer.emitCreated({
       documentId: document.id,
       fileName: document.fileName,
+      organization: organizationName,
       actorUserId: createdBy,
       ...(origin && {
         createdViaApiKeyId: origin.apiKeyId,
@@ -791,8 +841,8 @@ export class CreateDocumentSignatureFlowUseCase {
     });
 
     /**
-     * Publica lo que la transacción dejó en la outbox: las notificaciones de cada colaborador y,
-     * con aprobación, el `document.approval_requested`. Después del commit y best-effort: si Kafka
+     * Publica lo que la transacción dejó en la outbox: las notificaciones de cada colaborador,
+     * con aprobación el `document.approval_requested` y, si es indexable, el `document.index`. Después del commit y best-effort: si Kafka
      * falla, las filas quedan pendientes y las publica el siguiente `flush` (ver `OutboxService`),
      * así que un fallo aquí nunca deshace un documento que ya quedó creado.
      */
@@ -802,22 +852,6 @@ export class CreateDocumentSignatureFlowUseCase {
       this.logger.error(
         `No se pudo publicar la outbox tras crear el documento ${document.id}; queda pendiente para el siguiente flush: ${error}`,
       );
-    }
-
-    if (document.isIndexable) {
-      /**
-       * Punto de enganche de Búsqueda Inteligente, deliberadamente vacío por ahora.
-       *
-       * **No publica ningún evento ni llama a ningún servicio**: la indexación todavía no existe
-       * (no hay productor, ni consumidor, ni índice), y este bloque marca el lugar exacto donde
-       * entrará cuando se construya — después de que la transacción haya confirmado, junto al
-       * resto de los efectos externos, para que un documento que no llegó a guardarse no
-       * dispare nada.
-       *
-       * La condición ya es la definitiva: un documento con `isIndexable: false` nunca entra acá,
-       * así que quien agregue la llamada no tiene que acordarse de filtrarlo — la regla ya está
-       * puesta y probada.
-       */
     }
 
     return {
@@ -910,8 +944,8 @@ export class CreateDocumentSignatureFlowUseCase {
   }
 
   /**
-   * Dice si la organización de la cuenta activa permite que sus documentos entren a Búsqueda
-   * Inteligente.
+   * Lee de la organización de la cuenta activa lo que la indexación necesita: si permite que sus
+   * documentos entren a Búsqueda Inteligente y su nombre, que viaja en `document.index`.
    *
    * Una cuenta PERSONAL no tiene organización y no está sujeta a este interruptor: decide sólo la
    * casilla de cada documento. Tampoco se bloquea si la organización no aparece —la membresía se
@@ -919,26 +953,32 @@ export class CreateDocumentSignatureFlowUseCase {
    * un documento sin indexar.
    *
    * @param organizationId - Organización de la cuenta activa, o `null` en cuentas PERSONAL.
-   * @returns `false` sólo si la organización existe y tiene `indexDocuments` apagado.
+   * @returns `allowsIndexing` en `false` sólo si la organización existe y tiene `indexDocuments`
+   *   apagado; `organizationName` en `null` si no hay organización.
    *
    * @example
    * ```ts
-   * await this.organizationAllowsIndexing('org-1'); // false si apagó Búsqueda Inteligente
-   * await this.organizationAllowsIndexing(null); // true
+   * await this.findOrganizationIndexing('org-1'); // { allowsIndexing: true, organizationName: 'Acme' }
+   * await this.findOrganizationIndexing(null); // { allowsIndexing: true, organizationName: null }
    * ```
    */
-  private async organizationAllowsIndexing(
+  private async findOrganizationIndexing(
     organizationId: string | null,
-  ): Promise<boolean> {
-    if (!organizationId) return true;
+  ): Promise<{ allowsIndexing: boolean; organizationName: string | null }> {
+    if (!organizationId) {
+      return { allowsIndexing: true, organizationName: null };
+    }
 
     const organization = await this.dataSource
       .getRepository(OrganizationEntity)
       .findOne({
         where: { id: organizationId },
-        select: { id: true, indexDocuments: true },
+        select: { id: true, name: true, indexDocuments: true },
       });
 
-    return organization?.indexDocuments ?? true;
+    return {
+      allowsIndexing: organization?.indexDocuments ?? true,
+      organizationName: organization?.name ?? null,
+    };
   }
 }

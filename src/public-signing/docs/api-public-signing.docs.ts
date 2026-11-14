@@ -75,7 +75,7 @@ export function ApiGetSigningInvitation() {
   return applyDecorators(
     ApiOperation({
       summary:
-        'Valida el token de /sign/:token y devuelve el contexto mínimo, sin el PDF: con ACTIVE, nombre del documento, correo enmascarado, estado de la cuenta, si admite la firma pública, tipo de firma con sus validaciones y vencimiento; con EXPIRED, REVOKED, ALREADY_SIGNED, DOCUMENT_CANCELLED o UNAVAILABLE, sólo el estado.',
+        'Valida el token de /sign/:token y devuelve el contexto mínimo, sin el PDF: con ACTIVE, nombre del documento (y su id sólo si se firma desde una cuenta activa, para volver a él tras el login), correo enmascarado, estado de la cuenta, si admite la firma pública, tipo de firma con sus validaciones y vencimiento; con EXPIRED, REVOKED, ALREADY_SIGNED, DOCUMENT_CANCELLED o UNAVAILABLE, sólo el estado.',
     }),
     TOKEN_PARAM,
     ApiResponse({

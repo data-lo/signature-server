@@ -1,5 +1,6 @@
 import { EntityManager } from 'typeorm';
 
+import { ensureInitialIntegrationSettings } from 'src/integration-settings/services/integration-settings.service';
 import { PermissionEntity } from 'src/roles/entities/permission.entity';
 import {
   buildPermissionKey,
@@ -182,13 +183,18 @@ export interface IssueApiKeyParams {
  * No comprueba que la organización no tenga ya una llave activa: eso lo hace el llamador con la
  * organización bloqueada, y el índice único parcial de la base es la protección final.
  *
+ * Garantiza además que la organización tenga configuración de integración: la crea `ACTIVE` con la
+ * primera llave y no toca una existente (una integración `DISABLED` sigue así tras rotar). Como
+ * todas las emisiones pasan por aquí —alta, rotación y llave de plataforma—, ninguna organización
+ * con llave queda sin configuración.
+ *
  * @param manager - Transacción en curso.
  * @param apiKeyService - Acceso a datos.
  * @param apiKeySecretService - Generación y hash del secreto.
  * @param params - Organización, autor, nombre, permisos y expiración.
  * @returns Los metadatos de la llave más la llave completa, que sólo se entrega aquí.
  *
- * @throws {ApiKeyNotConfiguredException} (500) Si falta `API_KEY_PEPPER`.
+ * @throws {ApiKeyNotConfiguredException} (500) Si falta `INTEGRATION_API_KEY_HMAC_SECRET`.
  * @throws {QueryFailedError} Si la base rechaza la fila (p. ej. una segunda llave activa).
  *
  * @example
@@ -207,6 +213,8 @@ export async function issueApiKey(
 ): Promise<IssuedOrganizationApiKeyData> {
   const { publicId, keyPrefix, key, secretHash } =
     apiKeySecretService.generate();
+
+  await ensureInitialIntegrationSettings(manager, params.organizationId);
 
   const saved = await apiKeyService.insertApiKey(
     manager,

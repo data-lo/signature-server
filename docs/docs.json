@@ -1,0 +1,40 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Firmalo API",
+  "colors": {
+    "primary": "#3d5a99",
+    "light": "#7b93c7",
+    "dark": "#2a407a"
+  },
+  "favicon": "/favicon.png",
+  "logo": "/logo/firmalo.svg",
+  "appearance": {
+    "default": "light",
+    "strict": true
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Introducción",
+        "pages": ["introduction"]
+      },
+      {
+        "group": "Autenticación",
+        "pages": ["authentication"]
+      },
+      {
+        "group": "Primeros pasos",
+        "pages": ["guides/getting-started"]
+      },
+      {
+        "group": "Manejo de errores",
+        "pages": ["guides/errors"]
+      },
+      {
+        "group": "Referencia de API",
+        "openapi": "openapi.yaml"
+      }
+    ]
+  }
+}

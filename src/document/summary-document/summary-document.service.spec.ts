@@ -74,12 +74,12 @@ describe('SummaryDocumentService', () => {
   });
 
   describe('encabezado y pie (plantilla de referencia)', () => {
-    it('rotula la hoja como firma digital simple y lleva el logo', () => {
+    it('rotula la hoja como firma electrónica simple y lleva el logo', () => {
       const header = JSON.stringify(
         (buildDefinition().header as () => Content)(),
       );
 
-      expect(header).toContain('Firma_Digital_Simple');
+      expect(header).toContain('Firma_Electrónica_Simple');
       expect(header).toContain('firmalo-logo.png');
     });
 
@@ -115,9 +115,9 @@ describe('SummaryDocumentService', () => {
       const [documentInfo] = tablesOf(buildDefinition());
 
       expect(documentInfo).toEqual([
-        ['ID', document.id],
+        ['Id del Documento', document.id],
         ['Nombre del Documento', document.documentName],
-        ['Hash', document.hash],
+        ['Huella del Documento', document.hash],
         ['No. de Páginas', '1'],
         ['Creado por', document.createdBy],
       ]);
@@ -171,9 +171,8 @@ describe('SummaryDocumentService', () => {
       expect(signerTables[0].map(([label]) => label)).toEqual([
         'Nombre',
         'Tipo de Firma',
-        'IP',
         'Sustentada',
-        'OTP Code',
+        'Código de Verificación',
         'Fecha de Firma',
       ]);
     });
@@ -198,9 +197,8 @@ describe('SummaryDocumentService', () => {
         firstSigner.find((row) => row[0] === label)?.[1];
 
       expect(valueOf('Nombre')).toBe('JUAN ANGEL CEPEDA FERNANDEZ');
-      expect(valueOf('Tipo de Firma')).toBe('Digital Simple');
-      expect(valueOf('IP')).toBe('189.237.82.225');
-      expect(valueOf('OTP Code')).toBe('482913');
+      expect(valueOf('Tipo de Firma')).toBe('Electrónica Simple');
+      expect(valueOf('Código de Verificación')).toBe('482913');
       expect(valueOf('Sustentada')).toContain('Arts. 89, 90 y 93');
     });
 
@@ -250,7 +248,7 @@ describe('SummaryDocumentService', () => {
       const valueOf = (label: string) =>
         onlySigner.find((row) => row[0] === label)?.[1];
 
-      expect(valueOf('OTP Code')).toBe('');
+      expect(valueOf('Código de Verificación')).toBe('');
       expect(valueOf('Fecha de Firma')).toBe('');
     });
   });

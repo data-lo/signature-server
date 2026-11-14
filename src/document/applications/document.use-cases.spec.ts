@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { CloseBiometricReservationsUseCase } from 'src/billing/credits/close-biometric-reservations.use-case';
 import {
   BadRequestException,
   ForbiddenException,
@@ -9,6 +10,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IsNull } from 'typeorm';
 import { GuestSigningAccessService } from '../services/guest-signing-access.service';
+import { SigningLinkService } from 'src/signing-invitation/signing-link.service';
+import { SigningInvitationService } from 'src/signing-invitation/signing-invitation.service';
+import { BiometricSignatureAttemptEntity } from 'src/biometric-signature/entities/biometric-signature-attempt.entity';
 import { GUEST_SIGNING_ACCESS_PURPOSE_ENUM } from '../enum/guest-signing-access-purpose.enum';
 import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
@@ -60,6 +64,8 @@ import { GetDocumentsUseCase } from './get-documents.use-case';
 import { GetDocumentUseCase } from './get-document.use-case';
 import { SignDocumentUseCase } from './sign-document.use-case';
 import { RejectDocumentUseCase } from './reject-document.use-case';
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
+import { DOCUMENT_CLOSURE_REASON_ENUM } from 'src/billing/enums/document-closure-reason.enum';
 import { RequestDocumentVerificationCodeUseCase } from './request-document-verification-code.use-case';
 import { VerifyDocumentCodeUseCase } from './verify-document-code.use-case';
 import { SubmitDocumentForCancellationUseCase } from './submit-document-for-cancellation.use-case';
@@ -217,6 +223,7 @@ describe('casos de uso de documentos', () => {
   let emailService: Record<string, jest.Mock>;
   let auditService: Record<string, jest.Mock>;
   let documentEventsProducer: Record<string, jest.Mock>;
+  let authorizationService: { authorize: jest.Mock };
   let accountMemberService: Record<string, jest.Mock>;
   let witnessNotificationService: { notifyWitnessesOfRejection: jest.Mock };
   let verificationCodeService: Record<string, jest.Mock>;
@@ -229,6 +236,10 @@ describe('casos de uso de documentos', () => {
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
   let guestSigningAccessService: Record<string, jest.Mock>;
+  let finalizeBiometricCredits: { onDocumentClosed: jest.Mock };
+  let closeBiometricReservations: { execute: jest.Mock };
+  let signingInvitations: { issue: jest.Mock };
+  let biometricAttemptRepository: ReturnType<typeof createMockRepository>;
   let createDocument: CreateDocumentUseCase;
   let getDocuments: GetDocumentsUseCase;
   let getDocument: GetDocumentUseCase;
@@ -367,6 +378,11 @@ describe('casos de uso de documentos', () => {
     // produce, así que los tests pasaban contra un contrato inexistente — y lo que se persiste en
     // `advancedSignature` es justo lo que después se le manda a Seal Service.
     efirmaService = {
+      calcularHashDocumento: jest.fn().mockReturnValue('hash-doc-1'),
+      verificar: jest.fn().mockReturnValue({
+        hashCoincide: true,
+        firmaValida: true,
+      }),
       firmar: jest.fn().mockReturnValue({
         originalHash: 'hash-doc-1',
         signatureBase64: 'firma-base64',
@@ -416,6 +432,15 @@ describe('casos de uso de documentos', () => {
       revokeOpenForCollaborator: jest.fn().mockResolvedValue(0),
       revokeOpenForDocument: jest.fn().mockResolvedValue(0),
     };
+    signingInvitations = {
+      issue: jest
+        .fn()
+        .mockResolvedValue({ url: 'https://app.test/sign/token' }),
+    };
+    biometricAttemptRepository = createMockRepository();
+    finalizeBiometricCredits = {
+      onDocumentClosed: jest.fn().mockResolvedValue(0),
+    };
     signatureQrService = {
       generateAdvancedSignaturePng: jest
         .fn()
@@ -425,6 +450,10 @@ describe('casos de uso de documentos', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DocumentService,
+        {
+          provide: CloseBiometricReservationsUseCase,
+          useValue: { execute: jest.fn().mockResolvedValue({ consumed: 0 }) },
+        },
         DocumentAuthorizationPolicy,
         DocumentReadAccessService,
         { provide: AuthorizationService, useValue: authorizationService },
@@ -461,6 +490,10 @@ describe('casos de uso de documentos', () => {
         { provide: EmailService, useValue: emailService },
         { provide: AuditService, useValue: auditService },
         { provide: DocumentEventsProducer, useValue: documentEventsProducer },
+        {
+          provide: FinalizeBiometricSignatureCreditsUseCase,
+          useValue: finalizeBiometricCredits,
+        },
         { provide: AccountMemberService, useValue: accountMemberService },
         {
           provide: WitnessNotificationService,
@@ -497,6 +530,12 @@ describe('casos de uso de documentos', () => {
           useValue: advancedSummaryDocumentService,
         },
         { provide: SignatureQrService, useValue: signatureQrService },
+        SigningLinkService,
+        { provide: SigningInvitationService, useValue: signingInvitations },
+        {
+          provide: getRepositoryToken(BiometricSignatureAttemptEntity),
+          useValue: biometricAttemptRepository,
+        },
         {
           provide: GuestSigningAccessService,
           useValue: guestSigningAccessService,
@@ -509,6 +548,7 @@ describe('casos de uso de documentos', () => {
     getDocuments = module.get(GetDocumentsUseCase);
     getDocument = module.get(GetDocumentUseCase);
     signDocument = module.get(SignDocumentUseCase);
+    closeBiometricReservations = module.get(CloseBiometricReservationsUseCase);
     rejectDocument = module.get(RejectDocumentUseCase);
     requestDocumentVerificationCode = module.get(
       RequestDocumentVerificationCodeUseCase,
@@ -2511,6 +2551,31 @@ describe('casos de uso de documentos', () => {
         expect(finalizedUpload![3]).toBe(document.objectKey);
       });
 
+      it('marca SIGNED y consume las reservas biométricas en la misma transacción', async () => {
+        const document = await signLastSigner();
+
+        expect(documentRepository.manager.transaction).toHaveBeenCalled();
+        expect(closeBiometricReservations.execute).toHaveBeenCalledWith(
+          {
+            documentId: document.id,
+            closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_SIGNED,
+          },
+          expect.anything(),
+        );
+        expect(documentRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({ status: DOCUMENT_STATUS_ENUM.SIGNED }),
+        );
+      });
+
+      it('si el consumo de las reservas falla, el documento no queda firmado', async () => {
+        closeBiometricReservations.execute.mockRejectedValueOnce(
+          new Error('lote inconsistente'),
+        );
+
+        await expect(signLastSigner()).rejects.toThrow(/lote inconsistente/);
+        expect(documentEventsProducer.emitSigned).not.toHaveBeenCalled();
+      });
+
       it('el documento firmado sigue guardándose sin la hoja: es el insumo de signedHash', async () => {
         await signLastSigner();
 
@@ -3664,6 +3729,34 @@ describe('casos de uso de documentos', () => {
       expect(documentSigningService.stampRejectedWatermark).toHaveBeenCalled();
       expect(emailService.sendDocumentRejectedNotification).toHaveBeenCalled();
       expect(documentEventsProducer.emitRejected).toHaveBeenCalled();
+      // REJECTED y el cierre de reservas van en la misma transacción.
+      expect(documentRepository.manager.transaction).toHaveBeenCalled();
+      expect(finalizeBiometricCredits.onDocumentClosed).toHaveBeenCalledWith(
+        {
+          documentId: 'doc-1',
+          closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+        },
+        expect.anything(),
+      );
+    });
+
+    it('si el cierre de reservas falla, el rechazo no se confirma y el firmante puede reintentar', async () => {
+      documentRepository.findOne.mockResolvedValue(mockDocument());
+      const signer = buildSigner({ userId: 'user-1' });
+      collaboratorRepository.find.mockResolvedValue([signer]);
+      finalizeBiometricCredits.onDocumentClosed.mockRejectedValue(
+        new Error('base caída'),
+      );
+
+      await expect(
+        rejectDocument.execute('doc-1', 'user-1', 'No es válido'),
+      ).rejects.toThrow('base caída');
+
+      expect(documentEventsProducer.emitRejected).not.toHaveBeenCalled();
+      expect(collaboratorRepository.update).toHaveBeenLastCalledWith(
+        { id: signer.id, status: COLLABORATOR_STATUS_ENUM.REJECTED },
+        { status: COLLABORATOR_STATUS_ENUM.PENDING, cancellationReason: null },
+      );
     });
 
     /** Historia "Corregir notificaciones por correo para testigos". */
@@ -4062,6 +4155,15 @@ describe('casos de uso de documentos', () => {
         expect.objectContaining({ status: DOCUMENT_STATUS_ENUM.CANCELLED }),
       );
       expect(documentEventsProducer.emitCancelled).toHaveBeenCalled();
+      // CANCELLED y el cierre de reservas van en la misma transacción.
+      expect(documentRepository.manager.transaction).toHaveBeenCalled();
+      expect(finalizeBiometricCredits.onDocumentClosed).toHaveBeenCalledWith(
+        {
+          documentId: 'doc-1',
+          closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_CANCELLED,
+        },
+        expect.anything(),
+      );
     });
 
     /**

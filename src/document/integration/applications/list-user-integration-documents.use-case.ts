@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Raw, Repository } from 'typeorm';
 
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { apiKeyScopes } from 'src/api-key/guards/organization-api-key.guard';
@@ -13,20 +13,21 @@ import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { DocumentReadService } from '../../services/document-read.service';
 import { ListIntegrationDocumentsQueryDto } from '../dto/list-integration-documents-query.dto';
 import {
+  IntegrationAmbiguousUserException,
   IntegrationScopeDeniedException,
   IntegrationUserNotFoundException,
 } from '../exceptions/integration-document.exceptions';
 import { IntegrationDocumentsPage } from '../interfaces/integration-document-response';
 
 /**
- * `GET /api/v1/integration/users/:userId/documents`: documentos que creó un usuario dentro de la
- * organización de la API key.
+ * `GET /api/v1/integration/users/documents?email=` (y `GET /integration/documents?creatorEmail=`):
+ * documentos que creó un usuario dentro de la organización de la API key. El correo se resuelve aquí
+ * al `users.id`, que nunca entra ni sale por la API.
  *
  * El guard exige `DOCUMENT.READ` con alcance `OWN` u `ORGANIZATION`; aquí se decide qué permite
  * cada uno:
  * - `ORGANIZATION` (o `ANY`): cualquier miembro activo de la organización de la llave.
- * - sólo `OWN`: únicamente el actor de la llave (`userId === apiClient.actorUserId`); cualquier
- *   otro, 403.
+ * - sólo `OWN`: únicamente el actor de la llave; cualquier otro correo, 403, sea o no de un miembro.
  *
  * El alcance se revisa antes que la membresía, para que una llave `OWN` no pueda usar el 403/404
  * para averiguar quién pertenece a la organización. Un usuario sin membresía activa en ESTA
@@ -41,19 +42,20 @@ export class ListUserIntegrationDocumentsUseCase {
   ) {}
 
   /**
-   * Documentos de un miembro identificado por su correo (`GET /integration/documents?creatorEmail=`).
-   * Resuelve el usuario sólo entre los miembros activos de la organización de la llave y aplica las
-   * mismas reglas de alcance que `execute`.
+   * Documentos de un miembro identificado por su correo. Resuelve el usuario sólo entre los
+   * miembros activos de la organización de la llave, sin distinguir mayúsculas, y aplica las mismas
+   * reglas de alcance que `execute`.
    *
    * @param apiClient - Cliente autenticado por la API key.
    * @param creatorEmail - Correo del creador (se compara normalizado).
    * @param query - Paginación, orden y filtros.
    * @returns La página de documentos de ese creador.
    *
+   * @throws {IntegrationScopeDeniedException} (403) Si la llave sólo tiene alcance `OWN` y el correo
+   *   no es el de su propio usuario, exista o no: así no sirve para averiguar quién es miembro.
    * @throws {IntegrationUserNotFoundException} (404) Si el correo no es de un miembro activo de la
    *   organización (mismo error que un usuario inexistente).
-   * @throws {IntegrationScopeDeniedException} (403) Si la llave sólo tiene alcance `OWN` y el correo
-   *   no es el de su propio usuario.
+   * @throws {IntegrationAmbiguousUserException} (409) Si el correo es de más de un miembro.
    *
    * @example
    * ```ts
@@ -65,19 +67,34 @@ export class ListUserIntegrationDocumentsUseCase {
     creatorEmail: string,
     query: ListIntegrationDocumentsQueryDto,
   ): Promise<BaseResponse<IntegrationDocumentsPage>> {
-    const membership = await this.accountRepository.findOne({
+    const normalizedEmail = creatorEmail.trim().toLowerCase();
+    const memberships = await this.accountRepository.find({
       where: {
         organizationId: apiClient.organizationId,
         isActive: true,
-        user: { email: creatorEmail.trim().toLowerCase() },
+        user: {
+          email: Raw((alias) => `LOWER(${alias}) = :normalizedEmail`, {
+            normalizedEmail,
+          }),
+        },
       },
       relations: { user: true },
       select: { id: true, userId: true },
     });
-    if (!membership) {
+
+    if (
+      !this.canReadOrganization(apiClient) &&
+      !memberships.some(({ userId }) => userId === apiClient.actorUserId)
+    ) {
+      throw new IntegrationScopeDeniedException();
+    }
+    if (memberships.length === 0) {
       throw new IntegrationUserNotFoundException();
     }
-    return this.execute(apiClient, membership.userId, query);
+    if (memberships.length > 1) {
+      throw new IntegrationAmbiguousUserException();
+    }
+    return this.execute(apiClient, memberships[0].userId, query);
   }
 
   /**
@@ -104,16 +121,10 @@ export class ListUserIntegrationDocumentsUseCase {
     userId: string,
     query: ListIntegrationDocumentsQueryDto,
   ): Promise<BaseResponse<IntegrationDocumentsPage>> {
-    const scopes = apiKeyScopes(
-      apiClient.permissions,
-      RESOURCE_KEY_ENUM.DOCUMENT,
-      ACTION_KEY_ENUM.READ,
-    );
-    const canReadOrganization =
-      scopes.includes(PERMISSION_SCOPE_ENUM.ORGANIZATION) ||
-      scopes.includes(PERMISSION_SCOPE_ENUM.ANY);
-
-    if (!canReadOrganization && userId !== apiClient.actorUserId) {
+    if (
+      !this.canReadOrganization(apiClient) &&
+      userId !== apiClient.actorUserId
+    ) {
       throw new IntegrationScopeDeniedException();
     }
 
@@ -139,5 +150,18 @@ export class ListUserIntegrationDocumentsUseCase {
       message: 'Documentos del usuario obtenidos correctamente',
       data,
     };
+  }
+
+  /** Si la llave puede leer a cualquier miembro (`ORGANIZATION` o `ANY`), y no sólo a su actor. */
+  private canReadOrganization(apiClient: IntegrationApiClient): boolean {
+    const scopes = apiKeyScopes(
+      apiClient.permissions,
+      RESOURCE_KEY_ENUM.DOCUMENT,
+      ACTION_KEY_ENUM.READ,
+    );
+    return (
+      scopes.includes(PERMISSION_SCOPE_ENUM.ORGANIZATION) ||
+      scopes.includes(PERMISSION_SCOPE_ENUM.ANY)
+    );
   }
 }

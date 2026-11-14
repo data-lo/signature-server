@@ -63,6 +63,46 @@ export interface PlanEntitlements {
   limits: PlanLimits;
 }
 
+/** Saldo de un tipo de crédito. */
+export interface CreditBalance {
+  /** Créditos utilizables HOY: `remaining - reserved` de los lotes vigentes del tipo. Nunca nulo. */
+  available: number;
+}
+
+/**
+ * Saldos de la cuenta agrupados por tipo de crédito. Los nombres públicos son cortos y estables
+ * (`document`, `biometric`) y no repiten el enum interno (`DOCUMENT_SIGNATURE`,
+ * `BIOMETRIC_SIGNATURE`): un tipo nuevo se agrega como otra llave sin tocar las existentes.
+ */
+export interface BillingCredits {
+  /** Créditos para crear documentos. Lo reservado por documentos biométricos pendientes no cuenta. */
+  document: CreditBalance;
+  /** Créditos de firma biométrica. Cada intento de Didit reserva uno y sólo se cobra si se firma. */
+  biometric: CreditBalance;
+}
+
+/**
+ * Arma los saldos por tipo; lo que no se informe queda en `0`, nunca nulo.
+ *
+ * @param balances - Disponibles por tipo; los ausentes valen `0`.
+ * @returns Un objeto nuevo en cada llamada.
+ *
+ * @example
+ * ```ts
+ * toBillingCredits({ document: 12, biometric: 8 });
+ * // { document: { available: 12 }, biometric: { available: 8 } }
+ * toBillingCredits(); // { document: { available: 0 }, biometric: { available: 0 } }
+ * ```
+ */
+export function toBillingCredits(
+  balances: { document?: number; biometric?: number } = {},
+): BillingCredits {
+  return {
+    document: { available: balances.document ?? 0 },
+    biometric: { available: balances.biometric ?? 0 },
+  };
+}
+
 /**
  * Estado comercial completo de la cuenta activa: lo que se contrató, lo que queda y lo que se
  * puede hacer con ello.
@@ -87,7 +127,14 @@ export interface BillingAccessResponse {
   cancelAtPeriodEnd: boolean;
   currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
-  /** Documentos que la cuenta puede consumir HOY, sumando todos sus lotes vigentes. */
+  /** Saldos por tipo de crédito. Sin perfil o sin lotes, todos en `0`. */
+  credits: BillingCredits;
+  /**
+   * Igual a `credits.document.available`.
+   *
+   * @deprecated Usar `credits.document.available`. Se conserva mientras el frontend migra al
+   *   contrato agrupado; se elimina cuando ningún cliente lo lea.
+   */
   creditsAvailable: number;
   actions: PlanActions;
   limits: PlanLimits;

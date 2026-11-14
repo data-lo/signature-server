@@ -165,10 +165,19 @@ describe('StripeWebhookService', () => {
     });
   });
 
-  it('loguea (sin lanzar) eventos de Stripe no manejados', async () => {
+  it('loguea (sin lanzar) eventos de Stripe no manejados y los devuelve como ignored', async () => {
     await expect(
       service.process({ type: 'payment_intent.created' } as Stripe.Event),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('ignored');
+  });
+
+  it('devuelve handled cuando un handler atiende el evento', async () => {
+    await expect(
+      service.process({
+        type: 'invoice.paid',
+        data: { object: { id: 'in_1' } },
+      } as unknown as Stripe.Event),
+    ).resolves.toBe('handled');
   });
 
   /**

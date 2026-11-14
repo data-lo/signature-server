@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
 import { Match } from 'src/auth/validators/match.decorator';
 
 /**
@@ -18,15 +18,15 @@ export class ChangeMyPasswordDto {
   currentPassword: string;
 
   @ApiProperty({
-    example: 'supersecret123',
-    description: 'Nueva contraseña (mínimo 8 caracteres)',
+    example: 'mi gato duerme en la azotea',
+    description:
+      'Nueva contraseña. Mínimo 12 caracteres. No puede ser una contraseña común ni fácil de adivinar (por ejemplo, una palabra frecuente con números o símbolos, una secuencia o un patrón del teclado). No se exigen mayúsculas ni símbolos: una frase larga es válida. Si no cumple, la API responde 400 con un mensaje genérico. La valida PasswordPolicyService.',
   })
   @IsString()
-  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
   newPassword: string;
 
   @ApiProperty({
-    example: 'supersecret123',
+    example: 'mi gato duerme en la azotea',
     description: 'Confirmación de la nueva contraseña',
   })
   @IsString()

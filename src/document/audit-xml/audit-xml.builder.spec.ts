@@ -157,7 +157,18 @@ describe('buildDocumentAuditXml', () => {
               simpleSignature:
                 signatureType === 'FIEL'
                   ? null
-                  : { objectKey: 'rubrica.png', imageBase64: 'UE5H' },
+                  : {
+                      objectKey: 'rubrica.png',
+                      imageBase64: 'UE5H',
+                      identityDocumentFrontImage: {
+                        mimeType: null,
+                        contentBase64: null,
+                      },
+                      identityDocumentBackImage: {
+                        mimeType: null,
+                        contentBase64: null,
+                      },
+                    },
             },
           ],
         }),

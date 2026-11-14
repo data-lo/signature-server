@@ -1,7 +1,7 @@
 import { INestApplication, Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtService } from '@nestjs/jwt';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -11,7 +11,7 @@ import { join } from 'path';
 import { PDFDocument } from 'pdf-lib';
 import { Client } from 'pg';
 import * as request from 'supertest';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 
 import { AccountMemberService } from './../src/account/account-member.service';
 import { AccountService } from './../src/account/account.service';
@@ -55,19 +55,23 @@ import { IntegrationIdempotencyService } from './../src/document/integration/ser
 import { IntegrationPayloadValidator } from './../src/document/integration/validation/integration-payload.validator';
 import { DocumentReadService } from './../src/document/services/document-read.service';
 import { OrganizationMemberEventsProducer } from './../src/kafka/organization-member.producer';
-import { DEFAULT_INTEGRATION_PERMISSION_KEYS } from './../src/platform-provisioning/constants/default-integration-permissions';
-import { ProvisionProvisionalEnterpriseAccountUseCase } from './../src/platform-provisioning/applications/provision-provisional-enterprise-account.use-case';
-import { PlatformProvisioningRequestEntity } from './../src/platform-provisioning/entities/platform-provisioning-request.entity';
-import { InternalOrganizationProvisioningController } from './../src/platform-provisioning/internal-organization-provisioning.controller';
-import { ProvisionalOwnerProvisioningService } from './../src/platform-provisioning/services/provisional-owner-provisioning.service';
+import { DEFAULT_INTEGRATION_PERMISSION_KEYS } from '../src/platform/constants/default-integration-permissions';
+import { GrantOrganizationCreditsUseCase } from '../src/platform/applications/grant-organization-credits.use-case';
+import { ProvisionProvisionalEnterpriseAccountUseCase } from '../src/platform/applications/provision-provisional-enterprise-account.use-case';
+import { PlatformCreditGrantEntity } from '../src/platform/entities/platform-credit-grant.entity';
+import { PlatformRequestEntity } from '../src/platform/entities/platform-request.entity';
+import { InternalOrganizationCreditsController } from '../src/platform/internal-organization-credits.controller';
+import { InternalOrganizationProvisioningController } from '../src/platform/internal-organization-provisioning.controller';
+import { ProvisionalOwnerProvisioningService } from '../src/platform/services/provisional-owner-provisioning.service';
 import { RolesModule } from './../src/roles/roles.module';
 import { SigningInvitationDeliveryService } from './../src/signing-invitation/signing-invitation-delivery.service';
 import { UserEntity } from './../src/user/entities/user.entity';
 import { UserService } from './../src/user/user.service';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 config({ path: join(__dirname, '..', '.env') });
 
-const API_KEY_PEPPER =
+const INTEGRATION_API_KEY_HMAC_SECRET =
   'pepper-de-la-e2e-de-aprovisionamiento-con-32-caracteres';
 const INTERNAL_KEY = 'llave-interna-de-plataforma-e2e-con-mas-de-32-caracteres';
 const SHARED_SERVICES_KEY =
@@ -213,11 +217,60 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
     apiKey: string | null = INTERNAL_KEY,
   ) {
     let call = request(app.getHttpServer())
-      .post('/api/v1/internal/organizations/provision')
+      .post('/api/v1/platform/organizations/provision')
       .send(payload);
     if (apiKey) call = call.set('x-api-key', apiKey);
     if (idempotencyKey) call = call.set('Idempotency-Key', idempotencyKey);
     return call;
+  }
+
+  /** Crea un documento por la API de integración real, con la llave de la organización. */
+  function createDocument(
+    apiKey: string,
+    idempotencyKey: string,
+    creatorEmail: string,
+  ) {
+    return request(app.getHttpServer())
+      .post('/api/v1/integration/documents')
+      .set('X-API-Key', apiKey)
+      .set('Idempotency-Key', idempotencyKey)
+      .field(
+        'payload',
+        JSON.stringify({
+          creator: {
+            email: creatorEmail,
+            firstName: 'Ana',
+            lastName: 'López',
+          },
+          document: {
+            signatureType: 'SIMPLE',
+            isSequential: true,
+            isIndexable: true,
+          },
+          participants: [
+            {
+              role: 'SIGNER',
+              firstName: 'Luis',
+              lastName: 'Martínez',
+              email: 'luis@correo.test',
+              order: 1,
+              signaturePositions: [
+                {
+                  page: 1,
+                  xRatio: 0.1,
+                  yRatio: 0.1,
+                  widthRatio: 0.2,
+                  heightRatio: 0.08,
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      .attach('file', pdf, {
+        filename: 'contrato.pdf',
+        contentType: 'application/pdf',
+      });
   }
 
   /** Crea recurso, acción y permiso de una clave `RECURSO.ACCION[_ALCANCE]` si faltan. */
@@ -270,7 +323,8 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
   }
 
   beforeAll(async () => {
-    process.env.API_KEY_PEPPER = API_KEY_PEPPER;
+    process.env.INTEGRATION_API_KEY_HMAC_SECRET =
+      INTEGRATION_API_KEY_HMAC_SECRET;
     process.env.INTERNAL_PLATFORM_API_KEY = INTERNAL_KEY;
     process.env.API_KEY = SHARED_SERVICES_KEY;
     process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test/';
@@ -294,6 +348,7 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
 
     @Module({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         TypeOrmModule.forRoot({
           type: 'postgres',
@@ -301,7 +356,8 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
           entities: [join(__dirname, '..', 'src', '**', '*.entity{.ts,.js}')],
         }),
         TypeOrmModule.forFeature([
-          PlatformProvisioningRequestEntity,
+          PlatformRequestEntity,
+          PlatformCreditGrantEntity,
           DocumentEntity,
           CollaboratorEntity,
           AccountEntity,
@@ -321,11 +377,13 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
       ],
       controllers: [
         InternalOrganizationProvisioningController,
+        InternalOrganizationCreditsController,
         IntegrationDocumentsController,
       ],
       providers: [
         // Aprovisionamiento: todo real.
         ProvisionProvisionalEnterpriseAccountUseCase,
+        GrantOrganizationCreditsUseCase,
         ProvisionalOwnerProvisioningService,
         AccountService,
         AccountMemberService,
@@ -434,7 +492,7 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
       );
       expect(
         Object.keys(document.paths).filter((path) =>
-          path.includes('internal/organizations'),
+          path.includes('platform/organizations'),
         ),
       ).toEqual([]);
     });
@@ -471,13 +529,17 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
       );
 
       const [user] = await dataSource.query(
-        `SELECT lifecycle_status, password, national_id FROM users WHERE id = $1`,
+        `SELECT u.lifecycle_status, u.password, u.national_id, p.curp
+         FROM users u JOIN personal_information p ON p.id = u.personal_information_id
+         WHERE u.id = $1`,
         [provisioned.ownerUserId],
       );
+      // Con su ficha (sin CURP), para que el webhook aprobado de Didit pueda guardar la INE.
       expect(user).toEqual({
         lifecycle_status: 'PROVISIONED',
         password: null,
         national_id: null,
+        curp: null,
       });
 
       const [membership] = await dataSource.query(
@@ -613,47 +675,11 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
     });
 
     it('la llave crea un documento por POST /integration/documents y descuenta un crédito', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/api/v1/integration/documents')
-        .set('X-API-Key', provisioned.apiKey)
-        .set('Idempotency-Key', 'doc-acme-001')
-        .field(
-          'payload',
-          JSON.stringify({
-            creator: {
-              email: 'ana@acme.test',
-              firstName: 'Ana',
-              lastName: 'López',
-            },
-            document: {
-              signatureType: 'SIMPLE',
-              isSequential: true,
-              isIndexable: true,
-            },
-            participants: [
-              {
-                role: 'SIGNER',
-                firstName: 'Luis',
-                lastName: 'Martínez',
-                email: 'luis@correo.test',
-                order: 1,
-                signaturePositions: [
-                  {
-                    page: 1,
-                    xRatio: 0.1,
-                    yRatio: 0.1,
-                    widthRatio: 0.2,
-                    heightRatio: 0.08,
-                  },
-                ],
-              },
-            ],
-          }),
-        )
-        .attach('file', pdf, {
-          filename: 'contrato.pdf',
-          contentType: 'application/pdf',
-        });
+      const response = await createDocument(
+        provisioned.apiKey,
+        'doc-acme-001',
+        'ana@acme.test',
+      );
 
       expect(response.status).toBe(201);
       const [document] = await dataSource.query(
@@ -761,6 +787,459 @@ describe('Aprovisionamiento interno de cuentas Enterprise (e2e)', () => {
 
       spy.mockRestore();
       await provision(payload, 'prov-rollback').expect(201);
+    });
+  });
+
+  /**
+   * Recarga de créditos de punta a punta: guard interno real, transacción contra Postgres y la llave
+   * de la organización creando documentos antes y después de recargar.
+   */
+  describe('recarga de créditos', () => {
+    let account: Record<string, any>;
+    let owner: string;
+
+    function grantBody(patch: Record<string, unknown> = {}) {
+      return {
+        documentsGranted: 500,
+        externalReference: 'RECARGA-ACME-2026-001',
+        notes: 'Recarga autorizada por contrato',
+        ...patch,
+      };
+    }
+
+    function grant(
+      payload: Record<string, unknown>,
+      idempotencyKey: string | null,
+      organizationId: string = account.organizationId,
+      apiKey: string | null = INTERNAL_KEY,
+    ) {
+      let call = request(app.getHttpServer())
+        .post(`/api/v1/platform/organizations/${organizationId}/credits`)
+        .send(payload);
+      if (apiKey) call = call.set('x-api-key', apiKey);
+      if (idempotencyKey) call = call.set('Idempotency-Key', idempotencyKey);
+      return call;
+    }
+
+    /** Todo lo que una recarga no debe tocar: perfil e historial, tal como están en la base. */
+    async function billingSnapshot() {
+      const [profile] = await dataSource.query(
+        `SELECT current_plan_type, status, billing_source, stripe_customer_id, stripe_subscription_id,
+                cancel_at_period_end, current_period_start, current_period_end, updated_at
+         FROM billing_profiles WHERE id = $1`,
+        [account.billingProfileId],
+      );
+      const history = await dataSource.query(
+        `SELECT * FROM subscription_billing_history WHERE billing_profile_id = $1 ORDER BY id`,
+        [account.billingProfileId],
+      );
+      return { profile, history };
+    }
+
+    async function lots() {
+      return dataSource.query(
+        `SELECT id, origin, issued, remaining, expires_at, period_end, stripe_invoice_id,
+                stripe_payment_intent_id, stripe_subscription_id
+         FROM credit_lots WHERE billing_profile_id = $1 ORDER BY created_at, id`,
+        [account.billingProfileId],
+      );
+    }
+
+    beforeAll(async () => {
+      owner = 'recargas@acme.test';
+      const response = await provision(
+        body((value) => {
+          value.organization.name = 'Acme Recargas';
+          value.owner.email = owner;
+          value.billing.documentsGranted = 1;
+          value.billing.externalReference = 'PROVISION-RECARGAS-001';
+        }),
+        'prov-recargas-001',
+      ).expect(201);
+      account = response.body.data;
+    });
+
+    describe('seguridad', () => {
+      it.each([
+        ['sin x-api-key', () => null],
+        ['con la llave compartida de servicios', () => SHARED_SERVICES_KEY],
+        ['con una llave de integración fma_live_*', () => account.apiKey],
+      ])('rechaza con 401 %s y no acredita', async (_label, apiKey) => {
+        const before = await lots();
+
+        await grant(
+          grantBody({ externalReference: 'RECARGA-SEGURIDAD' }),
+          'recarga-seguridad',
+          account.organizationId,
+          apiKey(),
+        ).expect(401);
+
+        expect(await lots()).toEqual(before);
+      });
+
+      it('rechaza con 401 un JWT de usuario válido y no acredita', async () => {
+        const before = await lots();
+        const jwt = app.get(JwtService).sign({
+          sub: account.ownerUserId,
+          email: owner,
+          roles: 'user',
+          jti: randomUUID(),
+        });
+
+        await request(app.getHttpServer())
+          .post(
+            `/api/v1/platform/organizations/${account.organizationId}/credits`,
+          )
+          .set('Authorization', `Bearer ${jwt}`)
+          .set('Idempotency-Key', 'recarga-jwt')
+          .send(grantBody({ externalReference: 'RECARGA-JWT' }))
+          .expect(401);
+
+        expect(await lots()).toEqual(before);
+      });
+    });
+
+    describe('validación', () => {
+      it('exige Idempotency-Key', async () => {
+        const response = await grant(grantBody(), null).expect(400);
+        expect(response.body.code).toBe('IDEMPOTENCY_KEY_REQUIRED');
+      });
+
+      it('responde 400 si organizationId no es un UUID', async () => {
+        await grant(grantBody(), 'recarga-no-uuid', 'no-es-uuid').expect(400);
+      });
+
+      it.each([[0], [-5], [1.5], ['500'], [100_001]])(
+        'responde 400 con documentsGranted = %p',
+        async (documentsGranted) => {
+          await grant(
+            grantBody({ documentsGranted }),
+            'recarga-invalida',
+          ).expect(400);
+        },
+      );
+
+      it('responde 404 si la organización no existe', async () => {
+        const response = await grant(
+          grantBody(),
+          'recarga-sin-organizacion',
+          randomUUID(),
+        ).expect(404);
+        expect(response.body.code).toBe('ORGANIZATION_NOT_FOUND');
+      });
+
+      it('responde 422 si la organización está desactivada', async () => {
+        await dataSource.query(
+          `UPDATE organizations SET is_active = false WHERE id = $1`,
+          [account.organizationId],
+        );
+        try {
+          const response = await grant(
+            grantBody(),
+            'recarga-org-inactiva',
+          ).expect(422);
+          expect(response.body.code).toBe('ORGANIZATION_INACTIVE');
+        } finally {
+          await dataSource.query(
+            `UPDATE organizations SET is_active = true WHERE id = $1`,
+            [account.organizationId],
+          );
+        }
+      });
+
+      it.each([
+        ['facturado por Stripe', `billing_source = 'STRIPE'`],
+        ['sin plan', `current_plan_type = NULL`],
+        ['cancelado', `status = 'CANCELED'`],
+      ])('responde 422 con un perfil %s', async (_label, change) => {
+        const [original] = await dataSource.query(
+          `SELECT billing_source, current_plan_type, status FROM billing_profiles WHERE id = $1`,
+          [account.billingProfileId],
+        );
+        await dataSource.query(
+          `UPDATE billing_profiles SET ${change} WHERE id = $1`,
+          [account.billingProfileId],
+        );
+        try {
+          const response = await grant(
+            grantBody(),
+            'recarga-perfil-no-elegible',
+          ).expect(422);
+          expect(response.body.code).toBe('CREDIT_GRANT_PROFILE_NOT_ELIGIBLE');
+        } finally {
+          await dataSource.query(
+            `UPDATE billing_profiles SET billing_source = $2, current_plan_type = $3, status = $4 WHERE id = $1`,
+            [
+              account.billingProfileId,
+              original.billing_source,
+              original.current_plan_type,
+              original.status,
+            ],
+          );
+        }
+      });
+
+      it('ninguna validación fallida dejó lotes ni constancias', async () => {
+        const [{ n }] = await dataSource.query(
+          `SELECT count(*)::int AS n FROM platform_credit_grants`,
+        );
+        expect(n).toBe(0);
+        expect(await lots()).toHaveLength(1);
+      });
+    });
+
+    describe('saldo, idempotencia y uso', () => {
+      let granted: Record<string, any>;
+      let billingBefore: Awaited<ReturnType<typeof billingSnapshot>>;
+
+      it('con 0 créditos la API rechaza crear documentos', async () => {
+        await createDocument(account.apiKey, 'doc-recarga-1', owner).expect(
+          201,
+        );
+        expect(await availableCredits(account.billingProfileId)).toBe(0);
+
+        await createDocument(account.apiKey, 'doc-recarga-2', owner).expect(
+          402,
+        );
+      });
+
+      it('acredita un lote ADD_ON y responde el saldo y el identificador del lote', async () => {
+        billingBefore = await billingSnapshot();
+
+        const response = await grant(grantBody(), 'recarga-acme-001').expect(
+          201,
+        );
+        granted = response.body.data;
+
+        expect(response.headers['idempotent-replayed']).toBe('false');
+        expect(granted).toEqual({
+          grantId: expect.any(String),
+          organizationId: account.organizationId,
+          billingProfileId: account.billingProfileId,
+          creditLotId: expect.any(String),
+          documentsGranted: 500,
+          creditsAvailable: 500,
+          externalReference: 'RECARGA-ACME-2026-001',
+          replayed: false,
+        });
+
+        const [lot] = await dataSource.query(
+          `SELECT origin, issued, remaining, expires_at, period_end, stripe_invoice_id,
+                  stripe_payment_intent_id, stripe_subscription_id
+           FROM credit_lots WHERE id = $1`,
+          [granted.creditLotId],
+        );
+        expect(lot).toEqual({
+          origin: 'ADD_ON',
+          issued: 500,
+          remaining: 500,
+          expires_at: null,
+          period_end: null,
+          stripe_invoice_id: null,
+          stripe_payment_intent_id: null,
+          stripe_subscription_id: null,
+        });
+
+        const [stored] = await dataSource.query(
+          `SELECT organization_id, billing_profile_id, credit_lot_id, documents_granted,
+                  external_reference, idempotency_key, notes
+           FROM platform_credit_grants WHERE id = $1`,
+          [granted.grantId],
+        );
+        expect(stored).toEqual({
+          organization_id: account.organizationId,
+          billing_profile_id: account.billingProfileId,
+          credit_lot_id: granted.creditLotId,
+          documents_granted: 500,
+          external_reference: 'RECARGA-ACME-2026-001',
+          idempotency_key: 'recarga-acme-001',
+          notes: 'Recarga autorizada por contrato',
+        });
+      });
+
+      it('no modifica el plan, el periodo, la suscripción ni Stripe', async () => {
+        expect(await billingSnapshot()).toEqual(billingBefore);
+      });
+
+      it('la organización vuelve a crear documentos por API', async () => {
+        await createDocument(account.apiKey, 'doc-recarga-3', owner).expect(
+          201,
+        );
+        expect(await availableCredits(account.billingProfileId)).toBe(499);
+      });
+
+      it('repetir la solicitud no crea otro lote ni duplica el saldo', async () => {
+        const before = await lots();
+
+        const response = await grant(grantBody(), 'recarga-acme-001').expect(
+          200,
+        );
+
+        expect(response.headers['idempotent-replayed']).toBe('true');
+        expect(response.body.data).toEqual({
+          ...granted,
+          creditsAvailable: 499,
+          replayed: true,
+        });
+        expect(await lots()).toEqual(before);
+      });
+
+      it('una recarga con saldo pendiente se suma y conserva los lotes existentes', async () => {
+        const before = await lots();
+
+        const response = await grant(
+          grantBody({
+            documentsGranted: 100,
+            externalReference: 'RECARGA-ACME-2026-002',
+          }),
+          'recarga-acme-002',
+        ).expect(201);
+
+        expect(response.body.data.creditsAvailable).toBe(599);
+        const after = await lots();
+        expect(after).toHaveLength(before.length + 1);
+        expect(after.slice(0, before.length)).toEqual(before);
+      });
+
+      it('la misma clave con otro payload es 409 y no acredita', async () => {
+        const before = await lots();
+
+        const response = await grant(
+          grantBody({ documentsGranted: 501 }),
+          'recarga-acme-001',
+        ).expect(409);
+
+        expect(response.body.code).toBe('IDEMPOTENCY_KEY_MISMATCH');
+        expect(await lots()).toEqual(before);
+      });
+
+      it('la misma clave contra otra organización es 409 y no acredita', async () => {
+        const [other] = await dataSource.query(
+          `SELECT organization_id FROM platform_provisioning_requests WHERE idempotency_key = 'prov-acme-001'`,
+        );
+
+        const response = await grant(
+          grantBody(),
+          'recarga-acme-001',
+          other.organization_id,
+        ).expect(409);
+
+        expect(response.body.code).toBe('IDEMPOTENCY_KEY_MISMATCH');
+      });
+
+      /** El lote se escribe antes que la constancia: si ésta choca, la transacción se lo lleva. */
+      it('un folio repetido con otra clave es 409 y revierte el lote ya escrito', async () => {
+        const before = await lots();
+
+        const response = await grant(
+          grantBody({ documentsGranted: 7 }),
+          'recarga-folio-repetido',
+        ).expect(409);
+
+        expect(response.body.code).toBe('EXTERNAL_REFERENCE_ALREADY_USED');
+        expect(await lots()).toEqual(before);
+      });
+
+      it('dos repeticiones simultáneas de una clave nueva crean un solo lote', async () => {
+        const before = await availableCredits(account.billingProfileId);
+        const payload = grantBody({
+          documentsGranted: 10,
+          externalReference: 'RECARGA-PARALELA-001',
+        });
+
+        const [first, second] = await Promise.all([
+          grant(payload, 'recarga-paralela-001'),
+          grant(payload, 'recarga-paralela-001'),
+        ]);
+
+        expect([first.status, second.status].sort()).toEqual([200, 201]);
+        expect(first.body.data.creditLotId).toBe(second.body.data.creditLotId);
+        expect(await availableCredits(account.billingProfileId)).toBe(
+          before + 10,
+        );
+      });
+
+      it('dos claves simultáneas con el mismo folio acreditan una sola vez', async () => {
+        const before = await availableCredits(account.billingProfileId);
+        const payload = grantBody({
+          documentsGranted: 20,
+          externalReference: 'RECARGA-PARALELA-002',
+        });
+
+        const [first, second] = await Promise.all([
+          grant(payload, 'recarga-paralela-002a'),
+          grant(payload, 'recarga-paralela-002b'),
+        ]);
+
+        expect([first.status, second.status].sort()).toEqual([201, 409]);
+        expect(await availableCredits(account.billingProfileId)).toBe(
+          before + 20,
+        );
+      });
+
+      it('dos recargas simultáneas distintas se suman sin perder ninguna', async () => {
+        const before = await availableCredits(account.billingProfileId);
+
+        const responses = await Promise.all([
+          grant(
+            grantBody({
+              documentsGranted: 3,
+              externalReference: 'RECARGA-PARALELA-003',
+            }),
+            'recarga-paralela-003',
+          ),
+          grant(
+            grantBody({
+              documentsGranted: 4,
+              externalReference: 'RECARGA-PARALELA-004',
+            }),
+            'recarga-paralela-004',
+          ),
+        ]);
+
+        expect(responses.map((response) => response.status)).toEqual([
+          201, 201,
+        ]);
+        // La que entró al último ve las dos: el bloqueo del perfil las serializa.
+        expect(
+          Math.max(
+            ...responses.map((response) => response.body.data.creditsAvailable),
+          ),
+        ).toBe(before + 7);
+        expect(await availableCredits(account.billingProfileId)).toBe(
+          before + 7,
+        );
+      });
+
+      /** Falla la constancia con el lote ya escrito: no debe quedar saldo sin explicación. */
+      it('si falla el registro de auditoría revierte el lote y la clave queda libre', async () => {
+        const before = await lots();
+        const payload = grantBody({
+          documentsGranted: 9,
+          externalReference: 'RECARGA-ROLLBACK-001',
+        });
+        const originalSave = Repository.prototype.save;
+        const save = jest
+          .spyOn(Repository.prototype, 'save')
+          .mockImplementation(function (
+            this: Repository<any>,
+            ...args: unknown[]
+          ) {
+            if (this.target === PlatformCreditGrantEntity) {
+              return Promise.reject(
+                new Error('fallo simulado en la constancia'),
+              );
+            }
+            return (originalSave as any).apply(this, args);
+          } as never);
+
+        await grant(payload, 'recarga-rollback').expect(500);
+        save.mockRestore();
+
+        expect(await lots()).toEqual(before);
+
+        await grant(payload, 'recarga-rollback').expect(201);
+      });
     });
   });
 });

@@ -31,6 +31,7 @@ import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
 import { REQUIRED_PERMISSION_METADATA } from 'src/authorization/constants/permission-metadata.constant';
+import { MetricsModule } from 'src/metrics/metrics.module';
 
 type Mocked = { execute: jest.Mock };
 
@@ -90,6 +91,7 @@ describe('DocumentController', () => {
 
   beforeEach(async () => {
     module = await Test.createTestingModule({
+      imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
       controllers: [DocumentController],
       providers: USE_CASES.map((provide) => ({
         provide,

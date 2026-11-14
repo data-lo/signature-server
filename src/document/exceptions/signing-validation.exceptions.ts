@@ -95,6 +95,20 @@ export class CertificateSubjectMismatchException extends SigningValidationExcept
   }
 }
 
+/**
+ * El RFC del certificado no es el registrado para el firmante. Comparte código con
+ * `CertificateSubjectMismatchException`, porque es el mismo error para quien integra y para la
+ * auditoría; sólo el mensaje es más preciso.
+ */
+export class CertificateTaxIdMismatchException extends SigningValidationException {
+  constructor() {
+    super(
+      SIGNING_VALIDATION_ERROR_CODE_ENUM.CERTIFICATE_SUBJECT_MISMATCH,
+      'El RFC del certificado de la e.firma no coincide con el RFC registrado para este firmante.',
+    );
+  }
+}
+
 /** La firma producida no se pudo verificar contra el documento revisado. */
 export class SignatureValidationFailedException extends SigningValidationException {
   constructor() {

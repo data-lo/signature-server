@@ -11,6 +11,9 @@ import {
   FREE_WELCOME_DOCUMENT_CREDITS,
 } from '../catalog/free-plan.constants';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { recordLotIssued } from '../credits/credit-ledger.util';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from '../enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 import { BillingProfileEntity } from './billing-profile.entity';
 import type { BillingOwner } from './billing-owner.util';
@@ -203,14 +206,18 @@ export class BillingProfileProvisioningService {
     manager: EntityManager,
     billingProfileId: string,
   ): Promise<void> {
-    await manager.save(
+    const lot = await manager.save(
       manager.create(CreditLotEntity, {
         billingProfileId,
         origin: CREDIT_LOT_ORIGIN_ENUM.FREE_GRANT,
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
         issued: FREE_WELCOME_DOCUMENT_CREDITS,
         remaining: FREE_WELCOME_DOCUMENT_CREDITS,
       }),
     );
+
+    // Sin cobro de por medio: es una concesión, no una compra.
+    await recordLotIssued(manager, lot, CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.GRANT);
   }
 
   /**

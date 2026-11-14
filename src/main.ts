@@ -2,6 +2,7 @@ import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 
 // Módulos privados
@@ -11,6 +12,8 @@ import { SignatureModule } from './signature/signature.module';
 import { AuthModule } from './auth/auth.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
+import { IntegrationSettingsModule } from './integration-settings/integration-settings.module';
+import { OutboundWebhooksModule } from './outbound-webhooks/outbound-webhooks.module';
 import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,
@@ -20,6 +23,7 @@ import {
   INTEGRATION_OPENAPI_TITLE,
 } from './document/integration/openapi/create-integration-openapi-document';
 import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
+import { applyDiditWebhookBodyParser } from './webhooks/didit/didit-webhook-body-parser';
 import { frontendBaseUrl } from './common/utils/frontend-url.util';
 import {
   applyGlobalApiPrefix,
@@ -29,7 +33,7 @@ import {
 process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: new ConsoleLogger(),
     rawBody: true,
   });
@@ -39,6 +43,7 @@ async function bootstrap() {
   // Tiene que ir ANTES de `SwaggerModule.createDocument`, que lee las rutas ya
   // resueltas — si se llamara después, el Swagger publicaría las rutas sin prefijo.
   applyGlobalApiPrefix(app);
+  applyDiditWebhookBodyParser(app);
 
   // `frontendBaseUrl()` y no `process.env.FRONTEND_URL` crudo: el header `Origin` que manda el
   // navegador nunca lleva diagonal final, así que un `https://app.ejemplo.com/` configurado en el
@@ -102,6 +107,9 @@ async function bootstrap() {
         AuthModule,
         DirectoryModule,
         ApiKeyModule,
+        IntegrationSettingsModule,
+        // Configuración del endpoint de webhooks salientes (`/integration/webhooks/endpoint`).
+        OutboundWebhooksModule,
       ],
     },
   );

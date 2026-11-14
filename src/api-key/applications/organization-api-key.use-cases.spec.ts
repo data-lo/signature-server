@@ -1,6 +1,8 @@
 import { QueryFailedError } from 'typeorm';
 
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { IntegrationSettingsEntity } from 'src/integration-settings/entities/integration-settings.entity';
+import { INTEGRATION_STATUS_ENUM } from 'src/integration-settings/enums/integration-status.enum';
 import { PermissionEntity } from 'src/roles/entities/permission.entity';
 
 import { ApiKeySecretService } from '../api-key-secret.service';
@@ -83,13 +85,34 @@ function driverError(code: string, constraint?: string): QueryFailedError {
 }
 
 describe('casos de uso de API keys de organización', () => {
+  /** `INSERT … ON CONFLICT DO NOTHING` de `ensureInitialIntegrationSettings`. */
+  const settingsInsert = {
+    insert: jest.fn().mockReturnThis(),
+    into: jest.fn().mockReturnThis(),
+    values: jest.fn().mockReturnThis(),
+    orIgnore: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue(undefined),
+  };
   const manager = {
     create: jest.fn((_entity: unknown, data: object) => ({ ...data })),
+    createQueryBuilder: jest.fn(() => settingsInsert),
   };
+
+  /** Comprueba que la emisión garantizó la configuración `ACTIVE` sin pisar una existente. */
+  function expectInitialIntegrationSettings(): void {
+    expect(settingsInsert.into).toHaveBeenCalledWith(IntegrationSettingsEntity);
+    expect(settingsInsert.values).toHaveBeenCalledWith({
+      organizationId: ORGANIZATION_ID,
+      status: INTEGRATION_STATUS_ENUM.ACTIVE,
+    });
+    expect(settingsInsert.orIgnore).toHaveBeenCalled();
+    expect(settingsInsert.execute).toHaveBeenCalled();
+  }
   let service: jest.Mocked<ApiKeyService>;
   let secrets: jest.Mocked<ApiKeySecretService>;
 
   beforeEach(() => {
+    jest.clearAllMocks();
     service = {
       transaction: jest.fn((work) => work(manager)),
       findActiveOrganization: jest
@@ -140,6 +163,7 @@ describe('casos de uso de API keys de organización', () => {
         ORGANIZATION_ID,
         'wait',
       );
+      expectInitialIntegrationSettings();
       const inserted = service.insertApiKey.mock.calls[0][1];
       expect(inserted).toMatchObject({
         organizationId: ORGANIZATION_ID,
@@ -331,6 +355,8 @@ describe('casos de uso de API keys de organización', () => {
         permissions: [documentCreate],
       });
       expect(data?.key).toBe('fma_live_newpublic_secreto-en-claro');
+      // Rotar no reactiva una integración DISABLED: el insert es ON CONFLICT DO NOTHING.
+      expectInitialIntegrationSettings();
     });
 
     it('usa el nombre, los permisos y la expiración del body', async () => {

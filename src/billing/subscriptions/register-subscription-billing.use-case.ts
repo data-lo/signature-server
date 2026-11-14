@@ -10,6 +10,9 @@ import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enu
 import { BILLING_PROFILE_SOURCE_ENUM } from '../enums/billing-profile-source.enum';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from '../enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
+import { recordLotIssued } from '../credits/credit-ledger.util';
 import {
   BillingProfileNotFoundForRegistrationException,
   InvalidBillingRegistrationException,
@@ -193,6 +196,18 @@ export class RegisterSubscriptionBillingUseCase {
 
       const lot = await this.issueCreditLot(manager, input, plan);
 
+      // Idempotente por lote: el de una factura reutilizada no duplica la compra en el ledger.
+      await recordLotIssued(
+        manager,
+        lot,
+        CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.PURCHASE,
+        {
+          source: input.source,
+          stripeInvoiceId: input.stripeInvoiceId ?? null,
+          planType: plan.planType,
+        },
+      );
+
       // Antes del historial porque el id que devuelve es una de sus columnas.
       const checkoutOrderId =
         await this.checkoutOrderService.linkCompletedSubscriptionToCreditSlot(
@@ -269,8 +284,11 @@ export class RegisterSubscriptionBillingUseCase {
       creditLotRepository.create({
         billingProfileId: input.billingProfileId,
         origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
+        // Los planes incluyen documentos; los créditos biométricos se compran aparte.
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
         issued,
         remaining: issued,
+        reserved: 0,
         priority: CURRENT_PERIOD_LOT_PRIORITY,
         stripeInvoiceId: input.stripeInvoiceId ?? null,
         stripeSubscriptionId: input.stripeSubscriptionId ?? null,
@@ -301,6 +319,9 @@ export class RegisterSubscriptionBillingUseCase {
       .where('billing_profile_id = :billingProfileId', { billingProfileId })
       .andWhere('origin = :origin', {
         origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
+      })
+      .andWhere('credit_type = :creditType', {
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
       })
       .andWhere('remaining > 0')
       .execute();

@@ -4,6 +4,7 @@ import { createHmac } from 'crypto';
 import {
   API_KEY_TOKEN_PREFIX,
   ApiKeySecretService,
+  INTEGRATION_API_KEY_HMAC_SECRET_ENV,
 } from './api-key-secret.service';
 import { ApiKeyNotConfiguredException } from './exceptions/api-key.exceptions';
 
@@ -16,6 +17,17 @@ function serviceWith(pepper: string | undefined): ApiKeySecretService {
 }
 
 describe('ApiKeySecretService', () => {
+  it('lee el secreto HMAC desde la variable de entorno explícita de integración', () => {
+    const config = { get: jest.fn().mockReturnValue(PEPPER) };
+    const service = new ApiKeySecretService(config as unknown as ConfigService);
+
+    service.generate();
+
+    expect(config.get).toHaveBeenCalledWith(
+      INTEGRATION_API_KEY_HMAC_SECRET_ENV,
+    );
+  });
+
   it('arma la llave como fma_live_<publicId>_<secret>, con el prefijo visible', () => {
     const { publicId, keyPrefix, key } = serviceWith(PEPPER).generate();
 

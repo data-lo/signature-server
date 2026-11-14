@@ -57,7 +57,7 @@ export class RotateOrganizationApiKeyUseCase {
    * @throws {ApiKeyNotFoundException} (404) Si no tiene una llave activa que rotar.
    * @throws {ApiKeyRotationConflictException} (409) Si otra operación de la misma organización
    *   está en curso.
-   * @throws {ApiKeyNotConfiguredException} (500) Si falta `API_KEY_PEPPER`.
+   * @throws {ApiKeyNotConfiguredException} (500) Si falta `INTEGRATION_API_KEY_HMAC_SECRET`.
    *
    * @example
    * ```ts

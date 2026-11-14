@@ -27,6 +27,8 @@ export enum API_KEY_ERROR_CODE_ENUM {
   API_KEY_ORGANIZATION_INACTIVE = 'API_KEY_ORGANIZATION_INACTIVE',
   API_KEY_ACTOR_INACTIVE = 'API_KEY_ACTOR_INACTIVE',
   API_KEY_PERMISSION_DENIED = 'API_KEY_PERMISSION_DENIED',
+  /** La organización desactivó su integración (`integration_settings.status = DISABLED`). */
+  INTEGRATION_DISABLED = 'INTEGRATION_DISABLED',
 }
 
 /**
@@ -167,7 +169,7 @@ export class ApiKeyInvalidExpirationException extends UnprocessableEntityExcepti
 }
 
 /**
- * Falta `API_KEY_PEPPER` en el servidor. Es un error de despliegue, no del cliente, y el mensaje
+ * Falta `INTEGRATION_API_KEY_HMAC_SECRET` en el servidor. Es un error de despliegue, no del cliente, y el mensaje
  * no dice cuál es la variable.
  */
 export class ApiKeyNotConfiguredException extends InternalServerErrorException {
@@ -227,6 +229,23 @@ export class ApiKeyOrganizationInactiveException extends ForbiddenException {
         'Forbidden',
         'La organización de esta API key está desactivada',
         API_KEY_ERROR_CODE_ENUM.API_KEY_ORGANIZATION_INACTIVE,
+      ),
+    );
+  }
+}
+
+/**
+ * Un administrador de la organización desactivó su integración. La llave sigue `ACTIVE` y vuelve a
+ * servir en cuanto se reactive; por eso es 403 y no 401.
+ */
+export class IntegrationDisabledException extends ForbiddenException {
+  constructor() {
+    super(
+      buildApiKeyErrorBody(
+        HttpStatus.FORBIDDEN,
+        'Forbidden',
+        'La integración de la organización de esta API key está desactivada',
+        API_KEY_ERROR_CODE_ENUM.INTEGRATION_DISABLED,
       ),
     );
   }

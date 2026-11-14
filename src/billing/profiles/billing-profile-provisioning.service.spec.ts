@@ -1,3 +1,10 @@
+/** El ledger real se prueba contra Postgres (`test/credit-reservations.e2e-spec.ts`). */
+jest.mock('../credits/credit-ledger.util', () => ({
+  ...jest.requireActual('../credits/credit-ledger.util'),
+  recordLotIssued: jest.fn().mockResolvedValue(true),
+  recordCreditLedgerEntry: jest.fn().mockResolvedValue(true),
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { EntityManager } from 'typeorm';
 import { BillingProfileProvisioningService } from './billing-profile-provisioning.service';
@@ -12,6 +19,9 @@ import {
   FREE_WELCOME_DOCUMENT_CREDITS,
 } from '../catalog/free-plan.constants';
 import { CreditLotEntity } from '../credits/credit-lot.entity';
+import { recordLotIssued } from '../credits/credit-ledger.util';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from '../enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
 
 const PERSONAL_OWNER = {
@@ -143,10 +153,22 @@ describe('BillingProfileProvisioningService', () => {
       expect(manager.create).toHaveBeenCalledWith(CreditLotEntity, {
         billingProfileId: 'perfil-nuevo',
         origin: CREDIT_LOT_ORIGIN_ENUM.FREE_GRANT,
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
         issued: FREE_WELCOME_DOCUMENT_CREDITS,
         remaining: FREE_WELCOME_DOCUMENT_CREDITS,
       });
       expect(FREE_WELCOME_DOCUMENT_CREDITS).toBe(3);
+    });
+
+    /** Sin cobro de por medio: en el ledger es una concesión, en la misma transacción. */
+    it('registra la bienvenida como GRANT en el ledger', async () => {
+      await provision();
+
+      expect(recordLotIssued).toHaveBeenCalledWith(
+        manager,
+        expect.objectContaining({ billingProfileId: 'perfil-nuevo' }),
+        CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.GRANT,
+      );
     });
 
     /**

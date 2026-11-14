@@ -8,6 +8,7 @@ import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,
   INTEGRATION_DOCUMENTS_TAG,
+  INTEGRATION_OPENAPI_TAGS,
 } from '../docs/api-integration-documents-common.docs';
 import {
   EXAMPLE_IDEMPOTENCY_KEY,
@@ -57,14 +58,15 @@ const INTEGRATION_OPENAPI_DESCRIPTION = [
  * Es una función pura: no toca `source` (trabaja sobre una copia) y el resultado sólo depende de
  * él. Del documento general conserva:
  * - los `paths` que empiezan con `/api/v1/integration/`;
- * - en cada operación, sólo el tag `Integration Documents` y la seguridad `integration-api-key`
- *   (cualquier otra —JWT, `x-api-key` interna— se descarta), y un solo parámetro por header (ver
- *   `cleanHeaderParameters`);
+ * - en cada operación, sólo sus tags de integración (`Integration Documents`, `Organización` o
+ *   `Webhooks`; sin ninguno, el de documentos), la seguridad `integration-api-key` (cualquier otra —JWT,
+ *   `x-api-key` interna— se descarta) y un solo parámetro por header (ver `cleanHeaderParameters`);
  * - en `components`, sólo el esquema de seguridad `X-API-Key` y los esquemas alcanzables desde
- *   esas operaciones (DTOs y respuestas de integración, con sus dependencias).
+ *   esas operaciones (DTOs y respuestas de integración, con sus dependencias), incluidos los
+ *   payloads de webhooks que referencian los `callbacks` de `PUT /integration/webhooks/endpoint`.
  *
- * El título, la descripción y la seguridad global son los del contrato de clientes, no los del
- * documento general. No lleva `servers`: Swagger UI usa el host desde el que se abre.
+ * El título, la descripción, los tags (`INTEGRATION_OPENAPI_TAGS`, en ese orden) y la seguridad
+ * global son los del contrato de clientes, no los del documento general. No lleva `servers`: Swagger UI usa el host desde el que se abre.
  *
  * @param source - Documento generado por `SwaggerModule.createDocument`.
  * @returns El contrato OpenAPI de integración, listo para `SwaggerModule.setup`.
@@ -87,7 +89,7 @@ export function createIntegrationOpenApiDocument(
     for (const method of HTTP_METHODS) {
       const operation = pathItem[method];
       if (!operation) continue;
-      operation.tags = [INTEGRATION_DOCUMENTS_TAG];
+      operation.tags = integrationTagsOf(operation.tags);
       operation.security = [{ [INTEGRATION_API_KEY_SECURITY]: [] }];
       if (operation.parameters) {
         operation.parameters = cleanHeaderParameters(operation.parameters);
@@ -96,10 +98,6 @@ export function createIntegrationOpenApiDocument(
     paths[path] = pathItem;
   }
 
-  const sourceTag = copy.tags?.find(
-    (tag) => tag.name === INTEGRATION_DOCUMENTS_TAG,
-  );
-
   return {
     openapi: copy.openapi,
     info: {
@@ -107,13 +105,7 @@ export function createIntegrationOpenApiDocument(
       description: INTEGRATION_OPENAPI_DESCRIPTION,
       version: copy.info?.version ?? '1.0',
     },
-    tags: [
-      sourceTag ?? {
-        name: INTEGRATION_DOCUMENTS_TAG,
-        description:
-          'Documentos, firmantes y accesos de firma de tu organización',
-      },
-    ],
+    tags: INTEGRATION_OPENAPI_TAGS.map((tag) => ({ ...tag })),
     security: [{ [INTEGRATION_API_KEY_SECURITY]: [] }],
     paths,
     components: {
@@ -123,6 +115,28 @@ export function createIntegrationOpenApiDocument(
       schemas: collectReferencedSchemas(paths, copy.components?.schemas ?? {}),
     },
   };
+}
+
+/**
+ * Los tags de integración de una operación, en el orden de `INTEGRATION_OPENAPI_TAGS`.
+ *
+ * El documento general agrupa también con tags internos; aquí sólo quedan los que publica el
+ * contrato, para que Swagger UI y Mintlify no muestren secciones vacías ni ajenas.
+ *
+ * @param tags - Tags que la operación trae del documento general (`@ApiTags`).
+ * @returns Sus tags de integración, o `['Integration Documents']` si no tiene ninguno.
+ *
+ * @example
+ * ```ts
+ * integrationTagsOf(['Organización']); // ['Organización']
+ * integrationTagsOf(['Documents']); // ['Integration Documents']
+ * ```
+ */
+function integrationTagsOf(tags: string[] | undefined): string[] {
+  const kept = INTEGRATION_OPENAPI_TAGS.map((tag) => tag.name).filter((name) =>
+    tags?.includes(name),
+  );
+  return kept.length > 0 ? kept : [INTEGRATION_DOCUMENTS_TAG];
 }
 
 /**
