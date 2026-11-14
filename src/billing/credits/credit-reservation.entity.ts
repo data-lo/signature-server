@@ -4,9 +4,13 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+
+import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
 
 import { CREDIT_RESERVATION_STATUS_ENUM } from '../enums/credit-reservation-status.enum';
 import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
@@ -16,12 +20,16 @@ import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
  *
  * - Documental (`DOCUMENT_SIGNATURE`): un documento biométrico reserva su crédito al crearse y lo
  *   consume cuando se completa; si se rechaza o se cancela antes, lo libera.
- * - Biométrica (`BIOMETRIC_SIGNATURE`): cada intento de Didit reserva un crédito antes de abrir la
- *   sesión y lo consume sólo si la firma queda registrada.
+ * - Biométrica (`BIOMETRIC_SIGNATURE`): un crédito por colaborador biométrico del documento. Puede
+ *   apartarse al crear el documento, antes de que exista sesión en Didit
+ *   (`biometricSignatureAttemptId = null`); al abrirse la sesión, el intento se asocia a esa misma
+ *   reserva en vez de crear otra. Se consume sólo si la firma queda registrada.
  *
  * Garantías de la base:
- * - Una sola reserva documental ACTIVA por documento y una sola biométrica ACTIVA por intento
- *   (índices únicos parciales).
+ * - Una sola reserva documental ACTIVA por documento, una sola biométrica ACTIVA por colaborador
+ *   del documento y una sola biométrica ACTIVA por intento (índices únicos parciales).
+ * - Una biométrica siempre tiene documento y colaborador, y el colaborador es de ese documento (FK
+ *   compuesta a `collaborators (id, document_id)`); el intento es opcional. Su `quantity` es 1.
  * - Lote, perfil y tipo de crédito coinciden con los del lote (FK compuesta a
  *   `credit_lots (id, billing_profile_id, credit_type)`): una reserva no puede bloquear saldo de
  *   otro perfil ni de otro tipo.
@@ -35,6 +43,14 @@ import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
   unique: true,
   where: `"status" = 'ACTIVE' AND "credit_type" = 'DOCUMENT_SIGNATURE'`,
 })
+@Index(
+  'UQ_credit_reservations_active_biometric_collaborator',
+  ['documentId', 'collaboratorId'],
+  {
+    unique: true,
+    where: `"status" = 'ACTIVE' AND "credit_type" = 'BIOMETRIC_SIGNATURE'`,
+  },
+)
 @Index(
   'UQ_credit_reservations_active_biometric_attempt',
   ['biometricSignatureAttemptId'],
@@ -50,7 +66,11 @@ import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
 @Check('CHK_credit_reservations_quantity', '"quantity" > 0')
 @Check(
   'CHK_credit_reservations_subject',
-  `("credit_type" = 'DOCUMENT_SIGNATURE' AND "document_id" IS NOT NULL) OR ("credit_type" = 'BIOMETRIC_SIGNATURE' AND "biometric_signature_attempt_id" IS NOT NULL)`,
+  `("credit_type" = 'DOCUMENT_SIGNATURE' AND "document_id" IS NOT NULL AND "collaborator_id" IS NULL) OR ("credit_type" = 'BIOMETRIC_SIGNATURE' AND "document_id" IS NOT NULL AND "collaborator_id" IS NOT NULL)`,
+)
+@Check(
+  'CHK_credit_reservations_biometric_quantity',
+  `"credit_type" <> 'BIOMETRIC_SIGNATURE' OR "quantity" = 1`,
 )
 export class CreditReservationEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -74,7 +94,22 @@ export class CreditReservationEntity {
   @Column({ name: 'document_id', type: 'uuid', nullable: true })
   documentId: string | null;
 
-  /** Intento de Didit que paga; sólo en reservas biométricas. */
+  /** Colaborador biométrico al que se le aparta el crédito; sólo en reservas biométricas. */
+  @Column({ name: 'collaborator_id', type: 'uuid', nullable: true })
+  collaboratorId: string | null;
+
+  /**
+   * En la base la FK es compuesta (`collaborator_id`, `document_id`) → `collaborators (id,
+   * document_id)`; aquí basta la relación por id para cargar el colaborador.
+   */
+  @ManyToOne(() => CollaboratorEntity, { onDelete: 'RESTRICT', nullable: true })
+  @JoinColumn({ name: 'collaborator_id' })
+  collaborator?: CollaboratorEntity | null;
+
+  /**
+   * Intento de Didit que paga; sólo en reservas biométricas. `null` mientras el colaborador no abra
+   * su sesión: la reserva existe desde la creación del documento.
+   */
   @Column({
     name: 'biometric_signature_attempt_id',
     type: 'uuid',

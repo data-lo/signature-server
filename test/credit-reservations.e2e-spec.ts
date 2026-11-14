@@ -128,14 +128,26 @@ describe('Reservas de créditos biométricos (e2e)', () => {
     );
   }
 
+  /** Firmante biométrico del documento. */
+  async function createBiometricSigner(documentId: string): Promise<string> {
+    return insertReturningId(
+      `INSERT INTO collaborators (document_id, ip_address, colaborator_type, signature_type) VALUES ($1, '127.0.0.1', 'SIGNER', 'BIOMETRIC')`,
+      [documentId],
+    );
+  }
+
+  /** Intento de Didit; sin `collaboratorId` crea un colaborador nuevo para él. */
   async function createAttempt(
     documentId: string,
     status = 'PENDING',
+    existingCollaboratorId?: string,
   ): Promise<string> {
-    const collaboratorId = await insertReturningId(
-      `INSERT INTO collaborators (document_id, ip_address, colaborator_type) VALUES ($1, '127.0.0.1', 'SIGNER')`,
-      [documentId],
-    );
+    const collaboratorId =
+      existingCollaboratorId ??
+      (await insertReturningId(
+        `INSERT INTO collaborators (document_id, ip_address, colaborator_type) VALUES ($1, '127.0.0.1', 'SIGNER')`,
+        [documentId],
+      ));
     return insertReturningId(
       `INSERT INTO biometric_signature_attempts (document_id, collaborator_id, email_snapshot, provider, provider_workflow_id, document_hash, geolocation, consented_at, status)
        VALUES ($1, $2, 'firmante@correo.mx', 'DIDIT', 'wf-kyc', 'hash', '{}', now(), $3)`,
@@ -152,6 +164,21 @@ describe('Reservas de créditos biométricos (e2e)', () => {
       userId: ids.user,
     });
     return documentId;
+  }
+
+  /**
+   * Deshace migraciones, de la última hacia atrás, hasta revertir `name` inclusive. Así cada prueba
+   * de migración revierte la suya aunque después se agreguen otras.
+   */
+  async function undoMigrationsThrough(name: string): Promise<void> {
+    for (;;) {
+      const [last] = await dataSource.query(
+        `SELECT name FROM migrations ORDER BY id DESC LIMIT 1`,
+      );
+      if (!last) throw new Error(`La migración ${name} no está aplicada.`);
+      await dataSource.undoLastMigration({ transaction: 'each' });
+      if (last.name === name) return;
+    }
   }
 
   async function ledgerCount(): Promise<number> {
@@ -246,7 +273,9 @@ describe('Reservas de créditos biométricos (e2e)', () => {
   describe('migración', () => {
     it('respalda en el ledger los lotes y consumos históricos, y se revierte y se vuelve a aplicar', async () => {
       // Un lote y un consumo "de antes": se escriben con el esquema sin la 093.
-      await dataSource.undoLastMigration({ transaction: 'each' });
+      await undoMigrationsThrough(
+        'CreateCreditReservationsAndLedger1784300000093',
+      );
       const legacyLot = await insertReturningId(
         `INSERT INTO credit_lots (billing_profile_id, origin, issued, remaining, stripe_invoice_id) VALUES ($1, 'CURRENT_PERIOD', 10, 9, $2)`,
         [ids.personalProfile, `in_${randomUUID()}`],
@@ -282,6 +311,72 @@ describe('Reservas de créditos biométricos (e2e)', () => {
         },
       ]);
       expect(await lot(legacyLot)).toEqual({ remaining: 9, reserved: 0 });
+    });
+
+    it('098: las reservas biométricas históricas por intento toman su colaborador y siguen válidas', async () => {
+      // Una reserva "de antes" (sólo por intento): se escribe con el esquema sin la 098.
+      await undoMigrationsThrough(
+        'AddCollaboratorToCreditReservations1784300000098',
+      );
+      const lotId = await issueLot(ids.personalProfile, BIO, 1);
+      const documentId = await createDocument(ids.personalAccount);
+      const attemptId = await createAttempt(documentId, 'IN_PROGRESS');
+      const [{ collaborator_id: collaboratorId }] = await dataSource.query(
+        `SELECT collaborator_id FROM biometric_signature_attempts WHERE id = $1`,
+        [attemptId],
+      );
+      await dataSource.query(
+        `UPDATE credit_lots SET reserved = 1 WHERE id = $1`,
+        [lotId],
+      );
+      const legacyId = await insertReturningId(
+        `INSERT INTO credit_reservations (billing_profile_id, credit_lot_id, credit_type, biometric_signature_attempt_id, quantity, expires_at)
+         VALUES ($1, $2, 'BIOMETRIC_SIGNATURE', $3, 1, now() + interval '1 day')`,
+        [ids.personalProfile, lotId, attemptId],
+      );
+
+      await dataSource.runMigrations({ transaction: 'each' });
+
+      const [row] = await dataSource.query(
+        `SELECT document_id, collaborator_id, biometric_signature_attempt_id, status, quantity FROM credit_reservations WHERE id = $1`,
+        [legacyId],
+      );
+      expect(row).toEqual({
+        document_id: documentId,
+        collaborator_id: collaboratorId,
+        biometric_signature_attempt_id: attemptId,
+        status: 'ACTIVE',
+        quantity: 1,
+      });
+      expect(await lot(lotId)).toEqual({ remaining: 1, reserved: 1 });
+      // Sigue siendo la reserva del intento: reintentar no bloquea otro crédito.
+      await expect(
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+        }),
+      ).resolves.toMatchObject({ id: legacyId });
+    });
+
+    it('098: no se revierte si hay reservas biométricas sin intento', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+      await issueLot(ids.personalProfile, BIO, 1);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const collaboratorId = await createBiometricSigner(documentId);
+      await reserveBiometric.reserveForCollaborators({
+        documentId,
+        collaboratorIds: [collaboratorId],
+      });
+
+      await expect(
+        undoMigrationsThrough(
+          'AddCollaboratorToCreditReservations1784300000098',
+        ),
+      ).rejects.toThrow(/sin intento de Didit/);
+      const [column] = await dataSource.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = 'credit_reservations' AND column_name = 'collaborator_id'`,
+      );
+      expect(column).toBeDefined();
     });
 
     it('el ledger es inmutable: rechaza UPDATE, DELETE y TRUNCATE', async () => {
@@ -541,6 +636,256 @@ describe('Reservas de créditos biométricos (e2e)', () => {
 
       expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
       expect((await credits.findByAttempt(attemptId))?.status).toBe('RELEASED');
+    });
+  });
+
+  describe('reserva biométrica por colaborador (sin sesión de Didit)', () => {
+    /** Documento con su reserva documental y tres firmantes biométricos. */
+    async function threeSignerDocument(bioCredits: number, docCredits = 1) {
+      await issueLot(ids.personalProfile, DOC, docCredits);
+      const bioLot = await issueLot(ids.personalProfile, BIO, bioCredits);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const collaboratorIds = [
+        await createBiometricSigner(documentId),
+        await createBiometricSigner(documentId),
+        await createBiometricSigner(documentId),
+      ];
+      return { bioLot, documentId, collaboratorIds };
+    }
+
+    it('un documento con tres colaboradores biométricos queda con tres reservas, sin intento', async () => {
+      const { bioLot, documentId, collaboratorIds } =
+        await threeSignerDocument(3);
+
+      const reservations = await reserveBiometric.reserveForCollaborators({
+        documentId,
+        collaboratorIds,
+      });
+
+      expect(reservations).toHaveLength(3);
+      reservations.forEach((reservation, index) => {
+        expect(reservation).toMatchObject({
+          billingProfileId: ids.personalProfile,
+          creditLotId: bioLot,
+          creditType: BIO,
+          documentId,
+          collaboratorId: collaboratorIds[index],
+          biometricSignatureAttemptId: null,
+          quantity: 1,
+          status: 'ACTIVE',
+          expiresAt: null,
+        });
+      });
+      expect(await lot(bioLot)).toEqual({ remaining: 3, reserved: 3 });
+      const entries = await dataSource.query(
+        `SELECT metadata->>'collaboratorId' AS collaborator FROM credit_ledger_entries WHERE document_id = $1 AND credit_type = $2 AND movement_type = 'RESERVE' ORDER BY created_at`,
+        [documentId, BIO],
+      );
+      expect(
+        entries.map((e: { collaborator: string }) => e.collaborator),
+      ).toEqual(collaboratorIds);
+    });
+
+    it('reintento de creación no duplica las reservas, también en paralelo', async () => {
+      const { bioLot, documentId, collaboratorIds } =
+        await threeSignerDocument(5);
+      const first = await reserveBiometric.reserveForCollaborators({
+        documentId,
+        collaboratorIds,
+      });
+      const ledgerBefore = await ledgerCount();
+
+      const retries = await Promise.all([
+        reserveBiometric.reserveForCollaborators({
+          documentId,
+          collaboratorIds,
+        }),
+        reserveBiometric.reserveForCollaborators({
+          documentId,
+          collaboratorIds: [...collaboratorIds].reverse(),
+        }),
+      ]);
+
+      const firstIds = new Set(first.map(({ id }) => id));
+      for (const retry of retries) {
+        expect(new Set(retry.map(({ id }) => id))).toEqual(firstIds);
+      }
+      expect(await lot(bioLot)).toEqual({ remaining: 5, reserved: 3 });
+      expect(await ledgerCount()).toBe(ledgerBefore);
+    });
+
+    it('sin saldo para todos no reserva a ninguno (402)', async () => {
+      const { bioLot, documentId, collaboratorIds } =
+        await threeSignerDocument(2);
+
+      await expect(
+        reserveBiometric.reserveForCollaborators({
+          documentId,
+          collaboratorIds,
+        }),
+      ).rejects.toBeInstanceOf(InsufficientBiometricCreditsException);
+      expect(await lot(bioLot)).toEqual({ remaining: 2, reserved: 0 });
+      expect(await credits.findActiveByDocument(documentId)).toHaveLength(1);
+    });
+
+    it('rechaza colaboradores que no son firmantes biométricos del documento', async () => {
+      const { documentId } = await threeSignerDocument(3, 2);
+      const otherDocument = await reservedDocument(ids.personalAccount);
+      const foreign = await createBiometricSigner(otherDocument);
+      const simpleSigner = await insertReturningId(
+        `INSERT INTO collaborators (document_id, ip_address, colaborator_type, signature_type) VALUES ($1, '127.0.0.1', 'SIGNER', 'SIMPLE')`,
+        [documentId],
+      );
+
+      for (const collaboratorId of [foreign, simpleSigner]) {
+        await expect(
+          reserveBiometric.reserveForCollaborators({
+            documentId,
+            collaboratorIds: [collaboratorId],
+          }),
+        ).rejects.toThrow(/no son firmantes biométricos/);
+      }
+    });
+
+    it('al abrir la sesión, el intento se asocia a la reserva del colaborador y no bloquea otro crédito', async () => {
+      const { bioLot, documentId, collaboratorIds } =
+        await threeSignerDocument(3);
+      const [reservation] = await reserveBiometric.reserveForCollaborators({
+        documentId,
+        collaboratorIds,
+      });
+      const attemptId = await createAttempt(
+        documentId,
+        'PENDING',
+        collaboratorIds[0],
+      );
+
+      const [a, b] = await Promise.all([
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+        }),
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+        }),
+      ]);
+
+      expect(a.id).toBe(reservation.id);
+      expect(b.id).toBe(reservation.id);
+      expect(a.biometricSignatureAttemptId).toBe(attemptId);
+      expect(await credits.findByAttempt(attemptId)).toMatchObject({
+        id: reservation.id,
+        collaboratorId: collaboratorIds[0],
+      });
+      expect(await lot(bioLot)).toEqual({ remaining: 3, reserved: 3 });
+
+      // Firmar consume la reserva apartada al crear el documento.
+      await dataSource.query(
+        `UPDATE biometric_signature_attempts SET status = 'APPROVED' WHERE id = $1`,
+        [attemptId],
+      );
+      await expect(
+        finalize.onSignatureSucceeded({
+          biometricSignatureAttemptId: attemptId,
+          documentId,
+          documentCompleted: false,
+        }),
+      ).resolves.toEqual({ biometricConsumed: true, documentConsumed: false });
+      expect(await lot(bioLot)).toEqual({ remaining: 2, reserved: 2 });
+    });
+
+    it('un colaborador sin crédito apartado reserva el suyo al abrir la sesión', async () => {
+      await issueLot(ids.personalProfile, DOC, 1);
+      const bioLot = await issueLot(ids.personalProfile, BIO, 1);
+      const documentId = await reservedDocument(ids.personalAccount);
+      const collaboratorId = await createBiometricSigner(documentId);
+      const attemptId = await createAttempt(
+        documentId,
+        'PENDING',
+        collaboratorId,
+      );
+
+      const reservation = await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+
+      expect(reservation).toMatchObject({
+        documentId,
+        collaboratorId,
+        biometricSignatureAttemptId: attemptId,
+      });
+      // Ya tiene su reserva activa: apartar al colaborador devuelve esa misma.
+      await expect(
+        reserveBiometric.reserveForCollaborators({
+          documentId,
+          collaboratorIds: [collaboratorId],
+        }),
+      ).resolves.toEqual([expect.objectContaining({ id: reservation.id })]);
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 1 });
+    });
+
+    it('la base impide dos reservas activas del mismo colaborador y exige documento, colaborador y 1 crédito', async () => {
+      const { bioLot, documentId, collaboratorIds } = await threeSignerDocument(
+        3,
+        2,
+      );
+      await reserveBiometric.reserveForCollaborators({
+        documentId,
+        collaboratorIds: [collaboratorIds[0]],
+      });
+      const insert = (collaboratorId: string | null, quantity = 1) =>
+        dataSource.query(
+          `INSERT INTO credit_reservations (billing_profile_id, credit_lot_id, credit_type, document_id, collaborator_id, quantity) VALUES ($1, $2, 'BIOMETRIC_SIGNATURE', $3, $4, $5)`,
+          [ids.personalProfile, bioLot, documentId, collaboratorId, quantity],
+        );
+
+      await expect(insert(collaboratorIds[0])).rejects.toThrow(
+        /UQ_credit_reservations_active_biometric_collaborator/,
+      );
+      await expect(insert(null)).rejects.toThrow(
+        /CHK_credit_reservations_subject/,
+      );
+      await expect(insert(collaboratorIds[1], 2)).rejects.toThrow(
+        /CHK_credit_reservations_biometric_quantity/,
+      );
+
+      const otherDocument = await reservedDocument(ids.personalAccount);
+      const foreign = await createBiometricSigner(otherDocument);
+      await expect(insert(foreign)).rejects.toThrow(
+        /FK_credit_reservations_collaborator/,
+      );
+    });
+
+    it('liberada la reserva del colaborador, puede volver a tener una activa', async () => {
+      const { bioLot, documentId, collaboratorIds } =
+        await threeSignerDocument(3);
+      const [reservation] = await reserveBiometric.reserveForCollaborators({
+        documentId,
+        collaboratorIds: [collaboratorIds[0]],
+      });
+      await credits.release({
+        reservationId: reservation.id,
+        reason: 'TEST',
+      });
+      const attemptId = await createAttempt(
+        documentId,
+        'PENDING',
+        collaboratorIds[0],
+      );
+
+      const next = await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+
+      expect(next.id).not.toBe(reservation.id);
+      expect(next).toMatchObject({
+        collaboratorId: collaboratorIds[0],
+        status: 'ACTIVE',
+      });
+      expect(await lot(bioLot)).toEqual({ remaining: 3, reserved: 1 });
     });
   });
 
