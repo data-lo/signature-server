@@ -29,6 +29,8 @@ import {
   applyGlobalApiPrefix,
   GLOBAL_API_PREFIX,
 } from './common/constants/api-prefix.constants';
+import { applyRequestContext } from './observability/request-context/request-context.module';
+import { REQUEST_ID_HEADER } from './observability/request-context/request-context.constants';
 
 process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
 
@@ -37,6 +39,11 @@ async function bootstrap() {
     logger: new ConsoleLogger(),
     rawBody: true,
   });
+
+  // Primer middleware de Express: abre el contexto de correlación y fija `X-Request-Id` antes que
+  // los parsers de body, el ruteo, los middleware de módulo, los guards y los interceptores, para
+  // que el header salga también en los 401/403, 422, 429 y 500 que ellos respondan.
+  applyRequestContext(app);
 
   // El versionado vive acá y no dentro de cada `@Controller()`: ver
   // `api-prefix.constants.ts` para el prefijo, las exclusiones y por qué.
@@ -51,6 +58,9 @@ async function bootstrap() {
   // que el servidor registrara ningún error — un fallo mudo y difícil de rastrear desde acá.
   app.enableCors({
     origin: frontendBaseUrl(),
+    // Sin esto el navegador oculta `X-Request-Id` al JavaScript del frontend, que lo necesita para
+    // que soporte pueda rastrear una petición fallida.
+    exposedHeaders: [REQUEST_ID_HEADER],
   });
 
   // Conexión del Microservicio Kafka (Consumer)
