@@ -25,6 +25,10 @@ export const API_KEY_ASSIGNABLE_PERMISSION_KEYS: ReadonlySet<string> =
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_CREATE,
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_UPDATE,
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_DELETE,
+    // Explícitos y separados de los de documentos: una llave que crea documentos no puede, por
+    // eso, cambiar la configuración de la integración.
+    STATIC_PERMISSION_KEY_ENUM.INTEGRATION_SETTINGS_READ,
+    STATIC_PERMISSION_KEY_ENUM.INTEGRATION_SETTINGS_UPDATE,
     // Separados de los de documentos: una llave que crea documentos no puede, por eso, cambiar a
     // dónde se notifican ni leer cómo se firman las notificaciones.
     STATIC_PERMISSION_KEY_ENUM.WEBHOOK_READ,

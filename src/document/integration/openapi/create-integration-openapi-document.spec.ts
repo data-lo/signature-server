@@ -22,6 +22,8 @@ import {
 } from '../docs/api-integration-examples.docs';
 import { IntegrationDocumentsController } from '../integration-documents.controller';
 import { IntegrationOrganizationController } from '../integration-organization.controller';
+import { IntegrationApiSettingsController } from 'src/integration-settings/integration-api-settings.controller';
+import { IntegrationSettingsController } from 'src/integration-settings/integration-settings.controller';
 import { IntegrationWebhookEndpointController } from 'src/outbound-webhooks/controllers/integration-webhook-endpoint.controller';
 import { INTEGRATION_WEBHOOKS_TAG } from 'src/outbound-webhooks/docs/integration-webhooks-tag.docs';
 import { OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM } from 'src/outbound-webhooks/enums/outbound-webhook-event-type.enum';
@@ -68,6 +70,8 @@ describe('createIntegrationOpenApiDocument', () => {
       controllers: [
         IntegrationDocumentsController,
         IntegrationOrganizationController,
+        IntegrationApiSettingsController,
+        IntegrationSettingsController,
         IntegrationWebhookEndpointController,
         OrganizationApiKeysController,
         InternalSubscriptionBillingController,
@@ -117,7 +121,7 @@ describe('createIntegrationOpenApiDocument', () => {
     );
   });
 
-  it('contiene exactamente los diez endpoints de integración', () => {
+  it('contiene exactamente los doce endpoints de integración', () => {
     expect(operationsOf(integration)).toEqual(
       [
         'POST /api/v1/integration/documents',
@@ -128,6 +132,8 @@ describe('createIntegrationOpenApiDocument', () => {
         'DELETE /api/v1/integration/webhooks/endpoint',
         'POST /api/v1/integration/webhooks/endpoint/rotate-secret',
         'GET /api/v1/integration/users/documents',
+        'GET /api/v1/integration/settings',
+        'PATCH /api/v1/integration/settings',
         'POST /api/v1/integration/documents/{documentId}/signing-access',
         'POST /api/v1/integration/documents/{documentId}/collaborators/resend-invitation',
       ].sort(),
