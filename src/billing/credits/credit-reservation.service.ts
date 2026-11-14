@@ -20,8 +20,11 @@ export interface ReserveCreditsInput {
   billingProfileId: string;
   creditType: CREDIT_TYPE_ENUM;
   quantity: number;
-  /** Documento que paga la reserva, o al que pertenece el intento biométrico. */
+  /** Documento que paga la reserva, o al que pertenece el colaborador biométrico. */
   documentId: string | null;
+  /** Colaborador biométrico al que se le aparta el crédito; obligatorio en las biométricas. */
+  collaboratorId?: string | null;
+  /** Intento de Didit, si ya existe; una biométrica puede reservarse antes de abrir la sesión. */
   biometricSignatureAttemptId: string | null;
   /** Cuándo puede liberarla el job de expiración; `null` = no vence sola. */
   expiresAt: Date | null;
@@ -88,8 +91,9 @@ export class CreditReservationService {
    *
    * @throws {InsufficientDocumentCreditsException} (402) Sin saldo documental disponible.
    * @throws {InsufficientBiometricCreditsException} (402) Sin saldo biométrico disponible.
-   * @throws {QueryFailedError} Si ya hay otra reserva activa para el mismo documento o intento con
-   *   otra clave (índices únicos parciales).
+   * @throws {Error} Si una biométrica no trae documento y colaborador, o no es de 1 crédito.
+   * @throws {QueryFailedError} Si ya hay otra reserva activa para el mismo documento, colaborador o
+   *   intento con otra clave (índices únicos parciales), o si el colaborador no es del documento.
    *
    * @example
    * ```ts
@@ -98,9 +102,10 @@ export class CreditReservationService {
    *   creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
    *   quantity: 1,
    *   documentId: 'doc-1',
-   *   biometricSignatureAttemptId: 'att-1',
-   *   expiresAt: new Date(Date.now() + 86_400_000),
-   *   idempotencyKey: 'reserve:BIOMETRIC_SIGNATURE:att-1',
+   *   collaboratorId: 'col-1',
+   *   biometricSignatureAttemptId: null,
+   *   expiresAt: null,
+   *   idempotencyKey: 'reserve:BIOMETRIC_SIGNATURE:document:doc-1:collaborator:col-1',
    * });
    * ```
    */
@@ -243,6 +248,90 @@ export class CreditReservationService {
   }
 
   /**
+   * Reserva biométrica ACTIVA de un colaborador en un documento (hay a lo sumo una).
+   *
+   * @param input.documentId - Documento.
+   * @param input.collaboratorId - Colaborador biométrico.
+   * @param manager - Transacción en curso, si la hay.
+   * @returns La reserva activa, o `null` si el colaborador no tiene crédito apartado.
+   *
+   * @example
+   * ```ts
+   * const reservation = await credits.findActiveBiometricByCollaborator({ documentId: 'doc-1', collaboratorId: 'col-1' });
+   * ```
+   */
+  findActiveBiometricByCollaborator(
+    input: { documentId: string; collaboratorId: string },
+    manager?: EntityManager,
+  ): Promise<CreditReservationEntity | null> {
+    return (manager ?? this.dataSource.manager)
+      .getRepository(CreditReservationEntity)
+      .findOne({
+        where: {
+          documentId: input.documentId,
+          collaboratorId: input.collaboratorId,
+          creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+          status: CREDIT_RESERVATION_STATUS_ENUM.ACTIVE,
+        },
+      });
+  }
+
+  /**
+   * Asocia un intento de Didit a la reserva biométrica activa de su colaborador, en vez de crear
+   * otra. Si la reserva ya apuntaba a otro intento (uno anterior que terminó sin liberarla), pasa a
+   * apuntar al nuevo: el crédito es del colaborador, no del intento.
+   *
+   * @param input.reservationId - Reserva biométrica activa.
+   * @param input.biometricSignatureAttemptId - Intento recién abierto.
+   * @param manager - Transacción en curso, si la hay.
+   * @returns La reserva actualizada, o `null` si ya no estaba activa (otro proceso la resolvió).
+   *
+   * @throws {QueryFailedError} Si el intento ya está asociado a otra reserva activa.
+   *
+   * @example
+   * ```ts
+   * await credits.attachAttempt({ reservationId: 'res-1', biometricSignatureAttemptId: 'att-1' });
+   * ```
+   */
+  async attachAttempt(
+    input: { reservationId: string; biometricSignatureAttemptId: string },
+    manager?: EntityManager,
+  ): Promise<CreditReservationEntity | null> {
+    const tx = manager ?? this.dataSource.manager;
+    const repository = tx.getRepository(CreditReservationEntity);
+
+    const current = await repository.findOne({
+      where: { id: input.reservationId },
+    });
+    if (
+      current?.biometricSignatureAttemptId &&
+      current.biometricSignatureAttemptId !== input.biometricSignatureAttemptId
+    ) {
+      this.logger.warn(
+        `La reserva ${current.id} pasa del intento ${current.biometricSignatureAttemptId} al ${input.biometricSignatureAttemptId}.`,
+      );
+    }
+
+    const result = await tx
+      .createQueryBuilder()
+      .update(CreditReservationEntity)
+      .set({ biometricSignatureAttemptId: input.biometricSignatureAttemptId })
+      .where('id = :id', { id: input.reservationId })
+      .andWhere('credit_type = :creditType', {
+        creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+      })
+      .andWhere('status = :active', {
+        active: CREDIT_RESERVATION_STATUS_ENUM.ACTIVE,
+      })
+      .execute();
+    if (result.affected !== 1) {
+      return null;
+    }
+
+    return repository.findOne({ where: { id: input.reservationId } });
+  }
+
+  /**
    * Reserva documental más reciente de un documento, en cualquier estado.
    *
    * @param documentId - Documento.
@@ -313,6 +402,14 @@ export class CreditReservationService {
         `Cantidad de créditos a reservar inválida: ${input.quantity}`,
       );
     }
+    if (
+      input.creditType === CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE &&
+      (!input.documentId || !input.collaboratorId || input.quantity !== 1)
+    ) {
+      throw new Error(
+        'Una reserva biométrica necesita documento y colaborador, y bloquea exactamente 1 crédito.',
+      );
+    }
 
     // Dos reintentos simultáneos de la misma reserva se forman aquí: el segundo ve la del primero.
     await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
@@ -349,6 +446,7 @@ export class CreditReservationService {
         creditLotId,
         creditType: input.creditType,
         documentId: input.documentId,
+        collaboratorId: input.collaboratorId ?? null,
         biometricSignatureAttemptId: input.biometricSignatureAttemptId,
         quantity: input.quantity,
         status: CREDIT_RESERVATION_STATUS_ENUM.ACTIVE,
@@ -368,7 +466,7 @@ export class CreditReservationService {
       creditReservationId: reservation.id,
       documentId: input.documentId,
       biometricSignatureAttemptId: input.biometricSignatureAttemptId,
-      metadata: input.metadata ?? null,
+      metadata: withCollaborator(input.metadata, input.collaboratorId),
     });
 
     this.logger.log(
@@ -474,7 +572,7 @@ export class CreditReservationService {
       creditReservationId: reservation.id,
       documentId: reservation.documentId,
       biometricSignatureAttemptId: reservation.biometricSignatureAttemptId,
-      metadata: params.metadata ?? null,
+      metadata: withCollaborator(params.metadata, reservation.collaboratorId),
     });
     if (!recorded) {
       // La reserva estaba ACTIVE, así que la clave sólo puede venir de otro camino (p. ej. un
@@ -655,4 +753,26 @@ export function insufficientCredits(
   return creditType === CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE
     ? new InsufficientBiometricCreditsException(required, available, detail)
     : new InsufficientDocumentCreditsException(required, available, detail);
+}
+
+/**
+ * Metadatos del movimiento con el colaborador de la reserva, que el ledger no tiene como columna.
+ *
+ * @param metadata - Metadatos del llamador.
+ * @param collaboratorId - Colaborador de la reserva biométrica, si lo hay.
+ * @returns Los metadatos con `collaboratorId`, o `null` si no hay nada que guardar.
+ *
+ * @example
+ * ```ts
+ * withCollaborator({ reason: 'DIDIT_DECLINED' }, 'col-1'); // { reason: 'DIDIT_DECLINED', collaboratorId: 'col-1' }
+ * ```
+ */
+function withCollaborator(
+  metadata: Record<string, unknown> | undefined,
+  collaboratorId: string | null | undefined,
+): Record<string, unknown> | null {
+  if (!collaboratorId) {
+    return metadata ?? null;
+  }
+  return { ...metadata, collaboratorId };
 }
