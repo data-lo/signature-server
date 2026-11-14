@@ -287,28 +287,94 @@ export class InsufficientDocumentCreditsException extends HttpException {
   }
 }
 
+/** Código estable del 402 por falta de créditos biométricos; la pantalla decide por él, no por el texto. */
+export const INSUFFICIENT_BIOMETRIC_CREDITS_CODE =
+  'INSUFFICIENT_BIOMETRIC_CREDITS';
+
+/** Números del 402 biométrico, para que el cliente diga cuánto falta sin adivinarlo. */
+export interface InsufficientBiometricCreditsDetails {
+  /** Créditos biométricos que hacían falta. */
+  required: number;
+  /** Créditos biométricos disponibles (`remaining - reserved`). */
+  available: number;
+  /** Firmantes biométricos del documento; sólo al crearlo. */
+  biometricSigners?: number;
+}
+
+/** Contexto opcional del 402 biométrico. */
+export interface InsufficientBiometricCreditsOptions {
+  /** Mensaje para el usuario; por defecto, el del inicio de una firma. */
+  message?: string;
+  /** Firmantes biométricos solicitados, cuando se crea el documento. */
+  biometricSigners?: number;
+}
+
+const BIOMETRIC_SIGNING_MESSAGE =
+  'No hay créditos de firma biométrica disponibles para este documento. Pide al creador del documento que compre más.';
+
+/** Mensaje del 402 al crear un documento con más firmantes biométricos que créditos. */
+export const INSUFFICIENT_BIOMETRIC_CREDITS_ON_CREATE_MESSAGE =
+  'Saldo insuficiente para firmas biométricas.';
+
 /**
- * El propietario no tiene créditos biométricos disponibles para iniciar una firma biométrica.
+ * Faltan créditos biométricos: al crear un documento con más firmantes biométricos que saldo, o al
+ * iniciar una firma biométrica sin crédito.
  *
- * Mismo status y misma lógica que `InsufficientDocumentCreditsException` (402: falta saldo, no
- * plan), con otro mensaje porque lo que hay que recargar es otro producto. La lanza la reserva del
- * crédito biométrico ANTES de abrir la sesión de Didit, así que no se gasta una sesión del
- * proveedor que no se va a poder cobrar.
+ * Mismo status que `InsufficientDocumentCreditsException` (402: falta saldo, no plan), con otro
+ * mensaje porque lo que hay que recargar es otro producto.
+ *
+ * Cuerpo:
+ * ```json
+ * {
+ *   "statusCode": 402,
+ *   "success": false,
+ *   "message": "Saldo insuficiente para firmas biométricas.",
+ *   "code": "INSUFFICIENT_BIOMETRIC_CREDITS",
+ *   "details": { "required": 3, "available": 2, "biometricSigners": 3 },
+ *   "error": { "code": "INSUFFICIENT_BIOMETRIC_CREDITS", "details": { … } }
+ * }
+ * ```
+ * `error.code` y `error.details` son el contrato del dashboard. `code` y `details` en la raíz son
+ * los que lee `IntegrationErrorFilter`, así la API de integración responde el mismo código en vez
+ * del genérico `INSUFFICIENT_DOCUMENT_CREDITS` que asigna a todo 402.
  *
  * `detail` viaja en `cause` y se queda en el log: hacia fuera la respuesta es idéntica tenga o no
- * perfil de facturación el documento.
+ * perfil de facturación la cuenta.
  */
 export class InsufficientBiometricCreditsException extends HttpException {
-  constructor(required: number, available: number, detail?: string) {
+  readonly details: InsufficientBiometricCreditsDetails;
+
+  /**
+   * @param required - Créditos biométricos que hacían falta.
+   * @param available - Créditos biométricos disponibles.
+   * @param detail - Detalle para el log.
+   * @param options - Mensaje y firmantes biométricos solicitados.
+   */
+  constructor(
+    required: number,
+    available: number,
+    detail?: string,
+    options: InsufficientBiometricCreditsOptions = {},
+  ) {
+    const details: InsufficientBiometricCreditsDetails = {
+      required,
+      available,
+      ...(options.biometricSigners !== undefined && {
+        biometricSigners: options.biometricSigners,
+      }),
+    };
     super(
       {
         statusCode: HttpStatus.PAYMENT_REQUIRED,
-        message:
-          'No hay créditos de firma biométrica disponibles para este documento. Pide al creador del documento que compre más.',
-        error: 'Payment Required',
+        success: false,
+        message: options.message ?? BIOMETRIC_SIGNING_MESSAGE,
+        code: INSUFFICIENT_BIOMETRIC_CREDITS_CODE,
+        details,
+        error: { code: INSUFFICIENT_BIOMETRIC_CREDITS_CODE, details },
       },
       HttpStatus.PAYMENT_REQUIRED,
     );
+    this.details = details;
     this.cause =
       `Se requieren ${required} crédito(s) biométrico(s) y hay ${available} disponible(s).` +
       (detail ? ` ${detail}` : '');
