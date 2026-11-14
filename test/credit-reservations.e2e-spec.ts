@@ -12,7 +12,9 @@ import { countAvailableCredits } from './../src/billing/credits/count-available-
 import { recordLotIssued } from './../src/billing/credits/credit-ledger.util';
 import { CreditLotEntity } from './../src/billing/credits/credit-lot.entity';
 import { CreditReservationService } from './../src/billing/credits/credit-reservation.service';
+import { CloseBiometricReservationsUseCase } from './../src/billing/credits/close-biometric-reservations.use-case';
 import { FinalizeBiometricSignatureCreditsUseCase } from './../src/billing/credits/finalize-biometric-signature-credits.use-case';
+import { DOCUMENT_CLOSURE_REASON_ENUM } from './../src/billing/enums/document-closure-reason.enum';
 import { ReleaseExpiredCreditReservationsUseCase } from './../src/billing/credits/release-expired-credit-reservations.use-case';
 import { ReserveBiometricSignatureCreditsUseCase } from './../src/billing/credits/reserve-biometric-signature-credits.use-case';
 import { ReserveDocumentCreditUseCase } from './../src/billing/credits/reserve-document-credit.use-case';
@@ -55,6 +57,7 @@ describe('Reservas de créditos biométricos (e2e)', () => {
   let reserveDocument: ReserveDocumentCreditUseCase;
   let reserveBiometric: ReserveBiometricSignatureCreditsUseCase;
   let finalize: FinalizeBiometricSignatureCreditsUseCase;
+  let closeBiometric: CloseBiometricReservationsUseCase;
   let releaseExpired: ReleaseExpiredCreditReservationsUseCase;
   let consumeDocument: ConsumeDocumentCreditUseCase;
 
@@ -217,6 +220,7 @@ describe('Reservas de créditos biométricos (e2e)', () => {
         CreditReservationService,
         ReserveDocumentCreditUseCase,
         ReserveBiometricSignatureCreditsUseCase,
+        CloseBiometricReservationsUseCase,
         FinalizeBiometricSignatureCreditsUseCase,
         ReleaseExpiredCreditReservationsUseCase,
         ConsumeDocumentCreditUseCase,
@@ -229,6 +233,7 @@ describe('Reservas de créditos biométricos (e2e)', () => {
     reserveDocument = moduleRef.get(ReserveDocumentCreditUseCase);
     reserveBiometric = moduleRef.get(ReserveBiometricSignatureCreditsUseCase);
     finalize = moduleRef.get(FinalizeBiometricSignatureCreditsUseCase);
+    closeBiometric = moduleRef.get(CloseBiometricReservationsUseCase);
     releaseExpired = moduleRef.get(ReleaseExpiredCreditReservationsUseCase);
     consumeDocument = moduleRef.get(ConsumeDocumentCreditUseCase);
   }, 180_000);
@@ -524,7 +529,8 @@ describe('Reservas de créditos biométricos (e2e)', () => {
         biometricSignatureAttemptId: attemptId,
         status: 'ACTIVE',
       });
-      expect(reservation.expiresAt).toBeInstanceOf(Date);
+      // Comprometida con el colaborador hasta el cierre del documento: no vence sola.
+      expect(reservation.expiresAt).toBeNull();
     });
 
     it('reintento de creación de sesión: el mismo intento reutiliza su reserva, también en paralelo', async () => {
@@ -617,25 +623,52 @@ describe('Reservas de créditos biométricos (e2e)', () => {
       ).rejects.toBeInstanceOf(InsufficientBiometricCreditsException);
     });
 
-    it('falla de Didit antes de crear la sesión: la reserva se libera y el saldo vuelve', async () => {
+    it('falla de Didit antes de crear la sesión: el crédito NO vuelve al saldo y el siguiente intento lo reutiliza', async () => {
       await issueLot(ids.personalProfile, DOC, 1);
       const bioLot = await issueLot(ids.personalProfile, BIO, 1);
       const documentId = await reservedDocument(ids.personalAccount);
-      const attemptId = await createAttempt(documentId);
-      await reserveBiometric.execute({
-        biometricSignatureAttemptId: attemptId,
+      const collaboratorId = await createBiometricSigner(documentId);
+      const failedAttempt = await createAttempt(
+        documentId,
+        'PENDING',
+        collaboratorId,
+      );
+      const reservation = await reserveBiometric.execute({
+        biometricSignatureAttemptId: failedAttempt,
         documentId,
       });
 
       await expect(
         finalize.onAttemptFailed({
-          biometricSignatureAttemptId: attemptId,
+          biometricSignatureAttemptId: failedAttempt,
           reason: 'DIDIT_SESSION_NOT_CREATED',
         }),
-      ).resolves.toBe(true);
+      ).resolves.toBe(false);
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 1 });
+      expect((await credits.findByAttempt(failedAttempt))?.status).toBe(
+        'ACTIVE',
+      );
 
-      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
-      expect((await credits.findByAttempt(attemptId))?.status).toBe('RELEASED');
+      // Sin saldo libre, el reintento del mismo colaborador se asocia a su misma reserva.
+      await dataSource.query(
+        `UPDATE biometric_signature_attempts SET status = 'FAILED' WHERE id = $1`,
+        [failedAttempt],
+      );
+      const retryAttempt = await createAttempt(
+        documentId,
+        'PENDING',
+        collaboratorId,
+      );
+      await expect(
+        reserveBiometric.execute({
+          biometricSignatureAttemptId: retryAttempt,
+          documentId,
+        }),
+      ).resolves.toMatchObject({
+        id: reservation.id,
+        biometricSignatureAttemptId: retryAttempt,
+      });
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 1 });
     });
   });
 
@@ -974,41 +1007,295 @@ describe('Reservas de créditos biométricos (e2e)', () => {
       expect(consumes[0].n).toBe(1);
     });
 
-    it('webhook de rechazo repetido: libera una sola vez', async () => {
+    it('webhook de rechazo repetido: no libera ni mueve nada', async () => {
       const { bioLot, attemptId } = await signingScenario();
       const input = {
         biometricSignatureAttemptId: attemptId,
         reason: 'DIDIT_DECLINED',
       };
+      const ledgerBefore = await ledgerCount();
 
       const results = await Promise.all([
         finalize.onAttemptFailed(input),
         finalize.onAttemptFailed(input),
       ]);
-      const late = await finalize.onAttemptFailed(input);
 
-      expect(results.filter(Boolean)).toHaveLength(1);
-      expect(late).toBe(false);
-      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
+      expect(results).toEqual([false, false]);
+      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 1 });
+      expect(await ledgerCount()).toBe(ledgerBefore);
     });
 
-    it('documento cancelado con reservas activas: libera la documental y la biométrica', async () => {
+    it('documento rechazado con reservas activas: libera la documental y CONSUME la biométrica', async () => {
       const { docLot, bioLot, documentId } = await signingScenario();
 
       await expect(
-        finalize.onDocumentClosed({ documentId, reason: 'DOCUMENT_REJECTED' }),
+        finalize.onDocumentClosed({
+          documentId,
+          closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+        }),
       ).resolves.toBe(2);
       await expect(
-        finalize.onDocumentClosed({ documentId, reason: 'DOCUMENT_REJECTED' }),
+        finalize.onDocumentClosed({
+          documentId,
+          closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+        }),
       ).resolves.toBe(0);
 
       expect(await lot(docLot)).toEqual({ remaining: 1, reserved: 0 });
-      expect(await lot(bioLot)).toEqual({ remaining: 1, reserved: 0 });
+      expect(await lot(bioLot)).toEqual({ remaining: 0, reserved: 0 });
+    });
+  });
+
+  describe('cierre del documento: las biométricas se consumen, nunca se liberan', () => {
+    /** Documento con su reserva documental y tres colaboradores biométricos con su crédito. */
+    async function documentWithThreeSigners(account = ids.organizationAccount) {
+      const profile =
+        account === ids.organizationAccount
+          ? ids.organizationProfile
+          : ids.personalProfile;
+      const docLot = await issueLot(profile, DOC, 1);
+      const bioLot = await issueLot(profile, BIO, 3);
+      const documentId = await reservedDocument(account);
+      const collaboratorIds = [
+        await createBiometricSigner(documentId),
+        await createBiometricSigner(documentId),
+        await createBiometricSigner(documentId),
+      ];
+      await reserveBiometric.reserveForCollaborators({
+        documentId,
+        collaboratorIds,
+      });
+      return { docLot, bioLot, documentId, collaboratorIds };
+    }
+
+    async function biometricStatuses(documentId: string): Promise<string[]> {
+      const rows = await dataSource.query(
+        `SELECT status FROM credit_reservations WHERE document_id = $1 AND credit_type = $2 ORDER BY created_at`,
+        [documentId, BIO],
+      );
+      return rows.map((r: { status: string }) => r.status);
+    }
+
+    async function closureEntries(documentId: string) {
+      return dataSource.query(
+        `SELECT movement_type, quantity, credit_reservation_id, document_id,
+                metadata->>'closureReason' AS closure_reason,
+                metadata->>'collaboratorId' AS collaborator_id,
+                metadata->>'organizationId' AS organization_id
+           FROM credit_ledger_entries
+          WHERE document_id = $1 AND credit_type = $2 AND movement_type <> 'RESERVE'
+          ORDER BY created_at`,
+        [documentId, BIO],
+      );
+    }
+
+    it.each([
+      [DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_SIGNED, 'SIGNED'],
+      [DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED, 'REJECTED'],
+      [DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_CANCELLED, 'CANCELLED'],
+      [DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_EXPIRED, 'EXPIRED'],
+    ])(
+      '%s: consume las tres reservas aunque nadie haya abierto sesión, y lo registra en el ledger',
+      async (closureReason, documentStatus) => {
+        const { bioLot, documentId, collaboratorIds } =
+          await documentWithThreeSigners();
+
+        // Cambio de estado y cierre en la misma transacción, como en la aplicación.
+        const result = await dataSource.transaction(async (manager) => {
+          await manager.query(
+            `UPDATE documents SET status = $2 WHERE id = $1`,
+            [documentId, documentStatus],
+          );
+          return closeBiometric.execute({ documentId, closureReason }, manager);
+        });
+
+        expect(result).toEqual({ consumed: 3 });
+        expect(await biometricStatuses(documentId)).toEqual([
+          'CONSUMED',
+          'CONSUMED',
+          'CONSUMED',
+        ]);
+        expect(await lot(bioLot)).toEqual({ remaining: 0, reserved: 0 });
+
+        const reservations = await dataSource.query(
+          `SELECT id, consumed_at, released_at FROM credit_reservations WHERE document_id = $1 AND credit_type = $2 ORDER BY created_at`,
+          [documentId, BIO],
+        );
+        reservations.forEach(
+          (r: { consumed_at: Date | null; released_at: Date | null }) => {
+            expect(r.consumed_at).toBeInstanceOf(Date);
+            expect(r.released_at).toBeNull();
+          },
+        );
+        expect(await closureEntries(documentId)).toEqual(
+          reservations.map((r: { id: string }, index: number) => ({
+            movement_type: 'CONSUME',
+            quantity: 1,
+            credit_reservation_id: r.id,
+            document_id: documentId,
+            closure_reason: closureReason,
+            collaborator_id: collaboratorIds[index],
+            organization_id: null,
+          })),
+        );
+      },
+    );
+
+    it('guarda la organización del documento en el ledger', async () => {
+      const { documentId } = await documentWithThreeSigners();
+      await dataSource.query(
+        `UPDATE documents SET organization_id = $2 WHERE id = $1`,
+        [documentId, ids.organization],
+      );
+
+      await closeBiometric.execute({
+        documentId,
+        closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_SIGNED,
+      });
+
+      const entries = await closureEntries(documentId);
+      expect(entries).toHaveLength(3);
+      expect(
+        entries.every(
+          (e: { organization_id: string }) =>
+            e.organization_id === ids.organization,
+        ),
+      ).toBe(true);
+    });
+
+    it('procesar el mismo cierre dos veces (también en paralelo) no duplica consumos', async () => {
+      const { bioLot, documentId } = await documentWithThreeSigners();
+      const input = {
+        documentId,
+        closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+      };
+
+      const results = await Promise.all([
+        closeBiometric.execute(input),
+        closeBiometric.execute(input),
+      ]);
+      const late = await closeBiometric.execute(input);
+
+      expect(results.reduce((sum, r) => sum + r.consumed, 0)).toBe(3);
+      expect(late).toEqual({ consumed: 0 });
+      expect(await closureEntries(documentId)).toHaveLength(3);
+      expect(await lot(bioLot)).toEqual({ remaining: 0, reserved: 0 });
+    });
+
+    it('una reserva ya consumida al firmar se ignora sin error al cerrar el documento', async () => {
+      const { bioLot, documentId, collaboratorIds } =
+        await documentWithThreeSigners();
+      const attemptId = await createAttempt(
+        documentId,
+        'APPROVED',
+        collaboratorIds[0],
+      );
+      await reserveBiometric.execute({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+      });
+      await finalize.onSignatureSucceeded({
+        biometricSignatureAttemptId: attemptId,
+        documentId,
+        documentCompleted: false,
+      });
+
+      await expect(
+        closeBiometric.execute({
+          documentId,
+          closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+        }),
+      ).resolves.toEqual({ consumed: 2 });
+      expect(await biometricStatuses(documentId)).toEqual([
+        'CONSUMED',
+        'CONSUMED',
+        'CONSUMED',
+      ]);
+      expect(await lot(bioLot)).toEqual({ remaining: 0, reserved: 0 });
+    });
+
+    it('si el consumo falla, el cambio de estado del documento se deshace con él', async () => {
+      const { bioLot, documentId } = await documentWithThreeSigners();
+      // Inconsistencia: el lote ya no tiene bloqueado lo que las reservas dicen.
+      await dataSource.query(
+        `UPDATE credit_lots SET reserved = 0 WHERE id = $1`,
+        [bioLot],
+      );
+
+      await expect(
+        dataSource.transaction(async (manager) => {
+          await manager.query(
+            `UPDATE documents SET status = 'REJECTED' WHERE id = $1`,
+            [documentId],
+          );
+          await finalize.onDocumentClosed(
+            {
+              documentId,
+              closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+            },
+            manager,
+          );
+        }),
+      ).rejects.toThrow(/no tiene bloqueados/);
+
+      const [document] = await dataSource.query(
+        `SELECT status FROM documents WHERE id = $1`,
+        [documentId],
+      );
+      expect(document.status).toBe('PENDING_SIGNATURE');
+      expect(await biometricStatuses(documentId)).toEqual([
+        'ACTIVE',
+        'ACTIVE',
+        'ACTIVE',
+      ]);
+    });
+
+    it('el job consume las biométricas de un documento vencido o firmado que nadie cerró, y libera sólo la documental', async () => {
+      const expired = await documentWithThreeSigners(ids.personalAccount);
+      await dataSource.query(
+        `UPDATE documents SET status = 'EXPIRED' WHERE id = $1`,
+        [expired.documentId],
+      );
+
+      const first = await releaseExpired.execute();
+      const second = await releaseExpired.execute();
+
+      // El job barre toda la base; se comprueba sólo lo de este documento.
+      expect(first.failed).toBe(0);
+      expect(first.consumed).toBeGreaterThanOrEqual(3);
+      expect(second).toMatchObject({ orphaned: 0, consumed: 0 });
+      expect(await biometricStatuses(expired.documentId)).toEqual([
+        'CONSUMED',
+        'CONSUMED',
+        'CONSUMED',
+      ]);
+      expect(
+        (await closureEntries(expired.documentId)).map(
+          (e: { closure_reason: string }) => e.closure_reason,
+        ),
+      ).toEqual(Array(3).fill(DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_EXPIRED));
+      expect(await lot(expired.docLot)).toEqual({ remaining: 1, reserved: 0 });
+      expect(await lot(expired.bioLot)).toEqual({ remaining: 0, reserved: 0 });
+    });
+
+    it('ningún movimiento RELEASE de créditos biométricos en todo el cierre', async () => {
+      const { documentId } = await documentWithThreeSigners();
+      await finalize.onDocumentClosed({
+        documentId,
+        closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_CANCELLED,
+      });
+      await releaseExpired.execute();
+
+      const [row] = await dataSource.query(
+        `SELECT count(*)::int AS n FROM credit_ledger_entries WHERE document_id = $1 AND credit_type = $2 AND movement_type = 'RELEASE'`,
+        [documentId, BIO],
+      );
+      expect(row.n).toBe(0);
     });
   });
 
   describe('expiración', () => {
-    it('libera las vencidas cuyo intento terminó, respeta las de intentos abiertos y las de documentos cerrados se recogen', async () => {
+    it('no libera biométricas vencidas (ni de intentos fallidos) y las de documentos cerrados se recogen', async () => {
       await issueLot(ids.organizationProfile, DOC, 2);
       const bioLot = await issueLot(ids.organizationProfile, BIO, 2);
 
@@ -1041,16 +1328,26 @@ describe('Reservas de créditos biométricos (e2e)', () => {
       const first = await releaseExpired.execute();
       const second = await releaseExpired.execute();
 
-      expect(first).toEqual({ expired: 1, orphaned: 1, failed: 0 });
-      expect(second).toEqual({ expired: 0, orphaned: 0, failed: 0 });
+      expect(first).toEqual({
+        expired: 0,
+        orphaned: 1,
+        consumed: 0,
+        failed: 0,
+      });
+      expect(second).toEqual({
+        expired: 0,
+        orphaned: 0,
+        consumed: 0,
+        failed: 0,
+      });
       expect((await credits.findByAttempt(failedAttempt))?.status).toBe(
-        'EXPIRED',
+        'ACTIVE',
       );
       expect((await credits.findByAttempt(openAttempt))?.status).toBe('ACTIVE');
       expect(
         (await credits.findDocumentReservation(rejectedDocument))?.status,
       ).toBe('RELEASED');
-      expect(await lot(bioLot)).toEqual({ remaining: 2, reserved: 1 });
+      expect(await lot(bioLot)).toEqual({ remaining: 2, reserved: 2 });
     });
   });
 
@@ -1173,8 +1470,9 @@ describe('Reservas de créditos biométricos (e2e)', () => {
     expect(
       await countAvailableCredits(dataSource.manager, ids.personalProfile, DOC),
     ).toBe(0);
+    // Biométricos: 2 − 1 consumido al firmar − 1 que sigue comprometido aunque Didit rechazó.
     expect(
       await countAvailableCredits(dataSource.manager, ids.personalProfile, BIO),
-    ).toBe(1);
+    ).toBe(0);
   });
 });

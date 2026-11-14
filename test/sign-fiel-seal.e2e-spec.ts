@@ -1,3 +1,4 @@
+import { CloseBiometricReservationsUseCase } from '../src/billing/credits/close-biometric-reservations.use-case';
 import {
   CanActivate,
   ExecutionContext,
@@ -163,7 +164,7 @@ function buildFielSigner(): CollaboratorEntity {
 }
 
 function createMockRepository() {
-  return {
+  const repository = {
     findOne: jest.fn(),
     find: jest.fn(),
     create: jest.fn((data) => data),
@@ -171,7 +172,15 @@ function createMockRepository() {
     update: jest.fn().mockResolvedValue({ affected: 1 }),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
+    // Marcar SIGNED va en transacción (con el cierre de reservas biométricas): dentro de ella,
+    // `getRepository` devuelve este mismo mock.
+    manager: { transaction: jest.fn() },
   };
+  repository.manager.transaction.mockImplementation(
+    async (work: (manager: unknown) => unknown) =>
+      work({ getRepository: () => repository }),
+  );
+  return repository;
 }
 
 /**
@@ -247,6 +256,10 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         DocumentAuthorizationPolicy,
         ...DOCUMENT_CONTROLLER_USE_CASE_STUBS,
         DocumentService,
+        {
+          provide: CloseBiometricReservationsUseCase,
+          useValue: { execute: jest.fn().mockResolvedValue({ consumed: 0 }) },
+        },
         SealDocumentUseCase,
         SealApiService,
         {

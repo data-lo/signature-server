@@ -14,6 +14,7 @@ import { DOCUMENT_KAFKA_TOPICS } from 'src/kafka/document-events.topics';
 import { ApproveDocumentUseCase } from './approve-document.use-case';
 import { RejectDocumentApprovalUseCase } from './reject-document-approval.use-case';
 import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
+import { DOCUMENT_CLOSURE_REASON_ENUM } from 'src/billing/enums/document-closure-reason.enum';
 import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
@@ -370,11 +371,14 @@ describe('flujo de aprobación', () => {
       expect(result.data.status).toBe(DOCUMENT_STATUS_ENUM.REJECTED);
     });
 
-    it('libera las reservas de créditos del documento dentro de la misma transacción', async () => {
+    it('cierra las reservas de créditos del documento dentro de la misma transacción', async () => {
       await rejectApproval.execute('doc-1', REVIEWER_USER_ID);
 
       expect(finalizeBiometricCredits.onDocumentClosed).toHaveBeenCalledWith(
-        { documentId: 'doc-1', reason: 'DOCUMENT_APPROVAL_REJECTED' },
+        {
+          documentId: 'doc-1',
+          closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+        },
         transactionManager,
       );
     });

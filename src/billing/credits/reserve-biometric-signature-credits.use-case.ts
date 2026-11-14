@@ -16,15 +16,6 @@ import { InsufficientBiometricCreditsException } from '../exceptions/billing.exc
 /** Un colaborador biométrico (y el intento de Didit que abra) cuesta un crédito biométrico. */
 const CREDITS_PER_BIOMETRIC_SIGNER = 1;
 
-/**
- * Vigencia de una reserva biométrica creada por un intento. Holgada a propósito: el job de
- * expiración NO libera la reserva de un intento que sigue abierto o aprobado (ver
- * `ReleaseExpiredCreditReservationsUseCase`), así que este plazo sólo marca desde cuándo puede
- * recogerse una reserva cuyo intento ya terminó sin que nadie la liberara. Las apartadas al crear
- * el documento no vencen solas.
- */
-export const BIOMETRIC_RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
-
 export interface ReserveBiometricSignatureCreditsInput {
   biometricSignatureAttemptId: string;
   documentId: string;
@@ -133,7 +124,6 @@ export class ReserveBiometricSignatureCreditsUseCase {
    * 3. Una reserva nueva del colaborador con el intento asociado.
    *
    * @param input - Intento biométrico y su documento.
-   * @param now - Instante de referencia para la vigencia; por defecto, el actual.
    * @returns La reserva biométrica del intento.
    *
    * @throws {InsufficientBiometricCreditsException} (402) Si no se puede saber qué perfil paga el
@@ -147,7 +137,6 @@ export class ReserveBiometricSignatureCreditsUseCase {
    */
   execute(
     input: ReserveBiometricSignatureCreditsInput,
-    now: Date = new Date(),
   ): Promise<CreditReservationEntity> {
     return this.dataSource.transaction(async (tx) => {
       const collaboratorId = await this.resolveAttemptCollaborator(tx, input);
@@ -197,7 +186,9 @@ export class ReserveBiometricSignatureCreditsUseCase {
           documentId: input.documentId,
           collaboratorId,
           biometricSignatureAttemptId: input.biometricSignatureAttemptId,
-          expiresAt: new Date(now.getTime() + BIOMETRIC_RESERVATION_TTL_MS),
+          // Sin vencimiento: el crédito está comprometido con el colaborador hasta que el
+          // documento se cierre (ver `CloseBiometricReservationsUseCase`).
+          expiresAt: null,
           idempotencyKey: biometricReservationKey(
             input.biometricSignatureAttemptId,
           ),
@@ -215,8 +206,8 @@ export class ReserveBiometricSignatureCreditsUseCase {
    * - **Idempotente**: un colaborador que ya tiene su reserva activa (o que ya reservó con esta
    *   misma clave) la devuelve sin bloquear otro crédito.
    * - **Todo o nada**: si falta saldo para uno, no queda reservado ninguno (una sola transacción).
-   * - Las reservas no vencen solas (`expires_at = null`): viven lo que el documento; si se cierra
-   *   sin completarse, las recoge el cierre o el job de expiración.
+   * - Las reservas no vencen solas (`expires_at = null`) ni se liberan: viven lo que el documento
+   *   y su cierre, sea cual sea, las consume (`CloseBiometricReservationsUseCase`).
    *
    * @param input - Documento, colaboradores y, opcionalmente, el perfil que paga.
    * @param manager - Transacción del llamador (p. ej. la de creación del documento); sin ella abre
