@@ -36,6 +36,7 @@ import { CreditReservationService } from './credits/credit-reservation.service';
 import { ReserveDocumentCreditUseCase } from './credits/reserve-document-credit.use-case';
 import { ReserveBiometricSignatureCreditsUseCase } from './credits/reserve-biometric-signature-credits.use-case';
 import { AssertBiometricCreditsAvailableUseCase } from './credits/assert-biometric-credits-available.use-case';
+import { CloseBiometricReservationsUseCase } from './credits/close-biometric-reservations.use-case';
 import { FinalizeBiometricSignatureCreditsUseCase } from './credits/finalize-biometric-signature-credits.use-case';
 import { ReleaseExpiredCreditReservationsUseCase } from './credits/release-expired-credit-reservations.use-case';
 import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-credit-reservations.job';
@@ -111,6 +112,7 @@ import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-c
     ReserveDocumentCreditUseCase,
     ReserveBiometricSignatureCreditsUseCase,
     AssertBiometricCreditsAvailableUseCase,
+    CloseBiometricReservationsUseCase,
     FinalizeBiometricSignatureCreditsUseCase,
     ReleaseExpiredCreditReservationsUseCase,
     ReleaseExpiredCreditReservationsJob,
@@ -137,6 +139,8 @@ import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-c
     ReserveBiometricSignatureCreditsUseCase,
     // `DocumentModule`: saldo biométrico antes de crear un documento con firmantes biométricos.
     AssertBiometricCreditsAvailableUseCase,
+    // `DocumentService`: consume las biométricas en la misma transacción que marca SIGNED.
+    CloseBiometricReservationsUseCase,
     FinalizeBiometricSignatureCreditsUseCase,
   ],
 })

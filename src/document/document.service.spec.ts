@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { CloseBiometricReservationsUseCase } from 'src/billing/credits/close-biometric-reservations.use-case';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DocumentService } from './document.service';
@@ -227,6 +228,10 @@ describe('DocumentService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DocumentService,
+        {
+          provide: CloseBiometricReservationsUseCase,
+          useValue: { execute: jest.fn().mockResolvedValue({ consumed: 0 }) },
+        },
         {
           provide: getRepositoryToken(DocumentEntity),
           useValue: documentRepository,

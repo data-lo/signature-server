@@ -2,12 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 
+import { CloseBiometricReservationsUseCase } from './close-biometric-reservations.use-case';
 import { documentConsumptionLedgerKey } from './credit-ledger.util';
 import { CreditReservationEntity } from './credit-reservation.entity';
 import { CreditReservationService } from './credit-reservation.service';
 import { DocumentCreditConsumptionEntity } from './document-credit-consumption.entity';
 import { BILLING_SIGNATURE_TYPE_ENUM } from '../enums/billing-signature-type.enum';
 import { CREDIT_RESERVATION_STATUS_ENUM } from '../enums/credit-reservation-status.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
+import { DOCUMENT_CLOSURE_REASON_ENUM } from '../enums/document-closure-reason.enum';
 
 /** Firma biométrica registrada: qué se cobra. */
 export interface BiometricSignatureSucceededInput {
@@ -32,9 +35,10 @@ export interface BiometricSignatureSettlement {
  *   esa firma completó el documento, también el documental, dejando el recibo en
  *   `document_credit_consumptions`. Todo en una transacción.
  * - **Intento fallido** (`onAttemptFailed`): Didit rechazó, venció o falló, o el intento se cerró
- *   sin firmar; libera el crédito biométrico.
+ *   sin firmar. NO libera nada: el crédito biométrico está comprometido con el colaborador desde la
+ *   creación del documento, y su siguiente intento se asocia a la misma reserva.
  * - **Documento cerrado sin completarse** (`onDocumentClosed`): rechazado o cancelado; libera el
- *   crédito documental y los biométricos de intentos que hubieran quedado abiertos.
+ *   crédito documental y CONSUME los biométricos (`CloseBiometricReservationsUseCase`).
  *
  * **Idempotente ante reintentos del webhook**: cada reserva sólo se resuelve una vez (ver
  * `CreditReservationService`), así que una segunda entrega no cobra ni devuelve de nuevo.
@@ -48,6 +52,7 @@ export class FinalizeBiometricSignatureCreditsUseCase {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly credits: CreditReservationService,
+    private readonly closeBiometricReservations: CloseBiometricReservationsUseCase,
   ) {}
 
   /**
@@ -78,17 +83,18 @@ export class FinalizeBiometricSignatureCreditsUseCase {
   }
 
   /**
-   * Libera el crédito biométrico de un intento que terminó sin firma.
+   * Registra que un intento terminó sin firma. No libera el crédito biométrico: está comprometido
+   * con el colaborador desde que se creó el documento, la reserva sigue `ACTIVE` y el siguiente
+   * intento del colaborador se asocia a ella (ver `ReserveBiometricSignatureCreditsUseCase`). La
+   * cierra el cierre del documento.
    *
    * @param input.biometricSignatureAttemptId - Intento.
-   * @param input.reason - Motivo (p. ej. `DIDIT_DECLINED`), que queda en el ledger.
-   * @returns `true` si esta llamada lo liberó; `false` si no había reserva activa.
-   *
-   * @throws {Error} Si el lote no cuadra con la reserva.
+   * @param input.reason - Motivo (p. ej. `DIDIT_DECLINED`), sólo para el log.
+   * @returns Siempre `false`: ninguna reserva cambia.
    *
    * @example
    * ```ts
-   * await finalize.onAttemptFailed({ biometricSignatureAttemptId: 'att-1', reason: 'DIDIT_DECLINED' });
+   * await finalize.onAttemptFailed({ biometricSignatureAttemptId: 'att-1', reason: 'DIDIT_DECLINED' }); // false
    * ```
    */
   async onAttemptFailed(input: {
@@ -98,37 +104,35 @@ export class FinalizeBiometricSignatureCreditsUseCase {
     const reservation = await this.credits.findByAttempt(
       input.biometricSignatureAttemptId,
     );
-    if (
-      !reservation ||
-      reservation.status !== CREDIT_RESERVATION_STATUS_ENUM.ACTIVE
-    ) {
-      return false;
+    if (reservation?.status === CREDIT_RESERVATION_STATUS_ENUM.ACTIVE) {
+      this.logger.log(
+        `Intento ${input.biometricSignatureAttemptId} terminó sin firma (${input.reason}): la reserva ${reservation.id} sigue comprometida con el colaborador ${reservation.collaboratorId}.`,
+      );
     }
-
-    const { applied } = await this.credits.release({
-      reservationId: reservation.id,
-      reason: input.reason,
-    });
-    return applied;
+    return false;
   }
 
   /**
-   * Libera las reservas activas de un documento que ya no va a completarse.
+   * Cierra las reservas de un documento que ya no va a completarse: libera la documental y consume
+   * las biométricas, que no se reembolsan.
    *
-   * @param input.documentId - Documento rechazado o cancelado.
-   * @param input.reason - Motivo (p. ej. `DOCUMENT_REJECTED`).
-   * @param manager - Transacción del llamador (p. ej. la del rechazo); sin ella abre una propia.
-   * @returns Cuántas reservas liberó esta llamada.
+   * @param input.documentId - Documento rechazado, cancelado o vencido.
+   * @param input.closureReason - Motivo del cierre; queda en el ledger.
+   * @param manager - Transacción que cambia el estado del documento; sin ella abre una propia.
+   * @returns Cuántas reservas resolvió esta llamada (liberadas + consumidas).
    *
    * @throws {Error} Si un lote no cuadra con su reserva.
    *
    * @example
    * ```ts
-   * await finalize.onDocumentClosed({ documentId: 'doc-1', reason: 'DOCUMENT_REJECTED' });
+   * await finalize.onDocumentClosed(
+   *   { documentId: 'doc-1', closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED },
+   *   manager,
+   * );
    * ```
    */
   async onDocumentClosed(
-    input: { documentId: string; reason: string },
+    input: { documentId: string; closureReason: DOCUMENT_CLOSURE_REASON_ENUM },
     manager?: EntityManager,
   ): Promise<number> {
     const run = async (tx: EntityManager): Promise<number> => {
@@ -136,15 +140,23 @@ export class FinalizeBiometricSignatureCreditsUseCase {
         input.documentId,
         tx,
       );
-      let released = 0;
+      let resolved = 0;
       for (const reservation of active) {
+        if (reservation.creditType !== CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE) {
+          continue;
+        }
         const { applied } = await this.credits.release(
-          { reservationId: reservation.id, reason: input.reason },
+          { reservationId: reservation.id, reason: input.closureReason },
           tx,
         );
-        if (applied) released += 1;
+        if (applied) resolved += 1;
       }
-      return released;
+
+      const { consumed } = await this.closeBiometricReservations.execute(
+        input,
+        tx,
+      );
+      return resolved + consumed;
     };
 
     return manager ? run(manager) : this.dataSource.transaction(run);

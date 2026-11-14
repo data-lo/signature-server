@@ -5,7 +5,7 @@ describe('ReleaseExpiredCreditReservationsJob', () => {
     const releaseExpired = {
       execute: jest
         .fn()
-        .mockResolvedValue({ expired: 1, orphaned: 0, failed: 0 }),
+        .mockResolvedValue({ expired: 1, orphaned: 0, consumed: 0, failed: 0 }),
     };
 
     await new ReleaseExpiredCreditReservationsJob(

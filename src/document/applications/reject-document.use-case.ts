@@ -27,6 +27,7 @@ import { DocumentService } from '../document.service';
 import { WitnessNotificationService } from '../services/witness-notification.service';
 import { GuestSigningAccessService } from '../services/guest-signing-access.service';
 import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
+import { DOCUMENT_CLOSURE_REASON_ENUM } from 'src/billing/enums/document-closure-reason.enum';
 
 /**
  * `PATCH /document/:id/reject`: el firmante autenticado se niega a firmar, si es su turno.
@@ -144,7 +145,31 @@ export class RejectDocumentUseCase {
 
     document.rejectedAt = new Date();
     document.status = DOCUMENT_STATUS_ENUM.REJECTED;
-    await this.documentRepository.save(document);
+
+    /**
+     * El documento pasa a REJECTED y sus reservas se cierran en UNA transacción: la documental se
+     * libera y las biométricas se consumen (no se reembolsan, ver
+     * `CloseBiometricReservationsUseCase`). Si el cierre falla, el documento no queda rechazado y
+     * se devuelve al firmante a PENDING para que pueda reintentar.
+     */
+    try {
+      await this.documentRepository.manager.transaction(async (manager) => {
+        await manager.getRepository(DocumentEntity).save(document);
+        await this.finalizeBiometricCredits.onDocumentClosed(
+          {
+            documentId,
+            closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_REJECTED,
+          },
+          manager,
+        );
+      });
+    } catch (error) {
+      await this.collaboratorRepository.update(
+        { id: myParticipant.id, status: COLLABORATOR_STATUS_ENUM.REJECTED },
+        { status: COLLABORATOR_STATUS_ENUM.PENDING, cancellationReason: null },
+      );
+      throw error;
+    }
 
     // Un documento rechazado ya no se firma: los accesos de invitado que quedaran abiertos para él
     // dejan de valer. No bloquea el rechazo si falla: esos accesos tampoco servirían, porque la
@@ -154,22 +179,6 @@ export class RejectDocumentUseCase {
     } catch (error) {
       this.logger.warn(
         `No se pudieron revocar los accesos de invitado del documento ${documentId}: ${error}`,
-      );
-    }
-
-    /**
-     * Un documento biométrico rechazado ya no va a cobrarse: su crédito documental reservado, y el
-     * biométrico de cualquier intento que quedara abierto, vuelven al saldo. No bloquea el rechazo
-     * si falla: el job de reservas libera las de documentos rechazados que queden activas.
-     */
-    try {
-      await this.finalizeBiometricCredits.onDocumentClosed({
-        documentId,
-        reason: 'DOCUMENT_REJECTED',
-      });
-    } catch (error) {
-      this.logger.error(
-        `No se pudieron liberar las reservas de créditos del documento rechazado ${documentId}: ${error}`,
       );
     }
 
