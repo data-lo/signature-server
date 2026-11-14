@@ -19,6 +19,23 @@ tags:
     description: Documentos, firmantes y accesos de firma de tu organización
   - name: Organización
     description: La organización de la API key, su saldo de documentos, su plan y su ciclo de facturación
+  - name: Webhooks
+    description: |-
+      Firmalo envía un `POST` firmado a la URL de tu organización cuando cambia el estado de firma de un documento creado por la API de integración. Configura la URL y los eventos con estos endpoints; los cuerpos de cada evento están en la pestaña **Callbacks** de `PUT /api/v1/integration/webhooks/endpoint`.
+
+      **Eventos.** `document.collaborator_signed` (un participante firmó), `document.signed` (todos los firmantes completaron el documento), `document.rejected` (un firmante rechazó) y `document.cancelled` (se confirmó la cancelación). La última firma genera `document.collaborator_signed` y `document.signed` como dos eventos independientes; el orden de llegada no está garantizado.
+
+      **Headers.** `X-Signature-Webhook-Id` (identificador de la entrega, igual en todos sus reintentos), `X-Signature-Event` (el `type` del evento), `X-Signature-Timestamp` (segundos Unix del momento en que se firmó ese intento) y `X-Signature-Hmac` (firma en hexadecimal minúsculo, 64 caracteres). También `Content-Type: application/json` y `User-Agent: Firmalo-Webhooks/1.0`.
+
+      **Firma.** `X-Signature-Hmac = hex(HMAC-SHA256(secret, timestamp + "." + rawBody))`, con el secreto completo (`whsec_` incluido) en UTF-8, el texto exacto de `X-Signature-Timestamp` y los bytes exactos del cuerpo recibido. Para verificar: lee el cuerpo **crudo** antes de parsear el JSON; rechaza si falta un header o si el timestamp difiere más de 5 minutos de tu reloj; calcula la firma y compárala en tiempo constante.
+
+      **Entrega y reintentos.** Cualquier `2xx` confirma la entrega; las redirecciones no se siguen y cuentan como fallo. Cada intento espera 10 s. Ante un error de red, un timeout o una respuesta distinta de `2xx` se reintenta: 8 intentos en total (inmediato y a 1 min, 5 min, 30 min, 2 h, 5 h, 10 h y 10 h, algo más de 24 h). Cada reintento lleva un timestamp y una firma nuevos. Agotados, la entrega queda fallida.
+
+      **Al menos una vez.** Una entrega puede llegar repetida o fuera de orden. Deduplica por `id` del payload (mismo evento) o por `X-Signature-Webhook-Id` (misma entrega). Responde `2xx` rápido y procesa después.
+
+      **Secreto.** Se entrega sólo al crear el endpoint y al rotarlo; ninguna consulta lo vuelve a mostrar. Tras rotar, las entregas ya registradas se siguen firmando con el secreto anterior hasta terminar: acepta ambos durante 24 h.
+
+      **Datos que nunca viajan.** PDF ni su contenido, URLs del archivo, API keys, tokens de firma o invitación, certificados, contraseñas, IP, geolocalización, imágenes o evidencia de firma, datos biométricos, nombre del archivo, motivos escritos de rechazo o cancelación, datos de otros participantes ni datos de pago.
 security:
   - integration-api-key: []
 paths:
@@ -1488,6 +1505,670 @@ paths:
       summary: Consultar la organización, su saldo de documentos y su plan
       tags:
         - Organización
+  /api/v1/integration/webhooks/endpoint:
+    get:
+      description: |-
+        Devuelve la URL, el estado, los eventos suscritos y la versión del secreto activo. **Nunca devuelve el secreto.**
+
+        **Permiso requerido:** `WEBHOOK.READ`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_get
+      parameters: []
+      responses:
+        '200':
+          description: Configuración del endpoint, sin secreto.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`WEBHOOK_ENDPOINT_NOT_FOUND`: la organización no tiene un endpoint configurado. Créalo con `PUT`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                notFound:
+                  summary: Sin endpoint
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_ENDPOINT_NOT_FOUND
+                      message: La organización no tiene un endpoint de webhooks configurado
+      security:
+        - integration-api-key: []
+      summary: Consultar el endpoint de webhooks
+      tags:
+        - Webhooks
+    put:
+      callbacks:
+        document.collaborator_signed:
+          '{$request.body#/url}':
+            post:
+              summary: document.collaborator_signed
+              description: Un participante registró su firma. Si es la última, `data.document.status` ya es `SIGNED` y llega además `document.signed`.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentCollaboratorSignedWebhookPayload'
+                    example:
+                      id: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+                      type: document.collaborator_signed
+                      version: 1
+                      occurredAt: '2026-11-11T18:30:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: PENDING_SIGNATURE
+                        participant:
+                          id: 77f85c29-0104-4823-8b32-4bc567e88c6a
+                          email: firmante@empresa.com
+                          status: SIGNED
+                          signedAt: '2026-11-11T18:30:00.000Z'
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+        document.signed:
+          '{$request.body#/url}':
+            post:
+              summary: document.signed
+              description: Todos los firmantes completaron el documento.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentSignedWebhookPayload'
+                    example:
+                      id: a3c9e1f4-7b2d-4e8a-b6c0-1d5f9e3a7c28
+                      type: document.signed
+                      version: 1
+                      occurredAt: '2026-11-11T18:30:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: SIGNED
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+        document.rejected:
+          '{$request.body#/url}':
+            post:
+              summary: document.rejected
+              description: Un firmante rechazó el documento durante la firma. El motivo escrito no se publica.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentRejectedWebhookPayload'
+                    example:
+                      id: c7e2a9b1-4f6d-4c3e-8a0b-9d1e5f7a3b64
+                      type: document.rejected
+                      version: 1
+                      occurredAt: '2026-11-11T19:05:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: REJECTED
+                        participant:
+                          id: 77f85c29-0104-4823-8b32-4bc567e88c6a
+                          email: firmante@empresa.com
+                          status: REJECTED
+                          rejectedAt: '2026-11-11T19:05:00.000Z'
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+        document.cancelled:
+          '{$request.body#/url}':
+            post:
+              summary: document.cancelled
+              description: Se confirmó la cancelación del documento.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentCancelledWebhookPayload'
+                    example:
+                      id: e1f4b7c2-9a3d-4e6b-8c0f-2a5d8e1b4c97
+                      type: document.cancelled
+                      version: 1
+                      occurredAt: '2026-11-12T09:00:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: CANCELLED
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+      description: |-
+        Si la organización no tiene endpoint, lo crea activo y responde `201` con el **secreto**, que sólo se muestra esta vez. Si ya tiene uno, cambia la URL y los eventos, lo reactiva si estaba desactivado y responde `200` sin secreto: el secreto se conserva.
+
+        Las entregas ya registradas conservan la URL con la que se registraron.
+
+        Los cuerpos de cada evento están en la pestaña **Callbacks**.
+
+        **Permiso requerido:** `WEBHOOK.MANAGE`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_upsert
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertWebhookEndpointDto'
+      responses:
+        '200':
+          description: Endpoint actualizado. No incluye el secreto.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointResponse'
+        '201':
+          description: Endpoint creado. `data.secret` es el secreto HMAC; guárdalo ahora.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointWithSecretResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '422':
+          description: '`WEBHOOK_URL_NOT_ALLOWED` (la URL no es `https://` en el puerto 443, lleva credenciales o apunta a un host privado, reservado o que no resuelve; el motivo va en `details.reason`) o `INVALID_REQUEST` (falta `url`, `events` está vacío, repite un evento o trae uno desconocido).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                urlNotAllowed:
+                  summary: URL no permitida
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_URL_NOT_ALLOWED
+                      message: La URL del webhook debe usar https://
+                      details:
+                        field: url
+                        reason: HTTPS_REQUIRED
+        '503':
+          description: '`WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE`: el servidor no puede generar secretos por ahora. Reintenta más tarde; no se guardó nada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                unavailable:
+                  summary: Cifrado no disponible
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE
+                      message: La configuración de webhooks no está disponible por ahora. Vuelve a intentarlo más tarde.
+      security:
+        - integration-api-key: []
+      summary: Crear o actualizar el endpoint de webhooks
+      tags:
+        - Webhooks
+    delete:
+      description: |-
+        Deja de registrar entregas nuevas. Las ya registradas se siguen enviando. No borra la configuración ni el secreto: `PUT` lo reactiva. Repetirlo no cambia nada.
+
+        **Permiso requerido:** `WEBHOOK.MANAGE`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_disable
+      parameters: []
+      responses:
+        '200':
+          description: 'Endpoint desactivado (`status: DISABLED`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`WEBHOOK_ENDPOINT_NOT_FOUND`: la organización no tiene un endpoint configurado. Créalo con `PUT`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                notFound:
+                  summary: Sin endpoint
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_ENDPOINT_NOT_FOUND
+                      message: La organización no tiene un endpoint de webhooks configurado
+      security:
+        - integration-api-key: []
+      summary: Desactivar el endpoint de webhooks
+      tags:
+        - Webhooks
+  /api/v1/integration/webhooks/endpoint/rotate-secret:
+    post:
+      description: |-
+        Retira el secreto activo y genera el siguiente, que se devuelve **sólo en esta respuesta**. Las entregas nuevas se firman con él; las ya registradas se siguen firmando con el anterior hasta terminar, así que acepta ambos durante 24 h.
+
+        **Permiso requerido:** `WEBHOOK.MANAGE`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_rotateSecret
+      parameters: []
+      responses:
+        '200':
+          description: Secreto rotado. `data.secret` es el secreto nuevo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointWithSecretResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`WEBHOOK_ENDPOINT_NOT_FOUND`: la organización no tiene un endpoint configurado. Créalo con `PUT`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                notFound:
+                  summary: Sin endpoint
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_ENDPOINT_NOT_FOUND
+                      message: La organización no tiene un endpoint de webhooks configurado
+        '503':
+          description: '`WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE`: el servidor no puede generar secretos por ahora. Reintenta más tarde; no se guardó nada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                unavailable:
+                  summary: Cifrado no disponible
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE
+                      message: La configuración de webhooks no está disponible por ahora. Vuelve a intentarlo más tarde.
+      security:
+        - integration-api-key: []
+      summary: Rotar el secreto del webhook
+      tags:
+        - Webhooks
 components:
   securitySchemes:
     integration-api-key:
@@ -1560,6 +2241,134 @@ components:
           description: Correo del firmante
       required:
         - email
+    DocumentCancelledWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.cancelled
+          example: document.cancelled
+        data:
+          $ref: '#/components/schemas/WebhookPayloadDocumentData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
+    DocumentCollaboratorSignedWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.collaborator_signed
+          example: document.collaborator_signed
+        data:
+          $ref: '#/components/schemas/WebhookPayloadCollaboratorSignedData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
+    DocumentRejectedWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.rejected
+          example: document.rejected
+        data:
+          $ref: '#/components/schemas/WebhookPayloadRejectedData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
+    DocumentSignedWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.signed
+          example: document.signed
+        data:
+          $ref: '#/components/schemas/WebhookPayloadDocumentData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
     IntegrationBillingSummaryData:
       type: object
       properties:
@@ -2170,6 +2979,183 @@ components:
         - success
         - message
         - data
+    IntegrationWebhookEndpointData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 0c7a4f2e-9d1b-4e6a-8f3c-2b5d7e9a1c40
+        url:
+          type: string
+          example: https://erp.cliente.com/webhooks/firmalo
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - DISABLED
+          example: ACTIVE
+          description: '`ACTIVE` registra entregas para los eventos suscritos. `DISABLED` no registra entregas nuevas; las ya registradas se siguen enviando.'
+        events:
+          type: array
+          example:
+            - document.collaborator_signed
+            - document.signed
+            - document.rejected
+            - document.cancelled
+          items:
+            type: string
+            enum:
+              - document.collaborator_signed
+              - document.signed
+              - document.rejected
+              - document.cancelled
+        secretVersion:
+          type: number
+          example: 1
+          description: Versión del secreto activo. Sube en 1 con cada rotación; el secreto nunca se vuelve a mostrar.
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        disabledAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+          description: Cuándo se desactivó; `null` mientras está `ACTIVE`.
+      required:
+        - id
+        - url
+        - status
+        - events
+        - secretVersion
+        - createdAt
+        - updatedAt
+        - disabledAt
+    IntegrationWebhookEndpointResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Endpoint de webhooks obtenido correctamente
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationWebhookEndpointData'
+      required:
+        - success
+        - message
+        - data
+    IntegrationWebhookEndpointWithSecretData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 0c7a4f2e-9d1b-4e6a-8f3c-2b5d7e9a1c40
+        url:
+          type: string
+          example: https://erp.cliente.com/webhooks/firmalo
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - DISABLED
+          example: ACTIVE
+          description: '`ACTIVE` registra entregas para los eventos suscritos. `DISABLED` no registra entregas nuevas; las ya registradas se siguen enviando.'
+        events:
+          type: array
+          example:
+            - document.collaborator_signed
+            - document.signed
+            - document.rejected
+            - document.cancelled
+          items:
+            type: string
+            enum:
+              - document.collaborator_signed
+              - document.signed
+              - document.rejected
+              - document.cancelled
+        secretVersion:
+          type: number
+          example: 1
+          description: Versión del secreto activo. Sube en 1 con cada rotación; el secreto nunca se vuelve a mostrar.
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        disabledAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+          description: Cuándo se desactivó; `null` mientras está `ACTIVE`.
+        secret:
+          type: string
+          example: whsec_ZXhhbXBsZS1ub3QtYS1yZWFsLXNlY3JldC0xMjM0NTY3ODk
+          description: 'Secreto HMAC completo (`whsec_` incluido). **Sólo se entrega en esta respuesta**: guárdalo en el gestor de secretos de tu backend. Si se pierde, rótalo.'
+      required:
+        - id
+        - url
+        - status
+        - events
+        - secretVersion
+        - createdAt
+        - updatedAt
+        - disabledAt
+        - secret
+    IntegrationWebhookEndpointWithSecretResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Endpoint de webhooks creado correctamente
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationWebhookEndpointWithSecretData'
+      required:
+        - success
+        - message
+        - data
     ResendIntegrationSigningInvitationDto:
       type: object
       properties:
@@ -2206,5 +3192,134 @@ components:
         - yRatio
         - widthRatio
         - heightRatio
+    UpsertWebhookEndpointDto:
+      type: object
+      properties:
+        url:
+          type: string
+          example: https://erp.cliente.com/webhooks/firmalo
+          maxLength: 2048
+          description: 'URL que recibe los `POST`. Sólo `https://` en el puerto 443, sin usuario ni contraseña, a un host público: se rechazan IPs privadas, loopback, link-local y metadatos de nube.'
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          example:
+            - document.collaborator_signed
+            - document.signed
+            - document.rejected
+            - document.cancelled
+          description: Eventos que se notifican; al menos uno, sin repetir.
+          items:
+            type: string
+            enum:
+              - document.collaborator_signed
+              - document.signed
+              - document.rejected
+              - document.cancelled
+      required:
+        - url
+        - events
+    WebhookPayloadCollaboratorSignedData:
+      type: object
+      properties:
+        document:
+          $ref: '#/components/schemas/WebhookPayloadDocument'
+        participant:
+          $ref: '#/components/schemas/WebhookPayloadSignedParticipant'
+      required:
+        - document
+        - participant
+    WebhookPayloadDocument:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+          description: Identificador del documento; el mismo que devuelve la API de integración.
+        status:
+          type: string
+          enum:
+            - CREATED
+            - PENDING_APPROVAL
+            - PENDING_SIGNATURE
+            - SIGNED
+            - REJECTED
+            - EXPIRED
+            - CANCELLATION_PENDING
+            - CANCELLED
+          example: PENDING_SIGNATURE
+          description: Estado del documento justo después del hecho.
+      required:
+        - id
+        - status
+    WebhookPayloadDocumentData:
+      type: object
+      properties:
+        document:
+          $ref: '#/components/schemas/WebhookPayloadDocument'
+      required:
+        - document
+    WebhookPayloadRejectedData:
+      type: object
+      properties:
+        document:
+          $ref: '#/components/schemas/WebhookPayloadDocument'
+        participant:
+          $ref: '#/components/schemas/WebhookPayloadRejectedParticipant'
+      required:
+        - document
+        - participant
+    WebhookPayloadRejectedParticipant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 77f85c29-0104-4823-8b32-4bc567e88c6a
+          description: Identificador del participante; el mismo que devuelve la API de integración.
+        email:
+          type: string
+          example: firmante@empresa.com
+        status:
+          type: string
+          enum:
+            - REJECTED
+          example: REJECTED
+        rejectedAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T19:05:00.000Z'
+      required:
+        - id
+        - email
+        - status
+        - rejectedAt
+    WebhookPayloadSignedParticipant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 77f85c29-0104-4823-8b32-4bc567e88c6a
+          description: Identificador del participante; el mismo que devuelve la API de integración.
+        email:
+          type: string
+          example: firmante@empresa.com
+        status:
+          type: string
+          enum:
+            - SIGNED
+          example: SIGNED
+        signedAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+      required:
+        - id
+        - email
+        - status
+        - signedAt
 servers:
   - url: https://api.firmalo.example

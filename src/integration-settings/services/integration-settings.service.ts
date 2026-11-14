@@ -39,7 +39,10 @@ export async function ensureInitialIntegrationSettings(
     .execute();
 }
 
-/** Acceso a datos de la configuración de integración. */
+/**
+ * Acceso a datos de la configuración de integración. Se exporta para que las tareas de webhooks
+ * consulten `webhooksEnabled`.
+ */
 @Injectable()
 export class IntegrationSettingsService {
   constructor(
@@ -109,6 +112,39 @@ export class IntegrationSettingsService {
          SET "status" = EXCLUDED."status", "updated_at" = now()
          WHERE "integration_settings"."status" IS DISTINCT FROM EXCLUDED."status"`,
       [organizationId, status],
+    );
+
+    return this.settingsRepository.findOneOrFail({ where: { organizationId } });
+  }
+
+  /**
+   * Fija `webhooksEnabled` en una sola sentencia: crea la fila si no existe (con `status` en su
+   * valor por defecto, `ACTIVE`) y sólo la actualiza si el valor cambia. Repetir el mismo valor no
+   * crea filas ni modifica `updated_at`, y dos peticiones simultáneas no pueden crear dos filas
+   * (`ON CONFLICT` sobre `UQ_integration_settings_organization_id`). Nunca toca `status`.
+   *
+   * @param organizationId - Organización de la API key.
+   * @param webhooksEnabled - Valor deseado.
+   * @returns La configuración resultante.
+   *
+   * @throws {QueryFailedError} Si la organización no existe (FK).
+   *
+   * @example
+   * ```ts
+   * const settings = await service.setWebhooksEnabled('org-1', true);
+   * ```
+   */
+  async setWebhooksEnabled(
+    organizationId: string,
+    webhooksEnabled: boolean,
+  ): Promise<IntegrationSettingsEntity> {
+    await this.settingsRepository.query(
+      `INSERT INTO "integration_settings" ("organization_id", "webhooks_enabled")
+       VALUES ($1, $2)
+       ON CONFLICT ("organization_id") DO UPDATE
+         SET "webhooks_enabled" = EXCLUDED."webhooks_enabled", "updated_at" = now()
+         WHERE "integration_settings"."webhooks_enabled" IS DISTINCT FROM EXCLUDED."webhooks_enabled"`,
+      [organizationId, webhooksEnabled],
     );
 
     return this.settingsRepository.findOneOrFail({ where: { organizationId } });

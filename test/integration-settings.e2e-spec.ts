@@ -29,6 +29,7 @@ import { RedisService } from './../src/common/redis/redis.service';
 import { IntegrationErrorFilter } from './../src/document/integration/filters/integration-error.filter';
 import { IntegrationSettingsModule } from './../src/integration-settings/integration-settings.module';
 import { CreateIntegrationSettings1784300000095 } from './../src/migrations/1784300000095-CreateIntegrationSettings';
+import { AddWebhooksEnabledToIntegrationSettings1784300000096 } from './../src/migrations/1784300000096-AddWebhooksEnabledToIntegrationSettings';
 
 config({ path: join(__dirname, '..', '.env') });
 
@@ -271,11 +272,17 @@ describe('Configuración de integración por organización (e2e)', () => {
       await seedRawApiKey('legacy-revoked', 'REVOKED');
       await seedRawApiKey('legacy-revoked', 'REVOKED');
 
+      // La 096 agrega una columna a esta tabla: se revierte antes y se reaplica después, como haría
+      // `migration:revert` en orden inverso.
       const migration = new CreateIntegrationSettings1784300000095();
+      const webhooksMigration =
+        new AddWebhooksEnabledToIntegrationSettings1784300000096();
       const queryRunner = dataSource.createQueryRunner();
       try {
+        await webhooksMigration.down(queryRunner);
         await migration.down(queryRunner);
         await migration.up(queryRunner);
+        await webhooksMigration.up(queryRunner);
       } finally {
         await queryRunner.release();
       }

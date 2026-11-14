@@ -112,7 +112,6 @@ import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-c
     ReserveDocumentCreditUseCase,
     ReserveBiometricSignatureCreditsUseCase,
     AssertBiometricCreditsAvailableUseCase,
-    CloseBiometricReservationsUseCase,
     FinalizeBiometricSignatureCreditsUseCase,
     ReleaseExpiredCreditReservationsUseCase,
     ReleaseExpiredCreditReservationsJob,
