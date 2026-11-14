@@ -22,6 +22,8 @@ import {
 } from '../docs/api-integration-examples.docs';
 import { IntegrationDocumentsController } from '../integration-documents.controller';
 import { IntegrationOrganizationController } from '../integration-organization.controller';
+import { IntegrationApiSettingsController } from 'src/integration-settings/integration-api-settings.controller';
+import { IntegrationSettingsController } from 'src/integration-settings/integration-settings.controller';
 import {
   createIntegrationOpenApiDocument,
   findSchemaRefs,
@@ -65,6 +67,8 @@ describe('createIntegrationOpenApiDocument', () => {
       controllers: [
         IntegrationDocumentsController,
         IntegrationOrganizationController,
+        IntegrationApiSettingsController,
+        IntegrationSettingsController,
         OrganizationApiKeysController,
         InternalSubscriptionBillingController,
         AccountsController,
@@ -113,13 +117,15 @@ describe('createIntegrationOpenApiDocument', () => {
     );
   });
 
-  it('contiene exactamente los seis endpoints de integración', () => {
+  it('contiene exactamente los ocho endpoints de integración', () => {
     expect(operationsOf(integration)).toEqual(
       [
         'POST /api/v1/integration/documents',
         'GET /api/v1/integration/documents',
         'GET /api/v1/integration/organization/context',
         'GET /api/v1/integration/users/documents',
+        'GET /api/v1/integration/settings',
+        'PATCH /api/v1/integration/settings',
         'POST /api/v1/integration/documents/{documentId}/signing-access',
         'POST /api/v1/integration/documents/{documentId}/collaborators/resend-invitation',
       ].sort(),
