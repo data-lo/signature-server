@@ -58,11 +58,12 @@ const INTEGRATION_OPENAPI_DESCRIPTION = [
  * Es una función pura: no toca `source` (trabaja sobre una copia) y el resultado sólo depende de
  * él. Del documento general conserva:
  * - los `paths` que empiezan con `/api/v1/integration/`;
- * - en cada operación, sólo sus tags de integración (`Integration Documents` u `Organización`; sin
- *   ninguno, el de documentos), la seguridad `integration-api-key` (cualquier otra —JWT,
+ * - en cada operación, sólo sus tags de integración (`Integration Documents`, `Organización` o
+ *   `Webhooks`; sin ninguno, el de documentos), la seguridad `integration-api-key` (cualquier otra —JWT,
  *   `x-api-key` interna— se descarta) y un solo parámetro por header (ver `cleanHeaderParameters`);
  * - en `components`, sólo el esquema de seguridad `X-API-Key` y los esquemas alcanzables desde
- *   esas operaciones (DTOs y respuestas de integración, con sus dependencias).
+ *   esas operaciones (DTOs y respuestas de integración, con sus dependencias), incluidos los
+ *   payloads de webhooks que referencian los `callbacks` de `PUT /integration/webhooks/endpoint`.
  *
  * El título, la descripción, los tags (`INTEGRATION_OPENAPI_TAGS`, en ese orden) y la seguridad
  * global son los del contrato de clientes, no los del documento general. No lleva `servers`: Swagger UI usa el host desde el que se abre.

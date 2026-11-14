@@ -34,6 +34,8 @@ describe('api-key-permission-policy', () => {
     STATIC_PERMISSION_KEY_ENUM.DIRECTORY_READ,
     STATIC_PERMISSION_KEY_ENUM.INTEGRATION_SETTINGS_READ,
     STATIC_PERMISSION_KEY_ENUM.INTEGRATION_SETTINGS_UPDATE,
+    STATIC_PERMISSION_KEY_ENUM.WEBHOOK_READ,
+    STATIC_PERMISSION_KEY_ENUM.WEBHOOK_MANAGE,
   ])('admite %s', (key) => {
     expect(isApiKeyAssignablePermission(key)).toBe(true);
   });

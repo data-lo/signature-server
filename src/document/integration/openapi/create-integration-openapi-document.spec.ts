@@ -24,6 +24,9 @@ import { IntegrationDocumentsController } from '../integration-documents.control
 import { IntegrationOrganizationController } from '../integration-organization.controller';
 import { IntegrationApiSettingsController } from 'src/integration-settings/integration-api-settings.controller';
 import { IntegrationSettingsController } from 'src/integration-settings/integration-settings.controller';
+import { IntegrationWebhookEndpointController } from 'src/outbound-webhooks/controllers/integration-webhook-endpoint.controller';
+import { INTEGRATION_WEBHOOKS_TAG } from 'src/outbound-webhooks/docs/integration-webhooks-tag.docs';
+import { OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM } from 'src/outbound-webhooks/enums/outbound-webhook-event-type.enum';
 import {
   createIntegrationOpenApiDocument,
   findSchemaRefs,
@@ -69,6 +72,7 @@ describe('createIntegrationOpenApiDocument', () => {
         IntegrationOrganizationController,
         IntegrationApiSettingsController,
         IntegrationSettingsController,
+        IntegrationWebhookEndpointController,
         OrganizationApiKeysController,
         InternalSubscriptionBillingController,
         AccountsController,
@@ -117,12 +121,16 @@ describe('createIntegrationOpenApiDocument', () => {
     );
   });
 
-  it('contiene exactamente los ocho endpoints de integración', () => {
+  it('contiene exactamente los doce endpoints de integración', () => {
     expect(operationsOf(integration)).toEqual(
       [
         'POST /api/v1/integration/documents',
         'GET /api/v1/integration/documents',
         'GET /api/v1/integration/organization/context',
+        'GET /api/v1/integration/webhooks/endpoint',
+        'PUT /api/v1/integration/webhooks/endpoint',
+        'DELETE /api/v1/integration/webhooks/endpoint',
+        'POST /api/v1/integration/webhooks/endpoint/rotate-secret',
         'GET /api/v1/integration/users/documents',
         'GET /api/v1/integration/settings',
         'PATCH /api/v1/integration/settings',
@@ -199,29 +207,219 @@ describe('createIntegrationOpenApiDocument', () => {
     }
   });
 
-  it('publica los tags Integration Documents y Organización, en ese orden y sin otros', () => {
+  it('publica los tags Integration Documents, Organización y Webhooks, en ese orden y sin otros', () => {
     expect(integration.tags!.map((tag) => tag.name)).toEqual([
       INTEGRATION_DOCUMENTS_TAG,
       INTEGRATION_ORGANIZATION_TAG,
+      INTEGRATION_WEBHOOKS_TAG,
     ]);
     for (const tag of integration.tags!) {
       expect(tag.description).toBeTruthy();
     }
   });
 
-  it('agrupa GET /integration/organization/context bajo Organización y el resto bajo documentos', () => {
+  it('agrupa el contexto bajo Organización, la configuración de webhooks bajo Webhooks y el resto bajo documentos', () => {
     for (const operation of operationsOf(integration)) {
       const [method, path] = operation.split(' ');
       const tags =
         integration.paths[path][
           method.toLowerCase() as (typeof HTTP_METHODS)[number]
         ]!.tags;
-      expect(tags).toEqual([
+      const expected =
         path === '/api/v1/integration/organization/context'
           ? INTEGRATION_ORGANIZATION_TAG
-          : INTEGRATION_DOCUMENTS_TAG,
-      ]);
+          : path.startsWith('/api/v1/integration/webhooks/')
+            ? INTEGRATION_WEBHOOKS_TAG
+            : INTEGRATION_DOCUMENTS_TAG;
+      expect(tags).toEqual([expected]);
     }
+  });
+
+  describe('Webhooks', () => {
+    const WEBHOOK_ENDPOINT_PATH = '/api/v1/integration/webhooks/endpoint';
+    const ROTATE_PATH = `${WEBHOOK_ENDPOINT_PATH}/rotate-secret`;
+    const EVENTS = Object.values(OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM);
+    const HEADERS = [
+      'X-Signature-Webhook-Id',
+      'X-Signature-Event',
+      'X-Signature-Timestamp',
+      'X-Signature-Hmac',
+    ];
+
+    type Schema = {
+      $ref?: string;
+      properties?: Record<string, Schema>;
+      allOf?: Schema[];
+      required?: string[];
+    };
+
+    const schemaByRef = (ref: string): Schema =>
+      (integration.components!.schemas as Record<string, Schema>)[
+        ref.replace('#/components/schemas/', '')
+      ];
+
+    /** Propiedades de un esquema, siguiendo `$ref` y `allOf` (herencia de clases). */
+    const propertiesOf = (schema: Schema): Record<string, Schema> => {
+      if (schema.$ref) return propertiesOf(schemaByRef(schema.$ref));
+      return Object.assign(
+        {},
+        ...(schema.allOf ?? []).map(propertiesOf),
+        schema.properties ?? {},
+      );
+    };
+
+    /** Todas las rutas de propiedades de un esquema (`data.document.id`…). */
+    const propertyPaths = (schema: Schema, prefix = ''): string[] =>
+      Object.entries(propertiesOf(schema)).flatMap(([name, child]) => {
+        const path = prefix ? `${prefix}.${name}` : name;
+        const nested =
+          child.$ref || child.allOf ? propertyPaths(child, path) : [];
+        return [path, ...nested];
+      });
+
+    /** Las mismas rutas, pero de un ejemplo JSON. */
+    const examplePaths = (value: unknown, prefix = ''): string[] =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.entries(value).flatMap(([name, child]) => {
+            const path = prefix ? `${prefix}.${name}` : name;
+            return [path, ...examplePaths(child, path)];
+          })
+        : [];
+
+    const callbackOf = (event: string) => {
+      const put = integration.paths[WEBHOOK_ENDPOINT_PATH].put!;
+      const callback = (
+        put.callbacks as unknown as Record<
+          string,
+          Record<string, { post: unknown }>
+        >
+      )[event];
+      return callback['{$request.body#/url}'].post as {
+        parameters: {
+          name: string;
+          in: string;
+          required: boolean;
+          description: string;
+        }[];
+        requestBody: {
+          content: { 'application/json': { schema: Schema; example: unknown } };
+        };
+        responses: Record<string, unknown>;
+      };
+    };
+
+    it('la descripción del tag explica headers, HMAC, reintentos, entrega al menos una vez y deduplicación', () => {
+      const description = integration.tags!.find(
+        (tag) => tag.name === INTEGRATION_WEBHOOKS_TAG,
+      )!.description!;
+
+      for (const text of [
+        ...EVENTS,
+        ...HEADERS,
+        'HMAC-SHA256(secret, timestamp + "." + rawBody)',
+        'cuerpo **crudo**',
+        'tiempo constante',
+        '8 intentos',
+        '**Al menos una vez.**',
+        'Deduplica por `id`',
+        'sólo al crear el endpoint y al rotarlo',
+      ]) {
+        expect(description).toContain(text);
+      }
+    });
+
+    it('PUT documenta un callback por evento, con los cuatro headers obligatorios y su payload', () => {
+      const put = integration.paths[WEBHOOK_ENDPOINT_PATH].put!;
+      expect(Object.keys(put.callbacks ?? {})).toEqual(EVENTS);
+
+      for (const event of EVENTS) {
+        const callback = callbackOf(event);
+        expect(
+          callback.parameters.map((parameter) => [
+            parameter.name,
+            parameter.in,
+            parameter.required,
+          ]),
+        ).toEqual(HEADERS.map((name) => [name, 'header', true]));
+        expect(Object.keys(callback.responses)).toEqual(['2XX', 'default']);
+
+        const body = callback.requestBody.content['application/json'];
+        expect(body.schema.$ref).toMatch(/^#\/components\/schemas\//);
+        expect(schemaByRef(body.schema.$ref!)).toBeDefined();
+        expect((body.example as { type: string }).type).toBe(event);
+      }
+    });
+
+    it('cada payload documenta exactamente los campos de su ejemplo del contrato', () => {
+      for (const event of EVENTS) {
+        const body = callbackOf(event).requestBody.content['application/json'];
+        expect(propertyPaths(body.schema).sort()).toEqual(
+          examplePaths(body.example).sort(),
+        );
+      }
+    });
+
+    it('ningún payload incluye llaves, tokens, PDF, URLs, evidencia, geolocalización ni pagos', () => {
+      for (const event of EVENTS) {
+        const body = callbackOf(event).requestBody.content['application/json'];
+        const names = propertyPaths(body.schema).map(
+          (path) => path.split('.').pop()!,
+        );
+        for (const name of names) {
+          expect(name).not.toMatch(
+            /key|token|secret|pdf|file|url|certificate|^ip$|geo|location|latitude|longitude|image|evidence|biometric|reason|payment|card|bank|invoice/i,
+          );
+        }
+      }
+    });
+
+    it('el secreto sólo viaja al crear (PUT 201) y al rotar; ninguna otra respuesta lo trae', () => {
+      const dataOf = (
+        path: string,
+        method: 'get' | 'put' | 'post' | 'delete',
+        status: string,
+      ) => {
+        const response = integration.paths[path][method]!.responses[
+          status
+        ] as unknown as {
+          content: { 'application/json': { schema: Schema } };
+        };
+        return propertiesOf(
+          propertiesOf(response.content['application/json'].schema).data,
+        );
+      };
+
+      expect(dataOf(WEBHOOK_ENDPOINT_PATH, 'put', '201')).toHaveProperty(
+        'secret',
+      );
+      expect(dataOf(ROTATE_PATH, 'post', '200')).toHaveProperty('secret');
+      for (const [path, method] of [
+        [WEBHOOK_ENDPOINT_PATH, 'get'],
+        [WEBHOOK_ENDPOINT_PATH, 'put'],
+        [WEBHOOK_ENDPOINT_PATH, 'delete'],
+      ] as const) {
+        const data = dataOf(path, method, '200');
+        expect(data).toHaveProperty('secretVersion');
+        expect(data).not.toHaveProperty('secret');
+      }
+    });
+
+    it.each([
+      ['get', WEBHOOK_ENDPOINT_PATH, '`WEBHOOK.READ`'],
+      ['put', WEBHOOK_ENDPOINT_PATH, '`WEBHOOK.MANAGE`'],
+      ['post', ROTATE_PATH, '`WEBHOOK.MANAGE`'],
+      ['delete', WEBHOOK_ENDPOINT_PATH, '`WEBHOOK.MANAGE`'],
+    ] as const)(
+      '%s %s usa X-API-Key y documenta %s',
+      (method, path, permission) => {
+        const operation = integration.paths[path][method]!;
+        expect(operation.security).toEqual([
+          { [INTEGRATION_API_KEY_SECURITY]: [] },
+        ]);
+        expect(operation.description).toContain(permission);
+        expect(operation.description).toContain('`X-API-Key`');
+      },
+    );
   });
 
   it('GET /integration/organization/context documenta X-API-Key, el permiso y el saldo sin datos de pago', () => {
@@ -509,6 +707,26 @@ describe('createIntegrationOpenApiDocument', () => {
       'GET',
       '/api/v1/integration/organization/context',
       ['200', '400', '401', '403'],
+    ],
+    [
+      'GET',
+      '/api/v1/integration/webhooks/endpoint',
+      ['200', '400', '401', '403', '404'],
+    ],
+    [
+      'PUT',
+      '/api/v1/integration/webhooks/endpoint',
+      ['200', '201', '400', '401', '403', '422', '503'],
+    ],
+    [
+      'POST',
+      '/api/v1/integration/webhooks/endpoint/rotate-secret',
+      ['200', '400', '401', '403', '404', '503'],
+    ],
+    [
+      'DELETE',
+      '/api/v1/integration/webhooks/endpoint',
+      ['200', '400', '401', '403', '404'],
     ],
     [
       'POST',

@@ -2,6 +2,11 @@ import { applyDecorators } from '@nestjs/common';
 import { ApiResponse, ApiResponseExamples, ApiSecurity } from '@nestjs/swagger';
 import { SecuritySchemeObject } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
 
+import {
+  INTEGRATION_WEBHOOKS_TAG,
+  INTEGRATION_WEBHOOKS_TAG_DESCRIPTION,
+} from 'src/outbound-webhooks/docs/integration-webhooks-tag.docs';
+
 import { IntegrationErrorResponseDto } from '../interfaces/integration-document-response';
 import {
   EXAMPLE_INTEGRATION_API_KEY,
@@ -30,6 +35,10 @@ export const INTEGRATION_OPENAPI_TAGS = [
     name: INTEGRATION_ORGANIZATION_TAG,
     description:
       'La organización de la API key, su saldo de documentos, su plan y su ciclo de facturación',
+  },
+  {
+    name: INTEGRATION_WEBHOOKS_TAG,
+    description: INTEGRATION_WEBHOOKS_TAG_DESCRIPTION,
   },
 ] as const;
 
