@@ -42,9 +42,12 @@ import { PlatformModule } from './platform/platform.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { IntegrationSettingsModule } from './integration-settings/integration-settings.module';
 import { OutboundWebhooksModule } from './outbound-webhooks/outbound-webhooks.module';
+import { RequestContextModule } from './observability/request-context/request-context.module';
 
 @Module({
   imports: [
+    /** `X-Request-Id` y contexto de correlación; el middleware lo monta `applyRequestContext`. */
+    RequestContextModule,
     TypeOrmModule.forRootAsync({
       name: 'default',
       imports: [ConfigModule],
