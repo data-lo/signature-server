@@ -30,6 +30,7 @@ import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 import { ClientIp } from 'src/common/interceptors/request-ip.decorator';
 import { RequestIpInterceptor } from 'src/common/interceptors/request-ip.interceptor';
+import { annotateIntegrationAccess } from 'src/observability/integration-access-log/integration-access-log.annotations';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
@@ -190,6 +191,11 @@ export class IntegrationDocumentsController {
 
     response.status(replayed ? 200 : 201);
     response.setHeader(IDEMPOTENT_REPLAYED_HEADER, String(replayed));
+    // El documento creado no está en la URL: el log de acceso lo toma del resultado.
+    annotateIntegrationAccess(request, {
+      documentId: result.data?.id,
+      idempotencyReplayed: replayed,
+    });
     return result;
   }
 
