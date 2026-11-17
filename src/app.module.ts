@@ -38,10 +38,19 @@ import { PublicSigningModule } from './public-signing/public-signing.module';
 import { AuthorizationModule } from './authorization/authorization.module';
 import { DirectoryModule } from './directory/directory.module';
 import { ApiKeyModule } from './api-key/api-key.module';
-import { PlatformProvisioningModule } from './platform-provisioning/platform-provisioning.module';
+import { PlatformModule } from './platform/platform.module';
+import { MetricsModule } from './metrics/metrics.module';
+import { IntegrationSettingsModule } from './integration-settings/integration-settings.module';
+import { OutboundWebhooksModule } from './outbound-webhooks/outbound-webhooks.module';
+import { RequestContextModule } from './observability/request-context/request-context.module';
+import { IntegrationAccessLogModule } from './observability/integration-access-log/integration-access-log.module';
 
 @Module({
   imports: [
+    /** `X-Request-Id` y contexto de correlación; el middleware lo monta `applyRequestContext`. */
+    RequestContextModule,
+    /** Log JSON `integration.http_request`; el middleware lo monta `applyIntegrationAccessLog`. */
+    IntegrationAccessLogModule,
     TypeOrmModule.forRootAsync({
       name: 'default',
       imports: [ConfigModule],
@@ -119,7 +128,10 @@ import { PlatformProvisioningModule } from './platform-provisioning/platform-pro
     AuthorizationModule,
     DirectoryModule,
     ApiKeyModule,
-    PlatformProvisioningModule,
+    PlatformModule,
+    MetricsModule.forRoot(),
+    IntegrationSettingsModule,
+    OutboundWebhooksModule,
   ],
   controllers: [AppController],
   providers: [

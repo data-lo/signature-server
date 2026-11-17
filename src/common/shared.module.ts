@@ -8,6 +8,7 @@ import { MinioService } from './minio/minio.service';
 import { RedisService } from './redis/redis.service';
 import { PdfSignatureService } from './document-signing/document-signing.service';
 import { PasswordService } from './password/password.service';
+import { PasswordPolicyService } from './password/password-policy.service';
 import { TurnstileService } from './turnstile/turnstile.service';
 
 const services = [
@@ -18,6 +19,7 @@ const services = [
   OTPService,
   RedisService,
   PasswordService,
+  PasswordPolicyService,
   TurnstileService,
 ];
 

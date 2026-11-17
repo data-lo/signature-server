@@ -85,10 +85,11 @@ export class AssertPlanActionUseCase {
      * saldo no le desbloquearía nada.
      */
     const requiredCredits = input.requiredCredits ?? 0;
-    if (requiredCredits > 0 && access.creditsAvailable < requiredCredits) {
+    const documentCredits = access.credits.document.available;
+    if (requiredCredits > 0 && documentCredits < requiredCredits) {
       throw new InsufficientDocumentCreditsException(
         requiredCredits,
-        access.creditsAvailable,
+        documentCredits,
       );
     }
 

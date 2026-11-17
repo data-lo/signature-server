@@ -4,6 +4,11 @@ import {
   INTEGRATION_VALIDATION_CODE_ENUM as CODE,
   IntegrationValidationException,
 } from './integration-validation.exception';
+import {
+  EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD,
+  EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+  EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+} from '../docs/api-integration-examples.docs';
 import { IntegrationPayloadValidator } from './integration-payload.validator';
 
 type Plain = Record<string, any>;
@@ -52,6 +57,133 @@ function validator(config: Record<string, unknown> = {}) {
 }
 
 /** Ejecuta y devuelve el cuerpo del error de integración, o falla si no lanzó. */
+/**
+ * Los ejemplos de Swagger son contrato para quien integra: tienen que pasar el validador real.
+ */
+describe('ejemplos publicados en Swagger', () => {
+  it.each([
+    ['secuencial', EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD],
+    ['no secuencial', EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD],
+    ['de firma avanzada', EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD],
+  ])('el ejemplo %s es válido', (_label, example) => {
+    const subject = validator();
+
+    const validated = subject.validatePayload(JSON.stringify(example));
+
+    expect(() =>
+      subject.assertPositionsFitDocument(validated, 1),
+    ).not.toThrow();
+  });
+
+  it('ningún ejemplo publicado usa el campo retirado rfc', () => {
+    for (const example of [
+      EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+      EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+      EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD,
+    ]) {
+      for (const participant of example.participants) {
+        expect(participant).not.toHaveProperty('rfc');
+      }
+    }
+    expect(
+      EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD.participants[0],
+    ).toHaveProperty('taxId');
+  });
+
+  it('el ejemplo secuencial numera a dos firmantes y deja al testigo sin order', () => {
+    const { participants } = EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD;
+
+    expect(
+      participants.filter(({ role }) => role === 'SIGNER').map((p) => p.order),
+    ).toEqual([1, 2]);
+    expect(
+      participants.find(({ role }) => role === 'WITNESS'),
+    ).not.toHaveProperty('order');
+  });
+
+  describe('lo que la documentación afirma de order', () => {
+    function withParticipants(
+      example: Plain,
+      patch: (participants: Plain[]) => void,
+    ) {
+      const copy = structuredClone(example);
+      patch(copy.participants);
+      return JSON.stringify(copy);
+    }
+
+    it('en un flujo secuencial, el order de un testigo no cuenta en la secuencia', () => {
+      const raw = withParticipants(
+        EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+        (participants) => {
+          participants[2].order = 99;
+        },
+      );
+
+      expect(() => validator().validatePayload(raw)).not.toThrow();
+    });
+
+    it('sin isSequential el documento es secuencial y exige order a cada firmante', () => {
+      const copy: Plain = structuredClone(EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD);
+      delete copy.document.isSequential;
+      delete copy.participants[0].order;
+
+      expect(
+        errorOf(() => validator().validatePayload(JSON.stringify(copy))),
+      ).toEqual(expect.objectContaining({ code: 'INVALID_SIGNING_ORDER' }));
+    });
+
+    it('la posición en participants no define el orden: se aceptan desordenados', () => {
+      const raw = withParticipants(
+        EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
+        (participants) => {
+          participants.reverse();
+        },
+      );
+
+      expect(() => validator().validatePayload(raw)).not.toThrow();
+    });
+
+    it('con isSequential: false, un order repetido no se rechaza', () => {
+      const raw = withParticipants(
+        EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+        (participants) => {
+          participants[0].order = 5;
+          participants[1].order = 5;
+        },
+      );
+
+      expect(() => validator().validatePayload(raw)).not.toThrow();
+    });
+
+    it.each([
+      ['un testigo', EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD, 2],
+      [
+        'isSequential: false',
+        EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+        0,
+      ],
+    ])('con %s, un order menor a 1 se rechaza', (_label, example, index) => {
+      const raw = withParticipants(example, (participants) => {
+        participants[index].order = 0;
+      });
+
+      expect(errorOf(() => validator().validatePayload(raw))).toEqual(
+        expect.objectContaining({ code: 'INVALID_SIGNING_ORDER' }),
+      );
+    });
+  });
+
+  it('el ejemplo no secuencial no lleva order en ningún participante', () => {
+    const { document, participants } =
+      EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD;
+
+    expect(document.isSequential).toBe(false);
+    for (const participant of participants) {
+      expect(participant).not.toHaveProperty('order');
+    }
+  });
+});
+
 function errorOf(run: () => unknown): Plain {
   try {
     run();
@@ -334,57 +466,192 @@ describe('IntegrationPayloadValidator', () => {
     });
   });
 
-  describe('RFC del firmante avanzado', () => {
-    it('acepta el RFC de un firmante ADVANCED, normalizado a mayúsculas', () => {
+  describe('RFC del firmante avanzado (taxId)', () => {
+    it('acepta el taxId de un firmante ADVANCED, normalizado a mayúsculas', () => {
       const result = validator().validatePayload(
         payload((value) => {
           value.document.signatureType = 'ADVANCED';
-          value.participants[0].rfc = ' lopa800101ab1 ';
+          value.participants[0].taxId = ' lopa800101ab1 ';
         }),
       );
-      expect(result.participants[0].rfc).toBe('LOPA800101AB1');
+      expect(result.participants[0].taxId).toBe('LOPA800101AB1');
     });
 
-    it('rechaza un RFC con formato inválido', () => {
+    it('acepta el RFC de 12 caracteres de una persona moral', () => {
+      const result = validator().validatePayload(
+        payload((value) => {
+          value.document.signatureType = 'ADVANCED';
+          value.participants[0].taxId = 'ACM010101AB1';
+        }),
+      );
+      expect(result.participants[0].taxId).toBe('ACM010101AB1');
+    });
+
+    it('un firmante ADVANCED sin taxId sigue siendo válido', () => {
+      const result = validator().validatePayload(
+        payload((value) => (value.document.signatureType = 'ADVANCED')),
+      );
+      expect(result.participants[0].taxId).toBeUndefined();
+    });
+
+    it.each([
+      ['un formato inválido', 'NO-ES-RFC'],
+      ['menos de 12 caracteres', 'ACM010101AB'],
+      ['más de 13 caracteres', 'LOPA800101AB12'],
+      ['un valor que no es texto', 12345],
+    ])('rechaza %s', (_label, taxId) => {
       expect(
         errorOf(() =>
           validator().validatePayload(
             payload((value) => {
               value.document.signatureType = 'ADVANCED';
-              value.participants[0].rfc = 'NO-ES-RFC';
+              value.participants[0].taxId = taxId;
             }),
           ),
         ),
-      ).toMatchObject({ code: CODE.INVALID_PARTICIPANT_RFC });
-    });
-
-    it('rechaza el RFC en un documento que no es ADVANCED', () => {
-      expect(
-        errorOf(() =>
-          validator().validatePayload(
-            payload((value) => (value.participants[0].rfc = 'LOPA800101AB1')),
-          ),
-        ),
       ).toMatchObject({
-        code: CODE.PARTICIPANT_RFC_NOT_ALLOWED,
-        details: { field: 'participants[0].rfc' },
+        code: CODE.INVALID_PARTICIPANT_TAX_ID,
+        details: { field: 'participants[0].taxId' },
       });
     });
 
-    it('rechaza el RFC en un testigo', () => {
+    it.each(['SIMPLE', 'BIOMETRIC'])(
+      'rechaza el taxId en un documento %s',
+      (signatureType) => {
+        expect(
+          errorOf(() =>
+            validator().validatePayload(
+              payload((value) => {
+                value.document.signatureType = signatureType;
+                value.participants[0].taxId = 'LOPA800101AB1';
+              }),
+            ),
+          ),
+        ).toMatchObject({
+          code: CODE.PARTICIPANT_TAX_ID_NOT_ALLOWED,
+          details: { field: 'participants[0].taxId' },
+        });
+      },
+    );
+
+    it('rechaza el taxId en un testigo', () => {
       expect(
         errorOf(() =>
           validator().validatePayload(
             payload((value) => {
               value.document.signatureType = 'ADVANCED';
-              value.participants[1].rfc = 'LOPA800101AB1';
+              value.participants[1].taxId = 'LOPA800101AB1';
             }),
           ),
         ),
       ).toMatchObject({
-        code: CODE.PARTICIPANT_RFC_NOT_ALLOWED,
-        details: { field: 'participants[1].rfc' },
+        code: CODE.PARTICIPANT_TAX_ID_NOT_ALLOWED,
+        details: { field: 'participants[1].taxId' },
       });
+    });
+  });
+
+  describe('campo retirado rfc', () => {
+    it.each([
+      ['un firmante ADVANCED', 'ADVANCED', 0],
+      ['un firmante SIMPLE', 'SIMPLE', 0],
+      ['un testigo', 'ADVANCED', 1],
+    ])(
+      'rechaza rfc en %s con 422 y el campo que lo reemplaza',
+      (_label, signatureType, index) => {
+        const error = errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = signatureType;
+              value.participants[index].rfc = 'LOPA800101AB1';
+            }),
+          ),
+        );
+
+        expect(error).toMatchObject({
+          statusCode: 422,
+          code: CODE.UNSUPPORTED_PARTICIPANT_FIELD,
+          details: {
+            field: `participants[${index}].rfc`,
+            replacedBy: `participants[${index}].taxId`,
+          },
+        });
+        expect(error.message).toContain('taxId');
+      },
+    );
+
+    it('lo rechaza aunque también venga taxId', () => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[0].taxId = 'LOPA800101AB1';
+              value.participants[0].rfc = 'LOPA800101AB1';
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: CODE.UNSUPPORTED_PARTICIPANT_FIELD });
+    });
+
+    it('lo rechaza aunque valga null', () => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[0].rfc = null;
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: CODE.UNSUPPORTED_PARTICIPANT_FIELD });
+    });
+  });
+
+  describe('normalización y opcionalidad del taxId FIEL', () => {
+    it('lo acepta sin distinguir mayúsculas ni espacios internos y lo deja normalizado', () => {
+      const result = validator().validatePayload(
+        payload((value) => {
+          value.document.signatureType = 'ADVANCED';
+          value.participants[0].taxId = ' lopa 800101 ab1 ';
+        }),
+      );
+      expect(result.participants[0].taxId).toBe('LOPA800101AB1');
+    });
+
+    it.each([undefined, null])('es opcional: acepta %p', (taxId) => {
+      expect(() =>
+        validator().validatePayload(
+          payload((value) => {
+            value.document.signatureType = 'ADVANCED';
+            value.participants[0].taxId = taxId;
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it.each(['', '   ', 'LOPA800101'])('rechaza el formato de %p', (taxId) => {
+      expect(
+        errorOf(() =>
+          validator().validatePayload(
+            payload((value) => {
+              value.document.signatureType = 'ADVANCED';
+              value.participants[0].taxId = taxId;
+            }),
+          ),
+        ),
+      ).toMatchObject({
+        code: CODE.INVALID_PARTICIPANT_TAX_ID,
+        details: { field: 'participants[0].taxId' },
+      });
+    });
+
+    it('taxId: null no estorba a un firmante que no es FIEL', () => {
+      expect(() =>
+        validator().validatePayload(
+          payload((value) => (value.participants[0].taxId = null)),
+        ),
+      ).not.toThrow();
     });
   });
 

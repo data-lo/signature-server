@@ -1,3 +1,10 @@
+/** El ledger real se prueba contra Postgres (`test/credit-reservations.e2e-spec.ts`). */
+jest.mock('./credit-ledger.util', () => ({
+  ...jest.requireActual('./credit-ledger.util'),
+  recordLotIssued: jest.fn().mockResolvedValue(true),
+  recordCreditLedgerEntry: jest.fn().mockResolvedValue(true),
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { BadGatewayException } from '@nestjs/common';
@@ -9,6 +16,9 @@ import { RegisterDocumentCreditPurchaseUseCase } from './register-document-credi
 import { CheckoutOrderService } from '../checkout/checkout-order.service';
 import { CHECKOUT_KIND_ENUM } from '../enums/checkout-kind.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from '../enums/credit-lot-origin.enum';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from '../enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
+import { recordLotIssued } from './credit-ledger.util';
 
 /**
  * Construye una sesión de Stripe ya completada para las pruebas; por defecto es una compra de
@@ -185,11 +195,65 @@ describe('RegisterDocumentCreditPurchaseUseCase', () => {
       expect(lotes[0]).toMatchObject({
         billingProfileId: 'perfil-1',
         origin: CREDIT_LOT_ORIGIN_ENUM.ADD_ON,
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
         issued: 5,
         remaining: 5,
+        reserved: 0,
         stripePaymentIntentId: 'pi_123',
       });
     });
+
+    /**
+     * El perfil sale de `metadata.billingProfileId`, que el checkout resolvió desde la cuenta
+     * activa: el de la cuenta personal o el compartido de la organización.
+     */
+    it.each([
+      ['un perfil personal', 'perfil-personal'],
+      ['un perfil organizacional', 'perfil-organizacion'],
+    ])(
+      'compra de créditos biométricos acreditada a %s, con su PURCHASE en el ledger',
+      async (_label, billingProfileId) => {
+        ordenEncontrada = orden({
+          catalogPrice: {
+            catalogItemId: 'catalog-item-bio',
+            stripePriceId: 'price_pack_5',
+            catalogItem: {
+              documentCreditPack: {
+                documentsGranted: 5,
+                creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+              },
+            },
+          },
+        });
+
+        await useCase.handleCheckoutSessionCompleted(
+          sesion({
+            metadata: {
+              billingProfileId,
+              catalogPriceId: 'catalog-price-1',
+              quantity: '1',
+            },
+          }),
+        );
+
+        expect(lotes).toHaveLength(1);
+        expect(lotes[0]).toMatchObject({
+          billingProfileId,
+          creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+          issued: 5,
+          remaining: 5,
+        });
+        expect(recordLotIssued).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            billingProfileId,
+            creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+          }),
+          CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.PURCHASE,
+          expect.objectContaining({ checkoutOrderId: 'orden-1' }),
+        );
+      },
+    );
 
     /** El criterio de aceptación, literal. */
     it('un pago de 5 unidades acredita exactamente 5 documentos cuando documentsGranted=1', async () => {

@@ -1,5 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 
+import { resolveMetricsOptions } from 'src/metrics/metrics.constants';
+
 /**
  * Prefijo global de la API HTTP. Se aplica una sola vez en el arranque
  * (`applyGlobalApiPrefix`) en vez de repetirse dentro de cada `@Controller()`.
@@ -17,8 +19,9 @@ export const GLOBAL_API_PREFIX = 'api/v1';
  *   Swagger publicado (ver `ApiGetHello`). No es parte del contrato de la API, así que no le
  *   corresponde vivir bajo el prefijo versionado.
  *
- * Ninguna de las dos devuelve datos de negocio: son los dos únicos endpoints que no forman
- * parte de la API pública. Todo lo demás va prefijado.
+ * Ninguna de las dos devuelve datos de negocio: junto con el endpoint de métricas (`METRICS_PATH`,
+ * que `applyGlobalApiPrefix` agrega porque sale del entorno), son los únicos que no forman parte
+ * de la API pública. Todo lo demás va prefijado.
  */
 export const GLOBAL_API_PREFIX_EXCLUDE = ['health', '/'];
 
@@ -32,6 +35,6 @@ export const GLOBAL_API_PREFIX_EXCLUDE = ['health', '/'];
  */
 export function applyGlobalApiPrefix(app: INestApplication): void {
   app.setGlobalPrefix(GLOBAL_API_PREFIX, {
-    exclude: GLOBAL_API_PREFIX_EXCLUDE,
+    exclude: [...GLOBAL_API_PREFIX_EXCLUDE, resolveMetricsOptions().path],
   });
 }

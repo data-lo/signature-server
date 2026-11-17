@@ -1,8 +1,12 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 
 import { AccountService } from 'src/account/account.service';
 import { PasswordService } from 'src/common/password/password.service';
+import {
+  PasswordPolicyService,
+  WEAK_PASSWORD_MESSAGE,
+} from 'src/common/password/password-policy.service';
 
 import { ChangeMyPasswordUseCase } from './change-my-password.use-case';
 import { UserService } from '../user.service';
@@ -12,11 +16,13 @@ describe('ChangeMyPasswordUseCase', () => {
   let userService: { findOne: jest.Mock; updatePassword: jest.Mock };
   let accountService: { updatePasswordForUser: jest.Mock };
   let passwordService: { compare: jest.Mock; hash: jest.Mock };
+  /** La política real: es la misma que usan el registro y el restablecimiento. */
+  let passwordPolicy: PasswordPolicyService;
 
   const dto = {
     currentPassword: 'contrasenaActual',
-    newPassword: 'contrasenaNueva',
-    confirmPassword: 'contrasenaNueva',
+    newPassword: 'la lluvia moja el tejado viejo',
+    confirmPassword: 'la lluvia moja el tejado viejo',
   };
 
   beforeEach(async () => {
@@ -40,10 +46,12 @@ describe('ChangeMyPasswordUseCase', () => {
         { provide: UserService, useValue: userService },
         { provide: AccountService, useValue: accountService },
         { provide: PasswordService, useValue: passwordService },
+        PasswordPolicyService,
       ],
     }).compile();
 
     useCase = module.get(ChangeMyPasswordUseCase);
+    passwordPolicy = module.get(PasswordPolicyService);
   });
 
   it('verifica la contraseña actual contra el hash guardado del usuario', async () => {
@@ -63,7 +71,9 @@ describe('ChangeMyPasswordUseCase', () => {
   it('guarda el hash nuevo en el usuario y en sus cuentas', async () => {
     const result = await useCase.execute('user-1', dto);
 
-    expect(passwordService.hash).toHaveBeenCalledWith('contrasenaNueva');
+    expect(passwordService.hash).toHaveBeenCalledWith(
+      'la lluvia moja el tejado viejo',
+    );
     expect(userService.updatePassword).toHaveBeenCalledWith(
       'user-1',
       'hash-nuevo',
@@ -98,5 +108,45 @@ describe('ChangeMyPasswordUseCase', () => {
       UnauthorizedException,
     );
     expect(userService.updatePassword).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Historia "Centralizar política de contraseñas en PasswordPolicyService": la política se aplica
+   * a `newPassword` antes de hashearla.
+   */
+  describe('política de contraseñas', () => {
+    it('valida newPassword con la política antes de hashearla', async () => {
+      const assertValid = jest.spyOn(passwordPolicy, 'assertValid');
+
+      await useCase.execute('user-1', dto);
+
+      expect(assertValid).toHaveBeenCalledWith(
+        'la lluvia moja el tejado viejo',
+      );
+      expect(assertValid.mock.invocationCallOrder[0]).toBeLessThan(
+        passwordService.hash.mock.invocationCallOrder[0],
+      );
+    });
+
+    it.each(['Password123!', 'iloveyou1234', 'corta'])(
+      'rechaza %p con 400 genérico, sin escribir nada',
+      async (password) => {
+        const error = await useCase
+          .execute('user-1', {
+            ...dto,
+            newPassword: password,
+            confirmPassword: password,
+          })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(BadRequestException);
+        expect((error as BadRequestException).message).toBe(
+          WEAK_PASSWORD_MESSAGE,
+        );
+        expect(passwordService.hash).not.toHaveBeenCalled();
+        expect(userService.updatePassword).not.toHaveBeenCalled();
+        expect(accountService.updatePasswordForUser).not.toHaveBeenCalled();
+      },
+    );
   });
 });

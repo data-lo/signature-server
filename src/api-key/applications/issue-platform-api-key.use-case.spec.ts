@@ -83,7 +83,17 @@ describe('IssuePlatformApiKeyUseCase', () => {
   });
 
   it('emite una llave ACTIVE sin emisor ni vencimiento y devuelve la llave una vez', async () => {
-    const manager = { create: jest.fn((_entity, data) => data) };
+    const settingsInsert = {
+      insert: jest.fn().mockReturnThis(),
+      into: jest.fn().mockReturnThis(),
+      values: jest.fn().mockReturnThis(),
+      orIgnore: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue(undefined),
+    };
+    const manager = {
+      create: jest.fn((_entity, data) => data),
+      createQueryBuilder: jest.fn(() => settingsInsert),
+    };
     const permissions = [permission('DOCUMENT', 'CREATE', 'ANY')];
 
     const issued = await useCase.issueWithin(manager as never, {
@@ -105,5 +115,11 @@ describe('IssuePlatformApiKeyUseCase', () => {
     expect(saved.secretHash).not.toContain(issued.key.split('_').pop());
     expect(issued.key).toMatch(/^fma_live_[0-9a-f]{16}_[A-Za-z0-9_-]{43}$/);
     expect(issued.createdByAccountId).toBeNull();
+    // El aprovisionamiento deja la integración ACTIVE en la misma transacción que la llave.
+    expect(settingsInsert.values).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      status: 'ACTIVE',
+    });
+    expect(settingsInsert.orIgnore).toHaveBeenCalled();
   });
 });

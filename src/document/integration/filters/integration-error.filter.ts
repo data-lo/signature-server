@@ -6,7 +6,12 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
+
+import {
+  annotateIntegrationAccess,
+  errorTypeOf,
+} from 'src/observability/integration-access-log/integration-access-log.annotations';
 
 /** Forma de todo error de la API de integración. */
 export interface IntegrationErrorResponse {
@@ -47,6 +52,9 @@ const INTERNAL_ERROR_MESSAGE =
  * - Lo que no es `HttpException` —TypeORM, MinIO, Kafka, un bug— responde `500 INTERNAL_ERROR`
  *   con un mensaje genérico. El detalle sólo va al log del servidor, nunca al cliente: ni el texto
  *   del driver ni el stack trace.
+ *
+ * Además anota para el log de acceso (`integration.http_request`) el `code` respondido y la clase
+ * de la excepción; nunca el mensaje, los `details` ni el stack.
  */
 @Catch()
 export class IntegrationErrorFilter implements ExceptionFilter {
@@ -67,9 +75,14 @@ export class IntegrationErrorFilter implements ExceptionFilter {
    * ```
    */
   catch(exception: unknown, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse<Response>();
+    const http = host.switchToHttp();
+    const response = http.getResponse<Response>();
     const { status, body } = this.toResponse(exception);
 
+    annotateIntegrationAccess(http.getRequest<Request>(), {
+      errorCode: body.error.code,
+      errorType: errorTypeOf(exception),
+    });
     response.status(status).json(body);
   }
 

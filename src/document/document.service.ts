@@ -13,6 +13,8 @@ import { FindOptionsRelations, IsNull, Raw, Repository } from 'typeorm';
 
 // Entities
 import { DocumentEntity } from './entities/document.entity';
+import { CloseBiometricReservationsUseCase } from 'src/billing/credits/close-biometric-reservations.use-case';
+import { DOCUMENT_CLOSURE_REASON_ENUM } from 'src/billing/enums/document-closure-reason.enum';
 import { CollaboratorEntity } from './entities/collaborator.entity';
 import { UserEntity } from 'src/user/entities/user.entity';
 import { SIGNING_CREDENTIAL_STATUS_ENUM } from 'src/user/enums/signing-credential-status.enum';
@@ -182,6 +184,7 @@ export class DocumentService {
     private readonly advancedSummaryDocumentService: AdvancedSummaryDocumentService,
     private readonly signatureQrService: SignatureQrService,
     private readonly signingLinks: SigningLinkService,
+    private readonly closeBiometricReservations: CloseBiometricReservationsUseCase,
   ) {}
 
   async getCollaboratorNames(documentId: string): Promise<{
@@ -1305,7 +1308,21 @@ export class DocumentService {
       );
 
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
-      await this.documentRepository.save(document);
+      /**
+       * SIGNED y el consumo de las reservas biométricas en UNA transacción: un documento firmado
+       * no puede quedar con créditos biométricos bloqueados sin cobrar, ni cobrados sin firmar. En
+       * documentos no biométricos no hay reservas y no se consume nada.
+       */
+      await this.documentRepository.manager.transaction(async (manager) => {
+        await manager.getRepository(DocumentEntity).save(document);
+        await this.closeBiometricReservations.execute(
+          {
+            documentId: document.id,
+            closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_SIGNED,
+          },
+          manager,
+        );
+      });
     } catch (error) {
       this.logger.error(`Error estampando documento: ${error}`);
       throw new Error(`Error estampando el documento: ${error}`);

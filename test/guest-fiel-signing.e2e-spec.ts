@@ -41,6 +41,7 @@ import { GuestAdvancedSignatureAccessUseCases } from './../src/guest-advanced-si
 import { GuestAdvancedSignerService } from './../src/guest-advanced-signature/services/guest-advanced-signer.service';
 import { GuestSigningTokenService } from './../src/guest-advanced-signature/guest/guest-signing-token.service';
 import { GuestSigningAccessGuard } from './../src/guest-advanced-signature/guest/guest-signing-access.guard';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 const DOCUMENT_ID = '7d1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b';
 const COLLABORATOR_ID = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
@@ -246,6 +247,7 @@ describe('Firma electrónica sin cuenta: Firma Avanzada de invitado (e2e)', () =
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         ThrottlerModule.forRoot({ throttlers: [{ ttl: 60000, limit: 10 }] }),
       ],
       controllers: [

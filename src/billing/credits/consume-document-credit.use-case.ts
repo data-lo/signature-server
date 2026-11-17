@@ -5,6 +5,12 @@ import { DocumentCreditConsumptionEntity } from './document-credit-consumption.e
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { InsufficientDocumentCreditsException } from '../exceptions/billing.exceptions';
 import { BILLING_SIGNATURE_TYPE_ENUM } from '../enums/billing-signature-type.enum';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from '../enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
+import {
+  documentConsumptionLedgerKey,
+  recordCreditLedgerEntry,
+} from './credit-ledger.util';
 
 export interface ConsumeDocumentCreditInput {
   /** Documento que se cobra. Es la llave de idempotencia: `document_id` es único en el recibo. */
@@ -39,6 +45,11 @@ const CREDITS_PER_DOCUMENT = 1;
  * 3. Obtiene su `billing_profile`; sin perfil no hay saldo que gastar.
  * 4. Descuenta un crédito del primer lote utilizable (ver `spendOneCredit`).
  * 5. Escribe la fila de `document_credit_consumptions` con el lote, el perfil y el tipo de firma.
+ * 6. Registra el movimiento `CONSUME` en `credit_ledger_entries`, con la misma clave
+ *    (`consume:document:<id>`) que usaría el consumo de una reserva documental.
+ *
+ * Sólo gasta créditos `DOCUMENT_SIGNATURE` y sólo los no reservados (`remaining - reserved`): los
+ * bloqueados por un documento biométrico pendiente no están disponibles para otra alta.
  *
  * **Corre dentro de la transacción de quien crea el documento**, y por eso recibe un
  * `EntityManager` en vez de abrir el suyo: si el consumo falla, el documento tiene que
@@ -144,6 +155,23 @@ export class ConsumeDocumentCreditUseCase {
       }),
     );
 
+    const recorded = await recordCreditLedgerEntry(manager, {
+      billingProfileId: profile.id,
+      creditLotId,
+      creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+      movementType: CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.CONSUME,
+      quantity: CREDITS_PER_DOCUMENT,
+      idempotencyKey: documentConsumptionLedgerKey(input.documentId),
+      documentId: input.documentId,
+      metadata: { signatureType: input.signatureType ?? null },
+    });
+    if (!recorded) {
+      // El documento ya se cobró por otro camino (su reserva documental): deshacer este descuento.
+      throw new Error(
+        `El documento ${input.documentId} ya tenía registrado su consumo de crédito.`,
+      );
+    }
+
     this.logger.log(
       `El documento ${input.documentId} consumió 1 crédito del lote ${creditLotId} (perfil ${profile.id}).`,
     );
@@ -176,7 +204,10 @@ export class ConsumeDocumentCreditUseCase {
       .where('lot.billing_profile_id = :billingProfileId', {
         billingProfileId,
       })
-      .andWhere('lot.remaining > 0')
+      .andWhere('lot.credit_type = :creditType', {
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+      })
+      .andWhere('lot.remaining > lot.reserved')
       .andWhere('(lot.expires_at IS NULL OR lot.expires_at > now())')
       .orderBy('lot.priority', 'DESC')
       .addOrderBy('lot.expires_at', 'ASC', 'NULLS LAST')
@@ -189,9 +220,10 @@ export class ConsumeDocumentCreditUseCase {
         .createQueryBuilder()
         .update(CreditLotEntity)
         .set({ remaining: () => '"remaining" - 1' })
-        // `remaining > 0` en el WHERE es lo que hace atómico el descuento.
+        // `remaining > reserved` en el WHERE es lo que hace atómico el descuento: nunca toca
+        // créditos bloqueados por una reserva ni deja `remaining` por debajo de `reserved`.
         .where('id = :id', { id })
-        .andWhere('remaining > 0')
+        .andWhere('remaining > reserved')
         .execute();
 
       if (result.affected) {

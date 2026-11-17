@@ -10,6 +10,7 @@ import { DOCUMENT_STATUS_ENUM } from '../../enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
 import { DocumentReadService } from '../../services/document-read.service';
 import {
+  IntegrationAmbiguousUserException,
   IntegrationScopeDeniedException,
   IntegrationUserNotFoundException,
 } from '../exceptions/integration-document.exceptions';
@@ -83,7 +84,7 @@ describe('casos de uso de la API de integración de documentos', () => {
   });
 
   describe('ListUserIntegrationDocumentsUseCase', () => {
-    let accountRepository: { exists: jest.Mock };
+    let accountRepository: { exists: jest.Mock; find: jest.Mock };
     const useCase = () =>
       new ListUserIntegrationDocumentsUseCase(
         documentReadService,
@@ -91,7 +92,12 @@ describe('casos de uso de la API de integración de documentos', () => {
       );
 
     beforeEach(() => {
-      accountRepository = { exists: jest.fn().mockResolvedValue(true) };
+      accountRepository = {
+        exists: jest.fn().mockResolvedValue(true),
+        find: jest
+          .fn()
+          .mockResolvedValue([{ id: 'acc-1', userId: 'user-otro' }]),
+      };
     });
 
     it('con ORGANIZATION consulta a cualquier miembro activo, filtrando por organización y creador', async () => {
@@ -143,6 +149,87 @@ describe('casos de uso de la API de integración de documentos', () => {
       expect(
         documentReadService.listOrganizationDocuments,
       ).not.toHaveBeenCalled();
+    });
+
+    describe('executeByEmail', () => {
+      it('resuelve el correo sólo entre miembros activos de la organización de la llave', async () => {
+        await useCase().executeByEmail(apiClient(), ' Beto@Acme.mx ', {});
+
+        const [{ where }] = accountRepository.find.mock.calls[0];
+        expect(where).toMatchObject({
+          organizationId: 'org-1',
+          isActive: true,
+        });
+        expect(where.user.email.getSql('alias')).toBe(
+          'LOWER(alias) = :normalizedEmail',
+        );
+        expect(where.user.email.objectLiteralParameters).toEqual({
+          normalizedEmail: 'beto@acme.mx',
+        });
+        expect(
+          documentReadService.listOrganizationDocuments,
+        ).toHaveBeenCalledWith(
+          expect.objectContaining({ createdBy: 'user-otro' }),
+        );
+      });
+
+      it('404 si el correo no es de un miembro activo', async () => {
+        accountRepository.find.mockResolvedValue([]);
+
+        await expect(
+          useCase().executeByEmail(apiClient(), 'nadie@acme.mx', {}),
+        ).rejects.toBeInstanceOf(IntegrationUserNotFoundException);
+      });
+
+      it('409 si el correo es de más de un miembro, sin listar nada', async () => {
+        accountRepository.find.mockResolvedValue([
+          { id: 'acc-1', userId: 'user-1' },
+          { id: 'acc-2', userId: 'user-2' },
+        ]);
+
+        await expect(
+          useCase().executeByEmail(apiClient(), 'gemelo@acme.mx', {}),
+        ).rejects.toBeInstanceOf(IntegrationAmbiguousUserException);
+        expect(
+          documentReadService.listOrganizationDocuments,
+        ).not.toHaveBeenCalled();
+      });
+
+      it('con sólo OWN admite el correo de su propio actor', async () => {
+        accountRepository.find.mockResolvedValue([
+          { id: 'acc-actor', userId: 'user-actor' },
+        ]);
+
+        await useCase().executeByEmail(
+          apiClient([PERMISSION_SCOPE_ENUM.OWN]),
+          'actor@acme.mx',
+          {},
+        );
+
+        expect(
+          documentReadService.listOrganizationDocuments,
+        ).toHaveBeenCalledWith(
+          expect.objectContaining({ createdBy: 'user-actor' }),
+        );
+      });
+
+      it.each([
+        ['de otro miembro', [{ id: 'acc-1', userId: 'user-otro' }]],
+        ['que no existe', []],
+      ])(
+        'con sólo OWN responde lo mismo, 403, a un correo %s',
+        async (_label, memberships) => {
+          accountRepository.find.mockResolvedValue(memberships);
+
+          await expect(
+            useCase().executeByEmail(
+              apiClient([PERMISSION_SCOPE_ENUM.OWN]),
+              'alguien@acme.mx',
+              {},
+            ),
+          ).rejects.toBeInstanceOf(IntegrationScopeDeniedException);
+        },
+      );
     });
   });
 });

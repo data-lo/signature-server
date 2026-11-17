@@ -131,10 +131,7 @@ export class CreateDocumentUseCase {
         signatureCoordinates,
       } = createDocumentDto;
 
-      const allParticipantIds = [
-        ...signerIds,
-        ...(witnessIds ?? []),
-        ...(reviewerIds ?? []),
+      const allParticipantIds = [...signerIds, ...(witnessIds ?? []), ...(reviewerIds ?? []),
       ];
       const uniqueParticipantIds = new Set(allParticipantIds);
 

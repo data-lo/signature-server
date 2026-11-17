@@ -22,6 +22,7 @@ import {
   PAYLOAD_SIGNATURE_TYPE_ENUM,
   SignaturePositionDto,
 } from '../../dto/create-document-signatures.dto';
+import { RFC_FORMAT, normalizeTaxId } from '../../utils/tax-id.util';
 import { EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD } from '../docs/api-integration-examples.docs';
 import { INTEGRATION_VALIDATION_CODE_ENUM } from '../validation/integration-validation.exception';
 
@@ -58,13 +59,13 @@ function normalizeEmail({ value }: { value: unknown }): unknown {
   return typeof value === 'string' ? value.trim().toLowerCase() : value;
 }
 
-/** Recorta y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
-function normalizeRfc({ value }: { value: unknown }): unknown {
-  return typeof value === 'string' ? value.trim().toUpperCase() : value;
+/** Quita los espacios y pasa a mayúsculas un RFC; cualquier otro valor lo deja para que lo rechace la validación. */
+function normalizeTaxIdValue({ value }: { value: unknown }): unknown {
+  return typeof value === 'string' ? normalizeTaxId(value) : value;
 }
 
-/** Forma de un RFC de persona física (13) o moral (12). */
-export const RFC_FORMAT = /^[A-ZÑ&]{3,4}\d{6}[A-Z\d]{3}$/;
+/** El mismo `RFC_FORMAT`, como texto para el `pattern` de OpenAPI. */
+const RFC_FORMAT_PATTERN = RFC_FORMAT.source;
 
 /** Recorta los espacios de un nombre. */
 function trimText({ value }: { value: unknown }): unknown {
@@ -82,7 +83,9 @@ const ORDER = coded(INTEGRATION_VALIDATION_CODE_ENUM.INVALID_SIGNING_ORDER);
 const POSITIONS = coded(
   INTEGRATION_VALIDATION_CODE_ENUM.INVALID_SIGNATURE_POSITION,
 );
-const RFC = coded(INTEGRATION_VALIDATION_CODE_ENUM.INVALID_PARTICIPANT_RFC);
+const TAX_ID = coded(
+  INTEGRATION_VALIDATION_CODE_ENUM.INVALID_PARTICIPANT_TAX_ID,
+);
 
 /** Quién crea el documento. Se identifica SÓLO por su correo. */
 export class IntegrationCreatorDto {
@@ -124,7 +127,7 @@ export class IntegrationDocumentOptionsDto {
   @ApiPropertyOptional({
     default: true,
     description:
-      'Con `true` (el valor por omisión) los firmantes firman por `order`, que debe ser único y consecutivo desde 1.',
+      'Con `true`, o si se omite, los firmantes firman uno a la vez y cada participante con `role: SIGNER` debe incluir `order`. Con `false`, cualquier firmante pendiente puede firmar en cualquier momento y `order` no es obligatorio ni define el orden de firma. Un `WITNESS` nunca requiere `order`.',
   })
   @IsOptional()
   @IsBoolean(DOCUMENT)
@@ -153,7 +156,11 @@ export class IntegrationDocumentOptionsDto {
  * (páginas, traslapes) las aplica `IntegrationPayloadValidator`.
  */
 export class IntegrationParticipantDto {
-  @ApiProperty({ enum: INTEGRATION_PARTICIPANT_ROLE_ENUM })
+  @ApiProperty({
+    enum: INTEGRATION_PARTICIPANT_ROLE_ENUM,
+    description:
+      '`SIGNER` firma el documento: requiere `signaturePositions` y, si el documento es secuencial, `order`. `WITNESS` no requiere `order` ni participa en él, y no admite `signaturePositions`.',
+  })
   @IsEnum(INTEGRATION_PARTICIPANT_ROLE_ENUM, ROLE)
   role: INTEGRATION_PARTICIPANT_ROLE_ENUM;
 
@@ -181,9 +188,11 @@ export class IntegrationParticipantDto {
   email: string;
 
   @ApiPropertyOptional({
+    type: 'integer',
+    minimum: 1,
     example: 1,
     description:
-      'Posición del firmante en el orden de firma, desde 1. Obligatorio para cada SIGNER si `document.isSequential` es `true`; único y consecutivo.',
+      'Posición del firmante en el orden de firma: entero que inicia en 1. Obligatorio para cada `SIGNER` si `document.isSequential` es `true` o se omite. Entre los firmantes debe ser único y consecutivo, sin huecos (1, 2, 3…), y es este valor, no la posición en `participants`, lo que define el orden. Un `WITNESS` no lo requiere y no cuenta en la secuencia; con `isSequential: false` tampoco es obligatorio. Si se envía en esos casos no tiene efecto, pero debe ser un entero mayor o igual a 1.',
   })
   @IsOptional()
   @IsInt(ORDER)
@@ -211,14 +220,20 @@ export class IntegrationParticipantDto {
 
   @ApiPropertyOptional({
     example: 'LOPA800101AB1',
-    description:
-      'RFC del firmante. Sólo para un SIGNER de un documento `ADVANCED`: si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.',
+    minLength: 12,
+    maxLength: 13,
+    pattern: RFC_FORMAT_PATTERN,
+    description: [
+      'RFC mexicano del firmante: 13 caracteres para persona física o 12 para persona moral (3 o 4 letras, fecha AAMMDD y homoclave de 3). Se quitan los espacios y se pasa a mayúsculas.',
+      'Sólo se admite en un participante con `role: SIGNER` de un documento con `document.signatureType: ADVANCED`; en cualquier otro caso la respuesta es `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`, y con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.',
+      'Si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.',
+    ].join(' '),
   })
   @IsOptional()
-  @Transform(normalizeRfc)
-  @IsString(RFC)
-  @Matches(RFC_FORMAT, RFC)
-  rfc?: string;
+  @Transform(normalizeTaxIdValue)
+  @IsString(TAX_ID)
+  @Matches(RFC_FORMAT, TAX_ID)
+  taxId?: string;
 }
 
 /**
@@ -253,9 +268,10 @@ export class IntegrationDocumentPayloadDto {
  * regla. Lo valida `IntegrationPayloadValidator`.
  *
  * No existe —ni se acepta— ningún campo de organización, cuenta, usuario o permisos
- * (`organizationId`, `taxId`, `userId`, `accountId`, `createdBy`, `permissionIds`), ni el PDF en
- * base64 (`documentBase64`): la organización sale de la API key y el creador, de su correo. Si
- * alguno llega, se responde 400 en vez de ignorarlo (ver `assertNoTenantOverrides`).
+ * (`organizationId`, `taxId` fuera de un participante, `userId`, `accountId`, `createdBy`,
+ * `permissionIds`), ni el PDF en base64 (`documentBase64`): la organización sale de la API key y el
+ * creador, de su correo. Si alguno llega, se responde 400 en vez de ignorarlo (ver
+ * `assertNoTenantOverrides`). El `taxId` de un participante es otra cosa: el RFC del firmante.
  */
 export class CreateIntegrationDocumentDto {
   /**

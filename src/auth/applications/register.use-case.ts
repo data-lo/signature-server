@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { PasswordService } from 'src/common/password/password.service';
+import { PasswordPolicyService } from 'src/common/password/password-policy.service';
 import { TurnstileService } from 'src/common/turnstile/turnstile.service';
 import { UserService } from 'src/user/user.service';
 
@@ -25,12 +26,20 @@ export class RegisterUseCase {
   constructor(
     private readonly userService: UserService,
     private readonly passwordService: PasswordService,
+    private readonly passwordPolicyService: PasswordPolicyService,
     private readonly turnstileService: TurnstileService,
   ) {}
 
   async execute(dto: RegisterDto) {
     /**
-     * Primera línea del método y no un guard ni un paso posterior: el CAPTCHA existe para que
+     * La política de contraseñas va antes del CAPTCHA: el token de Turnstile es de un solo uso, y
+     * rechazar la contraseña después de canjearlo obligaría a resolver el reto otra vez. Es una
+     * validación local que no escribe ni envía nada, así que no le abre paso a ningún bot.
+     */
+    this.passwordPolicyService.assertValid(dto.password);
+
+    /**
+     * Antes de cualquier escritura y no un guard ni un paso posterior: el CAPTCHA existe para que
      * un bot no llegue siquiera a crear el pre-registro (ni a disparar el correo del OTP), así
      * que esta verificación tiene que ocurrir antes de cualquier escritura o envío.
      * `verifyToken` lanza si el token falta, es inválido, expiró o ya fue canjeado — no

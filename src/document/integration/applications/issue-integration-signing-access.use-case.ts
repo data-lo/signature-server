@@ -22,14 +22,13 @@ import { DocumentEntity } from '../../entities/document.entity';
 import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../../enum/collaborator-status.enum';
 import { DOCUMENT_STATUS_ENUM } from '../../enum/document-status.enum';
-import { collaboratorEmail } from '../../utils/collaborator-display.util';
 import { isSignerTurn } from '../../utils/next-signer.util';
 import {
-  IntegrationAmbiguousSignerException,
   IntegrationInvitationNotResendableException,
   IntegrationSignerNotFoundException,
   IntegrationSignerNotInTurnException,
 } from '../exceptions/integration-document.exceptions';
+import { findSignerByEmail } from '../utils/find-signer-by-email.util';
 
 /** Acceso temporal emitido: la URL de un solo uso y su vencimiento. */
 export interface IntegrationSigningAccess {
@@ -104,13 +103,7 @@ export class IssueIntegrationSigningAccessUseCase {
       relations: { account: { user: true } },
       order: { signingOrder: 'ASC' },
     });
-    const normalized = email.trim().toLowerCase();
-    const matches = signers.filter(
-      (signer) => collaboratorEmail(signer).toLowerCase() === normalized,
-    );
-    if (matches.length === 0) throw new IntegrationSignerNotFoundException();
-    if (matches.length > 1) throw new IntegrationAmbiguousSignerException();
-    const [collaborator] = matches;
+    const collaborator = findSignerByEmail(signers, email);
 
     if (
       document.status !== DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE ||

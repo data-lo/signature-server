@@ -10,6 +10,7 @@ import { CreditLotEntity } from '../credits/credit-lot.entity';
 import { SubscriptionBillingHistoryEntity } from '../subscriptions/subscription-billing-history.entity';
 import { BILLING_PROFILE_STATUS_ENUM } from '../enums/billing-profile-status.enum';
 import { BILLING_SOURCE_ENUM } from '../enums/billing-source.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
 import { MissingActiveAccountException } from '../exceptions/billing.exceptions';
 
 const PERSONAL_OWNER = {
@@ -152,6 +153,7 @@ describe('GetBillingAccessUseCase', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
         limits: PLAN_ENTITLEMENTS.free.limits,
@@ -203,6 +205,7 @@ describe('GetBillingAccessUseCase', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
         actions: NO_ACTIONS,
         limits: {
@@ -373,12 +376,42 @@ describe('GetBillingAccessUseCase', () => {
   });
 
   describe('saldo de documentos', () => {
+    /** Simula `SUM(remaining)` y `SUM(reserved)` por tipo de crédito. */
+    function saldos(
+      byType: Partial<
+        Record<CREDIT_TYPE_ENUM, { remaining: number; reserved: number }>
+      >,
+    ) {
+      creditLotRepository.sum.mockImplementation(
+        async (
+          column: 'remaining' | 'reserved',
+          where: { creditType: CREDIT_TYPE_ENUM }[],
+        ) => byType[where[0].creditType]?.[column] ?? null,
+      );
+    }
+
     it('suma el saldo utilizable del perfil', async () => {
       perfil();
-      creditLotRepository.sum.mockResolvedValue(18);
+      saldos({
+        [CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE]: { remaining: 18, reserved: 0 },
+      });
 
       await expect(execute()).resolves.toMatchObject({
+        credits: { document: { available: 18 }, biometric: { available: 0 } },
         creditsAvailable: 18,
+      });
+    });
+
+    it('descuenta lo reservado y separa el saldo documental del biométrico', async () => {
+      perfil();
+      saldos({
+        [CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE]: { remaining: 18, reserved: 3 },
+        [CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE]: { remaining: 10, reserved: 4 },
+      });
+
+      await expect(execute()).resolves.toMatchObject({
+        credits: { document: { available: 15 }, biometric: { available: 6 } },
+        creditsAvailable: 15,
       });
     });
 
@@ -391,26 +424,52 @@ describe('GetBillingAccessUseCase', () => {
 
       await execute();
 
-      expect(creditLotRepository.sum).toHaveBeenCalledWith('remaining', [
-        {
-          billingProfileId: 'profile-1',
-          remaining: MoreThan(0),
-          expiresAt: IsNull(),
-        },
-        {
-          billingProfileId: 'profile-1',
-          remaining: MoreThan(0),
-          expiresAt: MoreThan(expect.any(Date)),
-        },
-      ]);
+      for (const column of ['remaining', 'reserved']) {
+        expect(creditLotRepository.sum).toHaveBeenCalledWith(column, [
+          {
+            billingProfileId: 'profile-1',
+            creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+            remaining: MoreThan(0),
+            expiresAt: IsNull(),
+          },
+          {
+            billingProfileId: 'profile-1',
+            creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+            remaining: MoreThan(0),
+            expiresAt: MoreThan(expect.any(Date)),
+          },
+        ]);
+      }
     });
 
-    /** Sin lotes, `SUM` vuelve nulo; para el consumidor eso es no tener saldo. */
-    it('devuelve 0 cuando no hay ningún lote', async () => {
+    /** Sin lotes, `SUM` vuelve nulo; para el consumidor eso es no tener saldo: ceros, no nulos. */
+    it('devuelve ceros en ambos tipos cuando no hay ningún lote', async () => {
       perfil();
       creditLotRepository.sum.mockResolvedValue(null);
 
-      await expect(execute()).resolves.toMatchObject({ creditsAvailable: 0 });
+      await expect(execute()).resolves.toMatchObject({
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
+        creditsAvailable: 0,
+      });
+    });
+
+    it('creditsAvailable (obsoleto) refleja siempre credits.document.available', async () => {
+      perfil();
+      saldos({
+        [CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE]: { remaining: 9, reserved: 2 },
+        [CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE]: { remaining: 5, reserved: 0 },
+      });
+
+      const access = await execute();
+
+      expect(access.creditsAvailable).toBe(access.credits.document.available);
+      expect(access.credits).toEqual({
+        document: { available: 7 },
+        biometric: { available: 5 },
+      });
+      // El nombre público es `biometric`: ningún nombre derivado del enum interno.
+      expect(Object.keys(access.credits)).toEqual(['document', 'biometric']);
+      expect(access).not.toHaveProperty('biometricCreditsAvailable');
     });
   });
 

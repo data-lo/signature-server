@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { CloseBiometricReservationsUseCase } from 'src/billing/credits/close-biometric-reservations.use-case';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { QueryFailedError } from 'typeorm';
@@ -160,7 +161,7 @@ function sentPayload(callIndex = 0): SealDocumentDto {
 }
 
 function createMockRepository() {
-  return {
+  const repository = {
     findOne: jest.fn(),
     find: jest.fn(),
     create: jest.fn((data) => data),
@@ -168,7 +169,15 @@ function createMockRepository() {
     update: jest.fn().mockResolvedValue({ affected: 1 }),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
+    // Marcar SIGNED va en transacción (con el cierre de reservas biométricas): dentro de ella,
+    // `getRepository` devuelve este mismo mock.
+    manager: { transaction: jest.fn() },
   };
+  repository.manager.transaction.mockImplementation(
+    async (work: (manager: unknown) => unknown) =>
+      work({ getRepository: () => repository }),
+  );
+  return repository;
 }
 
 /**
@@ -246,6 +255,10 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
         SignDocumentUseCase,
         DocumentAuthorizationPolicy,
         DocumentService,
+        {
+          provide: CloseBiometricReservationsUseCase,
+          useValue: { execute: jest.fn().mockResolvedValue({ consumed: 0 }) },
+        },
         SealDocumentUseCase,
         SealApiService,
         SendCompletedSimpleSignatureToSealUseCase,

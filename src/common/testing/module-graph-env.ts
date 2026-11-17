@@ -33,6 +33,7 @@ export function setTestModuleGraphEnv(): void {
   process.env.MINIO_REJECTED_DOCUMENTS_BUCKET ??= 'rejected-documents';
   process.env.MINIO_CANCELLED_DOCUMENTS_BUCKET ??= 'cancelled-documents';
   process.env.MINIO_SIGNATURE_IMAGES_BUCKET ??= 'signature-images';
+  process.env.DOCUMENT_INDEX_ORIGIN_TYPE ??= 'digital_native';
 
   process.env.SENDGRID_API_KEY ??= 'SG.test-api-key';
   process.env.SENDGRID_FROM_EMAIL ??= 'no-reply@ejemplo.com';

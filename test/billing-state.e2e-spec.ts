@@ -9,6 +9,8 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
 
 import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
+import { GetAvailableDocumentCreditOffersUseCase } from './../src/billing/credits/get-available-document-credit-offers.use-case';
+import { CreateDocumentCreditCheckoutUseCase } from './../src/billing/checkout/create-document-credit-checkout.use-case';
 import { PaymentsController } from './../src/payments/payments.controller';
 import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-public-stripe-plans.use-case';
 import { CreateSubscriptionCheckoutUseCase } from './../src/billing/checkout/create-subscription-checkout.use-case';
@@ -24,6 +26,7 @@ import { ACCOUNT_TYPE_ENUM } from './../src/account/enums/account-type.enum';
 import { BILLING_PROFILE_STATUS_ENUM } from './../src/billing/enums/billing-profile-status.enum';
 import { BILLING_SOURCE_ENUM } from './../src/billing/enums/billing-source.enum';
 import { CREDIT_LOT_ORIGIN_ENUM } from './../src/billing/enums/credit-lot-origin.enum';
+import { CREDIT_TYPE_ENUM } from './../src/billing/enums/credit-type.enum';
 import { PLAN_ENTITLEMENTS } from './../src/billing/entitlements/plan-entitlements.config';
 import {
   createInMemoryRepository,
@@ -105,11 +108,15 @@ describe('Estado de facturación (e2e)', () => {
     billingProfileId: string;
     remaining: number;
     origin?: CREDIT_LOT_ORIGIN_ENUM;
+    creditType?: CREDIT_TYPE_ENUM;
+    reserved?: number;
     expiresAt?: Date | null;
   }) {
     await creditLots.save({
       origin: CREDIT_LOT_ORIGIN_ENUM.CURRENT_PERIOD,
+      creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
       issued: lote.remaining,
+      reserved: 0,
       expiresAt: null,
       ...lote,
     } as never);
@@ -158,6 +165,15 @@ describe('Estado de facturación (e2e)', () => {
         },
         {
           provide: ResumeSubscriptionUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        // El controller los pide para la compra de paquetes, que tiene su propia cobertura.
+        {
+          provide: GetAvailableDocumentCreditOffersUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        {
+          provide: CreateDocumentCreditCheckoutUseCase,
           useValue: { execute: jest.fn() },
         },
         GetBillingAccessUseCase,
@@ -227,6 +243,7 @@ describe('Estado de facturación (e2e)', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: '2026-09-04T00:00:00.000Z',
         currentPeriodEnd: '2026-10-04T00:00:00.000Z',
+        credits: { document: { available: 18 }, biometric: { available: 0 } },
         creditsAvailable: 18,
         actions: PLAN_ENTITLEMENTS.plus.actions,
         limits: PLAN_ENTITLEMENTS.plus.limits,
@@ -286,14 +303,69 @@ describe('Estado de facturación (e2e)', () => {
       expect(personal.body.data).toMatchObject({
         billingProfileId: 'perfil-personal',
         hasActiveSubscription: false,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
       });
       expect(organizacion.body.data).toMatchObject({
         billingProfileId: 'perfil-organizacion',
         hasActiveSubscription: true,
+        credits: { document: { available: 40 }, biometric: { available: 0 } },
         creditsAvailable: 40,
         actions: PLAN_ENTITLEMENTS.enterprise.actions,
+      });
+    });
+  });
+
+  describe('créditos por tipo', () => {
+    it('agrupa el saldo documental y el biométrico bajo credits, descontando lo reservado', async () => {
+      await darDeAltaPerfil({
+        id: 'perfil-personal',
+        personalAccountId: PERSONAL_ACCOUNT_ID,
+        status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        currentPlanType: 'plus',
+      });
+      await darDeAltaLote({
+        id: 'lote-documentos',
+        billingProfileId: 'perfil-personal',
+        remaining: 12,
+      });
+      await darDeAltaLote({
+        id: 'lote-biometrico',
+        billingProfileId: 'perfil-personal',
+        origin: CREDIT_LOT_ORIGIN_ENUM.ADD_ON,
+        creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+        remaining: 10,
+        reserved: 2,
+      });
+
+      const response = await consultarEstado();
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.credits).toEqual({
+        document: { available: 12 },
+        biometric: { available: 8 },
+      });
+      // Espejo obsoleto, mientras el frontend migra.
+      expect(response.body.data.creditsAvailable).toBe(12);
+      expect(response.body.data).not.toHaveProperty(
+        'biometricCreditsAvailable',
+      );
+    });
+
+    it('un perfil sin lotes recibe ceros en ambos tipos, no nulos', async () => {
+      await darDeAltaPerfil({
+        id: 'perfil-personal',
+        personalAccountId: PERSONAL_ACCOUNT_ID,
+        status: BILLING_PROFILE_STATUS_ENUM.ACTIVE,
+        currentPlanType: 'plus',
+      });
+
+      const response = await consultarEstado();
+
+      expect(response.body.data.credits).toEqual({
+        document: { available: 0 },
+        biometric: { available: 0 },
       });
     });
   });
@@ -312,6 +384,7 @@ describe('Estado de facturación (e2e)', () => {
         cancelAtPeriodEnd: false,
         currentPeriodStart: null,
         currentPeriodEnd: null,
+        credits: { document: { available: 0 }, biometric: { available: 0 } },
         creditsAvailable: 0,
         actions: PLAN_ENTITLEMENTS.free.actions,
         limits: PLAN_ENTITLEMENTS.free.limits,

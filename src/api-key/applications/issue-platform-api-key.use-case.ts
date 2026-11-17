@@ -30,7 +30,7 @@ export interface IssuePlatformApiKeyParams {
 /**
  * Emite API keys en nombre de la PLATAFORMA, no de una membresía: `createdByAccountId = null`.
  *
- * Es la emisión que usa el aprovisionamiento interno (`PlatformProvisioningModule`), que crea la
+ * Es la emisión que usa el aprovisionamiento interno (`PlatformModule`), que crea la
  * organización y su llave en una sola transacción y todavía no tiene —ni debe tener— un
  * administrador que la firme. Las reglas que no dependen del emisor se mantienen: los permisos
  * pasan por la misma lista blanca (`api-key-permission-policy.ts`), el secreto sólo se guarda como
@@ -96,7 +96,7 @@ export class IssuePlatformApiKeyUseCase {
    * @returns Los metadatos de la llave más `key`, la llave completa en claro, que no se vuelve a
    *   poder obtener.
    *
-   * @throws {ApiKeyNotConfiguredException} (500) Si falta `API_KEY_PEPPER`.
+   * @throws {ApiKeyNotConfiguredException} (500) Si falta `INTEGRATION_API_KEY_HMAC_SECRET`.
    * @throws {QueryFailedError} Si la base rechaza la fila (p. ej. una segunda llave activa).
    *
    * @example

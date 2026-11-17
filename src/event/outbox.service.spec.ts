@@ -137,6 +137,35 @@ describe('outbox transaccional', () => {
         }),
       );
     });
+    /**
+     * `document.index` es un contrato externo exacto: el cuerpo se guarda anidado en `payload`
+     * para que ninguna de sus claves choque con las de control (`topic`, `envelope`).
+     */
+    it('sin sobre: guarda el cuerpo anidado, marcado como envelope:false', async () => {
+      await outbox.enqueue(manager, {
+        eventType: EVENT_TYPE_ENUM.DOCUMENT_INDEX,
+        topic: 'document.index',
+        body: { clientDocumentId: 'doc-1', metadata: { signedAt: null } },
+        from: 'user-1',
+        envelope: false,
+      });
+
+      expect(managedEventRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: EVENT_TYPE_ENUM.DOCUMENT_INDEX,
+          metadata: {
+            topic: 'document.index',
+            envelope: false,
+            payload: {
+              clientDocumentId: 'doc-1',
+              metadata: { signedAt: null },
+            },
+          },
+          from: 'user-1',
+          publishedAt: null,
+        }),
+      );
+    });
   });
 
   describe('flush', () => {
@@ -196,6 +225,31 @@ describe('outbox transaccional', () => {
         publishedAt: expect.any(Date),
       });
       expect(published).toBe(0);
+    });
+    it('sin sobre: publica exactamente el cuerpo registrado, sin eventId ni actor', async () => {
+      const payload = {
+        organization: null,
+        clientDocumentId: 'doc-1',
+        metadata: { organizationId: null, signedAt: null },
+      };
+      eventRepository.find.mockResolvedValue([
+        givenPendingEvent({
+          eventType: EVENT_TYPE_ENUM.DOCUMENT_INDEX,
+          metadata: { topic: 'document.index', envelope: false, payload },
+        }),
+      ]);
+
+      const published = await outbox.flush();
+
+      expect(kafkaProducer.emit).toHaveBeenCalledWith(
+        'document.index',
+        payload,
+      );
+      expect(kafkaProducer.emit.mock.calls[0][1]).toStrictEqual(payload);
+      expect(eventRepository.update).toHaveBeenCalledWith('event-1', {
+        publishedAt: expect.any(Date),
+      });
+      expect(published).toBe(1);
     });
   });
 

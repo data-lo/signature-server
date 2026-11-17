@@ -1,4 +1,4 @@
-import { ApiPropertyOptional, PickType } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, PickType } from '@nestjs/swagger';
 import { IsEmail, IsOptional, MaxLength } from 'class-validator';
 
 import { GetDocumentsQueryDto } from '../../dto/get-documents-query.dto';
@@ -26,6 +26,21 @@ export class ListIntegrationDocumentsQueryDto extends PickType(
     'signedTo',
   ] as const,
 ) {}
+
+/**
+ * Query de `GET /integration/users/documents`: la del listado más el correo, obligatorio, del
+ * miembro de la organización cuyos documentos se piden. El id interno nunca entra ni sale.
+ */
+export class ListIntegrationUserDocumentsQueryDto extends ListIntegrationDocumentsQueryDto {
+  @ApiProperty({
+    example: 'ana@acme.mx',
+    description:
+      'Correo del usuario, miembro activo de la organización de la API key. No distingue mayúsculas.',
+  })
+  @IsEmail({}, { message: 'email debe ser un correo válido' })
+  @MaxLength(320)
+  email: string;
+}
 
 /**
  * Query de `GET /integration/documents`: la del listado más un filtro opcional por el correo del

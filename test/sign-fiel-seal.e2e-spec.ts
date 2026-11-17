@@ -1,3 +1,4 @@
+import { CloseBiometricReservationsUseCase } from '../src/billing/credits/close-biometric-reservations.use-case';
 import {
   CanActivate,
   ExecutionContext,
@@ -48,6 +49,7 @@ import { SummaryDocumentService } from './../src/document/summary-document/summa
 import { SealDocumentUseCase } from './../src/document/seal/use-cases/seal-document.use-case';
 import { SealApiService } from './../src/document/seal/services/seal-api.service';
 import { SealEntity } from './../src/document/seal/entities/seal.entity';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
@@ -162,7 +164,7 @@ function buildFielSigner(): CollaboratorEntity {
 }
 
 function createMockRepository() {
-  return {
+  const repository = {
     findOne: jest.fn(),
     find: jest.fn(),
     create: jest.fn((data) => data),
@@ -170,7 +172,15 @@ function createMockRepository() {
     update: jest.fn().mockResolvedValue({ affected: 1 }),
     delete: jest.fn(),
     createQueryBuilder: jest.fn(),
+    // Marcar SIGNED va en transacción (con el cierre de reservas biométricas): dentro de ella,
+    // `getRepository` devuelve este mismo mock.
+    manager: { transaction: jest.fn() },
   };
+  repository.manager.transaction.mockImplementation(
+    async (work: (manager: unknown) => unknown) =>
+      work({ getRepository: () => repository }),
+  );
+  return repository;
 }
 
 /**
@@ -236,6 +246,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     collaboratorRepository.find.mockResolvedValue([buildFielSigner()]);
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
       controllers: [DocumentController],
       providers: [
         // El endpoint bajo prueba entra por su caso de uso real; los otros 16 del controller se
@@ -245,6 +256,10 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         DocumentAuthorizationPolicy,
         ...DOCUMENT_CONTROLLER_USE_CASE_STUBS,
         DocumentService,
+        {
+          provide: CloseBiometricReservationsUseCase,
+          useValue: { execute: jest.fn().mockResolvedValue({ consumed: 0 }) },
+        },
         SealDocumentUseCase,
         SealApiService,
         {

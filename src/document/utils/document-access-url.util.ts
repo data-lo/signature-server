@@ -45,6 +45,31 @@ export function buildPublicDocumentUrl(documentId: string): string {
 }
 
 /**
+ * Enlace del correo "te agregaron como testigo": la vista pública del documento
+ * (`/public/documents/:id`), que no pide sesión ni cuenta.
+ *
+ * El testigo sólo consulta, así que no pasa por `/access-document` —que lo mandaba a `/login`—. La
+ * vista pública ya decide qué publica según el estado del documento: mientras no esté firmado,
+ * sólo su nombre y quiénes lo firman; firmado, el PDF final y la evidencia.
+ *
+ * No lleva el id del colaborador ni el correo: la vista es la misma para cualquier visitante, así
+ * que no darían acceso a nada y sólo expondrían quién es el testigo a quien vea el enlace.
+ *
+ * @param documentId - Documento al que se agregó al testigo.
+ * @returns `${PUBLIC_WEB_APP_URL}/public/documents/<documentId>`.
+ *
+ * @throws Nada.
+ *
+ * @example
+ * ```ts
+ * buildWitnessDocumentUrl('doc-1'); // 'https://app.firmalo.mx/public/documents/doc-1'
+ * ```
+ */
+export function buildWitnessDocumentUrl(documentId: string): string {
+  return buildPublicDocumentUrl(documentId);
+}
+
+/**
  * Enlace de la invitación individual de un firmante: la pantalla pública `/sign/:token`.
  *
  * Lleva sólo el token, nunca el id del documento ni del colaborador: quien tenga el enlace no

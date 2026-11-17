@@ -1,3 +1,13 @@
+/**
+ * Esta e2e persiste en memoria, sin query builder de inserción: el ledger real se prueba contra
+ * Postgres en `credit-reservations.e2e-spec.ts`.
+ */
+jest.mock('./../src/billing/credits/credit-ledger.util', () => ({
+  ...jest.requireActual('./../src/billing/credits/credit-ledger.util'),
+  recordLotIssued: jest.fn().mockResolvedValue(true),
+  recordCreditLedgerEntry: jest.fn().mockResolvedValue(true),
+}));
+
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -17,6 +27,7 @@ import { StripePaymentService } from './../src/payments/stripe/stripe-payment.se
 import { SubscriptionBillingService } from './../src/billing/subscriptions/subscription-billing.service';
 import { RegisterSubscriptionBillingUseCase } from './../src/billing/subscriptions/register-subscription-billing.use-case';
 import { FinalizeSubscriptionFromStripeUseCase } from './../src/billing/subscriptions/finalize-subscription-from-stripe.use-case';
+import { RegisterDocumentCreditPurchaseUseCase } from './../src/billing/credits/register-document-credit-purchase.use-case';
 import { SubscriptionBillingHistoryEntity } from './../src/billing/subscriptions/subscription-billing-history.entity';
 import { BillingCatalogService } from './../src/billing/catalog/billing-catalog.service';
 import { CatalogSyncService } from './../src/billing/catalog/catalog-sync.service';
@@ -42,6 +53,7 @@ import {
   createInMemoryRepository,
   InMemoryRepository,
 } from './billing-e2e-fixtures';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 /**
  * Secreto de firma de esta prueba. NO es el del despliegue: la firma se genera acá mismo con el
@@ -248,6 +260,7 @@ describe('Webhook de Stripe (e2e)', () => {
     );
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [MetricsModule.register({ enabled: false, path: '/metrics' })],
       controllers: [StripeWebhookController],
       providers: [
         ReceiveStripeWebhookUseCase,
@@ -263,6 +276,7 @@ describe('Webhook de Stripe (e2e)', () => {
          */
         RegisterSubscriptionBillingUseCase,
         FinalizeSubscriptionFromStripeUseCase,
+        RegisterDocumentCreditPurchaseUseCase,
         BillingCatalogService,
         CatalogSyncService,
         CheckoutOrderService,

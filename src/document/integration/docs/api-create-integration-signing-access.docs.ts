@@ -41,14 +41,14 @@ export function ApiCreateIntegrationSigningAccess() {
     ApiOperation({
       summary: 'Generar un acceso temporal de firma para un firmante',
       description:
-        'Requiere `DOCUMENT.CREATE`. Llamar desde el backend del tercero, nunca desde el navegador. Devuelve una URL `/sign/launch/:token` de un solo uso que vence en 5 minutos. El correo sólo localiza al firmante: al abrir la URL, la plataforma le envía un código a ese correo y no muestra el documento ni permite firmar sin validarlo. Diez accesos cada 10 minutos por firmante.',
+        'Llamar desde el backend del tercero, nunca desde el navegador. Devuelve una URL `/sign/launch/:token` de un solo uso que vence en 5 minutos. El correo sólo localiza al firmante: al abrir la URL, la plataforma le envía un código a ese correo y no muestra el documento ni permite firmar sin validarlo. Diez accesos cada 10 minutos por firmante.',
     }),
     ApiParam({
       name: 'documentId',
       format: 'uuid',
       example: '2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
     }),
-    ApiIntegrationCommonResponses('DOCUMENT.CREATE'),
+    ApiIntegrationCommonResponses(),
     ApiResponse({
       status: 200,
       description: 'Acceso temporal emitido',

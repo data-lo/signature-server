@@ -11,7 +11,10 @@ import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { SIGNING_AUTHORIZATION_ENUM } from '../enum/signing-authorization.enum';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
 import { InvalidGuestSigningAccessException } from '../exceptions/guest-signing-access.exceptions';
-import { CertificateSubjectMismatchException } from '../exceptions/signing-validation.exceptions';
+import {
+  CertificateSubjectMismatchException,
+  CertificateTaxIdMismatchException,
+} from '../exceptions/signing-validation.exceptions';
 import {
   PublicInvitationSigningActor,
   signingActorReference,
@@ -336,6 +339,85 @@ describe('SignDocumentUseCase — firma por SigningActor', () => {
         'c-1',
         VERIFICATION_EVENT_ENUM.PUBLIC_SIGNING_ACCESS,
       );
+    });
+  });
+
+  /** Historia "Validar RFC del firmante FIEL contra el certificado al momento de firmar". */
+  describe('RFC registrado del firmante FIEL', () => {
+    const authorization = {
+      userId: 'user-1',
+      accountId: 'acc-1',
+      organizationId: 'org-1',
+    } as never;
+
+    const signAuthenticated = () =>
+      useCase.execute(
+        'd-1',
+        'user-1',
+        { password: 'x' } as never,
+        GEO,
+        authorization,
+      );
+
+    beforeEach(() => {
+      signer.signatureType = SIGNATURE_TYPE_ENUM.FIEL;
+      signer.accountId = 'acc-1';
+      signer.account = { user: { id: 'user-1' } };
+      documentService.validateAndSignWithEfirma.mockResolvedValue({
+        certificate: { rfc: 'LOPA800101AB1', name: 'ANA LOPEZ PEREZ' },
+      });
+    });
+
+    it('coincidencia: firma, aunque el registrado difiera en mayúsculas y espacios', async () => {
+      signer.taxId = ' lopa 800101 ab1 ';
+
+      await signAuthenticated();
+
+      expect(collaboratorRepository.update).toHaveBeenCalled();
+    });
+
+    it('discrepancia: bloquea la firma con un mensaje claro y no gasta el código', async () => {
+      signer.taxId = 'MAML900101XY2';
+
+      const signing = signAuthenticated();
+
+      await expect(signing).rejects.toBeInstanceOf(
+        CertificateTaxIdMismatchException,
+      );
+      await expect(signing).rejects.toThrow(
+        'no coincide con el RFC registrado para este firmante',
+      );
+      expect(hasConsumedCode).not.toHaveBeenCalled();
+      expect(collaboratorRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('sin RFC registrado: firma con cualquier certificado, como hasta ahora', async () => {
+      signer.taxId = null;
+
+      await signAuthenticated();
+
+      expect(collaboratorRepository.update).toHaveBeenCalled();
+    });
+
+    it('sesión pública: también bloquea la discrepancia', async () => {
+      signer.taxId = 'MAML900101XY2';
+      signer.accountId = 'acc-prov';
+      signer.account = { user: { id: 'user-prov' } };
+
+      await expect(
+        useCase.sign(
+          publicActor(),
+          {
+            documentId: 'd-1',
+            geolocation: GEO,
+            documentHash: HASH,
+            advancedSignatureInput: { password: 'x' },
+            metadata: METADATA,
+          },
+          SIGNATURE_TYPE_ENUM.FIEL,
+        ),
+      ).rejects.toBeInstanceOf(CertificateTaxIdMismatchException);
+      expect(txCollaborators.update).not.toHaveBeenCalled();
     });
   });
 

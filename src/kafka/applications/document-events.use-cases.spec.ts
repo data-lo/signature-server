@@ -66,6 +66,7 @@ describe('consumidor de eventos de documento', () => {
   const payload: DocumentEventPayload = {
     documentId: 'doc-1',
     fileName: 'contrato.pdf',
+    organization: null,
     actorUserId: 'user-1',
     occurredAt: '2026-01-01T00:00:00.000Z',
   };

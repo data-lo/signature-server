@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AccountEntity } from 'src/account/entities/account.entity';
 import { OrganizationEntity } from 'src/account/entities/organization.entity';
+import { IntegrationSettingsEntity } from 'src/integration-settings/entities/integration-settings.entity';
 import { PermissionEntity } from 'src/roles/entities/permission.entity';
 
 import { ApiKeySecretService } from './api-key-secret.service';
@@ -17,6 +18,7 @@ import { ApiKeyEntity } from './entities/api-key.entity';
 import { ApiKeyPermissionGuard } from './guards/api-key-permission.guard';
 import { OrganizationApiKeyGuard } from './guards/organization-api-key.guard';
 import { OrganizationApiKeysController } from './organization-api-keys.controller';
+import { InternalOrganizationApiKeysController } from './internal-organization-api-keys.controller';
 
 /**
  * API keys de organización: el modelo y su administración interna
@@ -43,9 +45,15 @@ import { OrganizationApiKeysController } from './organization-api-keys.controlle
       OrganizationEntity,
       PermissionEntity,
       AccountEntity,
+      // `OrganizationApiKeyGuard` carga `organization.integrationSettings` y `issueApiKey` crea la
+      // configuración inicial: la entidad tiene que estar registrada donde se usa el guard.
+      IntegrationSettingsEntity,
     ]),
   ],
-  controllers: [OrganizationApiKeysController],
+  controllers: [
+    OrganizationApiKeysController,
+    InternalOrganizationApiKeysController,
+  ],
   providers: [
     ApiKeyService,
     ApiKeySecretService,

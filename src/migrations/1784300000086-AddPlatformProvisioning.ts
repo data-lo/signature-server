@@ -2,7 +2,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /**
  * Aprovisionamiento interno de cuentas provisionales Enterprise
- * (`POST /api/v1/internal/organizations/provision`).
+ * (`POST /api/v1/platform/organizations/provision`).
  *
  * 1. `api_keys.created_by_account_id` pasa a ser nullable: una llave emitida por la plataforma
  *    (el aprovisionamiento interno) no la emite ninguna membresía. Las que emite un administrador

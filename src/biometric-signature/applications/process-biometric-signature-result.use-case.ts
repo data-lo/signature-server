@@ -2,9 +2,12 @@ import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Not, Repository } from 'typeorm';
 
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
 import { SignDocumentUseCase } from 'src/document/applications/sign-document.use-case';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
+import { DocumentEntity } from 'src/document/entities/document.entity';
 import { COLLABORATOR_STATUS_ENUM } from 'src/document/enum/collaborator-status.enum';
+import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
 
 import { BiometricSignatureAttemptEntity } from '../entities/biometric-signature-attempt.entity';
 import {
@@ -71,7 +74,10 @@ export class ProcessBiometricSignatureResultUseCase {
     private readonly attemptRepository: Repository<BiometricSignatureAttemptEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    @InjectRepository(DocumentEntity)
+    private readonly documentRepository: Repository<DocumentEntity>,
     private readonly signDocument: SignDocumentUseCase,
+    private readonly finalizeCredits: FinalizeBiometricSignatureCreditsUseCase,
   ) {}
 
   /**
@@ -81,10 +87,12 @@ export class ProcessBiometricSignatureResultUseCase {
    *   simultáneas no aprueban dos veces). Se exige que el veredicto traiga aprobadas las pruebas
    *   del tipo de firmante y se registra la firma vía `SignDocumentUseCase.executeBiometric`, que
    *   revalida hash, estado y turno antes del claim atómico `PENDING → SIGNED`.
+   *   Con la firma registrada se consume el crédito biométrico del intento y, si completó el
+   *   documento, el documental (`FinalizeBiometricSignatureCreditsUseCase`).
    * - **Rechazado, vencido o fallido**: sólo se mueve el intento; el colaborador sigue en
-   *   `PENDING` y puede reintentar con otra sesión.
-   * - Un estado viejo nunca pisa uno terminal, y una reentrega de una firma ya registrada no hace
-   *   nada.
+   *   `PENDING` y puede reintentar con otra sesión. El crédito biométrico del intento se libera.
+   * - Un estado viejo nunca pisa uno terminal, y una reentrega de una firma ya registrada no
+   *   vuelve a firmar: sólo reintenta el cobro, que es idempotente.
    *
    * @param attempt - Intento de la sesión del webhook.
    * @param payload - Cuerpo del webhook de Didit, ya autenticado y validado.
@@ -224,11 +232,22 @@ export class ProcessBiometricSignatureResultUseCase {
       this.logger.log(
         `El colaborador ${attempt.collaboratorId} ya está firmado: la aprobación ${attempt.id} no vuelve a firmar.`,
       );
+      /**
+       * Reentrega de una firma ya registrada: la entrega anterior pudo caerse entre firmar y
+       * cobrar. El cobro es idempotente, así que repetirlo no cobra dos veces. Con un solo intento
+       * abierto por colaborador y PDF, el intento aprobado es el que firmó.
+       */
+      await this.settleSignedAttempt(
+        attempt,
+        await this.isDocumentSigned(attempt),
+      );
       return;
     }
 
+    let documentCompleted: boolean;
     try {
-      await this.signDocument.executeBiometric(attempt.id);
+      const signed = await this.signDocument.executeBiometric(attempt.id);
+      documentCompleted = signed.data?.documentCompleted === true;
     } catch (error) {
       if (!this.isBusinessRejection(error)) {
         throw error;
@@ -242,6 +261,10 @@ export class ProcessBiometricSignatureResultUseCase {
         where: { id: attempt.collaboratorId },
       });
       if (current?.status === COLLABORATOR_STATUS_ENUM.SIGNED) {
+        await this.settleSignedAttempt(
+          attempt,
+          await this.isDocumentSigned(attempt),
+        );
         return;
       }
 
@@ -252,10 +275,25 @@ export class ProcessBiometricSignatureResultUseCase {
         failureReason: reason,
         completedAt: new Date(),
       });
+      await this.releaseCredits(attempt.id, 'SIGNATURE_NOT_REGISTERED');
       return;
     }
 
+    await this.settleSignedAttempt(attempt, documentCompleted);
+
     // Cualquier otra sesión que el firmante hubiera dejado abierta ya no tiene nada que firmar.
+    const leftovers = await this.attemptRepository.find({
+      where: {
+        collaboratorId: attempt.collaboratorId,
+        id: Not(attempt.id),
+        status: In([...ACTIVE_BIOMETRIC_SIGNATURE_ATTEMPT_STATUSES]),
+      },
+      select: { id: true },
+    });
+    if (leftovers.length === 0) {
+      return;
+    }
+
     await this.attemptRepository.update(
       {
         collaboratorId: attempt.collaboratorId,
@@ -268,6 +306,88 @@ export class ProcessBiometricSignatureResultUseCase {
         completedAt: new Date(),
       },
     );
+    for (const leftover of leftovers) {
+      await this.releaseCredits(leftover.id, 'SIGNED_WITH_ANOTHER_ATTEMPT');
+    }
+  }
+
+  /**
+   * Cobra la firma registrada por un intento: su crédito biométrico y, si completó el documento,
+   * el documental (ver `FinalizeBiometricSignatureCreditsUseCase`). Idempotente ante reentregas.
+   *
+   * Si el cobro falla, el error se propaga: la entrega queda en FAILED, Didit la reintenta y la
+   * reentrega llega por la rama "ya está firmado", que vuelve a intentar sólo el cobro.
+   *
+   * @param attempt - Intento aprobado cuya firma quedó registrada.
+   * @param documentCompleted - Si el documento quedó firmado por todos.
+   * @returns Nada.
+   *
+   * @throws {Error} Si un lote no cuadra con su reserva.
+   *
+   * @example
+   * ```ts
+   * await this.settleSignedAttempt(attempt, true);
+   * ```
+   */
+  private async settleSignedAttempt(
+    attempt: BiometricSignatureAttemptEntity,
+    documentCompleted: boolean,
+  ): Promise<void> {
+    await this.finalizeCredits.onSignatureSucceeded({
+      biometricSignatureAttemptId: attempt.id,
+      documentId: attempt.documentId,
+      documentCompleted,
+    });
+  }
+
+  /**
+   * Indica si el documento del intento ya quedó firmado por todos.
+   *
+   * @param attempt - Intento.
+   * @returns `true` si el documento está en `SIGNED`.
+   *
+   * @example
+   * ```ts
+   * await this.isDocumentSigned(attempt); // true
+   * ```
+   */
+  private async isDocumentSigned(
+    attempt: BiometricSignatureAttemptEntity,
+  ): Promise<boolean> {
+    const document = await this.documentRepository.findOne({
+      where: { id: attempt.documentId },
+      select: { id: true, status: true },
+    });
+    return document?.status === DOCUMENT_STATUS_ENUM.SIGNED;
+  }
+
+  /**
+   * Devuelve al saldo el crédito biométrico de un intento que terminó sin firma. Un fallo aquí no
+   * tumba la entrega: la reserva vence y la recoge el job de reservas.
+   *
+   * @param attemptId - Intento cerrado sin firma.
+   * @param reason - Motivo para el ledger.
+   * @returns Nada.
+   *
+   * @example
+   * ```ts
+   * await this.releaseCredits('att-1', 'DIDIT_DECLINED');
+   * ```
+   */
+  private async releaseCredits(
+    attemptId: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.finalizeCredits.onAttemptFailed({
+        biometricSignatureAttemptId: attemptId,
+        reason,
+      });
+    } catch (error) {
+      this.logger.error(
+        `No se pudo liberar el crédito biométrico del intento ${attemptId}: ${error}`,
+      );
+    }
   }
 
   /**
@@ -335,7 +455,7 @@ export class ProcessBiometricSignatureResultUseCase {
       failureReason: string | null;
     },
   ): Promise<void> {
-    await this.attemptRepository.update(
+    const closed = await this.attemptRepository.update(
       { id: attempt.id, status: attempt.status },
       {
         status,
@@ -344,6 +464,11 @@ export class ProcessBiometricSignatureResultUseCase {
         completedAt: new Date(),
       },
     );
+
+    // Sólo quien cerró el intento libera su crédito; una entrega perdedora no tiene nada que hacer.
+    if (closed.affected === 1) {
+      await this.releaseCredits(attempt.id, `DIDIT_${status}`);
+    }
   }
 
   /**

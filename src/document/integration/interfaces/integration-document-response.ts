@@ -105,6 +105,15 @@ export class IntegrationDocumentParticipantData {
 
   @ApiProperty({ example: 1, description: 'Orden de firma, desde 1' })
   order: number;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: null,
+    description:
+      'RFC registrado para el firmante. Sólo de un firmante `FIEL` que lo tenga; `null` en cualquier otro caso',
+  })
+  taxId: string | null;
 }
 
 /** Documento creado por `POST /integration/documents`. */
@@ -169,7 +178,7 @@ export class IntegrationErrorData {
   @ApiProperty({
     example: 'DUPLICATE_PARTICIPANT_EMAIL',
     description:
-      'Código estable del error (p. ej. `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED`, `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`, `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`, `API_KEY_INVALID`, `INTERNAL_ERROR`)',
+      'Código estable del error (p. ej. `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED`, `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`, `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`, `INVALID_PARTICIPANT_TAX_ID`, `PARTICIPANT_TAX_ID_NOT_ALLOWED`, `UNSUPPORTED_PARTICIPANT_FIELD`, `API_KEY_INVALID`, `INTERNAL_ERROR`)',
   })
   code: string;
 
@@ -221,13 +230,13 @@ export class IntegrationSigningAccessResponse extends BaseResponse<IntegrationSi
   data: IntegrationSigningAccessData;
 }
 
-/** Resultado de `POST …/collaborators/:collaboratorId/resend-invitation`. Nunca trae el enlace. */
+/** Resultado de `POST …/collaborators/resend-invitation`. Nunca trae el enlace ni ids internos. */
 export class IntegrationResentInvitationData {
   @ApiProperty({
-    format: 'uuid',
-    example: '5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f',
+    example: 'ana@correo.com',
+    description: 'Correo del firmante al que se reenvió la invitación',
   })
-  collaboratorId: string;
+  email: string;
 
   @ApiProperty({
     example: '2026-11-02T12:00:00.000Z',

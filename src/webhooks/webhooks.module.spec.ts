@@ -17,15 +17,22 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
 import { CheckoutOrderEntity } from 'src/billing/checkout/checkout-order.entity';
 import { CreditLotEntity } from 'src/billing/credits/credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from 'src/billing/credits/document-credit-consumption.entity';
+import { CreditLedgerEntryEntity } from 'src/billing/credits/credit-ledger-entry.entity';
+import { CreditReservationEntity } from 'src/billing/credits/credit-reservation.entity';
 import { SubscriptionBillingHistoryEntity } from 'src/billing/subscriptions/subscription-billing-history.entity';
 import { BiometricSignatureModule } from 'src/biometric-signature/biometric-signature.module';
 import { ProcessBiometricSignatureResultUseCase } from 'src/biometric-signature/applications/process-biometric-signature-result.use-case';
 import { BiometricSignatureAttemptService } from 'src/biometric-signature/services/biometric-signature-attempt.service';
 import { WebhooksModule } from './webhooks.module';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
+import { DocumentIndexingJobEntity } from 'src/document/entities/document-indexing-job.entity';
 import { ReceiveDiditWebhookUseCase } from './applications/receive-didit-webhook.use-case';
+import { ReceiveIndexerWebhookUseCase } from './applications/receive-indexer-webhook.use-case';
 import { DiditWebhookController } from './didit-webhook.controller';
+import { MetricsModule } from 'src/metrics/metrics.module';
+import { WebhookBacklogMetricsCollector } from 'src/metrics/webhook-backlog-metrics.collector';
 import { StripeWebhookController } from './stripe-webhook.controller';
+import { IndexerWebhookController } from './indexer-webhook.controller';
 
 /**
  * Vale la pena tenerlo: los errores de cableado de Nest (un provider que dejó de exportarse,
@@ -80,12 +87,15 @@ describe('WebhooksModule', () => {
       imports: [
         ConfigModule.forRoot({ isGlobal: true }),
         StubDataSourceModule,
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         WebhooksModule,
       ],
     })
       .overrideModule(BiometricSignatureModule)
       .useModule(StubBiometricSignatureModule)
       .overrideProvider(getRepositoryToken(WebhookEventEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(DocumentIndexingJobEntity))
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(AccountEntity))
       .useValue(repositoryStub)
@@ -113,6 +123,10 @@ describe('WebhooksModule', () => {
       .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(DocumentCreditConsumptionEntity))
       .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CreditLedgerEntryEntity))
+      .useValue(repositoryStub)
+      .overrideProvider(getRepositoryToken(CreditReservationEntity))
+      .useValue(repositoryStub)
       .overrideProvider(getRepositoryToken(SubscriptionBillingHistoryEntity))
       .useValue(repositoryStub)
       .overrideProvider(RedisService)
@@ -122,5 +136,8 @@ describe('WebhooksModule', () => {
     expect(moduleRef.get(DiditWebhookController)).toBeDefined();
     expect(moduleRef.get(StripeWebhookController)).toBeDefined();
     expect(moduleRef.get(ReceiveDiditWebhookUseCase)).toBeDefined();
+    expect(moduleRef.get(WebhookBacklogMetricsCollector)).toBeDefined();
+    expect(moduleRef.get(IndexerWebhookController)).toBeDefined();
+    expect(moduleRef.get(ReceiveIndexerWebhookUseCase)).toBeDefined();
   });
 });

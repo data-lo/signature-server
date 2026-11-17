@@ -10,6 +10,9 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as request from 'supertest';
 
 import { applyGlobalApiPrefix } from './../src/common/constants/api-prefix.constants';
+import { GetAvailableDocumentCreditOffersUseCase } from './../src/billing/credits/get-available-document-credit-offers.use-case';
+import { CreateDocumentCreditCheckoutUseCase } from './../src/billing/checkout/create-document-credit-checkout.use-case';
+import { StripeCustomerService } from './../src/billing/profiles/stripe-customer.service';
 import { PaymentsController } from './../src/payments/payments.controller';
 import { GetPublicStripePlansUseCase } from './../src/payments/applications/get-public-stripe-plans.use-case';
 import { StripePaymentService } from './../src/payments/stripe/stripe-payment.service';
@@ -184,7 +187,17 @@ describe('Checkout de suscripción (e2e)', () => {
           provide: ResumeSubscriptionUseCase,
           useValue: { execute: jest.fn() },
         },
+        // El controller los pide para la compra de paquetes, que tiene su propia cobertura.
+        {
+          provide: GetAvailableDocumentCreditOffersUseCase,
+          useValue: { execute: jest.fn() },
+        },
+        {
+          provide: CreateDocumentCreditCheckoutUseCase,
+          useValue: { execute: jest.fn() },
+        },
         CreateSubscriptionCheckoutUseCase,
+        StripeCustomerService,
         // Lo pide el controller para `GET /billing-state`, que tiene su propia prueba e2e;
         // acá va simulado para no arrastrar sus repositorios a una prueba que no lo ejercita.
         {
@@ -306,7 +319,6 @@ describe('Checkout de suscripción (e2e)', () => {
             billingProfileId: perfil.id,
             planType: PLAN_TYPE,
             catalogPriceId: CATALOG_PRICE_ID,
-            accountId: PERSONAL_ACCOUNT_ID,
           },
         }),
       );

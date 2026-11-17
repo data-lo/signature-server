@@ -1,5 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
+import { InsufficientBiometricCreditsException } from 'src/billing/exceptions/billing.exceptions';
 import { BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM } from '../enums/biometric-signature-attempt-status.enum';
 import { BiometricSignatureAttemptService } from './biometric-signature-attempt.service';
 import {
@@ -31,6 +32,8 @@ describe('BiometricSessionLauncherService', () => {
     openAccountSession: jest.Mock;
     openGuestSession: jest.Mock;
   };
+  let reserveCredits: { execute: jest.Mock };
+  let finalizeCredits: { onAttemptFailed: jest.Mock };
   let launcher: BiometricSessionLauncherService;
 
   function params(overrides: Partial<BiometricLaunchParams> = {}) {
@@ -78,19 +81,32 @@ describe('BiometricSessionLauncherService', () => {
         raw: { session_id: 'didit-1' },
       }),
     };
+    reserveCredits = {
+      execute: jest.fn(async ({ biometricSignatureAttemptId }) => ({
+        id: `res-${biometricSignatureAttemptId}`,
+        status: 'ACTIVE',
+      })),
+    };
+    finalizeCredits = { onAttemptFailed: jest.fn().mockResolvedValue(true) };
     launcher = new BiometricSessionLauncherService(
       repository as never,
       new BiometricSignatureAttemptService(repository as never),
       didit as never,
+      reserveCredits as never,
+      finalizeCredits as never,
     );
   });
 
-  it('guarda el intento con su evidencia ANTES de llamar a Didit', async () => {
+  it('guarda el intento y reserva su crédito biométrico ANTES de llamar a Didit', async () => {
     const order: string[] = [];
     repository.save.mockImplementation(async (data) => {
       order.push('save');
       stored['a-1'] = { ...data, id: 'a-1' };
       return stored['a-1'];
+    });
+    reserveCredits.execute.mockImplementation(async () => {
+      order.push('reserve');
+      return { id: 'res-a-1', status: 'ACTIVE' };
     });
     didit.openGuestSession.mockImplementation(async () => {
       order.push('didit');
@@ -105,7 +121,11 @@ describe('BiometricSessionLauncherService', () => {
 
     const session = await launcher.launch(params());
 
-    expect(order).toEqual(['save', 'didit']);
+    expect(order).toEqual(['save', 'reserve', 'didit']);
+    expect(reserveCredits.execute).toHaveBeenCalledWith({
+      biometricSignatureAttemptId: 'a-1',
+      documentId: 'd-1',
+    });
     expect(repository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         documentId: 'd-1',
@@ -186,6 +206,28 @@ describe('BiometricSessionLauncherService', () => {
     );
     expect(repository.save).not.toHaveBeenCalled();
     expect(didit.openGuestSession).not.toHaveBeenCalled();
+    // Reintento de la sesión: la reserva idempotente del mismo intento, no una nueva.
+    expect(reserveCredits.execute).toHaveBeenCalledTimes(1);
+    expect(reserveCredits.execute).toHaveBeenCalledWith({
+      biometricSignatureAttemptId: 'a-0',
+      documentId: 'd-1',
+    });
+  });
+
+  it('sin crédito biométrico, el intento queda en FAILED y Didit no se llama', async () => {
+    const noCredits = new InsufficientBiometricCreditsException(1, 0);
+    reserveCredits.execute.mockRejectedValue(noCredits);
+
+    await expect(launcher.launch(params())).rejects.toBe(noCredits);
+
+    expect(didit.openGuestSession).not.toHaveBeenCalled();
+    expect(repository.update).toHaveBeenCalledWith(
+      'a-1',
+      expect.objectContaining({
+        status: BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.FAILED,
+      }),
+    );
+    expect(finalizeCredits.onAttemptFailed).not.toHaveBeenCalled();
   });
 
   it('cierra la sesión abierta sobre otro PDF y abre una nueva', async () => {
@@ -206,6 +248,10 @@ describe('BiometricSessionLauncherService', () => {
         failureReason: expect.stringContaining('documento cambió'),
       }),
     );
+    expect(finalizeCredits.onAttemptFailed).toHaveBeenCalledWith({
+      biometricSignatureAttemptId: 'a-0',
+      reason: 'ATTEMPT_CLOSED_UNUSABLE',
+    });
     expect(didit.openGuestSession).toHaveBeenCalled();
   });
 
@@ -223,6 +269,8 @@ describe('BiometricSessionLauncherService', () => {
       expect.objectContaining({ attemptId: 'a-w', reused: true }),
     );
     expect(didit.openGuestSession).not.toHaveBeenCalled();
+    // La reserva es del intento ganador, que la hace en su propia petición.
+    expect(reserveCredits.execute).not.toHaveBeenCalled();
   });
 
   it('responde 409 si choca y ya no hay intento abierto que devolver', async () => {
@@ -233,7 +281,7 @@ describe('BiometricSessionLauncherService', () => {
     );
   });
 
-  it('si Didit falla, el intento queda en FAILED y el error se propaga', async () => {
+  it('si Didit falla antes de crear la sesión, el intento queda en FAILED, libera su crédito y el error se propaga', async () => {
     didit.openGuestSession.mockRejectedValue(new Error('Didit caído'));
 
     await expect(launcher.launch(params())).rejects.toThrow('Didit caído');
@@ -244,5 +292,16 @@ describe('BiometricSessionLauncherService', () => {
         failureReason: 'Didit caído',
       }),
     );
+    expect(finalizeCredits.onAttemptFailed).toHaveBeenCalledWith({
+      biometricSignatureAttemptId: 'a-1',
+      reason: 'DIDIT_SESSION_NOT_CREATED',
+    });
+  });
+
+  it('un fallo al liberar no tapa el error de Didit', async () => {
+    didit.openGuestSession.mockRejectedValue(new Error('Didit caído'));
+    finalizeCredits.onAttemptFailed.mockRejectedValue(new Error('base caída'));
+
+    await expect(launcher.launch(params())).rejects.toThrow('Didit caído');
   });
 });

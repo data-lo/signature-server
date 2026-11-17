@@ -340,6 +340,28 @@ export class EmailService {
    * de watchers a NOTIFIED..."). `creatorEmail` va como replyTo, igual que
    * `sendDocumentPendingNotification`: quien responda preguntando de qué documento se trata llega
    * directo a quien lo creó.
+   *
+   * @param to - Correo del testigo.
+   * @param witnessName - Nombre del testigo, para el saludo.
+   * @param documentName - Nombre del documento.
+   * @param creatorName - Nombre de quien creó el documento.
+   * @param creatorEmail - Correo de quien creó el documento; se usa como replyTo.
+   * @param documentUrl - Vista pública del documento, sin sesión (`buildWitnessDocumentUrl`).
+   * @returns Nada, una vez que SendGrid aceptó el mensaje.
+   *
+   * @throws {InternalServerErrorException} Si SendGrid rechaza o no recibe el envío.
+   *
+   * @example
+   * ```ts
+   * await emailService.sendDocumentWitnessAddedNotification(
+   *   'testigo@correo.com',
+   *   'Ana López',
+   *   'contrato.pdf',
+   *   'Sara Ramírez',
+   *   'sara@acme.mx',
+   *   buildWitnessDocumentUrl('doc-1'),
+   * );
+   * ```
    */
   async sendDocumentWitnessAddedNotification(
     to: string,
@@ -347,7 +369,7 @@ export class EmailService {
     documentName: string,
     creatorName: string,
     creatorEmail: string,
-    accessUrl: string,
+    documentUrl: string,
   ): Promise<void> {
     await this.sendEmail(
       to,
@@ -356,7 +378,7 @@ export class EmailService {
         witnessName,
         documentName,
         creatorName,
-        accessUrl,
+        documentUrl,
       ),
       EmailType.NOTIFICATION,
       creatorEmail,

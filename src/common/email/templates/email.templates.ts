@@ -342,20 +342,42 @@ export const documentInvitationTemplate = (
     `,
   });
 
-/** Sin lenguaje de firma a propósito: un testigo sólo puede consultar el documento. */
+/**
+ * Aviso al testigo de que lo agregaron a un documento.
+ *
+ * Sin lenguaje de firma a propósito: un testigo sólo consulta el documento. Dice que participa
+ * como testigo y que el enlace abre el documento sin cuenta ni inicio de sesión, porque apunta a
+ * la vista pública (ver `buildWitnessDocumentUrl`).
+ *
+ * @param witnessName - Nombre del testigo, tal como se le saluda.
+ * @param documentName - Nombre del documento.
+ * @param creatorName - Nombre de quien creó el documento.
+ * @param documentUrl - Vista pública del documento (`buildWitnessDocumentUrl`).
+ * @returns El HTML completo del correo.
+ *
+ * @example
+ * ```ts
+ * const html = documentWitnessAddedTemplate(
+ *   'Ana López',
+ *   'contrato.pdf',
+ *   'Sara Ramírez',
+ *   'https://app.firmalo.mx/public/documents/doc-1',
+ * );
+ * ```
+ */
 export const documentWitnessAddedTemplate = (
   witnessName: string,
   documentName: string,
   creatorName: string,
-  accessUrl: string,
+  documentUrl: string,
 ): string =>
   emailLayout({
     title: 'Te agregaron como testigo de un documento',
     body: `
       ${paragraph(`Hola <strong>${witnessName}</strong>:`)}
-      ${paragraph(`<strong>${creatorName}</strong> te agregó como testigo del documento <strong>${documentName}</strong>. Podrás dar seguimiento a su estado desde Firmalo.`)}
-      ${buttons(primaryButton(accessUrl, 'Ver documento'))}
-      ${linkFallback(accessUrl)}
+      ${paragraph(`<strong>${creatorName}</strong> te agregó como <strong>testigo</strong> del documento <strong>${documentName}</strong>. Como testigo no necesitas firmar: puedes consultar el documento y el avance de sus firmas desde el siguiente enlace, sin crear una cuenta ni iniciar sesión.`)}
+      ${buttons(primaryButton(documentUrl, 'Consultar documento'))}
+      ${linkFallback(documentUrl)}
       ${note('Si no esperabas este mensaje, puedes ignorarlo.')}
     `,
   });

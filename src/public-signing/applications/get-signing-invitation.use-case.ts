@@ -17,13 +17,22 @@ import {
 
 /**
  * Contexto mínimo de una invitación: lo necesario para que la pantalla decida qué mostrar antes
- * de validar el código. No incluye el id del documento ni del colaborador, posiciones ni el PDF:
- * eso sale de la sesión (`GET /public/signing-sessions/current`).
+ * de validar el código. No incluye el id del colaborador, posiciones ni el PDF: eso sale de la
+ * sesión (`GET /public/signing-sessions/current`). El id del documento sólo viaja cuando el
+ * firmante firma desde su cuenta activa (ver `document.id`).
  */
 export interface SigningInvitationContext {
   status: SIGNING_INVITATION_STATUS_ENUM;
   /** Sólo con `ACTIVE`. */
-  document?: { name: string };
+  document?: {
+    name: string;
+    /**
+     * Sólo si el firmante no puede firmar desde el enlace y su cuenta está `ACTIVE`: la pantalla
+     * lo manda a iniciar sesión y, tras el login, al documento en el panel. Por sí solo no da
+     * acceso a nada: el panel exige la sesión de esa cuenta.
+     */
+    id?: string;
+  };
   /** Sólo con `ACTIVE`. */
   signer?: {
     /** Correo invitado, enmascarado (`a***@empresa.com`). */
@@ -77,14 +86,22 @@ export function toSigningInvitationContext({
       USER_LIFECYCLE_STATUS_ENUM.ACTIVE)
     : null;
   const type = collaborator.signatureType!;
+  const publicSigningAllowed = isPublicSigningAllowed(collaborator);
+  // Firma desde la cuenta: la pantalla necesita a qué documento volver tras el login.
+  const signsFromAccount =
+    !publicSigningAllowed &&
+    accountStatus === USER_LIFECYCLE_STATUS_ENUM.ACTIVE;
 
   return {
     status,
-    document: { name: summary.documentName },
+    document: {
+      name: summary.documentName,
+      ...(signsFromAccount ? { id: document.id } : {}),
+    },
     signer: {
       maskedEmail: summary.maskedEmail,
       accountStatus,
-      publicSigningAllowed: isPublicSigningAllowed(collaborator),
+      publicSigningAllowed,
     },
     signature: {
       type: PUBLIC_SIGNATURE_TYPE[type],

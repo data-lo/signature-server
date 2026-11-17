@@ -3,6 +3,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { AccountService } from 'src/account/account.service';
 import { BaseResponse } from 'src/interfaces/api-response.dto';
 import { PasswordService } from 'src/common/password/password.service';
+import { PasswordPolicyService } from 'src/common/password/password-policy.service';
 
 import { ChangeMyPasswordDto } from '../dto/change-my-password.dto';
 import { UserService } from '../user.service';
@@ -26,6 +27,7 @@ export class ChangeMyPasswordUseCase {
     private readonly userService: UserService,
     private readonly accountService: AccountService,
     private readonly passwordService: PasswordService,
+    private readonly passwordPolicyService: PasswordPolicyService,
   ) {}
 
   async execute(
@@ -46,6 +48,8 @@ export class ChangeMyPasswordUseCase {
     if (!matches) {
       throw new UnauthorizedException('La contraseña actual no es correcta');
     }
+
+    this.passwordPolicyService.assertValid(dto.newPassword);
 
     const hashedPassword = await this.passwordService.hash(dto.newPassword);
 

@@ -5,6 +5,9 @@ import { StripePaymentService } from './stripe-payment.service';
 import { SubscriptionBillingService } from '../../billing/subscriptions/subscription-billing.service';
 import { RegisterDocumentCreditPurchaseUseCase } from '../../billing/credits/register-document-credit-purchase.use-case';
 
+/** `handled`: un handler atendió el evento. `ignored`: el evento no está soportado. */
+export type StripeWebhookProcessResult = 'handled' | 'ignored';
+
 /**
  * Router de los eventos de Stripe ya autenticados. Cada evento soportado tiene su propio handler
  * — para reaccionar a uno nuevo basta con agregar un case al switch de `process()`.
@@ -25,7 +28,21 @@ export class StripeWebhookService {
     private readonly registerDocumentCreditPurchase: RegisterDocumentCreditPurchaseUseCase,
   ) {}
 
-  async process(event: Stripe.Event): Promise<void> {
+  /**
+   * Entrega un evento autenticado al handler de su tipo.
+   *
+   * @param event - Evento ya verificado.
+   * @returns `handled` si un handler lo atendió; `ignored` si su tipo no está soportado.
+   *
+   * @throws {Error} Lo que lance el handler, para que la entrega quede en FAILED y Stripe la
+   *   reintente.
+   *
+   * @example
+   * ```ts
+   * const result = await service.process(event); // 'handled'
+   * ```
+   */
+  async process(event: Stripe.Event): Promise<StripeWebhookProcessResult> {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
@@ -102,7 +119,10 @@ export class StripeWebhookService {
       }
       default:
         this.logger.log(`Evento de Stripe sin manejar: ${event.type}`);
+        return 'ignored';
     }
+
+    return 'handled';
   }
 
   /**

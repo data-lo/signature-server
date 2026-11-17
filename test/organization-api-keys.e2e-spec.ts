@@ -21,7 +21,8 @@ import { RedisService } from './../src/common/redis/redis.service';
 config({ path: join(__dirname, '..', '.env') });
 
 const JWT_SECRET = 'jwt-secret-de-la-e2e-de-api-keys';
-const API_KEY_PEPPER = 'pepper-de-la-e2e-de-api-keys-con-mas-de-32-caracteres';
+const INTEGRATION_API_KEY_HMAC_SECRET =
+  'secret-hmac-de-la-e2e-de-api-keys-con-mas-de-32-caracteres';
 
 /**
  * `JwtAuthGuard` real como guard global, con un Redis simulado que no tiene sesiones cerradas.
@@ -178,7 +179,8 @@ describe('Administración de API keys por organización (e2e)', () => {
   }
 
   beforeAll(async () => {
-    process.env.API_KEY_PEPPER = API_KEY_PEPPER;
+    process.env.INTEGRATION_API_KEY_HMAC_SECRET =
+      INTEGRATION_API_KEY_HMAC_SECRET;
     await adminQuery(`CREATE DATABASE "${DATABASE_NAME}"`);
 
     dataSource = new DataSource({

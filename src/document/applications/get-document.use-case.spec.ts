@@ -83,6 +83,47 @@ describe('GetDocumentUseCase: estatus de los participantes', () => {
     return participants.find((participant) => participant.id === id)?.status;
   }
 
+  describe('RFC registrado del firmante', () => {
+    const collaborators = () => [
+      buildCollaborator({
+        id: 'signer-1',
+        colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER,
+        status: COLLABORATOR_STATUS_ENUM.PENDING,
+        taxId: 'LOPA800101AB1',
+      }),
+      buildCollaborator({
+        id: 'witness-1',
+        colaboratorType: COLABORATOR_TYPE_ENUM.WITNESS,
+        status: COLLABORATOR_STATUS_ENUM.PENDING,
+        taxId: 'AUDI990101YYY',
+      }),
+    ];
+
+    const taxIdOf = (
+      participants: { id: string; taxId: string | null }[],
+      id: string,
+    ) => participants.find((participant) => participant.id === id)?.taxId;
+
+    it('quien creó el documento recupera el RFC del firmante, no el del testigo', async () => {
+      const { data } = await buildUseCase(collaborators()).execute({
+        documentId: 'doc-1',
+        authorization,
+      });
+
+      expect(taxIdOf(data.participants, 'signer-1')).toBe('LOPA800101AB1');
+      expect(taxIdOf(data.participants, 'witness-1')).toBeNull();
+    });
+
+    it('quien sólo puede leer el documento no recibe el RFC', async () => {
+      const { data } = await buildUseCase(collaborators()).execute({
+        documentId: 'doc-1',
+        authorization: { userId: 'admin-1' } as AuthorizationContext,
+      });
+
+      expect(taxIdOf(data.participants, 'signer-1')).toBeNull();
+    });
+  });
+
   it('expone NOTIFIED para el testigo al que ya se le envió el aviso', async () => {
     const useCase = buildUseCase([
       buildCollaborator({

@@ -1,9 +1,11 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { BillingModule } from 'src/billing/billing.module';
 import { SharedModule } from 'src/common/shared.module';
 import { DocumentModule } from 'src/document/document.module';
 import { CollaboratorEntity } from 'src/document/entities/collaborator.entity';
+import { DocumentEntity } from 'src/document/entities/document.entity';
 import { IdentityVerificationModule } from 'src/identity-verification/identity-verification.module';
 import { IdentityVerificationEntity } from 'src/identity-verification/entities/identity-verification.entity';
 
@@ -31,6 +33,7 @@ import { PublicBiometricSignatureController } from './public-biometric-signature
  *   política y los mismos códigos de verificación que la firma normal).
  * - `IdentityVerificationModule`: el adaptador HTTP de Didit y el descargador de su media. Nada de
  *   la identidad del onboarding cambia por una firma.
+ * - `BillingModule`: reserva, consumo y liberación del crédito biométrico de cada intento.
  *
  * `WebhooksModule` importa éste: recibe y autentica la entrega de Didit y, por el `session_id`, le
  * entrega a `ProcessBiometricSignatureResultUseCase` las que son de una firma.
@@ -40,11 +43,19 @@ import { PublicBiometricSignatureController } from './public-biometric-signature
     TypeOrmModule.forFeature([
       BiometricSignatureAttemptEntity,
       CollaboratorEntity,
+      // Sólo para saber si una reentrega de aprobación encuentra el documento ya completo.
+      DocumentEntity,
       IdentityVerificationEntity,
     ]),
     SharedModule,
     DocumentModule,
     IdentityVerificationModule,
+    /**
+     * Créditos de la firma: reserva antes de abrir Didit, consumo con la firma registrada,
+     * liberación si falla. `forwardRef` por el ciclo `BillingModule` ⇄ `PaymentsModule` que ya
+     * existe del otro lado (ver `DocumentModule`).
+     */
+    forwardRef(() => BillingModule),
   ],
   controllers: [
     BiometricSignatureController,

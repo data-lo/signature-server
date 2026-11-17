@@ -30,11 +30,11 @@ export const DOCUMENTS_PAGE_EXAMPLE = {
   },
 };
 
-/** 403 de alcance insuficiente con `DOCUMENT.READ_OWN`. */
+/** 403 cuando la llave no puede consultar el recurso solicitado. */
 export const SCOPE_DENIED_EXAMPLE = integrationErrorExample(
   'Alcance insuficiente',
   'INTEGRATION_SCOPE_DENIED',
-  'Con DOCUMENT.READ_OWN la API key sólo puede consultar los documentos de su propio usuario',
+  'La API key sólo puede consultar los documentos de su propio usuario',
 );
 
 /** 404 de un creador que no es miembro activo de la organización de la llave. */
@@ -42,6 +42,13 @@ export const USER_NOT_FOUND_EXAMPLE = integrationErrorExample(
   'Usuario fuera de la organización',
   'INTEGRATION_USER_NOT_FOUND',
   'El usuario no existe en la organización',
+);
+
+/** 409 de un correo que corresponde a más de un miembro de la organización. */
+export const AMBIGUOUS_USER_EXAMPLE = integrationErrorExample(
+  'Correo de más de un usuario',
+  'INTEGRATION_AMBIGUOUS_USER',
+  'El correo corresponde a más de un usuario de la organización',
 );
 
 /**
@@ -60,11 +67,11 @@ export function ApiListOrganizationIntegrationDocuments() {
     ApiOperation({
       summary: 'Listar los documentos de la organización',
       description:
-        'Sin `creatorEmail` requiere `DOCUMENT.READ_ORGANIZATION` y devuelve una página (de 1 a 100, 25 por omisión) de los documentos de la organización de la API key. Con `creatorEmail` devuelve sólo los que creó ese miembro: con `DOCUMENT.READ_OWN`, únicamente el correo del usuario que emitió la llave; con `DOCUMENT.READ_ORGANIZATION`, cualquier miembro activo. Filtrable por estatus y fechas. Sin URL del archivo ni datos de colaboradores.',
+        'Devuelve una página (de 1 a 100, 25 por omisión) de documentos de la organización de la API key. Con `creatorEmail`, devuelve sólo los documentos creados por ese miembro. Filtrable por estatus y fechas. No incluye la URL del archivo ni datos de colaboradores.',
     }),
-    ApiIntegrationCommonResponses('DOCUMENT.READ_ORGANIZATION', {
+    ApiIntegrationCommonResponses({
       forbiddenNote:
-        'O `INTEGRATION_SCOPE_DENIED`: con `DOCUMENT.READ_OWN` se pidió la organización u otro creador.',
+        'También puede devolver `INTEGRATION_SCOPE_DENIED` si la llave no tiene acceso a los documentos solicitados.',
       forbiddenExamples: { scopeDenied: SCOPE_DENIED_EXAMPLE },
     }),
     ApiResponse({
@@ -79,6 +86,13 @@ export function ApiListOrganizationIntegrationDocuments() {
         '`INTEGRATION_USER_NOT_FOUND`: `creatorEmail` no es de un miembro activo de la organización',
       type: IntegrationErrorResponseDto,
       examples: { userNotFound: USER_NOT_FOUND_EXAMPLE },
+    }),
+    ApiResponse({
+      status: 409,
+      description:
+        '`INTEGRATION_AMBIGUOUS_USER`: `creatorEmail` corresponde a más de un miembro de la organización',
+      type: IntegrationErrorResponseDto,
+      examples: { ambiguousUser: AMBIGUOUS_USER_EXAMPLE },
     }),
     ApiResponse({
       status: 422,

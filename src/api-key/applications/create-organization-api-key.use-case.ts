@@ -48,7 +48,7 @@ export class CreateOrganizationApiKeyUseCase {
    * @throws {ApiKeyOrganizationNotFoundException} (404) Si la organización no existe o está
    *   desactivada.
    * @throws {ApiKeyAlreadyActiveException} (409) Si ya tiene una llave activa.
-   * @throws {ApiKeyNotConfiguredException} (500) Si falta `API_KEY_PEPPER`.
+   * @throws {ApiKeyNotConfiguredException} (500) Si falta `INTEGRATION_API_KEY_HMAC_SECRET`.
    *
    * @example
    * ```ts

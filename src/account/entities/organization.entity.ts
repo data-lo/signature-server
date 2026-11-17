@@ -1,5 +1,12 @@
-import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  OneToMany,
+  OneToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { ApiKeyEntity } from 'src/api-key/entities/api-key.entity';
+import { IntegrationSettingsEntity } from 'src/integration-settings/entities/integration-settings.entity';
 
 /**
  * Entidad propia (ver plan de migración ER-V2, Fase 5) — reemplaza a
@@ -77,4 +84,14 @@ export class OrganizationEntity {
   /** Historial de API keys de la organización: a lo sumo una `ACTIVE`, el resto `REVOKED`. */
   @OneToMany(() => ApiKeyEntity, (apiKey) => apiKey.organization)
   apiKeys: ApiKeyEntity[];
+
+  /**
+   * Interruptor administrativo de la API de integración; `null` si la organización nunca emitió una
+   * llave (se considera `ACTIVE`). La FK vive en `integration_settings`.
+   */
+  @OneToOne(
+    () => IntegrationSettingsEntity,
+    (settings) => settings.organization,
+  )
+  integrationSettings?: IntegrationSettingsEntity | null;
 }

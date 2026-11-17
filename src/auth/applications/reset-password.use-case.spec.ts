@@ -1,8 +1,12 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 
 import { AccountService } from 'src/account/account.service';
 import { PasswordService } from 'src/common/password/password.service';
+import {
+  PasswordPolicyService,
+  WEAK_PASSWORD_MESSAGE,
+} from 'src/common/password/password-policy.service';
 import { UserService } from 'src/user/user.service';
 
 import { AuthService } from '../auth.service';
@@ -18,11 +22,13 @@ describe('ResetPasswordUseCase', () => {
     getSessionsValidAfter: jest.Mock;
     invalidateSessionsFor: jest.Mock;
   };
+  /** La política real: es la misma que usan el registro y el cambio. */
+  let passwordPolicy: PasswordPolicyService;
 
   const dto = {
     resetToken: 'reset-jwt',
-    newPassword: 'NuevaPassword123!',
-    confirmPassword: 'NuevaPassword123!',
+    newPassword: 'el tren sale del andén siete',
+    confirmPassword: 'el tren sale del andén siete',
   };
 
   beforeEach(async () => {
@@ -48,10 +54,12 @@ describe('ResetPasswordUseCase', () => {
         { provide: AccountService, useValue: accountService },
         { provide: PasswordService, useValue: passwordService },
         { provide: AuthService, useValue: authService },
+        PasswordPolicyService,
       ],
     }).compile();
 
     useCase = module.get(ResetPasswordUseCase);
+    passwordPolicy = module.get(PasswordPolicyService);
   });
 
   it('actualiza la contrasena en User y Account, e invalida las sesiones previas', async () => {
@@ -60,7 +68,9 @@ describe('ResetPasswordUseCase', () => {
     expect(authService.verifyPasswordResetToken).toHaveBeenCalledWith(
       'reset-jwt',
     );
-    expect(passwordService.hash).toHaveBeenCalledWith('NuevaPassword123!');
+    expect(passwordService.hash).toHaveBeenCalledWith(
+      'el tren sale del andén siete',
+    );
     expect(userService.updatePassword).toHaveBeenCalledWith(
       'user-1',
       'hashed-pw',
@@ -98,5 +108,44 @@ describe('ResetPasswordUseCase', () => {
     await expect(useCase.execute(dto)).resolves.toMatchObject({
       success: true,
     });
+  });
+
+  /**
+   * Historia "Centralizar política de contraseñas en PasswordPolicyService": la política se aplica
+   * a `newPassword`, después de validar el token y antes de escribir nada.
+   */
+  describe('política de contraseñas', () => {
+    it('valida newPassword con la política antes de hashearla', async () => {
+      const assertValid = jest.spyOn(passwordPolicy, 'assertValid');
+
+      await useCase.execute(dto);
+
+      expect(assertValid).toHaveBeenCalledWith('el tren sale del andén siete');
+      expect(assertValid.mock.invocationCallOrder[0]).toBeLessThan(
+        passwordService.hash.mock.invocationCallOrder[0],
+      );
+    });
+
+    /**
+     * El token no se invalida: el reset sólo invalida sesiones al final, así que el usuario puede
+     * reintentar con otra contraseña usando el mismo enlace.
+     */
+    it.each(['Password123!', 'admin1234567', 'corta'])(
+      'rechaza %p con 400 genérico, sin escribir ni invalidar sesiones',
+      async (password) => {
+        const error = await useCase
+          .execute({ ...dto, newPassword: password, confirmPassword: password })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(BadRequestException);
+        expect((error as BadRequestException).message).toBe(
+          WEAK_PASSWORD_MESSAGE,
+        );
+        expect(passwordService.hash).not.toHaveBeenCalled();
+        expect(userService.updatePassword).not.toHaveBeenCalled();
+        expect(accountService.updatePasswordForUser).not.toHaveBeenCalled();
+        expect(authService.invalidateSessionsFor).not.toHaveBeenCalled();
+      },
+    );
   });
 });

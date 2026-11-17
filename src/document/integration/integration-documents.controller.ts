@@ -18,7 +18,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 
 import { CurrentApiClient } from 'src/api-key/decorators/current-api-client.decorator';
@@ -30,6 +30,7 @@ import { SkipJwtAuth } from 'src/auth/decorators/skip-jwt-auth.decorator';
 import { MAX_UPLOAD_SAFETY_NET_BYTES } from 'src/common/constants/file-upload.constants';
 import { ClientIp } from 'src/common/interceptors/request-ip.decorator';
 import { RequestIpInterceptor } from 'src/common/interceptors/request-ip.interceptor';
+import { annotateIntegrationAccess } from 'src/observability/integration-access-log/integration-access-log.annotations';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
@@ -48,11 +49,12 @@ import { ApiResendIntegrationSigningInvitation } from './docs/api-resend-integra
 import { CreateIntegrationDocumentDto } from './dto/create-integration-document.dto';
 import {
   ListIntegrationDocumentsByCreatorQueryDto,
-  ListIntegrationDocumentsQueryDto,
+  ListIntegrationUserDocumentsQueryDto,
 } from './dto/list-integration-documents-query.dto';
+import { ResendIntegrationSigningInvitationDto } from './dto/resend-integration-signing-invitation.dto';
 import {
+  IntegrationEndpointRetiredException,
   IntegrationSignerNotFoundException,
-  IntegrationUserNotFoundException,
 } from './exceptions/integration-document.exceptions';
 import { IntegrationErrorFilter } from './filters/integration-error.filter';
 import {
@@ -113,8 +115,8 @@ export class IntegrationDocumentsController {
       : this.listOrganizationIntegrationDocuments.execute(apiClient, filters);
   }
 
-  /** Un `userId` que no es UUID no puede ser miembro de la organización: 404, igual que uno ajeno. */
-  @Get('users/:userId/documents')
+  /** El correo se resuelve al usuario dentro de la organización de la llave. */
+  @Get('users/documents')
   @ApiListUserIntegrationDocuments()
   @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ, [
     PERMISSION_SCOPE_ENUM.OWN,
@@ -122,18 +124,29 @@ export class IntegrationDocumentsController {
   ])
   listUserDocuments(
     @CurrentApiClient() apiClient: IntegrationApiClient,
-    @Param(
-      'userId',
-      new ParseUUIDPipe({
-        exceptionFactory: () => new IntegrationUserNotFoundException(),
-      }),
-    )
-    userId: string,
-    @Query() query: ListIntegrationDocumentsQueryDto,
+    @Query() query: ListIntegrationUserDocumentsQueryDto,
     @Req() request: Request,
   ) {
     assertNoTenantOverrides(request);
-    return this.listUserIntegrationDocuments.execute(apiClient, userId, query);
+    const { email, ...filters } = query;
+    return this.listUserIntegrationDocuments.executeByEmail(
+      apiClient,
+      email,
+      filters,
+    );
+  }
+
+  /** Retirada sin ventana de compatibilidad: responde 410 y dice qué ruta usar. */
+  @Get('users/:userId/documents')
+  @ApiExcludeEndpoint()
+  @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.READ, [
+    PERMISSION_SCOPE_ENUM.OWN,
+    PERMISSION_SCOPE_ENUM.ORGANIZATION,
+  ])
+  retiredListUserDocuments(): never {
+    throw new IntegrationEndpointRetiredException(
+      'GET /api/v1/integration/users/documents?email={email}',
+    );
   }
 
   /** Mismas opciones de carga que `POST /documents/signatures` (ver `DocumentSignaturesController`). */
@@ -178,10 +191,15 @@ export class IntegrationDocumentsController {
 
     response.status(replayed ? 200 : 201);
     response.setHeader(IDEMPOTENT_REPLAYED_HEADER, String(replayed));
+    // El documento creado no está en la URL: el log de acceso lo toma del resultado.
+    annotateIntegrationAccess(request, {
+      documentId: result.data?.id,
+      idempotencyReplayed: replayed,
+    });
     return result;
   }
 
-  @Post('documents/:documentId/collaborators/:collaboratorId/resend-invitation')
+  @Post('documents/:documentId/collaborators/resend-invitation')
   @HttpCode(HttpStatus.OK)
   @ApiResendIntegrationSigningInvitation()
   @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.CREATE, [
@@ -197,13 +215,7 @@ export class IntegrationDocumentsController {
       }),
     )
     documentId: string,
-    @Param(
-      'collaboratorId',
-      new ParseUUIDPipe({
-        exceptionFactory: () => new IntegrationSignerNotFoundException(),
-      }),
-    )
-    collaboratorId: string,
+    @Body() dto: ResendIntegrationSigningInvitationDto,
     @ClientIp() ip: string,
     @Headers('user-agent') userAgent: string | undefined,
     @Req() request: Request,
@@ -212,8 +224,20 @@ export class IntegrationDocumentsController {
     return this.resendSigningInvitation.execute(
       apiClient,
       documentId,
-      collaboratorId,
+      dto.email,
       { ipAddress: ip ?? null, userAgent: userAgent ?? null },
+    );
+  }
+
+  /** Retirada sin ventana de compatibilidad: responde 410 y dice qué ruta usar. */
+  @Post('documents/:documentId/collaborators/:collaboratorId/resend-invitation')
+  @ApiExcludeEndpoint()
+  @RequireApiKeyPermission(RESOURCE_KEY_ENUM.DOCUMENT, ACTION_KEY_ENUM.CREATE, [
+    PERMISSION_SCOPE_ENUM.ORGANIZATION,
+  ])
+  retiredResendInvitation(): never {
+    throw new IntegrationEndpointRetiredException(
+      'POST /api/v1/integration/documents/{documentId}/collaborators/resend-invitation con { "email": "..." }',
     );
   }
 

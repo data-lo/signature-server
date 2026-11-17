@@ -1,13 +1,22 @@
 import { OpenAPIObject } from '@nestjs/swagger';
 import {
+  HeaderObject,
   ParameterObject,
   ReferenceObject,
+  ResponsesObject,
 } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
+
+import {
+  REQUEST_ID_HEADER,
+  REQUEST_ID_MAX_LENGTH,
+  REQUEST_ID_PATTERN,
+} from 'src/observability/request-context/request-context.constants';
 
 import {
   INTEGRATION_API_KEY_SECURITY,
   INTEGRATION_API_KEY_SECURITY_SCHEME,
   INTEGRATION_DOCUMENTS_TAG,
+  INTEGRATION_OPENAPI_TAGS,
 } from '../docs/api-integration-documents-common.docs';
 import {
   EXAMPLE_IDEMPOTENCY_KEY,
@@ -34,6 +43,34 @@ const HTTP_METHODS = [
 
 const SCHEMA_REF_PREFIX = '#/components/schemas/';
 
+/** `X-Request-Id` de ejemplo: el que pondría un ERP con su propio prefijo. */
+export const EXAMPLE_REQUEST_ID = 'erp-20261114-7f3c2a9d';
+
+/** Esquema de `X-Request-Id`, igual en la petición y en la respuesta. */
+const REQUEST_ID_SCHEMA = {
+  type: 'string',
+  maxLength: REQUEST_ID_MAX_LENGTH,
+  pattern: REQUEST_ID_PATTERN.source,
+} as const;
+
+/** `X-Request-Id` opcional de la petición; se agrega a todas las operaciones. */
+const REQUEST_ID_PARAMETER: ParameterObject = {
+  name: REQUEST_ID_HEADER,
+  in: 'header',
+  required: false,
+  description: `Identificador de correlación propio, opcional. Se acepta si tiene de 1 a ${REQUEST_ID_MAX_LENGTH} caracteres entre letras ASCII, dígitos, \`-\`, \`_\`, \`.\` y \`:\`; si falta o no cumple, Firmalo genera un UUID. La respuesta lo devuelve siempre.`,
+  schema: { ...REQUEST_ID_SCHEMA },
+  example: EXAMPLE_REQUEST_ID,
+};
+
+/** `X-Request-Id` de la respuesta; va en todas las respuestas, también en las de error. */
+const REQUEST_ID_RESPONSE_HEADER: HeaderObject = {
+  description:
+    'Identificador de correlación de la petición: el `X-Request-Id` que mandaste si era válido o uno generado por Firmalo. Va en todas las respuestas, incluidos los errores; indícalo al contactar a soporte.',
+  schema: { ...REQUEST_ID_SCHEMA },
+  example: EXAMPLE_REQUEST_ID,
+};
+
 /**
  * Headers que Nest documenta solo por leerlos con `@Headers()` y que el cliente no elige: los pone
  * su cliente HTTP. Swagger los marca obligatorios, así que se quitan del contrato.
@@ -47,6 +84,8 @@ const INTEGRATION_OPENAPI_DESCRIPTION = [
   `\`X-API-Key: ${EXAMPLE_INTEGRATION_API_KEY}\``,
   '**Idempotencia.** `POST /integration/documents` exige `Idempotency-Key`: repetir la petición con la misma clave y el mismo contenido devuelve el documento original, sin crear ni cobrar otro. Ejemplo:',
   `\`Idempotency-Key: ${EXAMPLE_IDEMPOTENCY_KEY}\``,
+  `**Correlación.** Cada respuesta —también las de error— trae el header \`${REQUEST_ID_HEADER}\`. Puedes mandar el tuyo (hasta ${REQUEST_ID_MAX_LENGTH} caracteres: letras, dígitos, \`-\`, \`_\`, \`.\`, \`:\`) y se te devuelve el mismo; si falta o no cumple, se genera un UUID. Guárdalo e indícalo al reportar un problema. Ejemplo:`,
+  `\`${REQUEST_ID_HEADER}: ${EXAMPLE_REQUEST_ID}\``,
   '**Errores.** Todos tienen la forma `{ "success": false, "error": { "code", "message", "details" } }`, con un `code` estable para decidir qué hacer sin depender del texto.',
 ].join('\n\n');
 
@@ -57,14 +96,18 @@ const INTEGRATION_OPENAPI_DESCRIPTION = [
  * Es una función pura: no toca `source` (trabaja sobre una copia) y el resultado sólo depende de
  * él. Del documento general conserva:
  * - los `paths` que empiezan con `/api/v1/integration/`;
- * - en cada operación, sólo el tag `Integration Documents` y la seguridad `integration-api-key`
- *   (cualquier otra —JWT, `x-api-key` interna— se descarta), y un solo parámetro por header (ver
- *   `cleanHeaderParameters`);
+ * - en cada operación, sólo sus tags de integración (`Integration Documents`, `Organización` o
+ *   `Webhooks`; sin ninguno, el de documentos), la seguridad `integration-api-key` (cualquier otra —JWT,
+ *   `x-api-key` interna— se descarta) y un solo parámetro por header (ver `cleanHeaderParameters`);
+ * - en cada operación, el header opcional `X-Request-Id` de la petición y, en cada una de sus
+ *   respuestas, el `X-Request-Id` de la respuesta (no en los `callbacks`: esos los responde el
+ *   cliente);
  * - en `components`, sólo el esquema de seguridad `X-API-Key` y los esquemas alcanzables desde
- *   esas operaciones (DTOs y respuestas de integración, con sus dependencias).
+ *   esas operaciones (DTOs y respuestas de integración, con sus dependencias), incluidos los
+ *   payloads de webhooks que referencian los `callbacks` de `PUT /integration/webhooks/endpoint`.
  *
- * El título, la descripción y la seguridad global son los del contrato de clientes, no los del
- * documento general. No lleva `servers`: Swagger UI usa el host desde el que se abre.
+ * El título, la descripción, los tags (`INTEGRATION_OPENAPI_TAGS`, en ese orden) y la seguridad
+ * global son los del contrato de clientes, no los del documento general. No lleva `servers`: Swagger UI usa el host desde el que se abre.
  *
  * @param source - Documento generado por `SwaggerModule.createDocument`.
  * @returns El contrato OpenAPI de integración, listo para `SwaggerModule.setup`.
@@ -87,18 +130,16 @@ export function createIntegrationOpenApiDocument(
     for (const method of HTTP_METHODS) {
       const operation = pathItem[method];
       if (!operation) continue;
-      operation.tags = [INTEGRATION_DOCUMENTS_TAG];
+      operation.tags = integrationTagsOf(operation.tags);
       operation.security = [{ [INTEGRATION_API_KEY_SECURITY]: [] }];
-      if (operation.parameters) {
-        operation.parameters = cleanHeaderParameters(operation.parameters);
-      }
+      operation.parameters = [
+        ...cleanHeaderParameters(operation.parameters ?? []),
+        { ...REQUEST_ID_PARAMETER },
+      ];
+      addRequestIdResponseHeader(operation.responses);
     }
     paths[path] = pathItem;
   }
-
-  const sourceTag = copy.tags?.find(
-    (tag) => tag.name === INTEGRATION_DOCUMENTS_TAG,
-  );
 
   return {
     openapi: copy.openapi,
@@ -107,13 +148,7 @@ export function createIntegrationOpenApiDocument(
       description: INTEGRATION_OPENAPI_DESCRIPTION,
       version: copy.info?.version ?? '1.0',
     },
-    tags: [
-      sourceTag ?? {
-        name: INTEGRATION_DOCUMENTS_TAG,
-        description:
-          'Documentos, firmantes y accesos de firma de tu organización',
-      },
-    ],
+    tags: INTEGRATION_OPENAPI_TAGS.map((tag) => ({ ...tag })),
     security: [{ [INTEGRATION_API_KEY_SECURITY]: [] }],
     paths,
     components: {
@@ -123,6 +158,28 @@ export function createIntegrationOpenApiDocument(
       schemas: collectReferencedSchemas(paths, copy.components?.schemas ?? {}),
     },
   };
+}
+
+/**
+ * Los tags de integración de una operación, en el orden de `INTEGRATION_OPENAPI_TAGS`.
+ *
+ * El documento general agrupa también con tags internos; aquí sólo quedan los que publica el
+ * contrato, para que Swagger UI y Mintlify no muestren secciones vacías ni ajenas.
+ *
+ * @param tags - Tags que la operación trae del documento general (`@ApiTags`).
+ * @returns Sus tags de integración, o `['Integration Documents']` si no tiene ninguno.
+ *
+ * @example
+ * ```ts
+ * integrationTagsOf(['Organización']); // ['Organización']
+ * integrationTagsOf(['Documents']); // ['Integration Documents']
+ * ```
+ */
+function integrationTagsOf(tags: string[] | undefined): string[] {
+  const kept = INTEGRATION_OPENAPI_TAGS.map((tag) => tag.name).filter((name) =>
+    tags?.includes(name),
+  );
+  return kept.length > 0 ? kept : [INTEGRATION_DOCUMENTS_TAG];
 }
 
 /**
@@ -160,6 +217,29 @@ function cleanHeaderParameters(
     const name = parameter.name.toLowerCase();
     return !TRANSPORT_HEADERS.has(name) && documented.get(name) === parameter;
   });
+}
+
+/**
+ * Documenta `X-Request-Id` en cada respuesta de una operación, sin pisar otros headers que ya
+ * declare (como `Idempotent-Replayed`).
+ *
+ * @param responses - Respuestas de la operación; se modifican en el lugar (son de la copia).
+ * @returns Nada.
+ *
+ * @example
+ * ```ts
+ * addRequestIdResponseHeader(operation.responses);
+ * operation.responses['201'].headers['X-Request-Id']; // { description: '…', schema: {…} }
+ * ```
+ */
+function addRequestIdResponseHeader(responses: ResponsesObject): void {
+  for (const response of Object.values(responses ?? {})) {
+    if ('$ref' in response) continue;
+    response.headers = {
+      ...response.headers,
+      [REQUEST_ID_HEADER]: structuredClone(REQUEST_ID_RESPONSE_HEADER),
+    };
+  }
 }
 
 function isHeader(

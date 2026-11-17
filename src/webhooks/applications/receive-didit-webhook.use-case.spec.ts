@@ -5,6 +5,7 @@ import { RegisterWebhookEventUseCase } from './register-webhook-event.use-case';
 import { DiditWebhookSignatureVerifierService } from '../didit/didit-webhook-signature-verifier.service';
 import { DiditWebhookDispatcherService } from '../didit/didit-webhook-dispatcher.service';
 import { WEBHOOK_PROVIDER_ENUM } from '../enums/webhook-provider.enum';
+import { WebhookMetricsService } from 'src/metrics/webhook-metrics.service';
 
 /** Una entrega real de Didit: el evento final aprobado. */
 const PAYLOAD = {
@@ -35,6 +36,11 @@ describe('ReceiveDiditWebhookUseCase', () => {
   };
   /** Quien entrega al dominio: este caso de uso sólo autentica, valida y registra. */
   let dispatcher: { dispatch: jest.Mock };
+  let webhookMetrics: {
+    recordDelivery: jest.Mock;
+    recordSignatureVerification: jest.Mock;
+    recordDispatch: jest.Mock;
+  };
 
   beforeEach(async () => {
     verifier = { verify: jest.fn().mockReturnValue(true) };
@@ -50,6 +56,11 @@ describe('ReceiveDiditWebhookUseCase', () => {
     dispatcher = {
       dispatch: jest.fn().mockResolvedValue('identity-verification'),
     };
+    webhookMetrics = {
+      recordDelivery: jest.fn(),
+      recordSignatureVerification: jest.fn(),
+      recordDispatch: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -57,6 +68,7 @@ describe('ReceiveDiditWebhookUseCase', () => {
         { provide: DiditWebhookSignatureVerifierService, useValue: verifier },
         { provide: RegisterWebhookEventUseCase, useValue: register },
         { provide: DiditWebhookDispatcherService, useValue: dispatcher },
+        { provide: WebhookMetricsService, useValue: webhookMetrics },
       ],
     }).compile();
 
@@ -169,6 +181,123 @@ describe('ReceiveDiditWebhookUseCase', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
 
       expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('métricas', () => {
+    const delivery = (eventType: string, outcome: string) =>
+      expect(webhookMetrics.recordDelivery).toHaveBeenCalledWith({
+        provider: WEBHOOK_PROVIDER_ENUM.DIDIT,
+        eventType,
+        outcome,
+        durationSeconds: expect.any(Number),
+      });
+    const input = { rawBody: bodyOf(PAYLOAD), ...HEADERS };
+
+    afterEach(() => {
+      expect(webhookMetrics.recordDelivery).toHaveBeenCalledTimes(1);
+    });
+
+    it('una entrega atendida queda como processed, con su destino', async () => {
+      await useCase.execute(input);
+
+      delivery('status.updated', 'processed');
+      expect(webhookMetrics.recordSignatureVerification).toHaveBeenCalledWith(
+        WEBHOOK_PROVIDER_ENUM.DIDIT,
+        true,
+      );
+      expect(webhookMetrics.recordDispatch).toHaveBeenCalledWith(
+        WEBHOOK_PROVIDER_ENUM.DIDIT,
+        'identity-verification',
+      );
+    });
+
+    it('una entrega sin intento biométrico local queda como ignored, se marca PROCESSED y responde 200', async () => {
+      dispatcher.dispatch.mockResolvedValue('ignored');
+
+      const result = await useCase.execute(input);
+
+      delivery('status.updated', 'ignored');
+      expect(webhookMetrics.recordDispatch).toHaveBeenCalledWith(
+        WEBHOOK_PROVIDER_ENUM.DIDIT,
+        'ignored',
+      );
+      expect(register.markProcessed).toHaveBeenCalledWith('evt-row-1');
+      expect(register.markFailed).not.toHaveBeenCalled();
+      expect(result).toEqual({ received: true, duplicate: false });
+    });
+
+    it('una re-entrega queda como duplicate', async () => {
+      register.register.mockResolvedValue({
+        event: { id: 'evt-row-1' },
+        alreadyProcessed: true,
+      });
+
+      await useCase.execute(input);
+
+      delivery('status.updated', 'duplicate');
+    });
+
+    it('una firma inválida queda como rejected, sin leer el tipo del cuerpo', async () => {
+      verifier.verify.mockReturnValue(false);
+
+      await expect(useCase.execute(input)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+
+      delivery('unverified', 'rejected');
+      expect(webhookMetrics.recordSignatureVerification).toHaveBeenCalledWith(
+        WEBHOOK_PROVIDER_ENUM.DIDIT,
+        false,
+      );
+    });
+
+    it('un cuerpo firmado pero ilegible se audita, queda como rejected y conserva el 400', async () => {
+      await expect(
+        useCase.execute({
+          rawBody: Buffer.from('{no es json ana@correo.mx'),
+          ...HEADERS,
+        }),
+      ).rejects.toThrow(
+        new BadRequestException('Cuerpo de webhook de Didit inválido'),
+      );
+
+      expect(register.recordRejectedDelivery).toHaveBeenCalledWith(
+        WEBHOOK_PROVIDER_ENUM.DIDIT,
+        'Cuerpo de Didit ilegible: no es JSON',
+        { signatureValid: true, eventType: 'invalid_payload' },
+      );
+      delivery('invalid_payload', 'rejected');
+      expect(register.register).not.toHaveBeenCalled();
+      expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('un cuerpo fuera de contrato queda como rejected', async () => {
+      await expect(
+        useCase.execute({
+          rawBody: bodyOf({ ...PAYLOAD, event_id: undefined }),
+          ...HEADERS,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      delivery('invalid_payload', 'rejected');
+    });
+
+    it('un error del dominio queda como failed y se propaga', async () => {
+      dispatcher.dispatch.mockRejectedValue(new Error('caído'));
+
+      await expect(useCase.execute(input)).rejects.toThrow('caído');
+
+      delivery('status.updated', 'failed');
+      expect(webhookMetrics.recordDispatch).not.toHaveBeenCalled();
+    });
+
+    it('un error de la base al registrar queda como failed y se propaga', async () => {
+      register.register.mockRejectedValue(new Error('sin base'));
+
+      await expect(useCase.execute(input)).rejects.toThrow('sin base');
+
+      delivery('status.updated', 'failed');
     });
   });
 

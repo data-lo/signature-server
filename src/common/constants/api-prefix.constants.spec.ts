@@ -13,6 +13,8 @@ import { applyGlobalApiPrefix } from './api-prefix.constants';
  * 2. Un endpoint heredado sin versión propia (`auth`), de los que antes vivían en la raíz.
  * 3. `health`, excluido del prefijo.
  * 4. La raíz `@Controller()`, también excluida.
+ *
+ * Más el de métricas, cuya exclusión sale de `METRICS_PATH` y no de la lista fija.
  */
 @Controller('webhooks')
 class WebhooksStub {
@@ -43,6 +45,14 @@ class HealthStub {
   }
 }
 
+@Controller('metrics')
+class MetricsStub {
+  @Get()
+  scrape() {
+    return { ok: 'metrics' };
+  }
+}
+
 @Controller()
 class RootStub {
   @Get()
@@ -56,7 +66,7 @@ describe('prefijo global de la API', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      controllers: [WebhooksStub, AuthStub, HealthStub, RootStub],
+      controllers: [WebhooksStub, AuthStub, HealthStub, MetricsStub, RootStub],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -103,6 +113,11 @@ describe('prefijo global de la API', () => {
     it('/health queda en la raíz: es la URL fija que pide el HEALTHCHECK del Dockerfile', async () => {
       await request(app.getHttpServer()).get('/health').expect(200);
       await request(app.getHttpServer()).get('/api/v1/health').expect(404);
+    });
+
+    it('/metrics queda en la raíz: Prometheus lo consulta en una URL fija', async () => {
+      await request(app.getHttpServer()).get('/metrics').expect(200);
+      await request(app.getHttpServer()).get('/api/v1/metrics').expect(404);
     });
 
     it('GET / queda en la raíz: es el saludo de sanidad, no parte del contrato de la API', async () => {

@@ -10,6 +10,8 @@ import { CATALOG_ITEM_TYPE_ENUM } from '../enums/catalog-item-type.enum';
 import { CATALOG_PRICE_BILLING_MODE_ENUM } from '../enums/catalog-price-billing-mode.enum';
 import { CATALOG_SOURCE_ENUM } from '../enums/catalog-source.enum';
 import { BILLING_INTERVAL_ENUM } from '../enums/billing-interval.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
+import { MissingDocumentPackMetadataException } from './exceptions/catalog-sync.exceptions';
 
 function repository() {
   return {
@@ -139,7 +141,47 @@ describe('CatalogSyncService', () => {
     expect(packRepository.create).toHaveBeenCalledWith({
       catalogItemId: 'generated-id',
       documentsGranted: 50,
+      creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
     });
+  });
+
+  it('un paquete con metadata.creditType BIOMETRIC_SIGNATURE acredita créditos biométricos', async () => {
+    itemRepository.findOne.mockResolvedValue(null);
+    packRepository.findOne.mockResolvedValue(null);
+
+    await service.syncProductUpserted(
+      creditProduct({
+        metadata: {
+          catalogType: 'document_pack',
+          documentsGranted: '20',
+          creditType: 'biometric_signature',
+        },
+      }),
+    );
+
+    expect(packRepository.create).toHaveBeenCalledWith({
+      catalogItemId: 'generated-id',
+      documentsGranted: 20,
+      creditType: CREDIT_TYPE_ENUM.BIOMETRIC_SIGNATURE,
+    });
+  });
+
+  it('rechaza un metadata.creditType desconocido en vez de acreditar el tipo equivocado', async () => {
+    itemRepository.findOne.mockResolvedValue(null);
+    packRepository.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.syncProductUpserted(
+        creditProduct({
+          metadata: {
+            catalogType: 'document_pack',
+            documentsGranted: '20',
+            creditType: 'FACIAL',
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(MissingDocumentPackMetadataException);
+    expect(packRepository.create).not.toHaveBeenCalled();
   });
 
   it('no desactiva un catalog_item manual cuando se elimina su producto de Stripe', async () => {
@@ -233,6 +275,7 @@ describe('CatalogSyncService', () => {
     expect(packRepository.create).toHaveBeenCalledWith({
       catalogItemId: 'credit-item',
       documentsGranted: 50,
+      creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
     });
     expect(priceRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({

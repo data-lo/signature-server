@@ -4,6 +4,7 @@ import {
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
+import { getHttpErrorType } from 'src/metrics/http-metrics.utils';
 import {
   INCOMPLETE_UPLOAD_MESSAGE,
   MulterExceptionFilter,
@@ -13,10 +14,14 @@ function buildHost() {
   const json = jest.fn();
   const status = jest.fn().mockReturnValue({ json });
   const response = { status };
+  const request = {};
   const host = {
-    switchToHttp: () => ({ getResponse: () => response }),
+    switchToHttp: () => ({
+      getRequest: () => request,
+      getResponse: () => response,
+    }),
   } as unknown as ArgumentsHost;
-  return { host, status, json };
+  return { host, status, json, request };
 }
 
 describe('MulterExceptionFilter', () => {
@@ -46,6 +51,14 @@ describe('MulterExceptionFilter', () => {
       );
     },
   );
+
+  it('anota la clase de la excepción para http_server_errors_total', () => {
+    const { host, request } = buildHost();
+
+    filter.catch(new PayloadTooLargeException('File too large'), host);
+
+    expect(getHttpErrorType(request)).toBe('PayloadTooLargeException');
+  });
 
   it('sigue traduciendo el rechazo por tamaño con su 413', () => {
     const { host, status, json } = buildHost();

@@ -53,6 +53,8 @@ export interface CreatedDocumentParticipant {
   signatureType: SIGNATURE_TYPE_ENUM | null;
   /** Orden de firma, desde 1. */
   order: number;
+  /** RFC registrado; sólo de un firmante FIEL, `null` en cualquier otro. */
+  taxId: string | null;
 }
 
 export interface CreatedDocumentSummary extends DocumentSummary {
@@ -263,6 +265,10 @@ export class DocumentReadService {
         status: participantStatus(document, signer, signers),
         signatureType: signer.signatureType ?? null,
         order: (signer.signingOrder ?? index) + 1,
+        taxId:
+          signer.signatureType === SIGNATURE_TYPE_ENUM.FIEL
+            ? (signer.taxId ?? null)
+            : null,
       })),
     };
   }

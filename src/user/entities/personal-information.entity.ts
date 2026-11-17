@@ -11,8 +11,12 @@ export class PersonalInformationEntity {
   @Column({ name: 'last_name' })
   lastName: string;
 
-  @Column({ name: 'curp' })
-  curp: string;
+  /**
+   * `null` sólo en usuarios `PROVISIONED`: nacen con su ficha (para guardar la INE que verifica
+   * Didit) pero sin CURP. Ver migración `AllowProvisionalPersonalInformation`.
+   */
+  @Column({ name: 'curp', type: 'varchar', nullable: true })
+  curp: string | null;
 
   @Column({ nullable: true, name: 'rfc' })
   rfc: string | null;

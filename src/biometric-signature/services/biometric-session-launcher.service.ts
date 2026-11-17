@@ -2,6 +2,8 @@ import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
+import { ReserveBiometricSignatureCreditsUseCase } from 'src/billing/credits/reserve-biometric-signature-credits.use-case';
 import type { GeolocationDto } from 'src/document/dto/sign-document.dto';
 import { collaboratorEmail } from 'src/document/utils/collaborator-display.util';
 import { DiditSession } from 'src/identity-verification/interfaces/didit-session.interface';
@@ -43,6 +45,10 @@ export interface BiometricLaunchParams {
  *   se devuelve (`reused: true`). Uno abierto que dejó de servir se cierra antes de abrir otro.
  * - **El intento se persiste ANTES de llamar a Didit**, así el webhook siempre tiene contra qué
  *   reconciliar.
+ * - **Sin crédito biométrico no hay sesión**: tras crear el intento se reserva un crédito
+ *   (`ReserveBiometricSignatureCreditsUseCase`); sin saldo, el intento queda en FAILED y Didit no se
+ *   llama. Si Didit no crea la sesión, o un intento abierto se cierra por inservible, la reserva se
+ *   libera.
  * - **Dos clics simultáneos no abren dos sesiones**: el índice único parcial (colaborador + hash)
  *   rechaza el segundo `INSERT` y se devuelve la sesión del primero.
  */
@@ -55,6 +61,8 @@ export class BiometricSessionLauncherService {
     private readonly attemptRepository: Repository<BiometricSignatureAttemptEntity>,
     private readonly attempts: BiometricSignatureAttemptService,
     private readonly didit: BiometricSignatureDiditService,
+    private readonly reserveCredits: ReserveBiometricSignatureCreditsUseCase,
+    private readonly finalizeCredits: FinalizeBiometricSignatureCreditsUseCase,
   ) {}
 
   /**
@@ -68,7 +76,10 @@ export class BiometricSessionLauncherService {
    * @throws {ConflictException} Si otra petición abrió una sesión a la vez y ya no hay qué devolver.
    * @throws {BiometricReferencePortraitUnavailableException} Si el firmante con cuenta no tiene
    *   retrato de referencia utilizable (el intento queda en FAILED).
-   * @throws {DiditResponseException} Si Didit no pudo crear la sesión (el intento queda en FAILED).
+   * @throws {DiditResponseException} Si Didit no pudo crear la sesión (el intento queda en FAILED y
+   *   su crédito biométrico se libera).
+   * @throws {InsufficientBiometricCreditsException} (402) Si el documento no tiene crédito
+   *   biométrico disponible (el intento queda en FAILED y Didit no se llama).
    *
    * @example
    * ```ts
@@ -83,6 +94,12 @@ export class BiometricSessionLauncherService {
     const active = await this.attempts.findActive(signer.id);
     if (active) {
       if (this.attempts.isResumable(active, document.originalHash)) {
+        // Mismo intento, misma reserva: la reserva es idempotente por intento y no bloquea otro
+        // crédito. Sólo un intento abierto antes de las reservas reserva aquí por primera vez.
+        await this.reserveCredits.execute({
+          biometricSignatureAttemptId: active.id,
+          documentId: document.id,
+        });
         // Sin la URL en el log: es la puerta a la sesión del firmante.
         this.logger.log(
           `Reutilizando el intento biométrico ${active.id} del colaborador ${signer.id}.`,
@@ -93,6 +110,7 @@ export class BiometricSessionLauncherService {
         });
       }
       await this.closeUnusable(active, document.originalHash);
+      await this.releaseCredits(active.id, 'ATTEMPT_CLOSED_UNUSABLE');
     }
 
     const workflowId = this.didit.workflowFor(params.kind);
@@ -101,6 +119,22 @@ export class BiometricSessionLauncherService {
       return created.reusedSession;
     }
     const attempt = created.entity;
+
+    // Sin crédito biométrico no se abre la sesión: Didit cobra cada sesión creada.
+    try {
+      await this.reserveCredits.execute({
+        biometricSignatureAttemptId: attempt.id,
+        documentId: document.id,
+      });
+    } catch (error) {
+      await this.attemptRepository.update(attempt.id, {
+        status: BIOMETRIC_SIGNATURE_ATTEMPT_STATUS_ENUM.FAILED,
+        failureReason:
+          'No se pudo reservar el crédito de firma biométrica del documento',
+        completedAt: new Date(),
+      });
+      throw error;
+    }
 
     let session: DiditSession;
     try {
@@ -125,6 +159,7 @@ export class BiometricSessionLauncherService {
           error instanceof Error ? error.message : 'Error desconocido',
         completedAt: new Date(),
       });
+      await this.releaseCredits(attempt.id, 'DIDIT_SESSION_NOT_CREATED');
       throw error;
     }
 
@@ -244,6 +279,35 @@ export class BiometricSessionLauncherService {
           signatureCompleted: false,
         }),
       };
+    }
+  }
+
+  /**
+   * Devuelve al saldo el crédito biométrico de un intento que terminó sin firma. Un fallo aquí no
+   * oculta el error original del lanzamiento: la reserva vence y la recoge el job de reservas.
+   *
+   * @param attemptId - Intento cerrado.
+   * @param reason - Motivo para el ledger.
+   * @returns Nada.
+   *
+   * @example
+   * ```ts
+   * await this.releaseCredits(attempt.id, 'DIDIT_SESSION_NOT_CREATED');
+   * ```
+   */
+  private async releaseCredits(
+    attemptId: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.finalizeCredits.onAttemptFailed({
+        biometricSignatureAttemptId: attemptId,
+        reason,
+      });
+    } catch (error) {
+      this.logger.error(
+        `No se pudo liberar el crédito biométrico del intento ${attemptId}: ${error}`,
+      );
     }
   }
 

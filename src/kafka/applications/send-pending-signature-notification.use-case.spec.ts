@@ -552,9 +552,13 @@ describe('NotificationEventsConsumer', () => {
         'contrato.pdf',
         'Creador Uno',
         'creador@correo.com',
-        expect.stringContaining(
-          '/access-document?docId=doc-1&collabId=collaborator-1',
-        ),
+        // Vista pública del documento: sin `/access-document`, que manda a `/login`.
+        expect.stringMatching(/\/public\/documents\/doc-1$/),
+      );
+      const documentUrl =
+        emailService.sendDocumentWitnessAddedNotification.mock.calls[0][5];
+      expect(documentUrl).not.toMatch(
+        /access-document|login|collaborator-1|testigo/,
       );
       expect(collaboratorRepository.update).toHaveBeenCalledWith(
         { id: 'collaborator-1', status: COLLABORATOR_STATUS_ENUM.PENDING },

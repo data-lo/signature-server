@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
 import { config } from 'dotenv';
 import { join } from 'path';
 import { Client } from 'pg';
@@ -66,11 +67,18 @@ import { SigningLaunchService } from './../src/signing-invitation/signing-launch
 import { SigningRateLimitService } from './../src/signing-invitation/signing-rate-limit.service';
 import { UploadSignatureImageUseCase } from './../src/signature/applications/upload-signature-image.use-case';
 import { StartDiditVerificationUseCase } from './../src/identity-verification/applications/start-didit-verification.use-case';
+import { MetricsModule } from './../src/metrics/metrics.module';
 
 config({ path: join(__dirname, '..', '.env') });
 
 const HASH = 'f'.repeat(64);
 const GEOLOCATION = JSON.stringify({ latitude: 19.43, longitude: -99.13 });
+/** RFC y titular del certificado que devuelve el doble de `EfirmaService`. */
+const CERTIFICATE = {
+  rfc: 'LOPA800101AB1',
+  name: 'ANA LOPEZ PEREZ',
+  certificateNumber: '00001000000700000001',
+};
 
 /** Redis en memoria: lo que usan los límites y la idempotencia de la firma. */
 function memoryRedis() {
@@ -106,7 +114,8 @@ function memoryRedis() {
  * invitaciones y los tokens de lanzamiento (hash, vencimiento, un solo uso), la cookie de acceso,
  * el código del correo (`verification_codes`), la sesión (`guest_signing_accesses`) y la firma
  * (`SignDocumentUseCase`). Son dobles el correo (se lee el código del buzón), Redis (en memoria),
- * la auditoría (se cuentan los eventos) y lo que necesita MinIO, Kafka o el PDF.
+ * la auditoría (se cuentan los eventos), la criptografía de la e.firma (exigiría un `.cer`/`.key`
+ * reales del SAT) y lo que necesita MinIO, Kafka o el PDF.
  *
  * **No toca `signature_db`**: crea una base propia, le aplica las migraciones y la borra al final.
  */
@@ -127,6 +136,8 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
   let invitations: SigningInvitationService;
+  /** Lo activan los casos que abren muchas sesiones desde la misma IP en menos de un minuto. */
+  let skipThrottling = false;
 
   async function adminQuery(sql: string): Promise<void> {
     const client = new Client({ connectionString: adminUrl });
@@ -262,9 +273,13 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
   }
 
   /** Pide un acceso temporal para un correo desde el "backend del tercero". */
-  function signingAccess(email: string, key = apiKey) {
+  function signingAccess(
+    email: string,
+    key = apiKey,
+    documentId = ids.document,
+  ) {
     return request(app.getHttpServer())
-      .post(`/api/v1/integration/documents/${ids.document}/signing-access`)
+      .post(`/api/v1/integration/documents/${documentId}/signing-access`)
       .set('X-API-Key', key)
       .send({ email });
   }
@@ -304,7 +319,7 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
   }
 
   beforeAll(async () => {
-    process.env.API_KEY_PEPPER =
+    process.env.INTEGRATION_API_KEY_HMAC_SECRET =
       'pepper-de-la-e2e-de-acceso-a-firma-con-mas-de-32-caracteres';
     process.env.JWT_SECRET = 'jwt-secret-e2e-acceso-a-firma';
     process.env.PUBLIC_WEB_APP_URL = 'https://app.firmalo.test';
@@ -327,6 +342,13 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
           .findOneOrFail({ where: { id } }),
       assertCanSignWithSimpleSignature:
         DocumentService.prototype.assertCanSignWithSimpleSignature,
+      validateAndSignWithEfirma: async () => ({
+        originalHash: HASH,
+        signatureBase64: 'firma-en-base64',
+        algorithm: 'sha256',
+        signedAt: new Date(),
+        certificate: CERTIFICATE,
+      }),
       snapshotSignatureImage: async () => 'snapshots/rubrica.png',
       finalizeSignedDocument: async (document: DocumentEntity) => {
         await dataSource
@@ -343,8 +365,12 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
 
     @Module({
       imports: [
+        MetricsModule.register({ enabled: false, path: '/metrics' }),
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
-        ThrottlerModule.forRoot([{ ttl: 60000, limit: 1000 }]),
+        ThrottlerModule.forRoot({
+          throttlers: [{ ttl: 60000, limit: 1000 }],
+          skipIf: () => skipThrottling,
+        }),
         TypeOrmModule.forRoot({
           type: 'postgres',
           url: databaseUrl,
@@ -780,5 +806,145 @@ describe('Acceso a la firma desde correo y portal del tercero (e2e)', () => {
     );
 
     await openLaunch(issued.url).expect(404);
+  });
+
+  /**
+   * Historia "Integrar taxId para validación de RFC en firmantes FIEL": un firmante invitado por
+   * integración, sin cuenta, firma con su e.firma por la sesión pública; lo que la integración
+   * registró en `taxId` se compara contra el RFC del certificado.
+   */
+  describe('taxId del firmante FIEL contra el certificado', () => {
+    beforeAll(() => {
+      skipThrottling = true;
+    });
+
+    /** Documento con un solo firmante FIEL sin cuenta; devuelve su id y el del colaborador. */
+    async function seedFielDocument(
+      key: string,
+      signer: { taxId: string | null; firstName: string; lastName: string },
+    ) {
+      const [document] = await dataSource.query(
+        `INSERT INTO documents (object_key, file_name, file_type, total_pages, ip_address, original_hash, status, created_by, account_id, organization_id, total_signers, signature_type, is_sequential, requires_verification, created_via_api_key_id)
+         VALUES ('fiel.pdf', 'fiel.pdf', 'application/pdf', 1, '127.0.0.1', $1, 'PENDING_SIGNATURE', $2, $3, $4, 1, 'FIEL', true, true, $5) RETURNING id`,
+        [HASH, ids.actorUser, ids.actorAccount, ids.org, ids['key:portal']],
+      );
+      const email = `${key}@correo.test`;
+      const [collaborator] = await dataSource.query(
+        `INSERT INTO collaborators (document_id, email, first_name, last_name, tax_id, colaborator_type, signature_type, status, signing_order, ip_address)
+         VALUES ($1, $2, $3, $4, $5, 'SIGNER', 'FIEL', 'PENDING', 0, '127.0.0.1') RETURNING id`,
+        [document.id, email, signer.firstName, signer.lastName, signer.taxId],
+      );
+      return {
+        documentId: document.id as string,
+        collaboratorId: collaborator.id as string,
+        email,
+      };
+    }
+
+    /** Del portal del tercero a la sesión pública: acceso temporal, lanzamiento y código. */
+    async function openSession(email: string, documentId: string) {
+      const access = await signingAccess(email, apiKey, documentId).expect(200);
+      const opened = await openLaunch(access.body.data.url).expect(200);
+      return validateCode(
+        cookieFrom(opened, PUBLIC_SIGNING_INVITATION_COOKIE)!,
+        email,
+      );
+    }
+
+    function signAdvanced(sessionCookie: string, idempotencyKey: string) {
+      return request(app.getHttpServer())
+        .post('/api/v1/public/signing-sessions/current/advanced/sign')
+        .set('Cookie', sessionCookie)
+        .set('Idempotency-Key', idempotencyKey)
+        .field('documentHash', HASH)
+        .field('geolocation', GEOLOCATION)
+        .field('password', 'contrasena-de-la-efirma')
+        .attach('key', Buffer.from('llave'), 'fiel.key')
+        .attach('cer', Buffer.from('certificado'), 'fiel.cer');
+    }
+
+    async function statusOf(collaboratorId: string) {
+      const [row] = await dataSource.query(
+        `SELECT status FROM collaborators WHERE id = $1`,
+        [collaboratorId],
+      );
+      return row.status as string;
+    }
+
+    it.each([
+      ['idéntico', 'LOPA800101AB1'],
+      ['en minúsculas y con espacios', ' lopa 800101 ab1 '],
+    ])(
+      'RFC coincidente (%s): firma, aunque el nombre del invitado sea otro',
+      async (_label, taxId) => {
+        const { documentId, collaboratorId, email } = await seedFielDocument(
+          `coincide-${randomUUID()}`,
+          { taxId, firstName: 'Otro', lastName: 'Nombre' },
+        );
+        const session = await openSession(email, documentId);
+
+        const signed = await signAdvanced(session, randomUUID()).expect(200);
+
+        expect(signed.body.data).toEqual({
+          id: documentId,
+          documentCompleted: true,
+        });
+        expect(await statusOf(collaboratorId)).toBe('SIGNED');
+      },
+    );
+
+    it('RFC no coincidente: rechaza con 422 y un mensaje claro, sin firmar ni gastar el acceso', async () => {
+      const { documentId, collaboratorId, email } = await seedFielDocument(
+        `no-coincide-${randomUUID()}`,
+        { taxId: 'MARL800101AB2', firstName: 'Ana', lastName: 'Lopez' },
+      );
+      const session = await openSession(email, documentId);
+
+      const rejected = await signAdvanced(session, 'fiel-no-coincide').expect(
+        422,
+      );
+
+      expect(rejected.body.code).toBe('CERTIFICATE_SUBJECT_MISMATCH');
+      expect(rejected.body.message).toBe(
+        'El RFC del certificado de la e.firma no coincide con el RFC registrado para este firmante.',
+      );
+      expect(JSON.stringify(rejected.body)).not.toContain('MARL800101AB2');
+      expect(await statusOf(collaboratorId)).toBe('PENDING');
+      const [access] = await dataSource.query(
+        `SELECT consumed_at FROM guest_signing_accesses WHERE collaborator_id = $1`,
+        [collaboratorId],
+      );
+      expect(access.consumed_at).toBeNull();
+    });
+
+    it('sin taxId: el flujo no cambia, firma quien coincide con el nombre del invitado', async () => {
+      const { documentId, collaboratorId, email } = await seedFielDocument(
+        `sin-rfc-${randomUUID()}`,
+        { taxId: null, firstName: 'Ana', lastName: 'López' },
+      );
+      const session = await openSession(email, documentId);
+
+      await signAdvanced(session, 'fiel-sin-rfc').expect(200);
+
+      expect(await statusOf(collaboratorId)).toBe('SIGNED');
+    });
+
+    it('sin taxId: sigue rechazando a un titular con otro nombre, con el mensaje de siempre', async () => {
+      const { documentId, collaboratorId, email } = await seedFielDocument(
+        `sin-rfc-otro-${randomUUID()}`,
+        { taxId: null, firstName: 'Otra', lastName: 'Persona' },
+      );
+      const session = await openSession(email, documentId);
+
+      const rejected = await signAdvanced(session, 'fiel-otro-nombre').expect(
+        422,
+      );
+
+      expect(rejected.body.code).toBe('CERTIFICATE_SUBJECT_MISMATCH');
+      expect(rejected.body.message).toBe(
+        'El titular de la e.firma no corresponde a la persona invitada a firmar este documento.',
+      );
+      expect(await statusOf(collaboratorId)).toBe('PENDING');
+    });
   });
 });

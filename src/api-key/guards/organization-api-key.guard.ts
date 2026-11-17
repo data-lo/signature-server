@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { AccountEntity } from 'src/account/entities/account.entity';
+import { INTEGRATION_STATUS_ENUM } from 'src/integration-settings/enums/integration-status.enum';
 import { ACTION_KEY_ENUM } from 'src/roles/enums/action-key.enum';
 import { PERMISSION_SCOPE_ENUM } from 'src/roles/enums/permission-scope.enum';
 import { RESOURCE_KEY_ENUM } from 'src/roles/enums/resource-key.enum';
@@ -20,6 +21,7 @@ import {
   ApiKeyActorInactiveException,
   ApiKeyOrganizationInactiveException,
   ExpiredApiKeyException,
+  IntegrationDisabledException,
   InvalidApiKeyException,
 } from '../exceptions/api-key.exceptions';
 import {
@@ -43,6 +45,9 @@ export const API_KEY_HEADER = 'x-api-key';
  * 2. que exista la llave de ese `publicId` y que el HMAC del secreto coincida (tiempo constante);
  * 3. estado `ACTIVE` y `expiresAt` futura;
  * 4. organización activa;
+ * 4b. integración de la organización no desactivada (`integration_settings.status`). Sin fila se
+ *    considera `ACTIVE`: sólo faltaría si alguien insertó la llave a mano, y cortar ahí dejaría
+ *    sin servicio una integración que nadie apagó;
  * 5. que el actor —la membresía que emitió la llave— siga activo en ESA organización. Una llave
  *    emitida por la plataforma (sin `createdByAccountId`) no tiene actor y se salta este paso.
  *
@@ -72,6 +77,7 @@ export class OrganizationApiKeyGuard implements CanActivate {
    *   coincide o está revocada.
    * @throws {ExpiredApiKeyException} (401) Si venció.
    * @throws {ApiKeyOrganizationInactiveException} (403) Si su organización está desactivada.
+   * @throws {IntegrationDisabledException} (403) Si la organización desactivó su integración.
    * @throws {ApiKeyActorInactiveException} (403) Si su actor ya no es miembro activo.
    *
    * @example
@@ -88,6 +94,13 @@ export class OrganizationApiKeyGuard implements CanActivate {
 
     if (!apiKey.organization?.isActive) {
       throw new ApiKeyOrganizationInactiveException();
+    }
+
+    if (
+      apiKey.organization.integrationSettings?.status ===
+      INTEGRATION_STATUS_ENUM.DISABLED
+    ) {
+      throw new IntegrationDisabledException();
     }
 
     const actor = await this.resolveActor(apiKey);
@@ -181,7 +194,7 @@ export class OrganizationApiKeyGuard implements CanActivate {
     const apiKey = await this.apiKeyRepository.findOne({
       where: { publicId: token.publicId },
       relations: {
-        organization: true,
+        organization: { integrationSettings: true },
         permissions: { resource: true, action: true },
       },
     });

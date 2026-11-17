@@ -1,0 +1,3325 @@
+openapi: 3.0.0
+info:
+  title: Firmalo Integration API
+  description: |-
+    API para que tu sistema cree documentos PDF con su flujo de firmas, consulte su estado y gestione el acceso de los firmantes en Firmalo.
+
+    **Autenticación.** Todas las rutas usan la API key de tu organización en el header `X-API-Key`, con formato `fma_live_<publicId>_<secret>`. Pégala en «Authorize» para probar desde esta página. Ejemplo (no es una llave real):
+
+    `X-API-Key: fma_live_0123456789abcdef_EjemploNoRealEjemploNoRealEjemploNoReal1234`
+
+    **Idempotencia.** `POST /integration/documents` exige `Idempotency-Key`: repetir la petición con la misma clave y el mismo contenido devuelve el documento original, sin crear ni cobrar otro. Ejemplo:
+
+    `Idempotency-Key: erp-contrato-2026-000184`
+
+    **Errores.** Todos tienen la forma `{ "success": false, "error": { "code", "message", "details" } }`, con un `code` estable para decidir qué hacer sin depender del texto.
+  version: 1.0.0
+tags:
+  - name: Integration Documents
+    description: Documentos, firmantes y accesos de firma de tu organización
+  - name: Organización
+    description: La organización de la API key, su saldo de documentos, su plan y su ciclo de facturación
+  - name: Webhooks
+    description: |-
+      Firmalo envía un `POST` firmado a la URL de tu organización cuando cambia el estado de firma de un documento creado por la API de integración. Configura la URL y los eventos con estos endpoints; los cuerpos de cada evento están en la pestaña **Callbacks** de `PUT /api/v1/integration/webhooks/endpoint`.
+
+      **Eventos.** `document.collaborator_signed` (un participante firmó), `document.signed` (todos los firmantes completaron el documento), `document.rejected` (un firmante rechazó) y `document.cancelled` (se confirmó la cancelación). La última firma genera `document.collaborator_signed` y `document.signed` como dos eventos independientes; el orden de llegada no está garantizado.
+
+      **Headers.** `X-Signature-Webhook-Id` (identificador de la entrega, igual en todos sus reintentos), `X-Signature-Event` (el `type` del evento), `X-Signature-Timestamp` (segundos Unix del momento en que se firmó ese intento) y `X-Signature-Hmac` (firma en hexadecimal minúsculo, 64 caracteres). También `Content-Type: application/json` y `User-Agent: Firmalo-Webhooks/1.0`.
+
+      **Firma.** `X-Signature-Hmac = hex(HMAC-SHA256(secret, timestamp + "." + rawBody))`, con el secreto completo (`whsec_` incluido) en UTF-8, el texto exacto de `X-Signature-Timestamp` y los bytes exactos del cuerpo recibido. Para verificar: lee el cuerpo **crudo** antes de parsear el JSON; rechaza si falta un header o si el timestamp difiere más de 5 minutos de tu reloj; calcula la firma y compárala en tiempo constante.
+
+      **Entrega y reintentos.** Cualquier `2xx` confirma la entrega; las redirecciones no se siguen y cuentan como fallo. Cada intento espera 10 s. Ante un error de red, un timeout o una respuesta distinta de `2xx` se reintenta: 8 intentos en total (inmediato y a 1 min, 5 min, 30 min, 2 h, 5 h, 10 h y 10 h, algo más de 24 h). Cada reintento lleva un timestamp y una firma nuevos. Agotados, la entrega queda fallida.
+
+      **Al menos una vez.** Una entrega puede llegar repetida o fuera de orden. Deduplica por `id` del payload (mismo evento) o por `X-Signature-Webhook-Id` (misma entrega). Responde `2xx` rápido y procesa después.
+
+      **Secreto.** Se entrega sólo al crear el endpoint y al rotarlo; ninguna consulta lo vuelve a mostrar. Tras rotar, las entregas ya registradas se siguen firmando con el secreto anterior hasta terminar: acepta ambos durante 24 h.
+
+      **Datos que nunca viajan.** PDF ni su contenido, URLs del archivo, API keys, tokens de firma o invitación, certificados, contraseñas, IP, geolocalización, imágenes o evidencia de firma, datos biométricos, nombre del archivo, motivos escritos de rechazo o cancelación, datos de otros participantes ni datos de pago.
+security:
+  - integration-api-key: []
+paths:
+  /api/v1/integration/documents:
+    get:
+      description: Devuelve una página (de 1 a 100, 25 por omisión) de documentos de la organización de la API key. Con `creatorEmail`, devuelve sólo los documentos creados por ese miembro. Filtrable por estatus y fechas. No incluye la URL del archivo ni datos de colaboradores.
+      operationId: IntegrationDocumentsController_listOrganizationDocuments
+      parameters:
+        - name: statuses
+          required: false
+          in: query
+          description: Uno o varios estatus del documento. Repetible (`?statuses=pending&statuses=signed`) o separado por comas.
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - CREATED
+                - PENDING_APPROVAL
+                - PENDING_SIGNATURE
+                - SIGNED
+                - REJECTED
+                - EXPIRED
+                - CANCELLATION_PENDING
+                - CANCELLED
+        - name: createdFrom
+          required: false
+          in: query
+          description: Creados desde (ISO 8601)
+          schema:
+            example: '2026-01-01'
+            type: string
+        - name: createdTo
+          required: false
+          in: query
+          description: Creados hasta (ISO 8601)
+          schema:
+            example: '2026-12-31'
+            type: string
+        - name: signedFrom
+          required: false
+          in: query
+          description: Firmados desde (ISO 8601)
+          schema:
+            example: '2026-01-01'
+            type: string
+        - name: signedTo
+          required: false
+          in: query
+          description: Firmados hasta (ISO 8601)
+          schema:
+            example: '2026-12-31'
+            type: string
+        - name: sortBy
+          required: false
+          in: query
+          description: Campo por el que se ordena. Lista cerrada, no un nombre de columna.
+          schema:
+            default: createdAt
+            enum:
+              - createdAt
+              - signedAt
+              - fileName
+              - status
+            type: string
+        - name: sortDirection
+          required: false
+          in: query
+          schema:
+            default: DESC
+            enum:
+              - ASC
+              - DESC
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: Página
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: limit
+          required: false
+          in: query
+          description: Resultados por página
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 25
+            type: number
+        - name: creatorEmail
+          required: false
+          in: query
+          description: Correo del creador. Sólo documentos que creó ese miembro de la organización de la API key.
+          schema:
+            example: ana@acme.mx
+            type: string
+      responses:
+        '200':
+          description: Página de documentos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationDocumentsPageResponse'
+              example:
+                success: true
+                message: Documentos obtenidos correctamente
+                data:
+                  items:
+                    - id: 7d1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                      fileName: contrato.pdf
+                      status: PENDING_SIGNATURE
+                      signatureType: SIMPLE
+                      createdAt: '2026-10-26T12:00:00.000Z'
+                      signedAt: null
+                  pagination:
+                    page: 1
+                    limit: 25
+                    total: 1
+                    totalPages: 1
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo). También puede devolver `INTEGRATION_SCOPE_DENIED` si la llave no tiene acceso a los documentos solicitados.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+                scopeDenied:
+                  summary: Alcance insuficiente
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_SCOPE_DENIED
+                      message: La API key sólo puede consultar los documentos de su propio usuario
+        '404':
+          description: '`INTEGRATION_USER_NOT_FOUND`: `creatorEmail` no es de un miembro activo de la organización'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                userNotFound:
+                  summary: Usuario fuera de la organización
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_USER_NOT_FOUND
+                      message: El usuario no existe en la organización
+        '409':
+          description: '`INTEGRATION_AMBIGUOUS_USER`: `creatorEmail` corresponde a más de un miembro de la organización'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                ambiguousUser:
+                  summary: Correo de más de un usuario
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_AMBIGUOUS_USER
+                      message: El correo corresponde a más de un usuario de la organización
+        '422':
+          description: '`INVALID_REQUEST`: algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalidRequest:
+                  summary: Campos inválidos
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_REQUEST
+                      message: La petición tiene campos inválidos.
+                      details:
+                        errors:
+                          - limit must not be greater than 100
+      security:
+        - integration-api-key: []
+      summary: Listar los documentos de la organización
+      tags:
+        - Integration Documents
+    post:
+      description: |-
+        Es `multipart/form-data` con dos campos: `file` (el PDF, binario) y `payload` (texto con un JSON con `creator`, `document` y `participants`; su estructura es `IntegrationDocumentPayloadDto`).
+
+        La organización sale de la API key. El creador se identifica por su correo: si es miembro de la organización se usa su cuenta; si existe sin membresía, se le crea una con el rol `INTEGRATION_DOCUMENT_CREATOR`; si no existe, se crea como usuario provisional (sin contraseña). Sus datos nunca se sobrescriben.
+
+        Cada documento creado consume un crédito de la organización. Los participantes se invitan por correo.
+
+        **Orden de firma.** `document.isSequential` decide si `participants[].order` es obligatorio:
+
+        | `document.isSequential` | `SIGNER` | `WITNESS` |
+        | --- | --- | --- |
+        | `true` o se omite | `order` obligatorio: firman uno a la vez | No requiere `order` ni participa en él |
+        | `false` | `order` no es obligatorio: firman en cualquier momento | No requiere `order` ni participa en él |
+
+        En un documento secuencial, `order` es un entero que inicia en `1` y debe ser único y consecutivo entre firmantes (`1`, `2`, `3`…). Es este valor, no la posición en `participants`, lo que define el orden. Si no se cumple, la respuesta es `422` con `INVALID_SIGNING_ORDER` o `DUPLICATE_SIGNING_ORDER`.
+
+        **RFC del firmante (`participants[].taxId`).** Sólo aplica a un `SIGNER` de un documento con `document.signatureType: ADVANCED` y es opcional:
+
+        - Formato: RFC mexicano de 13 caracteres (persona física) o 12 (persona moral): 3 o 4 letras, fecha `AAMMDD` y homoclave de 3, p. ej. `MAGL800101AB1`. Se recortan los espacios y se pasa a mayúsculas.
+        - Si viene, el titular del certificado de la e.firma con que firme tiene que tener exactamente ese RFC; si no viene, se compara el nombre del participante con el del certificado.
+        - En un `WITNESS` o en un documento `SIMPLE` o `BIOMETRIC` se rechaza con `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`; con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.
+        - El campo anterior, `rfc`, ya no forma parte del contrato: enviarlo responde `422 UNSUPPORTED_PARTICIPANT_FIELD`.
+
+        **Ejemplo de `payload`: flujo secuencial** (dos firmantes y un testigo):
+
+        ```json
+        {
+          "creator": {
+            "email": "ana.lopez@cliente.example",
+            "firstName": "Ana",
+            "lastName": "López"
+          },
+          "document": {
+            "signatureType": "SIMPLE",
+            "isSequential": true,
+            "isIndexable": true
+          },
+          "participants": [
+            {
+              "role": "SIGNER",
+              "firstName": "Luis",
+              "lastName": "Martínez",
+              "email": "luis.martinez@correo.example",
+              "order": 1,
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.1,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ]
+            },
+            {
+              "role": "SIGNER",
+              "firstName": "Marta",
+              "lastName": "Gómez",
+              "email": "marta.gomez@correo.example",
+              "order": 2,
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.55,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ]
+            },
+            {
+              "role": "WITNESS",
+              "firstName": "Eva",
+              "lastName": "Ruiz",
+              "email": "eva.ruiz@correo.example"
+            }
+          ]
+        }
+        ```
+
+        **Ejemplo de `payload`: flujo no secuencial** (sin `order`):
+
+        ```json
+        {
+          "creator": {
+            "email": "ana.lopez@cliente.example",
+            "firstName": "Ana",
+            "lastName": "López"
+          },
+          "document": {
+            "signatureType": "SIMPLE",
+            "isSequential": false,
+            "isIndexable": true
+          },
+          "participants": [
+            {
+              "role": "SIGNER",
+              "firstName": "Luis",
+              "lastName": "Martínez",
+              "email": "luis.martinez@correo.example",
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.1,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ]
+            },
+            {
+              "role": "SIGNER",
+              "firstName": "Marta",
+              "lastName": "Gómez",
+              "email": "marta.gomez@correo.example",
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.55,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ]
+            },
+            {
+              "role": "WITNESS",
+              "firstName": "Eva",
+              "lastName": "Ruiz",
+              "email": "eva.ruiz@correo.example"
+            }
+          ]
+        }
+        ```
+
+        **Ejemplo de `payload`: firma avanzada** (el primer firmante con `taxId`):
+
+        ```json
+        {
+          "creator": {
+            "email": "ana.lopez@cliente.example",
+            "firstName": "Ana",
+            "lastName": "López"
+          },
+          "document": {
+            "signatureType": "ADVANCED",
+            "isSequential": true,
+            "isIndexable": true
+          },
+          "participants": [
+            {
+              "role": "SIGNER",
+              "firstName": "Luis",
+              "lastName": "Martínez",
+              "email": "luis.martinez@correo.example",
+              "order": 1,
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.1,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ],
+              "taxId": "MAGL800101AB1"
+            },
+            {
+              "role": "SIGNER",
+              "firstName": "Marta",
+              "lastName": "Gómez",
+              "email": "marta.gomez@correo.example",
+              "order": 2,
+              "signaturePositions": [
+                {
+                  "page": 1,
+                  "xRatio": 0.55,
+                  "yRatio": 0.8,
+                  "widthRatio": 0.25,
+                  "heightRatio": 0.08
+                }
+              ]
+            },
+            {
+              "role": "WITNESS",
+              "firstName": "Eva",
+              "lastName": "Ruiz",
+              "email": "eva.ruiz@correo.example"
+            }
+          ]
+        }
+        ```
+
+        Ejemplo con curl:
+
+        ```bash
+        curl -X POST https://<host>/api/v1/integration/documents \
+          -H "X-API-Key: $FIRMALO_API_KEY" \
+          -H "Idempotency-Key: erp-contrato-2026-000184" \
+          -F "file=@contrato.pdf;type=application/pdf" \
+          -F 'payload={"creator":{"email":"ana.lopez@cliente.example","firstName":"Ana","lastName":"López"},"document":{"signatureType":"SIMPLE","isSequential":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis.martinez@correo.example","order":1,"signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.8,"widthRatio":0.25,"heightRatio":0.08}]}]}'
+        ```
+
+        Ejemplo con curl, firma avanzada con el RFC del firmante:
+
+        ```bash
+        curl -X POST https://<host>/api/v1/integration/documents \
+          -H "X-API-Key: $FIRMALO_API_KEY" \
+          -H "Idempotency-Key: erp-contrato-2026-000185" \
+          -F "file=@contrato.pdf;type=application/pdf" \
+          -F 'payload={"creator":{"email":"ana.lopez@cliente.example","firstName":"Ana","lastName":"López"},"document":{"signatureType":"ADVANCED","isSequential":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis.martinez@correo.example","order":1,"taxId":"MAGL800101AB1","signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.8,"widthRatio":0.25,"heightRatio":0.08}]}]}'
+        ```
+      operationId: IntegrationDocumentsController_createDocument
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: Valor único elegido por ti para este documento (1 a 255 caracteres ASCII visibles), por API key, durante 24 horas. Repetir la petición con la misma clave y el mismo contenido devuelve el documento original sin subir, crear, cobrar ni notificar nada.
+          required: true
+          schema:
+            type: string
+            example: erp-contrato-2026-000184
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CreateIntegrationDocumentDto'
+            examples:
+              sequential:
+                summary: 'Flujo secuencial: dos firmantes y un testigo'
+                value:
+                  payload:
+                    creator:
+                      email: ana.lopez@cliente.example
+                      firstName: Ana
+                      lastName: López
+                    document:
+                      signatureType: SIMPLE
+                      isSequential: true
+                      isIndexable: true
+                    participants:
+                      - role: SIGNER
+                        firstName: Luis
+                        lastName: Martínez
+                        email: luis.martinez@correo.example
+                        order: 1
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.1
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                      - role: SIGNER
+                        firstName: Marta
+                        lastName: Gómez
+                        email: marta.gomez@correo.example
+                        order: 2
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.55
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                      - role: WITNESS
+                        firstName: Eva
+                        lastName: Ruiz
+                        email: eva.ruiz@correo.example
+              nonSequential:
+                summary: 'Flujo no secuencial: sin `order`'
+                value:
+                  payload:
+                    creator:
+                      email: ana.lopez@cliente.example
+                      firstName: Ana
+                      lastName: López
+                    document:
+                      signatureType: SIMPLE
+                      isSequential: false
+                      isIndexable: true
+                    participants:
+                      - role: SIGNER
+                        firstName: Luis
+                        lastName: Martínez
+                        email: luis.martinez@correo.example
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.1
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                      - role: SIGNER
+                        firstName: Marta
+                        lastName: Gómez
+                        email: marta.gomez@correo.example
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.55
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                      - role: WITNESS
+                        firstName: Eva
+                        lastName: Ruiz
+                        email: eva.ruiz@correo.example
+              advanced:
+                summary: 'Firma avanzada: RFC del firmante en `taxId`'
+                value:
+                  payload:
+                    creator:
+                      email: ana.lopez@cliente.example
+                      firstName: Ana
+                      lastName: López
+                    document:
+                      signatureType: ADVANCED
+                      isSequential: true
+                      isIndexable: true
+                    participants:
+                      - role: SIGNER
+                        firstName: Luis
+                        lastName: Martínez
+                        email: luis.martinez@correo.example
+                        order: 1
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.1
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                        taxId: MAGL800101AB1
+                      - role: SIGNER
+                        firstName: Marta
+                        lastName: Gómez
+                        email: marta.gomez@correo.example
+                        order: 2
+                        signaturePositions:
+                          - page: 1
+                            xRatio: 0.55
+                            yRatio: 0.8
+                            widthRatio: 0.25
+                            heightRatio: 0.08
+                      - role: WITNESS
+                        firstName: Eva
+                        lastName: Ruiz
+                        email: eva.ruiz@correo.example
+      responses:
+        '200':
+          description: 'Repetición de una petición anterior con el mismo `Idempotency-Key`: el documento original (`Idempotent-Replayed: true`)'
+          headers:
+            Idempotent-Replayed:
+              description: '`false` si se creó el documento; `true` si es la respuesta de una petición anterior con el mismo `Idempotency-Key`'
+              schema:
+                type: boolean
+                example: false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationCreatedDocumentResponse'
+              example:
+                success: true
+                message: El documento ya se había creado con este Idempotency-Key
+                data:
+                  id: 2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                  status: PENDING_SIGNATURE
+                  signatureType: SIMPLE
+                  fileName: contrato.pdf
+                  createdAt: '2026-10-26T12:00:00.000Z'
+                  creator:
+                    email: ana.lopez@cliente.example
+                  participantsCount: 2
+                  publicUrl: https://app.firmalo.com/public/documents/2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                  participants:
+                    - email: luis.martinez@correo.example
+                      status: PENDING
+                      signatureType: SIMPLE
+                      order: 1
+                      taxId: null
+        '201':
+          description: Documento creado, con su URL pública de consulta
+          headers:
+            Idempotent-Replayed:
+              description: '`false` si se creó el documento; `true` si es la respuesta de una petición anterior con el mismo `Idempotency-Key`'
+              schema:
+                type: boolean
+                example: false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationCreatedDocumentResponse'
+              example:
+                success: true
+                message: Documento y flujo de firmas creados correctamente
+                data:
+                  id: 2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                  status: PENDING_SIGNATURE
+                  signatureType: SIMPLE
+                  fileName: contrato.pdf
+                  createdAt: '2026-10-26T12:00:00.000Z'
+                  creator:
+                    email: ana.lopez@cliente.example
+                  participantsCount: 2
+                  publicUrl: https://app.firmalo.com/public/documents/2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                  participants:
+                    - email: luis.martinez@correo.example
+                      status: PENDING
+                      signatureType: SIMPLE
+                      order: 1
+                      taxId: null
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+                idempotencyKeyRequired:
+                  summary: Falta Idempotency-Key
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_IDEMPOTENCY_KEY_REQUIRED
+                      message: 'El header Idempotency-Key es obligatorio: de 1 a 255 caracteres ASCII visibles'
+                approvalNotSupported:
+                  summary: Aprobación previa no soportada
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_APPROVAL_NOT_SUPPORTED
+                      message: 'La API de integración todavía no admite documentos con aprobación previa (requiresApproval: true)'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '402':
+          description: '`INSUFFICIENT_DOCUMENT_CREDITS`: la organización no tiene créditos de documento disponibles. No se crea nada y la `Idempotency-Key` queda libre para reintentar.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                noCredits:
+                  summary: Sin créditos
+                  value:
+                    success: false
+                    error:
+                      code: INSUFFICIENT_DOCUMENT_CREDITS
+                      message: No tienes documentos disponibles. Compra más o espera a tu próximo periodo.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '409':
+          description: '`INTEGRATION_IDEMPOTENCY_KEY_MISMATCH` (la clave ya se usó con otro archivo o datos) o `INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS` (otra petición con la misma clave sigue en curso).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                mismatch:
+                  summary: Clave reutilizada con otro contenido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_IDEMPOTENCY_KEY_MISMATCH
+                      message: Este Idempotency-Key ya se usó con otro archivo o con otros datos. Usa una clave nueva para un documento nuevo.
+                inProgress:
+                  summary: Petición en curso
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS
+                      message: Ya hay una petición en curso con este Idempotency-Key. Vuelve a intentarlo en unos segundos.
+        '422':
+          description: 'Validación del payload o del archivo, con `error.details.field` apuntando al campo (p. ej. `participants[2].email`). Se valida antes de subir el archivo, aprovisionar al creador o reservar la `Idempotency-Key`: `INVALID_PAYLOAD`, `INVALID_CREATOR`, `INVALID_DOCUMENT_OPTIONS`, `INVALID_DOCUMENT_FILE` (no es un PDF legible o pesa de más); `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED` (50 por omisión), `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_NAME`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL` (sin espacios y en minúsculas, aunque cambie el rol); `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `MAX_SIGNATURE_POSITIONS_EXCEEDED`, `INVALID_SIGNING_ORDER` / `DUPLICATE_SIGNING_ORDER` (con `isSequential`, `order` único y consecutivo desde 1 entre firmantes); `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`; `INVALID_PARTICIPANT_TAX_ID` (`taxId` no es un RFC de 12 o 13 caracteres), `PARTICIPANT_TAX_ID_NOT_ALLOWED` (`taxId` fuera de un `SIGNER` de un documento `ADVANCED`), `UNSUPPORTED_PARTICIPANT_FIELD` (un campo retirado del contrato, como `rfc`; `details.replacedBy` dice cuál usar); y `INTEGRATION_CREATOR_UNAVAILABLE` / `INTEGRATION_CREATOR_MEMBERSHIP_REVOKED` para el creador.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                duplicateParticipant:
+                  summary: Participante repetido
+                  value:
+                    success: false
+                    error:
+                      code: DUPLICATE_PARTICIPANT_EMAIL
+                      message: Un colaborador sólo puede participar una vez en el documento.
+                      details:
+                        field: participants[1].email
+                        email: luis.martinez@correo.example
+                positionOutOfRange:
+                  summary: Posición fuera del documento
+                  value:
+                    success: false
+                    error:
+                      code: SIGNATURE_POSITION_PAGE_OUT_OF_RANGE
+                      message: La posición de firma está en la página 3, pero el documento sólo tiene 2.
+                      details:
+                        field: participants[0].signaturePositions[0].page
+                        page: 3
+                        totalPages: 2
+                invalidTaxId:
+                  summary: RFC del firmante inválido
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_PARTICIPANT_TAX_ID
+                      message: 'El taxId del firmante no es un RFC válido: 12 o 13 caracteres (letras, fecha AAMMDD y homoclave).'
+                      details:
+                        field: participants[0].taxId
+                unsupportedParticipantField:
+                  summary: Campo retirado del contrato
+                  value:
+                    success: false
+                    error:
+                      code: UNSUPPORTED_PARTICIPANT_FIELD
+                      message: 'El campo `rfc` ya no forma parte del contrato: envía el RFC del firmante en `taxId`.'
+                      details:
+                        field: participants[0].rfc
+                        replacedBy: participants[0].taxId
+                invalidFile:
+                  summary: El archivo no es un PDF
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_DOCUMENT_FILE
+                      message: 'El archivo no es un PDF válido: su contenido no corresponde al tipo declarado'
+                      details:
+                        field: file
+                invalidRequest:
+                  summary: Campos inválidos
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_REQUEST
+                      message: La petición tiene campos inválidos.
+                      details:
+                        errors:
+                          - limit must not be greater than 100
+      security:
+        - integration-api-key: []
+      summary: Crear un documento PDF con su flujo de firmas
+      tags:
+        - Integration Documents
+  /api/v1/integration/users/documents:
+    get:
+      description: Devuelve una página de documentos creados por el usuario con ese `email`, obligatorio. Admite la misma paginación y filtros por estatus y fechas que el listado de la organización. Reemplaza a `GET /users/{userId}/documents`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.
+      operationId: IntegrationDocumentsController_listUserDocuments
+      parameters:
+        - name: statuses
+          required: false
+          in: query
+          description: Uno o varios estatus del documento. Repetible (`?statuses=pending&statuses=signed`) o separado por comas.
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - CREATED
+                - PENDING_APPROVAL
+                - PENDING_SIGNATURE
+                - SIGNED
+                - REJECTED
+                - EXPIRED
+                - CANCELLATION_PENDING
+                - CANCELLED
+        - name: createdFrom
+          required: false
+          in: query
+          description: Creados desde (ISO 8601)
+          schema:
+            example: '2026-01-01'
+            type: string
+        - name: createdTo
+          required: false
+          in: query
+          description: Creados hasta (ISO 8601)
+          schema:
+            example: '2026-12-31'
+            type: string
+        - name: signedFrom
+          required: false
+          in: query
+          description: Firmados desde (ISO 8601)
+          schema:
+            example: '2026-01-01'
+            type: string
+        - name: signedTo
+          required: false
+          in: query
+          description: Firmados hasta (ISO 8601)
+          schema:
+            example: '2026-12-31'
+            type: string
+        - name: sortBy
+          required: false
+          in: query
+          description: Campo por el que se ordena. Lista cerrada, no un nombre de columna.
+          schema:
+            default: createdAt
+            enum:
+              - createdAt
+              - signedAt
+              - fileName
+              - status
+            type: string
+        - name: sortDirection
+          required: false
+          in: query
+          schema:
+            default: DESC
+            enum:
+              - ASC
+              - DESC
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: Página
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: limit
+          required: false
+          in: query
+          description: Resultados por página
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 25
+            type: number
+        - name: email
+          required: true
+          in: query
+          description: Correo del usuario, miembro activo de la organización de la API key. No distingue mayúsculas.
+          schema:
+            example: ana@acme.mx
+            type: string
+      responses:
+        '200':
+          description: Página de documentos del usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationDocumentsPageResponse'
+              example:
+                success: true
+                message: Documentos del usuario obtenidos correctamente
+                data:
+                  items:
+                    - id: 7d1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+                      fileName: contrato.pdf
+                      status: PENDING_SIGNATURE
+                      signatureType: SIMPLE
+                      createdAt: '2026-10-26T12:00:00.000Z'
+                      signedAt: null
+                  pagination:
+                    page: 1
+                    limit: 25
+                    total: 1
+                    totalPages: 1
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo). Puede devolver `INTEGRATION_SCOPE_DENIED` si la llave no tiene acceso a los documentos solicitados.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+                scopeDenied:
+                  summary: Alcance insuficiente
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_SCOPE_DENIED
+                      message: La API key sólo puede consultar los documentos de su propio usuario
+        '404':
+          description: '`INTEGRATION_USER_NOT_FOUND`: el correo no es de un miembro activo de la organización de la llave'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                userNotFound:
+                  summary: Usuario fuera de la organización
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_USER_NOT_FOUND
+                      message: El usuario no existe en la organización
+        '409':
+          description: '`INTEGRATION_AMBIGUOUS_USER`: el correo corresponde a más de un miembro de la organización'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                ambiguousUser:
+                  summary: Correo de más de un usuario
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_AMBIGUOUS_USER
+                      message: El correo corresponde a más de un usuario de la organización
+        '422':
+          description: '`INVALID_REQUEST`: falta `email` o no es un correo válido, o algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalidRequest:
+                  summary: Campos inválidos
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_REQUEST
+                      message: La petición tiene campos inválidos.
+                      details:
+                        errors:
+                          - limit must not be greater than 100
+      security:
+        - integration-api-key: []
+      summary: Listar los documentos creados por un usuario de la organización
+      tags:
+        - Integration Documents
+  /api/v1/integration/documents/{documentId}/collaborators/resend-invitation:
+    post:
+      description: Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante. El correo sólo localiza al firmante dentro del documento. Reemplaza a `POST /documents/{documentId}/collaborators/{collaboratorId}/resend-invitation`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.
+      operationId: IntegrationDocumentsController_resendInvitation
+      parameters:
+        - name: documentId
+          required: true
+          in: path
+          schema:
+            format: uuid
+            example: 2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendIntegrationSigningInvitationDto'
+      responses:
+        '200':
+          description: 'Invitación emitida. Con `emailDelivered: false` la invitación existe pero el correo no salió; se puede reintentar.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationResentInvitationResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o ningún firmante tiene ese correo'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                signerNotFound:
+                  summary: Firmante no encontrado
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_SIGNER_NOT_FOUND
+                      message: No existe ese firmante en un documento de la organización
+        '409':
+          description: '`INTEGRATION_AMBIGUOUS_SIGNER` (más de un firmante con ese correo) o `INTEGRATION_INVITATION_NOT_RESENDABLE` (el documento ya no espera esa firma, no es su turno o firma desde su cuenta)'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                ambiguous:
+                  summary: Correo de más de un firmante
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_AMBIGUOUS_SIGNER
+                      message: El correo corresponde a más de un firmante del documento
+                notResendable:
+                  summary: El firmante ya no espera firma
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_INVITATION_NOT_RESENDABLE
+                      message: El documento ya no espera la firma de este firmante
+                notInTurn:
+                  summary: No es su turno
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_INVITATION_NOT_RESENDABLE
+                      message: Todavía no es el turno de este firmante
+        '422':
+          description: '`INVALID_REQUEST`: falta `email` o no es un correo válido.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalidRequest:
+                  summary: Campos inválidos
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_REQUEST
+                      message: La petición tiene campos inválidos.
+                      details:
+                        errors:
+                          - email debe ser un correo válido
+        '429':
+          description: '`TOO_MANY_REQUESTS`: ya se reenvió en los últimos 10 minutos o se alcanzaron diez reenvíos en el día.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tooManyRequests:
+                  summary: Demasiadas solicitudes para el firmante
+                  value:
+                    success: false
+                    error:
+                      code: TOO_MANY_REQUESTS
+                      message: Demasiados intentos. Espera unos minutos antes de volver a intentarlo.
+      security:
+        - integration-api-key: []
+      summary: Reenviar la invitación de firma a un firmante
+      tags:
+        - Integration Documents
+  /api/v1/integration/documents/{documentId}/signing-access:
+    post:
+      description: 'Llamar desde el backend del tercero, nunca desde el navegador. Devuelve una URL `/sign/launch/:token` de un solo uso que vence en 5 minutos. El correo sólo localiza al firmante: al abrir la URL, la plataforma le envía un código a ese correo y no muestra el documento ni permite firmar sin validarlo. Diez accesos cada 10 minutos por firmante.'
+      operationId: IntegrationDocumentsController_createSigningAccess
+      parameters:
+        - name: documentId
+          required: true
+          in: path
+          schema:
+            format: uuid
+            example: 2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIntegrationSigningAccessDto'
+      responses:
+        '200':
+          description: Acceso temporal emitido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationSigningAccessResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o ningún firmante tiene ese correo'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                signerNotFound:
+                  summary: Firmante no encontrado
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_SIGNER_NOT_FOUND
+                      message: No existe ese firmante en un documento de la organización
+        '409':
+          description: '`WAITING_FOR_PREVIOUS_SIGNER` (no es su turno), `INTEGRATION_AMBIGUOUS_SIGNER` (más de un firmante con ese correo) o `INTEGRATION_INVITATION_NOT_RESENDABLE` (ya no espera esa firma o firma desde su cuenta)'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                notInTurn:
+                  summary: No es su turno
+                  value:
+                    success: false
+                    error:
+                      code: WAITING_FOR_PREVIOUS_SIGNER
+                      message: 'Todavía no es el turno de este firmante: falta la firma de un firmante anterior'
+                ambiguous:
+                  summary: Correo de más de un firmante
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_AMBIGUOUS_SIGNER
+                      message: El correo corresponde a más de un firmante del documento
+                notResendable:
+                  summary: El firmante ya no espera firma
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_INVITATION_NOT_RESENDABLE
+                      message: El documento ya no espera la firma de este firmante
+        '422':
+          description: '`INVALID_REQUEST`: `email` no es un correo válido.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalidRequest:
+                  summary: Campos inválidos
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_REQUEST
+                      message: La petición tiene campos inválidos.
+                      details:
+                        errors:
+                          - email debe ser un correo válido
+        '429':
+          description: '`TOO_MANY_REQUESTS`: se superaron los diez accesos en 10 minutos para ese firmante.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tooManyRequests:
+                  summary: Demasiadas solicitudes para el firmante
+                  value:
+                    success: false
+                    error:
+                      code: TOO_MANY_REQUESTS
+                      message: Demasiados intentos. Espera unos minutos antes de volver a intentarlo.
+      security:
+        - integration-api-key: []
+      summary: Generar un acceso temporal de firma para un firmante
+      tags:
+        - Integration Documents
+  /api/v1/integration/organization/context:
+    get:
+      description: |-
+        Devuelve la organización de la API key, su saldo de documentos (`signatureQuota.documentsRemaining`), los documentos firmados en el periodo (`signatureQuota.documentsSigned`), el límite del plan (`signatureQuota.planLimit`), el periodo vigente y un resumen de su plan y ciclo de facturación.
+
+        La organización se resuelve exclusivamente desde la API key: no se envía ningún identificador.
+
+        **Autenticación:** `X-API-Key`.
+
+        **Permiso requerido:** `DOCUMENT.READ` con alcance `ORGANIZATION`. Una llave con alcance `OWN` responde `403 API_KEY_PERMISSION_DENIED`.
+
+        Nunca incluye datos de tarjeta, tokens de pago, facturas ni datos bancarios.
+      operationId: IntegrationOrganizationController_getContext
+      parameters: []
+      responses:
+        '200':
+          description: Contexto de la organización. Sin plan ni facturación, los contadores van en `0` y los datos del plan en `null`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationOrganizationContextResponse'
+              example:
+                success: true
+                message: Contexto de la organización obtenido correctamente
+                data:
+                  organization:
+                    id: 1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b
+                    name: Empresa Ejemplo S.A. de C.V.
+                    status: active
+                  signatureQuota:
+                    planLimit: 1000
+                    documentsSigned: 725
+                    documentsRemaining: 275
+                    periodStart: '2026-11-01'
+                    periodEnd: '2026-11-30'
+                  billing:
+                    plan: Business
+                    status: active
+                    billingCycle: monthly
+                    nextBillingDate: '2026-12-01'
+                    paymentStatus: paid
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo). Este endpoint exige `DOCUMENT.READ` con alcance `ORGANIZATION`; con alcance `OWN` responde `API_KEY_PERMISSION_DENIED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+      security:
+        - integration-api-key: []
+      summary: Consultar la organización, su saldo de documentos y su plan
+      tags:
+        - Organización
+  /api/v1/integration/webhooks/endpoint:
+    get:
+      description: |-
+        Devuelve la URL, el estado, los eventos suscritos y la versión del secreto activo. **Nunca devuelve el secreto.**
+
+        **Permiso requerido:** `WEBHOOK.READ`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_get
+      parameters: []
+      responses:
+        '200':
+          description: Configuración del endpoint, sin secreto.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`WEBHOOK_ENDPOINT_NOT_FOUND`: la organización no tiene un endpoint configurado. Créalo con `PUT`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                notFound:
+                  summary: Sin endpoint
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_ENDPOINT_NOT_FOUND
+                      message: La organización no tiene un endpoint de webhooks configurado
+      security:
+        - integration-api-key: []
+      summary: Consultar el endpoint de webhooks
+      tags:
+        - Webhooks
+    put:
+      callbacks:
+        document.collaborator_signed:
+          '{$request.body#/url}':
+            post:
+              summary: document.collaborator_signed
+              description: Un participante registró su firma. Si es la última, `data.document.status` ya es `SIGNED` y llega además `document.signed`.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentCollaboratorSignedWebhookPayload'
+                    example:
+                      id: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+                      type: document.collaborator_signed
+                      version: 1
+                      occurredAt: '2026-11-11T18:30:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: PENDING_SIGNATURE
+                        participant:
+                          id: 77f85c29-0104-4823-8b32-4bc567e88c6a
+                          email: firmante@empresa.com
+                          status: SIGNED
+                          signedAt: '2026-11-11T18:30:00.000Z'
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+        document.signed:
+          '{$request.body#/url}':
+            post:
+              summary: document.signed
+              description: Todos los firmantes completaron el documento.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentSignedWebhookPayload'
+                    example:
+                      id: a3c9e1f4-7b2d-4e8a-b6c0-1d5f9e3a7c28
+                      type: document.signed
+                      version: 1
+                      occurredAt: '2026-11-11T18:30:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: SIGNED
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+        document.rejected:
+          '{$request.body#/url}':
+            post:
+              summary: document.rejected
+              description: Un firmante rechazó el documento durante la firma. El motivo escrito no se publica.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentRejectedWebhookPayload'
+                    example:
+                      id: c7e2a9b1-4f6d-4c3e-8a0b-9d1e5f7a3b64
+                      type: document.rejected
+                      version: 1
+                      occurredAt: '2026-11-11T19:05:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: REJECTED
+                        participant:
+                          id: 77f85c29-0104-4823-8b32-4bc567e88c6a
+                          email: firmante@empresa.com
+                          status: REJECTED
+                          rejectedAt: '2026-11-11T19:05:00.000Z'
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+        document.cancelled:
+          '{$request.body#/url}':
+            post:
+              summary: document.cancelled
+              description: Se confirmó la cancelación del documento.
+              parameters:
+                - name: X-Signature-Webhook-Id
+                  in: header
+                  required: true
+                  description: 'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.'
+                  schema:
+                    type: string
+                    format: uuid
+                  example: 3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43
+                - name: X-Signature-Event
+                  in: header
+                  required: true
+                  description: Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.
+                  schema:
+                    type: string
+                    enum:
+                      - document.collaborator_signed
+                      - document.signed
+                      - document.rejected
+                      - document.cancelled
+                - name: X-Signature-Timestamp
+                  in: header
+                  required: true
+                  description: Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de 300 s de tu reloj.
+                  schema:
+                    type: string
+                    pattern: ^[0-9]+$
+                  example: '1794421800'
+                - name: X-Signature-Hmac
+                  in: header
+                  required: true
+                  description: '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.'
+                  schema:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/DocumentCancelledWebhookPayload'
+                    example:
+                      id: e1f4b7c2-9a3d-4e6b-8c0f-2a5d8e1b4c97
+                      type: document.cancelled
+                      version: 1
+                      occurredAt: '2026-11-12T09:00:00.000Z'
+                      data:
+                        document:
+                          id: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+                          status: CANCELLED
+              responses:
+                2XX:
+                  description: Entrega confirmada. El cuerpo de la respuesta se ignora.
+                default:
+                  description: 'Cualquier otra respuesta (incluidas las `3xx`), un error de red o 10 s sin respuesta: se reintenta con el mismo `X-Signature-Webhook-Id`.'
+      description: |-
+        Si la organización no tiene endpoint, lo crea activo y responde `201` con el **secreto**, que sólo se muestra esta vez. Si ya tiene uno, cambia la URL y los eventos, lo reactiva si estaba desactivado y responde `200` sin secreto: el secreto se conserva.
+
+        Las entregas ya registradas conservan la URL con la que se registraron.
+
+        Los cuerpos de cada evento están en la pestaña **Callbacks**.
+
+        **Permiso requerido:** `WEBHOOK.MANAGE`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_upsert
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertWebhookEndpointDto'
+      responses:
+        '200':
+          description: Endpoint actualizado. No incluye el secreto.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointResponse'
+        '201':
+          description: Endpoint creado. `data.secret` es el secreto HMAC; guárdalo ahora.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointWithSecretResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '422':
+          description: '`WEBHOOK_URL_NOT_ALLOWED` (la URL no es `https://` en el puerto 443, lleva credenciales o apunta a un host privado, reservado o que no resuelve; el motivo va en `details.reason`) o `INVALID_REQUEST` (falta `url`, `events` está vacío, repite un evento o trae uno desconocido).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                urlNotAllowed:
+                  summary: URL no permitida
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_URL_NOT_ALLOWED
+                      message: La URL del webhook debe usar https://
+                      details:
+                        field: url
+                        reason: HTTPS_REQUIRED
+        '503':
+          description: '`WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE`: el servidor no puede generar secretos por ahora. Reintenta más tarde; no se guardó nada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                unavailable:
+                  summary: Cifrado no disponible
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE
+                      message: La configuración de webhooks no está disponible por ahora. Vuelve a intentarlo más tarde.
+      security:
+        - integration-api-key: []
+      summary: Crear o actualizar el endpoint de webhooks
+      tags:
+        - Webhooks
+    delete:
+      description: |-
+        Deja de registrar entregas nuevas. Las ya registradas se siguen enviando. No borra la configuración ni el secreto: `PUT` lo reactiva. Repetirlo no cambia nada.
+
+        **Permiso requerido:** `WEBHOOK.MANAGE`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_disable
+      parameters: []
+      responses:
+        '200':
+          description: 'Endpoint desactivado (`status: DISABLED`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`WEBHOOK_ENDPOINT_NOT_FOUND`: la organización no tiene un endpoint configurado. Créalo con `PUT`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                notFound:
+                  summary: Sin endpoint
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_ENDPOINT_NOT_FOUND
+                      message: La organización no tiene un endpoint de webhooks configurado
+      security:
+        - integration-api-key: []
+      summary: Desactivar el endpoint de webhooks
+      tags:
+        - Webhooks
+  /api/v1/integration/webhooks/endpoint/rotate-secret:
+    post:
+      description: |-
+        Retira el secreto activo y genera el siguiente, que se devuelve **sólo en esta respuesta**. Las entregas nuevas se firman con él; las ya registradas se siguen firmando con el anterior hasta terminar, así que acepta ambos durante 24 h.
+
+        **Permiso requerido:** `WEBHOOK.MANAGE`.
+
+        La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.
+      operationId: IntegrationWebhookEndpointController_rotateSecret
+      parameters: []
+      responses:
+        '200':
+          description: Secreto rotado. `data.secret` es el secreto nuevo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationWebhookEndpointWithSecretResponse'
+        '400':
+          description: '`INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED`: la petición trae `organizationId`, `taxId` (fuera de un participante), `userId`, `accountId`, `createdBy`, `createdByUserId`, `permissionIds`, `X-Account-Id` o `X-Organization-Id` (la organización y el autor salen de la llave). `taxId` sí se admite dentro de un participante, como RFC del firmante de firma avanzada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                tenantOverride:
+                  summary: Campo de organización o autor no permitido
+                  value:
+                    success: false
+                    error:
+                      code: INTEGRATION_TENANT_OVERRIDE_NOT_ALLOWED
+                      message: 'La organización, la cuenta y el autor salen de la API key; no se aceptan: organizationId'
+        '401':
+          description: '`API_KEY_INVALID` (falta, formato incorrecto, secreto que no coincide o llave revocada) o `API_KEY_EXPIRED`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                invalid:
+                  summary: Llave ausente, inválida o revocada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_INVALID
+                      message: API key inválida o revocada
+                expired:
+                  summary: Llave vencida
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_EXPIRED
+                      message: La API key venció. Genera una nueva desde Integraciones.
+        '403':
+          description: '`API_KEY_PERMISSION_DENIED` (la llave no está autorizada para la operación), `API_KEY_ORGANIZATION_INACTIVE` o `API_KEY_ACTOR_INACTIVE` (quien emitió la llave ya no es miembro activo).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                permissionDenied:
+                  summary: Operación no autorizada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_PERMISSION_DENIED
+                      message: La API key no está autorizada para esta operación
+                organizationInactive:
+                  summary: Organización desactivada
+                  value:
+                    success: false
+                    error:
+                      code: API_KEY_ORGANIZATION_INACTIVE
+                      message: La organización de esta API key está desactivada
+        '404':
+          description: '`WEBHOOK_ENDPOINT_NOT_FOUND`: la organización no tiene un endpoint configurado. Créalo con `PUT`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                notFound:
+                  summary: Sin endpoint
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_ENDPOINT_NOT_FOUND
+                      message: La organización no tiene un endpoint de webhooks configurado
+        '503':
+          description: '`WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE`: el servidor no puede generar secretos por ahora. Reintenta más tarde; no se guardó nada.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationErrorResponseDto'
+              examples:
+                unavailable:
+                  summary: Cifrado no disponible
+                  value:
+                    success: false
+                    error:
+                      code: WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE
+                      message: La configuración de webhooks no está disponible por ahora. Vuelve a intentarlo más tarde.
+      security:
+        - integration-api-key: []
+      summary: Rotar el secreto del webhook
+      tags:
+        - Webhooks
+components:
+  securitySchemes:
+    integration-api-key:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |-
+        API key de tu organización, con formato `fma_live_<publicId>_<secret>`. Se emite (y se rota o revoca) desde **Integraciones** en Firmalo; el secreto completo sólo se muestra al emitirla.
+
+        Ejemplo (no es una llave real): `fma_live_0123456789abcdef_EjemploNoRealEjemploNoRealEjemploNoReal1234`
+
+        La organización y el contexto de acceso salen de la llave: no se usan JWT, `X-Account-Id` ni `X-Organization-Id`. Llama a la API sólo desde tu backend; nunca expongas la llave en un navegador o una app móvil.
+  schemas:
+    CreateIntegrationDocumentDto:
+      type: object
+      properties:
+        payload:
+          description: Campo de texto con un JSON con `creator`, `document` y `participants`.
+          example:
+            creator:
+              email: ana.lopez@cliente.example
+              firstName: Ana
+              lastName: López
+            document:
+              signatureType: SIMPLE
+              isSequential: true
+              isIndexable: true
+            participants:
+              - role: SIGNER
+                firstName: Luis
+                lastName: Martínez
+                email: luis.martinez@correo.example
+                order: 1
+                signaturePositions:
+                  - page: 1
+                    xRatio: 0.1
+                    yRatio: 0.8
+                    widthRatio: 0.25
+                    heightRatio: 0.08
+              - role: SIGNER
+                firstName: Marta
+                lastName: Gómez
+                email: marta.gomez@correo.example
+                order: 2
+                signaturePositions:
+                  - page: 1
+                    xRatio: 0.55
+                    yRatio: 0.8
+                    widthRatio: 0.25
+                    heightRatio: 0.08
+              - role: WITNESS
+                firstName: Eva
+                lastName: Ruiz
+                email: eva.ruiz@correo.example
+          allOf:
+            - $ref: '#/components/schemas/IntegrationDocumentPayloadDto'
+        file:
+          type: string
+          format: binary
+          description: PDF del documento a firmar, como archivo binario.
+      required:
+        - payload
+        - file
+    CreateIntegrationSigningAccessDto:
+      type: object
+      properties:
+        email:
+          type: string
+          example: ana@correo.com
+          description: Correo del firmante
+      required:
+        - email
+    DocumentCancelledWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.cancelled
+          example: document.cancelled
+        data:
+          $ref: '#/components/schemas/WebhookPayloadDocumentData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
+    DocumentCollaboratorSignedWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.collaborator_signed
+          example: document.collaborator_signed
+        data:
+          $ref: '#/components/schemas/WebhookPayloadCollaboratorSignedData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
+    DocumentRejectedWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.rejected
+          example: document.rejected
+        data:
+          $ref: '#/components/schemas/WebhookPayloadRejectedData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
+    DocumentSignedWebhookPayload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d0b8c62-2f3e-4a7b-9c1d-6e4f8a2b0c13
+          description: 'Identificador estable del evento. Igual en cada reintento: úsalo para deduplicar.'
+        version:
+          type: number
+          enum:
+            - 1
+          example: 1
+          description: 'Versión del contrato. Un campo opcional nuevo no la cambia: ignora los campos que no conozcas.'
+        occurredAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+          description: Momento del hecho (ISO 8601 UTC con milisegundos), no del envío.
+        type:
+          type: string
+          enum:
+            - document.signed
+          example: document.signed
+        data:
+          $ref: '#/components/schemas/WebhookPayloadDocumentData'
+      required:
+        - id
+        - version
+        - occurredAt
+        - type
+        - data
+    IntegrationBillingSummaryData:
+      type: object
+      properties:
+        plan:
+          type: string
+          nullable: true
+          example: Business
+          description: Nombre del plan; `null` si la organización no tiene plan
+        status:
+          type: string
+          enum:
+            - free
+            - incomplete
+            - active
+            - past_due
+            - canceled
+          nullable: true
+          example: active
+          description: '`null` si la organización nunca pasó por facturación'
+        billingCycle:
+          type: string
+          enum:
+            - monthly
+            - yearly
+            - custom
+          nullable: true
+          example: monthly
+          description: Según la duración del periodo vigente; `custom` si no es mensual ni anual, y `null` sin periodo
+        nextBillingDate:
+          type: string
+          format: date
+          nullable: true
+          example: '2026-12-01'
+          description: 'Fecha de renovación (UTC); `null` si no habrá otro cobro: sin plan de pago o con la baja programada'
+        paymentStatus:
+          type: string
+          enum:
+            - paid
+            - past_due
+            - pending
+            - not_applicable
+          example: paid
+          description: '`paid` (al corriente), `past_due` (cobro fallido), `pending` (contratación sin confirmar) o `not_applicable` (sin plan de pago)'
+      required:
+        - plan
+        - status
+        - billingCycle
+        - nextBillingDate
+        - paymentStatus
+    IntegrationCreatedDocumentData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+        status:
+          type: string
+          enum:
+            - CREATED
+            - PENDING_APPROVAL
+            - PENDING_SIGNATURE
+            - SIGNED
+            - REJECTED
+            - EXPIRED
+            - CANCELLATION_PENDING
+            - CANCELLED
+          example: PENDING_SIGNATURE
+        signatureType:
+          type: string
+          enum:
+            - SIMPLE
+            - FIEL
+            - BIOMETRIC
+          nullable: true
+          example: SIMPLE
+          description: '`FIEL` es la firma avanzada'
+        fileName:
+          type: string
+          example: contrato.pdf
+        createdAt:
+          format: date-time
+          type: string
+          example: '2026-10-26T12:00:00.000Z'
+        creator:
+          $ref: '#/components/schemas/IntegrationDocumentCreatorData'
+        participantsCount:
+          type: number
+          example: 1
+          description: Firmantes y testigos del documento
+        publicUrl:
+          type: string
+          example: https://app.firmalo.com/public/documents/2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+          description: URL pública de consulta del documento (`PUBLIC_WEB_APP_URL`)
+        participants:
+          description: 'Firmantes en orden de firma. No incluye URLs de firma: cada uno recibe su invitación por correo, y el portal pide un acceso temporal con `POST /integration/documents/:documentId/signing-access`.'
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationDocumentParticipantData'
+      required:
+        - id
+        - status
+        - signatureType
+        - fileName
+        - createdAt
+        - creator
+        - participantsCount
+        - publicUrl
+        - participants
+    IntegrationCreatedDocumentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Operación realizada con éxito
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationCreatedDocumentData'
+      required:
+        - success
+        - message
+        - data
+    IntegrationCreatorDto:
+      type: object
+      properties:
+        email:
+          type: string
+          example: ana@cliente.com
+          description: Correo del creador. Si no existe en la plataforma, se le da de alta como usuario provisional y miembro de la organización.
+        firstName:
+          type: string
+          example: Ana
+          description: Sólo se usa si el usuario no existe; nunca sobrescribe datos de uno existente.
+        lastName:
+          type: string
+          example: López
+      required:
+        - email
+        - firstName
+        - lastName
+    IntegrationDocumentCreatorData:
+      type: object
+      properties:
+        email:
+          type: string
+          example: ana@cliente.com
+      required:
+        - email
+    IntegrationDocumentData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 7d1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+        fileName:
+          type: string
+          example: contrato.pdf
+        status:
+          type: string
+          enum:
+            - CREATED
+            - PENDING_APPROVAL
+            - PENDING_SIGNATURE
+            - SIGNED
+            - REJECTED
+            - EXPIRED
+            - CANCELLATION_PENDING
+            - CANCELLED
+          example: PENDING_SIGNATURE
+        signatureType:
+          type: string
+          enum:
+            - SIMPLE
+            - FIEL
+            - BIOMETRIC
+          nullable: true
+          example: SIMPLE
+          description: '`FIEL` es la firma avanzada; `null` en documentos antiguos sin un tipo único'
+        createdAt:
+          format: date-time
+          type: string
+          example: '2026-10-26T12:00:00.000Z'
+        signedAt:
+          format: date-time
+          type: string
+          nullable: true
+          example: null
+          description: Momento en que la última firma cerró el documento; `null` mientras tanto
+      required:
+        - id
+        - fileName
+        - status
+        - signatureType
+        - createdAt
+        - signedAt
+    IntegrationDocumentOptionsDto:
+      type: object
+      properties:
+        signatureType:
+          type: string
+          enum:
+            - SIMPLE
+            - ADVANCED
+            - BIOMETRIC
+          example: SIMPLE
+        isSequential:
+          type: boolean
+          default: true
+          description: 'Con `true`, o si se omite, los firmantes firman uno a la vez y cada participante con `role: SIGNER` debe incluir `order`. Con `false`, cualquier firmante pendiente puede firmar en cualquier momento y `order` no es obligatorio ni define el orden de firma. Un `WITNESS` nunca requiere `order`.'
+        requiresApproval:
+          type: boolean
+          default: false
+          description: 'Por ahora sólo `false`: la aprobación previa no se admite por integración.'
+        isIndexable:
+          type: boolean
+          default: true
+      required:
+        - signatureType
+    IntegrationDocumentParticipantData:
+      type: object
+      properties:
+        email:
+          type: string
+          example: ana@correo.com
+        status:
+          type: string
+          enum:
+            - PENDING
+            - WAITING_FOR_PREVIOUS_SIGNER
+            - SIGNED
+            - REJECTED
+          example: PENDING
+          description: '`PENDING` si puede firmar ya; `WAITING_FOR_PREVIOUS_SIGNER` si el documento es secuencial y falta la firma de un firmante anterior'
+        signatureType:
+          type: string
+          enum:
+            - SIMPLE
+            - FIEL
+            - BIOMETRIC
+          nullable: true
+          example: SIMPLE
+        order:
+          type: number
+          example: 1
+          description: Orden de firma, desde 1
+        taxId:
+          type: string
+          nullable: true
+          example: null
+          description: RFC registrado para el firmante. Sólo de un firmante `FIEL` que lo tenga; `null` en cualquier otro caso
+      required:
+        - email
+        - status
+        - signatureType
+        - order
+        - taxId
+    IntegrationDocumentPayloadDto:
+      type: object
+      properties:
+        creator:
+          $ref: '#/components/schemas/IntegrationCreatorDto'
+        document:
+          $ref: '#/components/schemas/IntegrationDocumentOptionsDto'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationParticipantDto'
+      required:
+        - creator
+        - document
+        - participants
+    IntegrationDocumentsPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationDocumentData'
+        pagination:
+          $ref: '#/components/schemas/IntegrationDocumentsPagination'
+      required:
+        - items
+        - pagination
+    IntegrationDocumentsPageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Operación realizada con éxito
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationDocumentsPage'
+      required:
+        - success
+        - message
+        - data
+    IntegrationDocumentsPagination:
+      type: object
+      properties:
+        page:
+          type: number
+          example: 1
+        limit:
+          type: number
+          example: 25
+          description: Tamaño de página aplicado (máximo 100)
+        total:
+          type: number
+          example: 42
+        totalPages:
+          type: number
+          example: 2
+      required:
+        - page
+        - limit
+        - total
+        - totalPages
+    IntegrationErrorData:
+      type: object
+      properties:
+        code:
+          type: string
+          example: DUPLICATE_PARTICIPANT_EMAIL
+          description: Código estable del error (p. ej. `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED`, `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`, `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`, `INVALID_PARTICIPANT_TAX_ID`, `PARTICIPANT_TAX_ID_NOT_ALLOWED`, `UNSUPPORTED_PARTICIPANT_FIELD`, `API_KEY_INVALID`, `INTERNAL_ERROR`)
+        message:
+          type: string
+          example: Un colaborador sólo puede participar una vez en el documento.
+        details:
+          type: object
+          example:
+            field: participants[2].email
+            email: ana@correo.com
+          description: 'Datos del error: `field` con la ruta del campo afectado cuando aplica, y los valores que lo explican (`limit`, `received`, `page`, `totalPages`…).'
+      required:
+        - code
+        - message
+    IntegrationErrorResponseDto:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          $ref: '#/components/schemas/IntegrationErrorData'
+      required:
+        - success
+        - error
+    IntegrationOrganizationContextData:
+      type: object
+      properties:
+        organization:
+          $ref: '#/components/schemas/IntegrationOrganizationData'
+        signatureQuota:
+          $ref: '#/components/schemas/IntegrationSignatureQuotaData'
+        billing:
+          $ref: '#/components/schemas/IntegrationBillingSummaryData'
+      required:
+        - organization
+        - signatureQuota
+        - billing
+    IntegrationOrganizationContextResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Contexto de la organización obtenido correctamente
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationOrganizationContextData'
+      required:
+        - success
+        - message
+        - data
+    IntegrationOrganizationData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b
+        name:
+          type: string
+          example: Empresa Ejemplo S.A. de C.V.
+          description: Razón social
+        status:
+          type: string
+          enum:
+            - active
+          example: active
+          description: 'Siempre `active`: una llave de una organización desactivada responde `403 API_KEY_ORGANIZATION_INACTIVE`'
+      required:
+        - id
+        - name
+        - status
+    IntegrationParticipantDto:
+      type: object
+      properties:
+        role:
+          type: string
+          enum:
+            - SIGNER
+            - WITNESS
+          description: '`SIGNER` firma el documento: requiere `signaturePositions` y, si el documento es secuencial, `order`. `WITNESS` no requiere `order` ni participa en él, y no admite `signaturePositions`.'
+        firstName:
+          type: string
+          example: Luis
+          maxLength: 100
+        lastName:
+          type: string
+          example: Martínez
+          maxLength: 100
+        email:
+          type: string
+          example: luis@correo.com
+          description: 'Se compara sin espacios y en minúsculas: no puede repetirse.'
+        order:
+          type: integer
+          minimum: 1
+          example: 1
+          description: 'Posición del firmante en el orden de firma: entero que inicia en 1. Obligatorio para cada `SIGNER` si `document.isSequential` es `true` o se omite. Entre los firmantes debe ser único y consecutivo, sin huecos (1, 2, 3…), y es este valor, no la posición en `participants`, lo que define el orden. Un `WITNESS` no lo requiere y no cuenta en la secuencia; con `isSequential: false` tampoco es obligatorio. Si se envía en esos casos no tiene efecto, pero debe ser un entero mayor o igual a 1.'
+        signaturePositions:
+          description: Obligatorio para cada SIGNER (al menos una); prohibido para un WITNESS. Ratios 0-1 de la página.
+          type: array
+          items:
+            $ref: '#/components/schemas/SignaturePositionDto'
+        requiresTwoFactorAuth:
+          type: boolean
+          description: Código de verificación al firmar. En SIMPLE siempre se exige; en ADVANCED y BIOMETRIC, sólo si es true.
+        taxId:
+          type: string
+          example: LOPA800101AB1
+          minLength: 12
+          maxLength: 13
+          pattern: ^[A-ZÑ&]{3,4}\d{6}[A-Z\d]{3}$
+          description: 'RFC mexicano del firmante: 13 caracteres para persona física o 12 para persona moral (3 o 4 letras, fecha AAMMDD y homoclave de 3). Se quitan los espacios y se pasa a mayúsculas. Sólo se admite en un participante con `role: SIGNER` de un documento con `document.signatureType: ADVANCED`; en cualquier otro caso la respuesta es `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`, y con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`. Si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.'
+      required:
+        - role
+        - firstName
+        - lastName
+        - email
+    IntegrationResentInvitationData:
+      type: object
+      properties:
+        email:
+          type: string
+          example: ana@correo.com
+          description: Correo del firmante al que se reenvió la invitación
+        invitationExpiresAt:
+          format: date-time
+          type: string
+          example: '2026-11-02T12:00:00.000Z'
+          description: Vencimiento de la invitación nueva
+        emailDelivered:
+          type: boolean
+          example: true
+          description: '`false` si la invitación se emitió pero el correo no se pudo entregar; se puede reintentar más tarde'
+      required:
+        - email
+        - invitationExpiresAt
+        - emailDelivered
+    IntegrationResentInvitationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Invitación reenviada al correo del firmante
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationResentInvitationData'
+      required:
+        - success
+        - message
+        - data
+    IntegrationSignatureQuotaData:
+      type: object
+      properties:
+        planLimit:
+          type: number
+          example: 1000
+          description: Documentos que incluye el periodo vigente del plan
+        documentsSigned:
+          type: number
+          example: 725
+          description: Documentos que terminaron de firmarse durante el periodo vigente; `0` si no hay periodo vigente
+        documentsRemaining:
+          type: number
+          example: 275
+          description: 'Documentos que todavía se pueden crear para firma: suma los créditos vigentes del plan, los arrastrados y los comprados aparte, así que puede superar a `planLimit`. Un crédito se consume al crear el documento, no al firmarlo, por lo que no equivale a `planLimit - documentsSigned`. `0` si se agotó.'
+        periodStart:
+          type: string
+          format: date
+          nullable: true
+          example: '2026-11-01'
+          description: Primer día del periodo vigente (UTC)
+        periodEnd:
+          type: string
+          format: date
+          nullable: true
+          example: '2026-11-30'
+          description: Último día cubierto por el periodo vigente (UTC)
+      required:
+        - planLimit
+        - documentsSigned
+        - documentsRemaining
+        - periodStart
+        - periodEnd
+    IntegrationSigningAccessData:
+      type: object
+      properties:
+        url:
+          type: string
+          example: https://app.firmalo.com/sign/launch/EjemploDeTokenNoReal
+          description: URL `/sign/launch/:token` de un solo uso para abrir desde tu portal. Al abrirla, la plataforma envía un código al correo del firmante.
+        expiresAt:
+          format: date-time
+          type: string
+          example: '2026-10-26T12:05:00.000Z'
+          description: 'Vencimiento de la URL: cinco minutos después de emitirla'
+      required:
+        - url
+        - expiresAt
+    IntegrationSigningAccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Acceso temporal de firma generado
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationSigningAccessData'
+      required:
+        - success
+        - message
+        - data
+    IntegrationWebhookEndpointData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 0c7a4f2e-9d1b-4e6a-8f3c-2b5d7e9a1c40
+        url:
+          type: string
+          example: https://erp.cliente.com/webhooks/firmalo
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - DISABLED
+          example: ACTIVE
+          description: '`ACTIVE` registra entregas para los eventos suscritos. `DISABLED` no registra entregas nuevas; las ya registradas se siguen enviando.'
+        events:
+          type: array
+          example:
+            - document.collaborator_signed
+            - document.signed
+            - document.rejected
+            - document.cancelled
+          items:
+            type: string
+            enum:
+              - document.collaborator_signed
+              - document.signed
+              - document.rejected
+              - document.cancelled
+        secretVersion:
+          type: number
+          example: 1
+          description: Versión del secreto activo. Sube en 1 con cada rotación; el secreto nunca se vuelve a mostrar.
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        disabledAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+          description: Cuándo se desactivó; `null` mientras está `ACTIVE`.
+      required:
+        - id
+        - url
+        - status
+        - events
+        - secretVersion
+        - createdAt
+        - updatedAt
+        - disabledAt
+    IntegrationWebhookEndpointResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Endpoint de webhooks obtenido correctamente
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationWebhookEndpointData'
+      required:
+        - success
+        - message
+        - data
+    IntegrationWebhookEndpointWithSecretData:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 0c7a4f2e-9d1b-4e6a-8f3c-2b5d7e9a1c40
+        url:
+          type: string
+          example: https://erp.cliente.com/webhooks/firmalo
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - DISABLED
+          example: ACTIVE
+          description: '`ACTIVE` registra entregas para los eventos suscritos. `DISABLED` no registra entregas nuevas; las ya registradas se siguen enviando.'
+        events:
+          type: array
+          example:
+            - document.collaborator_signed
+            - document.signed
+            - document.rejected
+            - document.cancelled
+          items:
+            type: string
+            enum:
+              - document.collaborator_signed
+              - document.signed
+              - document.rejected
+              - document.cancelled
+        secretVersion:
+          type: number
+          example: 1
+          description: Versión del secreto activo. Sube en 1 con cada rotación; el secreto nunca se vuelve a mostrar.
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-12T18:00:00.000Z'
+        disabledAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+          description: Cuándo se desactivó; `null` mientras está `ACTIVE`.
+        secret:
+          type: string
+          example: whsec_ZXhhbXBsZS1ub3QtYS1yZWFsLXNlY3JldC0xMjM0NTY3ODk
+          description: 'Secreto HMAC completo (`whsec_` incluido). **Sólo se entrega en esta respuesta**: guárdalo en el gestor de secretos de tu backend. Si se pierde, rótalo.'
+      required:
+        - id
+        - url
+        - status
+        - events
+        - secretVersion
+        - createdAt
+        - updatedAt
+        - disabledAt
+        - secret
+    IntegrationWebhookEndpointWithSecretResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+          description: Indica si la operación fue exitosa
+        message:
+          type: string
+          example: Endpoint de webhooks creado correctamente
+          description: Mensaje descriptivo del resultado de la operación
+          enum:
+            - Operación realizada con éxito
+            - Recurso creado correctamente
+            - Recurso no encontrado
+            - Datos de entrada inválidos
+            - No autorizado para realizar esta acción
+            - El firmante no está asociado al recurso
+            - El recurso ya existe
+            - Error interno del servidor
+        data:
+          description: Datos de la respuesta
+          allOf:
+            - $ref: '#/components/schemas/IntegrationWebhookEndpointWithSecretData'
+      required:
+        - success
+        - message
+        - data
+    ResendIntegrationSigningInvitationDto:
+      type: object
+      properties:
+        email:
+          type: string
+          example: ana@correo.com
+          description: Correo del firmante
+      required:
+        - email
+    SignaturePositionDto:
+      type: object
+      properties:
+        signatureId:
+          type: string
+          example: sig_loc_01
+        page:
+          type: number
+          example: 1
+        xRatio:
+          type: number
+          example: 0.65
+        yRatio:
+          type: number
+          example: 0.8
+        widthRatio:
+          type: number
+          example: 0.2
+        heightRatio:
+          type: number
+          example: 0.08
+      required:
+        - page
+        - xRatio
+        - yRatio
+        - widthRatio
+        - heightRatio
+    UpsertWebhookEndpointDto:
+      type: object
+      properties:
+        url:
+          type: string
+          example: https://erp.cliente.com/webhooks/firmalo
+          maxLength: 2048
+          description: 'URL que recibe los `POST`. Sólo `https://` en el puerto 443, sin usuario ni contraseña, a un host público: se rechazan IPs privadas, loopback, link-local y metadatos de nube.'
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          example:
+            - document.collaborator_signed
+            - document.signed
+            - document.rejected
+            - document.cancelled
+          description: Eventos que se notifican; al menos uno, sin repetir.
+          items:
+            type: string
+            enum:
+              - document.collaborator_signed
+              - document.signed
+              - document.rejected
+              - document.cancelled
+      required:
+        - url
+        - events
+    WebhookPayloadCollaboratorSignedData:
+      type: object
+      properties:
+        document:
+          $ref: '#/components/schemas/WebhookPayloadDocument'
+        participant:
+          $ref: '#/components/schemas/WebhookPayloadSignedParticipant'
+      required:
+        - document
+        - participant
+    WebhookPayloadDocument:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 8f25e9d5-8998-4ec5-9a0e-1421ad48f743
+          description: Identificador del documento; el mismo que devuelve la API de integración.
+        status:
+          type: string
+          enum:
+            - CREATED
+            - PENDING_APPROVAL
+            - PENDING_SIGNATURE
+            - SIGNED
+            - REJECTED
+            - EXPIRED
+            - CANCELLATION_PENDING
+            - CANCELLED
+          example: PENDING_SIGNATURE
+          description: Estado del documento justo después del hecho.
+      required:
+        - id
+        - status
+    WebhookPayloadDocumentData:
+      type: object
+      properties:
+        document:
+          $ref: '#/components/schemas/WebhookPayloadDocument'
+      required:
+        - document
+    WebhookPayloadRejectedData:
+      type: object
+      properties:
+        document:
+          $ref: '#/components/schemas/WebhookPayloadDocument'
+        participant:
+          $ref: '#/components/schemas/WebhookPayloadRejectedParticipant'
+      required:
+        - document
+        - participant
+    WebhookPayloadRejectedParticipant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 77f85c29-0104-4823-8b32-4bc567e88c6a
+          description: Identificador del participante; el mismo que devuelve la API de integración.
+        email:
+          type: string
+          example: firmante@empresa.com
+        status:
+          type: string
+          enum:
+            - REJECTED
+          example: REJECTED
+        rejectedAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T19:05:00.000Z'
+      required:
+        - id
+        - email
+        - status
+        - rejectedAt
+    WebhookPayloadSignedParticipant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 77f85c29-0104-4823-8b32-4bc567e88c6a
+          description: Identificador del participante; el mismo que devuelve la API de integración.
+        email:
+          type: string
+          example: firmante@empresa.com
+        status:
+          type: string
+          enum:
+            - SIGNED
+          example: SIGNED
+        signedAt:
+          type: string
+          format: date-time
+          example: '2026-11-11T18:30:00.000Z'
+      required:
+        - id
+        - email
+        - status
+        - signedAt
+servers:
+  - url: https://api.firmalo.example

@@ -15,6 +15,8 @@ import { EmailService } from 'src/common/email/email.service';
 import { MinioService } from 'src/common/minio/minio.service';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { PdfSignatureService } from 'src/common/document-signing/document-signing.service';
+import { FinalizeBiometricSignatureCreditsUseCase } from 'src/billing/credits/finalize-biometric-signature-credits.use-case';
+import { DOCUMENT_CLOSURE_REASON_ENUM } from 'src/billing/enums/document-closure-reason.enum';
 
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { DocumentEntity } from '../entities/document.entity';
@@ -49,6 +51,7 @@ export class ConfirmDocumentCancellationUseCase {
     private readonly auditService: AuditService,
     private readonly documentEventsProducer: DocumentEventsProducer,
     private readonly documentService: DocumentService,
+    private readonly finalizeBiometricCredits: FinalizeBiometricSignatureCreditsUseCase,
   ) {}
 
   async execute(
@@ -82,15 +85,33 @@ export class ConfirmDocumentCancellationUseCase {
     // arriba casi al mismo tiempo — sin este UPDATE condicionado, ambos estamparían y subirían
     // a MinIO, y todos los colaboradores recibirían el correo de cancelación duplicado.
     const cancelledAt = new Date();
-    const claim = await this.documentRepository.update(
-      { id: documentId, status: DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING },
-      { status: DOCUMENT_STATUS_ENUM.CANCELLED, cancelledAt },
-    );
-    if (claim.affected !== 1) {
-      throw new BadRequestException(
-        'La cancelación de este documento ya fue confirmada',
+
+    /**
+     * El claim a CANCELLED y el cierre de las reservas van en UNA transacción: si el cierre falla,
+     * el documento sigue en CANCELLATION_PENDING y la confirmación se puede reintentar. Sólo se
+     * cancela un documento ya firmado, así que normalmente no queda nada activo; las biométricas
+     * que quedaran se consumen, nunca se liberan.
+     */
+    await this.documentRepository.manager.transaction(async (manager) => {
+      const claim = await manager
+        .getRepository(DocumentEntity)
+        .update(
+          { id: documentId, status: DOCUMENT_STATUS_ENUM.CANCELLATION_PENDING },
+          { status: DOCUMENT_STATUS_ENUM.CANCELLED, cancelledAt },
+        );
+      if (claim.affected !== 1) {
+        throw new BadRequestException(
+          'La cancelación de este documento ya fue confirmada',
+        );
+      }
+      await this.finalizeBiometricCredits.onDocumentClosed(
+        {
+          documentId,
+          closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_CANCELLED,
+        },
+        manager,
       );
-    }
+    });
     document.status = DOCUMENT_STATUS_ENUM.CANCELLED;
     document.cancelledAt = cancelledAt;
 

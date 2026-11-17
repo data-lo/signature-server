@@ -7,6 +7,16 @@ import { DocumentCreditConsumptionEntity } from './document-credit-consumption.e
 import { BillingOwnerService } from '../profiles/billing-owner.service';
 import { InsufficientDocumentCreditsException } from '../exceptions/billing.exceptions';
 import { BILLING_SIGNATURE_TYPE_ENUM } from '../enums/billing-signature-type.enum';
+import { CREDIT_LEDGER_MOVEMENT_TYPE_ENUM } from '../enums/credit-ledger-movement-type.enum';
+import { CREDIT_TYPE_ENUM } from '../enums/credit-type.enum';
+import { recordCreditLedgerEntry } from './credit-ledger.util';
+
+/** El ledger real se prueba contra Postgres (`test/credit-reservations.e2e-spec.ts`). */
+jest.mock('./credit-ledger.util', () => ({
+  ...jest.requireActual('./credit-ledger.util'),
+  recordCreditLedgerEntry: jest.fn().mockResolvedValue(true),
+}));
+const recordLedger = recordCreditLedgerEntry as jest.Mock;
 
 const PERSONAL_OWNER = {
   personalAccountId: 'account-1',
@@ -126,6 +136,7 @@ describe('ConsumeDocumentCreditUseCase', () => {
   };
 
   beforeEach(async () => {
+    recordLedger.mockClear().mockResolvedValue(true);
     billingOwnerService = {
       resolveOwner: jest.fn().mockResolvedValue(PERSONAL_OWNER),
       findProfileByOwner: jest.fn().mockResolvedValue({ id: 'perfil-1' }),
@@ -507,7 +518,14 @@ describe('ConsumeDocumentCreditUseCase', () => {
       const builder = doble.manager.createQueryBuilder.mock.results[0]
         .value as Record<string, jest.Mock>;
 
-      expect(builder.andWhere).toHaveBeenCalledWith('lot.remaining > 0');
+      // Sólo lo no reservado y sólo créditos documentales.
+      expect(builder.andWhere).toHaveBeenCalledWith(
+        'lot.remaining > lot.reserved',
+      );
+      expect(builder.andWhere).toHaveBeenCalledWith(
+        'lot.credit_type = :creditType',
+        { creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE },
+      );
       expect(builder.andWhere).toHaveBeenCalledWith(
         '(lot.expires_at IS NULL OR lot.expires_at > now())',
       );
@@ -529,6 +547,39 @@ describe('ConsumeDocumentCreditUseCase', () => {
       expect(builder.where).toHaveBeenCalledWith(
         'lot.billing_profile_id = :billingProfileId',
         { billingProfileId: 'perfil-1' },
+      );
+    });
+  });
+
+  describe('ledger', () => {
+    it('registra el CONSUME del documento en la misma transacción, con la clave por documento', async () => {
+      await consume('documento-1', BILLING_SIGNATURE_TYPE_ENUM.SIMPLE);
+
+      expect(recordLedger).toHaveBeenCalledWith(doble.manager, {
+        billingProfileId: 'perfil-1',
+        creditLotId: 'lote-1',
+        creditType: CREDIT_TYPE_ENUM.DOCUMENT_SIGNATURE,
+        movementType: CREDIT_LEDGER_MOVEMENT_TYPE_ENUM.CONSUME,
+        quantity: 1,
+        idempotencyKey: 'consume:document:documento-1',
+        documentId: 'documento-1',
+        metadata: { signatureType: BILLING_SIGNATURE_TYPE_ENUM.SIMPLE },
+      });
+    });
+
+    it('el reintento con recibo existente no vuelve a registrar el movimiento', async () => {
+      await consume('documento-1');
+      await consume('documento-1');
+
+      expect(recordLedger).toHaveBeenCalledTimes(1);
+    });
+
+    /** Si el documento ya se cobró por su reserva, este descuento tiene que deshacerse. */
+    it('falla (y la transacción revierte) si el consumo del documento ya estaba en el ledger', async () => {
+      recordLedger.mockResolvedValueOnce(false);
+
+      await expect(consume('documento-1')).rejects.toThrow(
+        'ya tenía registrado su consumo',
       );
     });
   });
