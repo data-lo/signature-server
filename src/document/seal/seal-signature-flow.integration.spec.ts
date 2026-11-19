@@ -451,7 +451,11 @@ describe('Integración: sellado al completarse la firma avanzada (FIEL)', () => 
     expect(url).toBe('http://seal-service:3000/seal/signature');
     expect(config).toEqual(
       expect.objectContaining({
-        headers: { 'x-api-key': 'api-key-de-prueba' },
+        headers: {
+          'x-api-key': 'api-key-de-prueba',
+          // La misma clave en cada ejecución del sellado de este documento.
+          'Idempotency-Key': 'signature-server:document:doc-1:v1',
+        },
       }),
     );
     expect(sentPayload()).toEqual({

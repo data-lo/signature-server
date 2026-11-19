@@ -487,7 +487,12 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
 
       expect(url).toBe(`${SEAL_SERVICE_URL}/seal/signature`);
       expect(config).toEqual(
-        expect.objectContaining({ headers: { 'x-api-key': SEAL_API_KEY } }),
+        expect.objectContaining({
+          headers: {
+            'x-api-key': SEAL_API_KEY,
+            'Idempotency-Key': `signature-server:document:${DOCUMENT_ID}:v1`,
+          },
+        }),
       );
       expect(body).toEqual({
         documentId: DOCUMENT_ID,

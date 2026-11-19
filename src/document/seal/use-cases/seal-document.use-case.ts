@@ -21,6 +21,28 @@ export class SealDocumentUseCase {
     private readonly sealRepository: Repository<SealEntity>,
   ) {}
 
+  /**
+   * Sella las firmas avanzadas de un documento en Seal Service y guarda la constancia.
+   *
+   * El envío es idempotente por documento (`Idempotency-Key: signature-server:document:<id>:v1`):
+   * si el guardado local falla después de la emisión, el siguiente intento recibe de Seal Service
+   * la evidencia ya emitida en vez de pedir otra constancia al PSC.
+   *
+   * @param sealDocumentDto - Documento y firmas avanzadas.
+   * @returns La constancia guardada.
+   *
+   * @throws {DocumentAlreadySealedException} Si el documento ya tenía constancia local.
+   * @throws {SealPersistenceException} Si no se pudo guardar; repetir recupera la misma evidencia.
+   * @throws {SealOperationInProgressException} Si Seal Service la sigue emitiendo.
+   * @throws {SealIdempotencyConflictException} Si el payload cambió después del primer envío.
+   * @throws {SealReconciliationRequiredException} Si el resultado ante el PSC es incierto.
+   * @throws {Error} Los errores de transporte de `SealApiService`.
+   *
+   * @example
+   * ```ts
+   * const seal = await sealDocumentUseCase.create(dto);
+   * ```
+   */
   async create(sealDocumentDto: SealDocumentDto): Promise<SealEntity> {
     const response =
       await this.sealApiService.generateDocumentSeals(sealDocumentDto);
