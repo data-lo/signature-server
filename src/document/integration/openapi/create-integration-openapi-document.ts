@@ -107,19 +107,28 @@ const INTEGRATION_OPENAPI_DESCRIPTION = [
  *   payloads de webhooks que referencian los `callbacks` de `PUT /integration/webhooks/endpoint`.
  *
  * El título, la descripción, los tags (`INTEGRATION_OPENAPI_TAGS`, en ese orden) y la seguridad
- * global son los del contrato de clientes, no los del documento general. No lleva `servers`: Swagger UI usa el host desde el que se abre.
+ * global son los del contrato de clientes, no los del documento general.
+ *
+ * Con `options.serverUrl` declara `servers: [{ url }]`, que es a donde el playground de Mintlify
+ * (y Swagger UI) manda las peticiones. Sin él no lleva `servers` y Swagger UI usa el host desde el
+ * que se abre.
  *
  * @param source - Documento generado por `SwaggerModule.createDocument`.
+ * @param options - Opciones del contrato publicado.
+ * @param options.serverUrl - Origen público de la API (ver `integrationApiPublicUrl`), sin ruta.
  * @returns El contrato OpenAPI de integración, listo para `SwaggerModule.setup`.
  *
  * @example
  * ```ts
- * const integrationDocument = createIntegrationOpenApiDocument(publicDocument);
+ * const integrationDocument = createIntegrationOpenApiDocument(publicDocument, {
+ *   serverUrl: integrationApiPublicUrl(),
+ * });
  * SwaggerModule.setup(`${GLOBAL_API_PREFIX}/integration/docs`, app, integrationDocument);
  * ```
  */
 export function createIntegrationOpenApiDocument(
   source: OpenAPIObject,
+  options: { serverUrl?: string } = {},
 ): OpenAPIObject {
   const copy: OpenAPIObject = structuredClone(source);
 
@@ -148,6 +157,7 @@ export function createIntegrationOpenApiDocument(
       description: INTEGRATION_OPENAPI_DESCRIPTION,
       version: copy.info?.version ?? '1.0',
     },
+    ...(options.serverUrl ? { servers: [{ url: options.serverUrl }] } : {}),
     tags: INTEGRATION_OPENAPI_TAGS.map((tag) => ({ ...tag })),
     security: [{ [INTEGRATION_API_KEY_SECURITY]: [] }],
     paths,

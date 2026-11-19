@@ -948,6 +948,25 @@ describe('createIntegrationOpenApiDocument', () => {
     }
   });
 
+  describe('servers', () => {
+    it('sin serverUrl no declara servers: Swagger UI usa el host desde el que se abre', () => {
+      expect(integration).not.toHaveProperty('servers');
+    });
+
+    it('con serverUrl declara sólo ese host y conserva rutas y seguridad', () => {
+      const withServer = createIntegrationOpenApiDocument(general, {
+        serverUrl: 'https://signature.api.staging.data-lo.online',
+      });
+
+      expect(withServer.servers).toEqual([
+        { url: 'https://signature.api.staging.data-lo.online' },
+      ]);
+      expect(operationsOf(withServer)).toEqual(operationsOf(integration));
+      expect(withServer.security).toEqual(integration.security);
+      expect(withServer.components).toEqual(integration.components);
+    });
+  });
+
   it('no modifica el documento general', () => {
     expect(JSON.stringify(general)).toBe(generalSnapshot);
   });
