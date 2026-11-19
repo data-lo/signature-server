@@ -14,6 +14,9 @@ import { buildAttachmentDisposition } from './content-disposition.util';
 /** Bucket privado de la INE verificada cuando `MINIO_IDENTITY_DOCUMENTS_BUCKET` no está definido. */
 export const DEFAULT_IDENTITY_DOCUMENTS_BUCKET = 'identity-documents';
 
+/** Bucket privado de los payloads de sellado cuando `MINIO_SEALING_REQUESTS_BUCKET` no está definido. */
+export const DEFAULT_SEALING_REQUESTS_BUCKET = 'sealing-requests';
+
 /**
  * Los metadatos de un objeto viajan como cabeceras HTTP `x-amz-meta-*`, que solo admiten ASCII
  * imprimible. Un nombre como "José Pérez" se enviaría en latin1 y llegaría corrupto, y un
@@ -42,6 +45,7 @@ export class MinioService {
   MINIO_REJECTED_DOCUMENTS_BUCKET: any;
   MINIO_SIGNATURE_IMAGES_BUCKET: any;
   MINIO_IDENTITY_DOCUMENTS_BUCKET: string;
+  MINIO_SEALING_REQUESTS_BUCKET: string;
 
   MINIO_HOST: any;
   MINIO_PORT: any;
@@ -150,6 +154,9 @@ export class MinioService {
     this.MINIO_IDENTITY_DOCUMENTS_BUCKET =
       process.env.MINIO_IDENTITY_DOCUMENTS_BUCKET ||
       DEFAULT_IDENTITY_DOCUMENTS_BUCKET;
+    this.MINIO_SEALING_REQUESTS_BUCKET =
+      process.env.MINIO_SEALING_REQUESTS_BUCKET ||
+      DEFAULT_SEALING_REQUESTS_BUCKET;
     this.MINIO_HOST = process.env.MINIO_HOST;
     this.MINIO_PORT = process.env.MINIO_PORT;
     this.MINIO_API = process.env.MINIO_API;
@@ -219,6 +226,8 @@ export class MinioService {
         return this.MINIO_SIGNATURE_IMAGES_BUCKET;
       case BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS:
         return this.MINIO_IDENTITY_DOCUMENTS_BUCKET;
+      case BUCKET_TYPES_ENUM.SEALING_REQUESTS:
+        return this.MINIO_SEALING_REQUESTS_BUCKET;
       default:
         throw new Error('Tipo de bucket no reconocido');
     }
@@ -233,7 +242,7 @@ export class MinioService {
    * (`ensureBucketExists`) y MinIO lo crea PRIVADO: sin política de acceso anónimo, sólo se lee con
    * las credenciales del servicio. Tampoco se ofrece ningún método que firme URLs sobre él.
    *
-   * @param bucketType - Bucket de destino; hoy sólo `IDENTITY_DOCUMENTS`.
+   * @param bucketType - Bucket privado de destino: `IDENTITY_DOCUMENTS` o `SEALING_REQUESTS`.
    * @param objectKey - Llave interna del objeto (UUIDs, sin datos del titular).
    * @param content - Bytes del objeto.
    * @param contentType - Tipo MIME ya validado del contenido.
@@ -277,7 +286,7 @@ export class MinioService {
    * Es la lectura hermana de `putSensitiveObject`: `getFileInBytesFormat` escribe en el log los
    * metadatos del objeto y, al fallar, su llave dentro del mensaje de error.
    *
-   * @param bucketType - Bucket de origen; hoy sólo `IDENTITY_DOCUMENTS`.
+   * @param bucketType - Bucket privado de origen: `IDENTITY_DOCUMENTS` o `SEALING_REQUESTS`.
    * @param objectKey - Llave interna del objeto.
    * @returns Los bytes del objeto. Quien lo recibe es responsable de no conservarlos más de lo necesario.
    *
@@ -310,6 +319,40 @@ export class MinioService {
     } catch (error) {
       throw new Error(
         `No se pudo leer un objeto sensible de MinIO (${this.describeMinioError(error)}).`,
+      );
+    }
+  }
+
+  /**
+   * Borra un objeto sensible sin registrar su llave. Tolera que ya no exista: se usa para limpiar
+   * objetos huérfanos, y un segundo intento de limpieza no es un error.
+   *
+   * @param bucketType - Bucket privado: `IDENTITY_DOCUMENTS` o `SEALING_REQUESTS`.
+   * @param objectKey - Llave interna del objeto.
+   * @returns Nada; si regresa, el objeto ya no existe.
+   *
+   * @throws {Error} Con un mensaje genérico y el código de MinIO, sin la llave, si no se pudo borrar.
+   *
+   * @example
+   * ```ts
+   * await minioService.removeSensitiveObject(BUCKET_TYPES_ENUM.SEALING_REQUESTS, key);
+   * ```
+   */
+  async removeSensitiveObject(
+    bucketType: BUCKET_TYPES_ENUM,
+    objectKey: string,
+  ): Promise<void> {
+    const minioPrivateClient = this.getMinioPrivateClient();
+    const bucketName = this.getBucketByType(bucketType);
+
+    try {
+      await minioPrivateClient.removeObject(bucketName, objectKey);
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'NoSuchKey') {
+        return;
+      }
+      throw new Error(
+        `No se pudo borrar un objeto sensible de MinIO (${this.describeMinioError(error)}).`,
       );
     }
   }
