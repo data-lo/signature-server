@@ -18,10 +18,6 @@ import {
   INTEGRATION_DOCUMENTS_TAG,
   INTEGRATION_OPENAPI_TAGS,
 } from '../docs/api-integration-documents-common.docs';
-import {
-  EXAMPLE_IDEMPOTENCY_KEY,
-  EXAMPLE_INTEGRATION_API_KEY,
-} from '../docs/api-integration-examples.docs';
 
 /** Prefijo de las rutas que se publican: sólo la API de integración. */
 export const INTEGRATION_OPENAPI_PATH_PREFIX = '/api/v1/integration/';
@@ -58,7 +54,7 @@ const REQUEST_ID_PARAMETER: ParameterObject = {
   name: REQUEST_ID_HEADER,
   in: 'header',
   required: false,
-  description: `Identificador de correlación propio, opcional. Se acepta si tiene de 1 a ${REQUEST_ID_MAX_LENGTH} caracteres entre letras ASCII, dígitos, \`-\`, \`_\`, \`.\` y \`:\`; si falta o no cumple, Firmalo genera un UUID. La respuesta lo devuelve siempre.`,
+  description: `Opcional. Tu identificador para rastrear la petición: de 1 a ${REQUEST_ID_MAX_LENGTH} caracteres entre letras ASCII, dígitos, \`-\`, \`_\`, \`.\` y \`:\`. Si falta o no cumple el formato, Firmalo genera un UUID.`,
   schema: { ...REQUEST_ID_SCHEMA },
   example: EXAMPLE_REQUEST_ID,
 };
@@ -66,7 +62,7 @@ const REQUEST_ID_PARAMETER: ParameterObject = {
 /** `X-Request-Id` de la respuesta; va en todas las respuestas, también en las de error. */
 const REQUEST_ID_RESPONSE_HEADER: HeaderObject = {
   description:
-    'Identificador de correlación de la petición: el `X-Request-Id` que mandaste si era válido o uno generado por Firmalo. Va en todas las respuestas, incluidos los errores; indícalo al contactar a soporte.',
+    'El `X-Request-Id` que enviaste, o el que generó Firmalo. Indícalo al reportar un problema.',
   schema: { ...REQUEST_ID_SCHEMA },
   example: EXAMPLE_REQUEST_ID,
 };
@@ -79,14 +75,12 @@ const TRANSPORT_HEADERS = new Set(['user-agent']);
 
 /** Descripción del contrato: lo que un cliente necesita antes de la primera llamada. */
 const INTEGRATION_OPENAPI_DESCRIPTION = [
-  'API para que tu sistema cree documentos PDF con su flujo de firmas, consulte su estado y gestione el acceso de los firmantes en Firmalo.',
-  '**Autenticación.** Todas las rutas usan la API key de tu organización en el header `X-API-Key`, con formato `fma_live_<publicId>_<secret>`. Pégala en «Authorize» para probar desde esta página. Ejemplo (no es una llave real):',
-  `\`X-API-Key: ${EXAMPLE_INTEGRATION_API_KEY}\``,
-  '**Idempotencia.** `POST /integration/documents` exige `Idempotency-Key`: repetir la petición con la misma clave y el mismo contenido devuelve el documento original, sin crear ni cobrar otro. Ejemplo:',
-  `\`Idempotency-Key: ${EXAMPLE_IDEMPOTENCY_KEY}\``,
-  `**Correlación.** Cada respuesta —también las de error— trae el header \`${REQUEST_ID_HEADER}\`. Puedes mandar el tuyo (hasta ${REQUEST_ID_MAX_LENGTH} caracteres: letras, dígitos, \`-\`, \`_\`, \`.\`, \`:\`) y se te devuelve el mismo; si falta o no cumple, se genera un UUID. Guárdalo e indícalo al reportar un problema. Ejemplo:`,
-  `\`${REQUEST_ID_HEADER}: ${EXAMPLE_REQUEST_ID}\``,
-  '**Errores.** Todos tienen la forma `{ "success": false, "error": { "code", "message", "details" } }`, con un `code` estable para decidir qué hacer sin depender del texto.',
+  'Crea documentos PDF para firma, consulta su estado y da acceso a los firmantes desde tu sistema.',
+  [
+    '- **Autenticación.** Envía la API key de tu organización en `X-API-Key` en cada petición.',
+    `- **Correlación.** Cada respuesta, también las de error, trae \`${REQUEST_ID_HEADER}\`. Envía el tuyo para rastrear la petición en tus logs (por ejemplo, \`${REQUEST_ID_HEADER}: ${EXAMPLE_REQUEST_ID}\`) e indícalo al reportar un problema.`,
+    '- **Errores.** Todos tienen la forma `{ "success": false, "error": { "code", "message", "details" } }`. Decide qué hacer según `code`; `message` puede cambiar.',
+  ].join('\n'),
 ].join('\n\n');
 
 /**

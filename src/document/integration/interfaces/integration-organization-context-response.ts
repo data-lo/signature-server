@@ -36,7 +36,7 @@ export class IntegrationOrganizationData {
     enum: ['active'],
     example: 'active',
     description:
-      'Siempre `active`: una llave de una organización desactivada responde `403 API_KEY_ORGANIZATION_INACTIVE`',
+      'Siempre `active`. Si la organización se desactiva, la API responde `403 API_KEY_ORGANIZATION_INACTIVE`.',
   })
   status: 'active';
 }
@@ -45,21 +45,20 @@ export class IntegrationOrganizationData {
 export class IntegrationSignatureQuotaData {
   @ApiProperty({
     example: 1000,
-    description: 'Documentos que incluye el periodo vigente del plan',
+    description: 'Documentos que incluye el plan en el periodo vigente.',
   })
   planLimit: number;
 
   @ApiProperty({
     example: 725,
-    description:
-      'Documentos que terminaron de firmarse durante el periodo vigente; `0` si no hay periodo vigente',
+    description: 'Documentos que terminaron de firmarse en el periodo vigente.',
   })
   documentsSigned: number;
 
   @ApiProperty({
     example: 275,
     description:
-      'Documentos que todavía se pueden crear para firma: suma los créditos vigentes del plan, los arrastrados y los comprados aparte, así que puede superar a `planLimit`. Un crédito se consume al crear el documento, no al firmarlo, por lo que no equivale a `planLimit - documentsSigned`. `0` si se agotó.',
+      'Documentos que todavía puedes crear. Suma los créditos del plan, los arrastrados y los comprados, así que puede ser mayor que `planLimit`. Se descuenta uno al crear cada documento, no al firmarlo.',
   })
   documentsRemaining: number;
 

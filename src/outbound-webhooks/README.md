@@ -86,7 +86,7 @@ identificadores de participante son los mismos que devuelve la API de integraci√
     },
     "participant": {
       "id": "77f85c29-0104-4823-8b32-4bc567e88c6a",
-      "email": "firmante@empresa.com",
+      "email": "luis.martinez@correo.example",
       "status": "SIGNED",
       "signedAt": "2026-11-11T18:30:00.000Z"
     }
@@ -128,7 +128,7 @@ Si es la √∫ltima firma, `document.status` ya es `SIGNED`.
     },
     "participant": {
       "id": "77f85c29-0104-4823-8b32-4bc567e88c6a",
-      "email": "firmante@empresa.com",
+      "email": "luis.martinez@correo.example",
       "status": "REJECTED",
       "rejectedAt": "2026-11-11T19:05:00.000Z"
     }
