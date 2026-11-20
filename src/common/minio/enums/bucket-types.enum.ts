@@ -31,4 +31,11 @@ export enum BUCKET_TYPES_ENUM {
    * firman URLs permanentes sobre él. Ver `MinioService.putSensitiveObject`.
    */
   IDENTITY_DOCUMENTS = 'identity_documents',
+  /**
+   * Payloads congelados que un trabajo de sellado envía a Seal Service (ver
+   * `SealingRequestSnapshotService`). Bucket PRIVADO como `IDENTITY_DOCUMENTS`: lleva CURP, correo,
+   * el código de verificación consumido y referencias a la INE y la rúbrica. Sólo lo leen y escriben
+   * servicios internos con `putSensitiveObject` / `getSensitiveObject`.
+   */
+  SEALING_REQUESTS = 'sealing_requests',
 }

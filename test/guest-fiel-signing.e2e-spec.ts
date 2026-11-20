@@ -184,9 +184,14 @@ describe('Firma electrónica sin cuenta: Firma Avanzada de invitado (e2e)', () =
           return EFIRMA_RESULT;
         },
       ),
-      finalizeSignedDocument: jest.fn(async () => {
-        document.status = DOCUMENT_STATUS_ENUM.SIGNED;
-      }),
+      // Mismo contrato que el real: la evidencia del último firmante se guarda en la transacción de
+      // cierre, junto con el documento en SIGNED y el trabajo de sellado.
+      finalizeSignedDocument: jest.fn(
+        async (_document: unknown, _signers: unknown, lastSigner: object) => {
+          await (collaboratorRepository.save as jest.Mock)(lastSigner);
+          document.status = DOCUMENT_STATUS_ENUM.SIGNED;
+        },
+      ),
       refreshPartiallySignedPreview: jest.fn(),
       notifyNextSigner: jest.fn(),
     };
