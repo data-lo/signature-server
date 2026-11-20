@@ -73,6 +73,8 @@ import { PublicSigningController } from './public-signing.controller';
 import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
 import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
 import { DocumentIndexingJobEntity } from './entities/document-indexing-job.entity';
+import { DocumentSealingJobEntity } from './seal/entities/document-sealing-job.entity';
+import { RefreshSealedDocumentEvidenceService } from './services/refresh-sealed-document-evidence.service';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
@@ -97,6 +99,11 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
   ],
   providers: [
     DocumentService,
+    /**
+     * Fase `UPDATING_EVIDENCE_PDF` del trabajo de sellado: se registra al arrancar en
+     * `ProcessDocumentSealingJobUseCase` (de `SealModule`), que no puede importar este módulo.
+     */
+    RefreshSealedDocumentEvidenceService,
     VerificationCodeService,
     SignatureQrService,
     /**
@@ -183,6 +190,8 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
       GuestSigningAccessEntity,
       // Trabajos de indexación: estado técnico del envío al indexador, aparte de `DocumentEntity`.
       DocumentIndexingJobEntity,
+      // La vista pública lee el estado del trabajo de sellado; no lo procesa.
+      DocumentSealingJobEntity,
       IntegrationIdempotencyKeyEntity,
       // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
       // pedido dentro de la organización de la API key.
