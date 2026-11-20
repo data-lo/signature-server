@@ -148,6 +148,27 @@ describe('RetryPendingSealUseCase', () => {
     );
   });
 
+  it('vuelve a preguntar por una evidencia unknown y guarda la respuesta nueva', async () => {
+    collaboratorRepository.find
+      .mockResolvedValueOnce([
+        fielSigner('c-1', { ...GOOD(SIGNED_AT), status: 'unknown' }),
+      ])
+      .mockResolvedValueOnce([]);
+    ocspService.verifyRevokedOCSP.mockResolvedValue({
+      status: 'good',
+      verifiedAt: new Date(),
+    });
+
+    await useCase.execute('doc-1');
+
+    expect(ocspService.verifyRevokedOCSP).toHaveBeenCalledTimes(1);
+    expect(collaboratorRepository.update).toHaveBeenCalledWith('c-1', {
+      advancedSignature: expect.objectContaining({
+        ocspEvidence: expect.objectContaining({ status: 'good' }),
+      }),
+    });
+  });
+
   it('guarda una respuesta unknown tal cual: decidir si basta es tarea del procesador', async () => {
     collaboratorRepository.find
       .mockResolvedValueOnce([fielSigner('c-1', undefined)])

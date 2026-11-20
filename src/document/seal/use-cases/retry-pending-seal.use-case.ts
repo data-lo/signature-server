@@ -27,7 +27,8 @@ import { IncompleteAdvancedSignatureEvidenceException } from '../exceptions/seal
  *   `IncompleteAdvancedSignatureEvidenceException`: la evidencia no sirve; requiere revisión.
  *
  * Un resultado `unknown` NO es un error aquí: se guarda tal cual, como cualquier evidencia, y es el
- * procesador quien decide que no basta para sellar (ver `assertSealableOcspEvidence`).
+ * procesador quien decide que no basta para sellar (ver `findUnsealableOcspSigners`). En el siguiente
+ * intento se vuelve a consultar, y la respuesta nueva reemplaza a la anterior.
  *
  * **Sobre `verifiedAt`.** Es el momento de la consulta de este reintento, no el de la firma, que
  * sigue en `advancedSignature.signedAt`. La consulta acredita que el certificado no está revocado
@@ -73,7 +74,8 @@ export class RetryPendingSealUseCase {
       (collaborator) =>
         collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
         collaborator.advancedSignature &&
-        !collaborator.advancedSignature.ocspEvidence,
+        // Sin evidencia, o con `unknown`: ése se vuelve a preguntar en cada intento.
+        collaborator.advancedSignature.ocspEvidence?.status !== 'good',
     );
 
     if (missing.length === 0) {

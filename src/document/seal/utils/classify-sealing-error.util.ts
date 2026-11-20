@@ -29,8 +29,24 @@ import {
   SealingFailure,
 } from '../interfaces/sealing-failure.interface';
 
-/** Estados `4xx` de Seal Service que sí son transitorios. */
+/**
+ * Ejecuciones máximas mientras el SAT responda `unknown`: se reintenta poco, porque un certificado
+ * que el respondedor no reconoce rara vez cambia en horas, y nunca se acepta como `good`.
+ */
+export const OCSP_UNKNOWN_MAX_ATTEMPTS = 3;
+
+/** Estados de Seal Service que se reintentan aunque sean `4xx`. */
 const TRANSIENT_CLIENT_STATUSES = new Set([408, 425, 429]);
+
+/** Estados que indican credenciales o configuración del servidor equivocadas. */
+const CONFIGURATION_STATUSES = new Set([401, 403, 404]);
+
+/** Datos opcionales de un fallo. */
+interface SealingFailureOptions {
+  upstreamStatus?: number | null;
+  retryAfterMs?: number | null;
+  maxAttempts?: number | null;
+}
 
 /**
  * Arma un `SealingFailure`.
@@ -39,7 +55,7 @@ const TRANSIENT_CLIENT_STATUSES = new Set([408, 425, 429]);
  * @param code - Código normalizado.
  * @param message - Diagnóstico sanitizado.
  * @param phase - Fase en la que falló.
- * @param upstreamStatus - Estado HTTP de Seal Service, si respondió.
+ * @param options - Estado HTTP, `Retry-After` y tope propio de ejecuciones, si aplican.
  * @returns El fallo.
  *
  * @example
@@ -52,22 +68,41 @@ export function sealingFailure(
   code: SEALING_FAILURE_CODE_ENUM,
   message: string,
   phase: SEALING_PHASE_ENUM,
-  upstreamStatus: number | null = null,
+  options: SealingFailureOptions = {},
 ): SealingFailure {
-  return { kind, code, message, phase, upstreamStatus };
+  return {
+    kind,
+    code,
+    message,
+    phase,
+    upstreamStatus: options.upstreamStatus ?? null,
+    retryAfterMs: options.retryAfterMs ?? null,
+    maxAttempts: options.maxAttempts ?? null,
+  };
 }
 
 /**
- * Traduce cualquier error de un intento de sellado a un `SealingFailure`, para que el worker
- * decida sin leer mensajes.
+ * Traduce cualquier error de un intento de sellado a un `SealingFailure`: la política única de
+ * errores del worker.
+ *
+ * | Condición | Clase |
+ * | --- | --- |
+ * | Timeout o red con Seal Service | `RETRYABLE`; el siguiente intento consulta antes la operación idempotente. |
+ * | Seal Service `429` / `5xx` | `RETRYABLE`, con `Retry-After` si vino. |
+ * | OCSP no disponible o respuesta inválida | `RETRYABLE`. |
+ * | OCSP `unknown` (lo arma el procesador) | `RETRYABLE` con tope `OCSP_UNKNOWN_MAX_ATTEMPTS`. |
+ * | Certificado revocado o cadena inválida | `TERMINAL` (`DEAD`). |
+ * | Evidencia incompleta, `400`/`422` | `TERMINAL`: el payload requiere corrección. |
+ * | Credenciales o configuración (`401`/`403`/`404`, variables faltantes) | `TERMINAL`. |
+ * | Resultado incierto, payload distinto, PDF o snapshot que no corresponden | `RECONCILIATION_REQUIRED`. |
+ * | BD o MinIO, y errores no clasificados | `RETRYABLE` hasta el tope general. |
  *
  * El mensaje que se guarda es fijo por código, salvo en las excepciones que ya se escriben
  * sanitizadas (evidencia incompleta, que nombra al firmante por el id de su fila, y la fecha de una
  * revocación). Nunca se copia el mensaje de un error desconocido: puede traer un cuerpo del
  * proveedor, una ruta de MinIO o datos de la consulta.
  *
- * `SealingJobLeaseLostException` no pasa por aquí: no es un fallo del trabajo, y quien lo procesa
- * la propaga tal cual.
+ * `SealingJobLeaseLostException` no pasa por aquí: no es un fallo del trabajo.
  *
  * @param error - Lo que lanzó la fase.
  * @param phase - Fase en la que ocurrió.
@@ -100,6 +135,14 @@ export function classifySealingError(
       phase,
     );
   }
+  if (error instanceof OCSPInvalidResponseException) {
+    return sealingFailure(
+      RETRYABLE,
+      CODE.OCSP_INVALID_EVIDENCE,
+      `La respuesta OCSP del SAT no sirve como evidencia (${error.reason}).`,
+      phase,
+    );
+  }
   if (error instanceof CertificadoRevocadoException) {
     return sealingFailure(
       TERMINAL,
@@ -112,20 +155,12 @@ export function classifySealingError(
       phase,
     );
   }
-  if (error instanceof OCSPInvalidResponseException) {
-    return sealingFailure(
-      RECONCILIATION_REQUIRED,
-      CODE.OCSP_INVALID_EVIDENCE,
-      `La respuesta OCSP del SAT no sirve como evidencia (${error.reason}).`,
-      phase,
-    );
-  }
   if (
     error instanceof CadenaConfianzaInvalidaException ||
     error instanceof CertificadoInvalidoException
   ) {
     return sealingFailure(
-      RECONCILIATION_REQUIRED,
+      TERMINAL,
       CODE.OCSP_INVALID_EVIDENCE,
       'El certificado persistido de un firmante no encadena a una AC del SAT.',
       phase,
@@ -135,7 +170,7 @@ export function classifySealingError(
   // Evidencia incompleta: sus mensajes ya identifican al firmante sólo por su fila.
   if (error instanceof IncompleteAdvancedSignatureEvidenceException) {
     return sealingFailure(
-      RECONCILIATION_REQUIRED,
+      TERMINAL,
       CODE.ADVANCED_EVIDENCE_INCOMPLETE,
       error.message,
       phase,
@@ -143,7 +178,7 @@ export function classifySealingError(
   }
   if (error instanceof IncompleteSimpleSignatureDataException) {
     return sealingFailure(
-      RECONCILIATION_REQUIRED,
+      TERMINAL,
       CODE.SIMPLE_EVIDENCE_INCOMPLETE,
       error.message,
       phase,
@@ -155,34 +190,19 @@ export function classifySealingError(
     error instanceof SealProviderUnavailableException ||
     error instanceof SealProviderTimeoutException
   ) {
-    // Repetir es seguro: la clave idempotente evita una segunda emisión.
     return sealingFailure(
       RETRYABLE,
       CODE.SEAL_PROVIDER_UNAVAILABLE,
-      'Seal Service no respondió.',
+      'Seal Service no respondió; el siguiente intento consulta la operación antes de reenviar.',
       phase,
     );
   }
   if (error instanceof SealProviderResponseException) {
-    const status = error.upstreamStatus;
-    const permanent =
-      status !== null &&
-      status >= 400 &&
-      status < 500 &&
-      !TRANSIENT_CLIENT_STATUSES.has(status);
-    return sealingFailure(
-      permanent ? RECONCILIATION_REQUIRED : RETRYABLE,
-      CODE.SEAL_PROVIDER_REJECTED,
-      status
-        ? `Seal Service respondió HTTP ${status}.`
-        : 'Seal Service devolvió una respuesta incompleta.',
-      phase,
-      status,
-    );
+    return classifyProviderResponse(error, phase);
   }
   if (error instanceof SealProviderConfigurationException) {
     return sealingFailure(
-      RETRYABLE,
+      TERMINAL,
       CODE.SEAL_PROVIDER_CONFIGURATION,
       'Falta la configuración de Seal Service.',
       phase,
@@ -194,7 +214,7 @@ export function classifySealingError(
       CODE.SEAL_IN_PROGRESS,
       'Seal Service sigue emitiendo la constancia.',
       phase,
-      202,
+      { upstreamStatus: 202 },
     );
   }
   if (error instanceof SealIdempotencyConflictException) {
@@ -203,7 +223,7 @@ export function classifySealingError(
       CODE.SEAL_PAYLOAD_CONFLICT,
       'Seal Service ya recibió otro payload con la clave de este documento.',
       phase,
-      409,
+      { upstreamStatus: 409 },
     );
   }
   if (error instanceof SealReconciliationRequiredException) {
@@ -214,7 +234,7 @@ export function classifySealingError(
         error.reasonCode ? ` (${error.reasonCode})` : ''
       }.`,
       phase,
-      409,
+      { upstreamStatus: 409 },
     );
   }
   if (error instanceof SealPersistenceException) {
@@ -227,7 +247,7 @@ export function classifySealingError(
     );
   }
 
-  // PDF final
+  // PDF final y payload congelado
   if (error instanceof SealedEvidencePdfUpdateException) {
     return sealingFailure(
       RETRYABLE,
@@ -258,5 +278,75 @@ export function classifySealingError(
     CODE.UNEXPECTED_ERROR,
     `Error inesperado en la fase ${phase}.`,
     phase,
+  );
+}
+
+/**
+ * Clasifica una respuesta de error de Seal Service por su estado HTTP original.
+ *
+ * @param error - Excepción con `upstreamStatus` y `retryAfterMs`.
+ * @param phase - Fase en la que ocurrió.
+ * @returns El fallo clasificado.
+ *
+ * @example
+ * ```ts
+ * classifyProviderResponse(new SealProviderResponseException(429, 30_000), phase); // RETRYABLE, 30 s
+ * ```
+ */
+function classifyProviderResponse(
+  error: SealProviderResponseException,
+  phase: SEALING_PHASE_ENUM,
+): SealingFailure {
+  const { RETRYABLE, RECONCILIATION_REQUIRED, TERMINAL } =
+    SEALING_FAILURE_KIND_ENUM;
+  const CODE = SEALING_FAILURE_CODE_ENUM;
+  const status = error.upstreamStatus;
+  const options = {
+    upstreamStatus: status,
+    retryAfterMs: error.retryAfterMs,
+  };
+
+  if (status === null) {
+    return sealingFailure(
+      RETRYABLE,
+      CODE.SEAL_PROVIDER_REJECTED,
+      'Seal Service devolvió una respuesta incompleta.',
+      phase,
+      options,
+    );
+  }
+  if (status >= 500 || TRANSIENT_CLIENT_STATUSES.has(status)) {
+    return sealingFailure(
+      RETRYABLE,
+      CODE.SEAL_PROVIDER_REJECTED,
+      `Seal Service respondió HTTP ${status}.`,
+      phase,
+      options,
+    );
+  }
+  if (CONFIGURATION_STATUSES.has(status)) {
+    return sealingFailure(
+      TERMINAL,
+      CODE.SEAL_PROVIDER_CONFIGURATION,
+      `Seal Service respondió HTTP ${status}: revisar credenciales y URL.`,
+      phase,
+      options,
+    );
+  }
+  if (status === 409) {
+    return sealingFailure(
+      RECONCILIATION_REQUIRED,
+      CODE.SEAL_RECONCILIATION_REQUIRED,
+      'Seal Service respondió un conflicto sin código reconocido.',
+      phase,
+      options,
+    );
+  }
+  return sealingFailure(
+    TERMINAL,
+    CODE.SEAL_PROVIDER_REJECTED,
+    `Seal Service rechazó el payload (HTTP ${status}); requiere corrección.`,
+    phase,
+    options,
   );
 }

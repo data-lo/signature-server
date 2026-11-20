@@ -17,17 +17,22 @@ import {
   IncompleteAdvancedSignatureEvidenceException,
   SealingJobLeaseLostException,
   SealingRequestSnapshotMismatchException,
+  SealOperationInProgressException,
   SealPersistenceException,
+  SealReconciliationRequiredException,
 } from '../exceptions/seal.exceptions';
+import { SEAL_OPERATION_STATUS_ENUM } from '../interfaces/seal-operation-response.interface';
 import { SealedDocumentEvidenceRefresher } from '../interfaces/sealed-document-evidence-refresher.interface';
 import {
   SEALING_FAILURE_CODE_ENUM,
   SEALING_FAILURE_KIND_ENUM,
 } from '../interfaces/sealing-failure.interface';
 import { SealingRequestSnapshotReference } from '../interfaces/sealing-request-snapshot.interface';
+import { SealApiService } from '../services/seal-api.service';
 import { SealingRequestSnapshotService } from '../services/sealing-request-snapshot.service';
 import {
   classifySealingError,
+  OCSP_UNKNOWN_MAX_ATTEMPTS,
   sealingFailure,
 } from '../utils/classify-sealing-error.util';
 import { RetryPendingSealUseCase } from './retry-pending-seal.use-case';
@@ -42,10 +47,10 @@ type JobProgress = Partial<
 /**
  * Firmantes FIEL cuya evidencia OCSP no permite sellar todavía.
  *
- * **Política para `unknown` (SELL-04).** `unknown` significa que el respondedor del SAT no reconoce
- * el certificado: no prueba que esté vigente, así que no se trata como `good`. La evidencia se
- * conserva tal cual y el trabajo pasa a conciliación (`OCSP_STATUS_UNKNOWN`). Si SELL-04 define
- * otra regla, éste es el único lugar donde cambia.
+ * **Política para `unknown`.** `unknown` significa que el respondedor del SAT no reconoce el
+ * certificado: no prueba que esté vigente, así que nunca se trata como `good`. La evidencia se
+ * conserva, el siguiente intento vuelve a preguntar y, tras `OCSP_UNKNOWN_MAX_ATTEMPTS`
+ * ejecuciones, el trabajo queda `DEAD` (`OCSP_STATUS_UNKNOWN`).
  *
  * @param signers - Firmantes del documento, recargados después de completar el OCSP.
  * @returns Los ids de colaborador sin evidencia y los que tienen `unknown`.
@@ -98,8 +103,8 @@ export function findUnsealableOcspSigners(signers: CollaboratorEntity[]): {
  *
  * **Errores tipados.** Cualquier otro fallo sale como `DocumentSealingJobFailedException`, con un
  * `SealingFailure` que dice si reintentar, conciliar o abandonar. Registrar ese fallo y
- * reprogramar el trabajo es tarea del worker que lo reclamó; este caso de uso no toca
- * `attempt_count`, `next_attempt_at` ni `status` salvo para completarlo.
+ * reprogramar el trabajo es tarea de `ProcessPendingSealingJobsJob` (con `SealingRetryPolicy`);
+ * este caso de uso no toca `attempt_count`, `next_attempt_at` ni `status` salvo para completarlo.
  *
  * Nada de esto vuelve a firmar el documento ni toca `signed_hash`: el PDF firmado de
  * `signed_documents` sólo se lee.
@@ -120,6 +125,7 @@ export class ProcessDocumentSealingJobUseCase {
     private readonly snapshots: SealingRequestSnapshotService,
     private readonly sealDocument: SealDocumentUseCase,
     private readonly sealSimpleSignatures: SendCompletedSimpleSignatureToSealUseCase,
+    private readonly sealApi: SealApiService,
   ) {}
 
   /**
@@ -143,6 +149,8 @@ export class ProcessDocumentSealingJobUseCase {
    *
    * @param jobId - Trabajo reclamado.
    * @param leaseToken - Token del reclamo; debe seguir siendo el del trabajo.
+   * @param ownership - Se aborta cuando el heartbeat pierde el lease (ver
+   *   `SealingJobLeaseService.startHeartbeat`): no se empieza ninguna fase más.
    * @returns Nada, cuando el trabajo quedó `COMPLETED`.
    *
    * @throws {SealingJobLeaseLostException} Si el trabajo no existe, no está en `PROCESSING`, su
@@ -159,8 +167,17 @@ export class ProcessDocumentSealingJobUseCase {
    * }
    * ```
    */
-  async execute(jobId: string, leaseToken: string): Promise<void> {
+  async execute(
+    jobId: string,
+    leaseToken: string,
+    ownership?: AbortSignal,
+  ): Promise<void> {
     let job = await this.loadOwnedJob(jobId, leaseToken);
+    const assertOwned = () => {
+      if (ownership?.aborted) {
+        throw new SealingJobLeaseLostException(jobId);
+      }
+    };
 
     try {
       const document = await this.documentRepository.findOne({
@@ -192,11 +209,14 @@ export class ProcessDocumentSealingJobUseCase {
       }
 
       if (job.phase === SEALING_PHASE_ENUM.VERIFYING_OCSP) {
+        assertOwned();
         job = await this.verifyOcsp(job, leaseToken);
       }
 
       if (job.phase === SEALING_PHASE_ENUM.GENERATING_SEAL) {
+        assertOwned();
         seal = await this.generateSeal(job);
+        assertOwned();
         job = await this.advance(job, leaseToken, {
           phase: SEALING_PHASE_ENUM.UPDATING_EVIDENCE_PDF,
         });
@@ -213,7 +233,9 @@ export class ProcessDocumentSealingJobUseCase {
         );
       }
 
+      assertOwned();
       await this.updateEvidencePdf(job, seal);
+      assertOwned();
       await this.complete(job, leaseToken);
     } catch (error) {
       if (error instanceof SealingJobLeaseLostException) {
@@ -239,7 +261,8 @@ export class ProcessDocumentSealingJobUseCase {
    * @param leaseToken - Token del reclamo.
    * @returns El trabajo en `GENERATING_SEAL`, con la referencia del payload.
    *
-   * @throws {DocumentSealingJobFailedException} Si falta evidencia o es `unknown`.
+   * @throws {DocumentSealingJobFailedException} Si alguna evidencia es `unknown` (reintento acotado).
+   * @throws {IncompleteAdvancedSignatureEvidenceException} Si un firmante sigue sin evidencia.
    * @throws {SealingJobLeaseLostException} Si se perdió el reclamo; el payload recién subido se borra.
    * @throws {Error} Los errores tipados de `RetryPendingSealUseCase` y del snapshot.
    *
@@ -271,10 +294,11 @@ export class ProcessDocumentSealingJobUseCase {
     if (unknown.length > 0) {
       throw new DocumentSealingJobFailedException(
         sealingFailure(
-          SEALING_FAILURE_KIND_ENUM.RECONCILIATION_REQUIRED,
+          SEALING_FAILURE_KIND_ENUM.RETRYABLE,
           SEALING_FAILURE_CODE_ENUM.OCSP_STATUS_UNKNOWN,
           `El SAT respondió "unknown" para el certificado del firmante ${unknown[0]}; no se sella sin un estado "good".`,
           job.phase,
+          { maxAttempts: OCSP_UNKNOWN_MAX_ATTEMPTS },
         ),
       );
     }
@@ -301,11 +325,19 @@ export class ProcessDocumentSealingJobUseCase {
   /**
    * Fase `GENERATING_SEAL`: lee el payload congelado y lo sella por el contrato del trabajo.
    *
+   * En un reintento (`attempt_count > 1`) la ejecución anterior pudo dejar una solicitud en curso o
+   * perder la respuesta, así que primero se consulta la operación idempotente: si Seal Service la
+   * sigue emitiendo no se reenvía, y si requiere conciliación tampoco. En cualquier otro caso se
+   * reenvía el mismo payload con la misma clave, que devuelve la evidencia ya emitida (con su
+   * cadena canónica, que la consulta no trae) o emite por primera vez.
+   *
    * @param job - Trabajo en `GENERATING_SEAL`.
    * @returns La constancia guardada (o la que ya estaba).
    *
    * @throws {SealingRequestSnapshotMismatchException} Si no hay payload o no corresponde al trabajo.
    * @throws {SealPersistenceException} Si la constancia no se pudo guardar.
+   * @throws {SealOperationInProgressException} Si la consulta dice que sigue en proceso.
+   * @throws {SealReconciliationRequiredException} Si la consulta dice que requiere conciliación.
    * @throws {Error} Los errores tipados de `SealApiService` y de MinIO.
    *
    * @example
@@ -331,6 +363,10 @@ export class ProcessDocumentSealingJobUseCase {
       throw new SealingRequestSnapshotMismatchException();
     }
 
+    if (job.attemptCount > 1) {
+      await this.assertNotInFlight(job.documentId);
+    }
+
     if (snapshot.sealType === SEALING_TYPE_ENUM.SIMPLE) {
       return this.sealSimpleSignatures.execute(snapshot);
     }
@@ -347,6 +383,36 @@ export class ProcessDocumentSealingJobUseCase {
         throw new SealPersistenceException();
       }
       return existing;
+    }
+  }
+
+  /**
+   * Consulta la operación idempotente del documento antes de reenviarla.
+   *
+   * @param documentId - Documento.
+   * @returns Nada si se puede reenviar (`NOT_FOUND`, `FAILED` o `COMPLETED`).
+   *
+   * @throws {SealOperationInProgressException} Si sigue en `PROCESSING`.
+   * @throws {SealReconciliationRequiredException} Si está en `RECONCILIATION_REQUIRED`.
+   * @throws {Error} Los errores de transporte de la consulta (reintentables).
+   *
+   * @example
+   * ```ts
+   * await this.assertNotInFlight(job.documentId);
+   * ```
+   */
+  private async assertNotInFlight(documentId: string): Promise<void> {
+    const operation = await this.sealApi.getSealOperation(documentId);
+
+    if (operation.status === SEAL_OPERATION_STATUS_ENUM.PROCESSING) {
+      throw new SealOperationInProgressException();
+    }
+    if (
+      operation.status === SEAL_OPERATION_STATUS_ENUM.RECONCILIATION_REQUIRED
+    ) {
+      throw new SealReconciliationRequiredException(
+        operation.error?.code ?? null,
+      );
     }
   }
 

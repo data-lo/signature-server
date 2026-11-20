@@ -22,6 +22,20 @@ import { SealingRequestSnapshotService } from './../src/document/seal/services/s
 import { ProcessDocumentSealingJobUseCase } from './../src/document/seal/use-cases/process-document-sealing-job.use-case';
 import { RetryPendingSealUseCase } from './../src/document/seal/use-cases/retry-pending-seal.use-case';
 import { SealDocumentUseCase } from './../src/document/seal/use-cases/seal-document.use-case';
+import {
+  DEFAULT_SEALING_WORKER_SETTINGS,
+  SealingWorkerConfig,
+} from './../src/document/seal/config/sealing-worker.config';
+import { decideSealingRetry } from './../src/document/seal/policies/sealing-retry.policy';
+import { SealingJobLeaseService } from './../src/document/seal/services/sealing-job-lease.service';
+import { ClaimDueSealingJobsUseCase } from './../src/document/seal/use-cases/claim-due-sealing-jobs.use-case';
+import { classifySealingError } from './../src/document/seal/utils/classify-sealing-error.util';
+import {
+  IncompleteSimpleSignatureDataException,
+  SealProviderResponseException,
+  SealProviderUnavailableException,
+} from './../src/document/seal/exceptions/seal.exceptions';
+import { backfillPendingSealingJobs } from './../src/scripts/backfill-pending-sealing-jobs';
 
 config();
 
@@ -478,8 +492,9 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
           sealApi as never,
           dataSource.getRepository(SealEntity),
         ),
-        {} as never,
         // El de firma simple no participa en estos casos.
+        {} as never,
+        { getSealOperation: jest.fn() } as never,
       );
       processor.useEvidenceRefresher(refresher);
     });
@@ -625,5 +640,398 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
     expect(job.createdAt).toBeInstanceOf(Date);
     expect(job.leaseToken).toBeNull();
     expect(job.leaseExpiresAt).toBeNull();
+  });
+
+  /**
+   * Reclamo, lease y recuperación contra Postgres: `FOR UPDATE SKIP LOCKED`, los UPDATE
+   * condicionados al token y el barrido de trabajos agotados sólo se prueban de verdad aquí.
+   */
+  describe('worker: reclamo y lease', () => {
+    const config = {
+      settings: { ...DEFAULT_SEALING_WORKER_SETTINGS, maxAttempts: 8 },
+    } as SealingWorkerConfig;
+    let claim: ClaimDueSealingJobsUseCase;
+    let leases: SealingJobLeaseService;
+
+    beforeEach(async () => {
+      // Cada caso parte sin trabajos de los bloques anteriores.
+      await dataSource.query(`DELETE FROM document_sealing_jobs`);
+      claim = new ClaimDueSealingJobsUseCase(dataSource, config);
+      leases = new SealingJobLeaseService(
+        dataSource.getRepository(DocumentSealingJobEntity),
+        config,
+      );
+    });
+
+    /** Documento con un trabajo en el estado indicado. */
+    async function jobIn(
+      status: SEALING_JOB_STATUS_ENUM,
+      extra: string = '',
+    ): Promise<string> {
+      const { documentId } = await createDocumentWithFielSigner();
+      const { job } = await dataSource.transaction((manager) =>
+        registerSealingJob.execute(
+          { documentId, sealType: SEALING_TYPE_ENUM.ADVANCED },
+          manager,
+        ),
+      );
+      await dataSource.query(
+        `UPDATE document_sealing_jobs SET status = $2 ${extra} WHERE id = $1`,
+        [job.id, status],
+      );
+      return job.id;
+    }
+
+    async function rowOf(jobId: string) {
+      const [row] = await dataSource.query(
+        `SELECT status, phase, attempt_count, lease_token, lease_expires_at, next_attempt_at,
+                last_error_code, last_upstream_status
+           FROM document_sealing_jobs WHERE id = $1`,
+        [jobId],
+      );
+      return row;
+    }
+
+    it('dos workers reclamando a la vez nunca toman el mismo trabajo', async () => {
+      const ids = [];
+      for (let i = 0; i < 6; i++) {
+        ids.push(await jobIn(SEALING_JOB_STATUS_ENUM.PENDING));
+      }
+
+      const [first, second] = await Promise.all([
+        claim.execute(6),
+        claim.execute(6),
+      ]);
+
+      const claimed = [...first, ...second].map((job) => job.id);
+      expect(new Set(claimed).size).toBe(claimed.length);
+      expect(claimed.sort()).toEqual([...ids].sort());
+      for (const job of [...first, ...second]) {
+        expect(await rowOf(job.id)).toEqual(
+          expect.objectContaining({
+            status: SEALING_JOB_STATUS_ENUM.PROCESSING,
+            attempt_count: 1,
+            lease_token: job.leaseToken,
+            lease_expires_at: expect.any(Date),
+          }),
+        );
+      }
+    });
+
+    it('cada trabajo reclamado recibe su propio token y respeta el límite', async () => {
+      await jobIn(SEALING_JOB_STATUS_ENUM.PENDING);
+      await jobIn(SEALING_JOB_STATUS_ENUM.PENDING);
+      await jobIn(SEALING_JOB_STATUS_ENUM.PENDING);
+
+      const claimed = await claim.execute(2);
+
+      expect(claimed).toHaveLength(2);
+      expect(claimed[0].leaseToken).not.toBe(claimed[1].leaseToken);
+    });
+
+    it('respeta next_attempt_at y nunca toma trabajos terminales ni en conciliación', async () => {
+      await jobIn(
+        SEALING_JOB_STATUS_ENUM.RETRY_SCHEDULED,
+        `, next_attempt_at = now() + interval '5 minutes'`,
+      );
+      await jobIn(SEALING_JOB_STATUS_ENUM.DEAD);
+      await jobIn(SEALING_JOB_STATUS_ENUM.COMPLETED);
+      await jobIn(SEALING_JOB_STATUS_ENUM.RECONCILIATION_REQUIRED);
+      const due = await jobIn(
+        SEALING_JOB_STATUS_ENUM.RETRY_SCHEDULED,
+        `, next_attempt_at = now() - interval '1 second', attempt_count = 2`,
+      );
+
+      const claimed = await claim.execute(10);
+
+      expect(claimed.map((job) => job.id)).toEqual([due]);
+      expect(claimed[0].attemptCount).toBe(3);
+    });
+
+    it('recupera un PROCESSING con el lease vencido, pero no uno vigente', async () => {
+      const expired = await jobIn(
+        SEALING_JOB_STATUS_ENUM.PROCESSING,
+        `, lease_token = gen_random_uuid(), lease_expires_at = now() - interval '1 second', attempt_count = 1`,
+      );
+      await jobIn(
+        SEALING_JOB_STATUS_ENUM.PROCESSING,
+        `, lease_token = gen_random_uuid(), lease_expires_at = now() + interval '1 minute', attempt_count = 1`,
+      );
+      const before = await rowOf(expired);
+
+      const claimed = await claim.execute(10);
+
+      expect(claimed).toEqual([
+        expect.objectContaining({
+          id: expired,
+          recovered: true,
+          attemptCount: 2,
+        }),
+      ]);
+      expect(claimed[0].leaseToken).not.toBe(before.lease_token);
+    });
+
+    it('un trabajo interrumpido en su última ejecución queda DEAD, no colgado', async () => {
+      const exhausted = await jobIn(
+        SEALING_JOB_STATUS_ENUM.PROCESSING,
+        `, lease_token = gen_random_uuid(), lease_expires_at = now() - interval '1 second', attempt_count = 8, phase = 'GENERATING_SEAL'`,
+      );
+
+      expect(await claim.execute(10)).toEqual([]);
+      expect(await rowOf(exhausted)).toEqual(
+        expect.objectContaining({
+          status: SEALING_JOB_STATUS_ENUM.DEAD,
+          // Se conserva la fase en la que se quedó.
+          phase: SEALING_PHASE_ENUM.GENERATING_SEAL,
+          lease_token: null,
+          last_error_code: 'MAX_ATTEMPTS_REACHED',
+        }),
+      );
+    });
+
+    it('renovar extiende el lease sólo para el dueño', async () => {
+      await jobIn(SEALING_JOB_STATUS_ENUM.PENDING);
+      const [job] = await claim.execute(1);
+      await dataSource.query(
+        `UPDATE document_sealing_jobs SET lease_expires_at = now() + interval '5 seconds' WHERE id = $1`,
+        [job.id],
+      );
+
+      expect(await leases.renew(job.id, randomUUID())).toBe(false);
+      expect(await leases.renew(job.id, job.leaseToken)).toBe(true);
+
+      const { lease_expires_at } = await rowOf(job.id);
+      expect(new Date(lease_expires_at).getTime()).toBeGreaterThan(
+        Date.now() + 100_000,
+      );
+    });
+
+    it('un worker antiguo no puede renovar, reprogramar ni completar el trabajo del nuevo dueño', async () => {
+      await jobIn(SEALING_JOB_STATUS_ENUM.PENDING);
+      const [old] = await claim.execute(1);
+      // Su lease vence y otro worker lo recupera.
+      await dataSource.query(
+        `UPDATE document_sealing_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`,
+        [old.id],
+      );
+      const [current] = await claim.execute(1);
+      expect(current.id).toBe(old.id);
+
+      const failure = classifySealingError(
+        new SealProviderUnavailableException(),
+        SEALING_PHASE_ENUM.VERIFYING_OCSP,
+      );
+      const decision = decideSealingRetry({
+        attemptCount: old.attemptCount,
+        failure,
+        maxAttempts: 8,
+      });
+
+      expect(await leases.renew(old.id, old.leaseToken)).toBe(false);
+      expect(
+        await leases.recordFailure(old.id, old.leaseToken, decision, failure),
+      ).toBe(false);
+      const processor = new ProcessDocumentSealingJobUseCase(
+        dataSource.getRepository(DocumentSealingJobEntity),
+        dataSource.getRepository(DocumentEntity),
+        dataSource.getRepository(SealEntity),
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+      await expect(
+        processor.execute(old.id, old.leaseToken),
+      ).rejects.toBeInstanceOf(SealingJobLeaseLostException);
+
+      expect(await rowOf(current.id)).toEqual(
+        expect.objectContaining({
+          status: SEALING_JOB_STATUS_ENUM.PROCESSING,
+          lease_token: current.leaseToken,
+          attempt_count: 2,
+        }),
+      );
+    });
+
+    it('registrar un fallo libera el lease y conserva la fase, con su backoff', async () => {
+      await jobIn(
+        SEALING_JOB_STATUS_ENUM.PENDING,
+        `, phase = 'GENERATING_SEAL'`,
+      );
+      const [job] = await claim.execute(1);
+      const failure = classifySealingError(
+        new SealProviderResponseException(429, 10 * 60_000),
+        SEALING_PHASE_ENUM.GENERATING_SEAL,
+      );
+      const decision = decideSealingRetry({
+        attemptCount: job.attemptCount,
+        failure,
+        maxAttempts: 8,
+      });
+
+      expect(
+        await leases.recordFailure(job.id, job.leaseToken, decision, failure),
+      ).toBe(true);
+
+      const row = await rowOf(job.id);
+      expect(row).toEqual(
+        expect.objectContaining({
+          status: SEALING_JOB_STATUS_ENUM.RETRY_SCHEDULED,
+          phase: SEALING_PHASE_ENUM.GENERATING_SEAL,
+          lease_token: null,
+          lease_expires_at: null,
+          last_error_code: 'SEAL_PROVIDER_REJECTED',
+          last_upstream_status: 429,
+        }),
+      );
+      // Retry-After de 10 min por encima del primer escalón (1 min).
+      expect(new Date(row.next_attempt_at).getTime()).toBeGreaterThanOrEqual(
+        Date.now() + 9 * 60_000,
+      );
+      // No se vuelve a reclamar antes de tiempo.
+      expect(await claim.execute(10)).toEqual([]);
+    });
+  });
+
+  describe('recuperación histórica (backfill)', () => {
+    const logger = { log: jest.fn(), warn: jest.fn() };
+    let snapshots: {
+      freezeSimpleSignatureRequest: jest.Mock;
+      discard: jest.Mock;
+    };
+
+    beforeEach(() => {
+      snapshots = {
+        freezeSimpleSignatureRequest: jest.fn().mockResolvedValue({
+          objectKey: 'doc/snap.json',
+          hash: 'a'.repeat(64),
+        }),
+        discard: jest.fn(),
+      };
+    });
+
+    const run = (dryRun: boolean) =>
+      backfillPendingSealingJobs(
+        { dataSource, snapshots, registerJob: registerSealingJob, logger },
+        { dryRun, limit: 1000 },
+      );
+
+    /** Documento firmado como antes de los trabajos. */
+    async function historicalDocument(options: {
+      signatureType: 'FIEL' | 'SIMPLE' | 'BIOMETRIC';
+      pending?: boolean;
+      sealed?: boolean;
+    }): Promise<string> {
+      const documentId = await insertReturningId(
+        `INSERT INTO documents (object_key, file_name, file_type, total_pages, ip_address, original_hash, signed_hash, created_by, account_id, total_signers, status, sealing_pending_at)
+         VALUES ($1, 'historico.pdf', 'application/pdf', 1, '127.0.0.1', 'hash', 'hash-firmado', $2, $3, 1, 'SIGNED', $4)`,
+        [
+          `${randomUUID()}.pdf`,
+          ids.user,
+          ids.account,
+          options.pending === false ? null : new Date('2026-09-01T00:00:00Z'),
+        ],
+      );
+      await dataSource.query(
+        `INSERT INTO collaborators (document_id, ip_address, colaborator_type, signature_type, status) VALUES ($1, '127.0.0.1', 'SIGNER', $2, 'SIGNED')`,
+        [documentId, options.signatureType],
+      );
+      if (options.sealed) {
+        await dataSource.query(
+          `INSERT INTO document_seals (document_id, signature_hash, canonical_payload, timestamp_evidence, integrity_evidence) VALUES ($1, 'h', 'c', '{}', '{}')`,
+          [documentId],
+        );
+      }
+      return documentId;
+    }
+
+    const outcomeOf = (
+      summary: Awaited<ReturnType<typeof run>>,
+      documentId: string,
+    ) => summary.documents.find((doc) => doc.documentId === documentId);
+
+    it('--dry-run informa sin escribir; la corrida real registra y repetirla no duplica', async () => {
+      const advanced = await historicalDocument({ signatureType: 'FIEL' });
+      const simple = await historicalDocument({ signatureType: 'SIMPLE' });
+
+      const dry = await run(true);
+      expect(outcomeOf(dry, advanced)?.outcome).toBe('WOULD_REGISTER');
+      expect(outcomeOf(dry, simple)?.outcome).toBe('WOULD_REGISTER');
+      expect(await jobsOf(advanced)).toEqual([]);
+      expect(snapshots.freezeSimpleSignatureRequest).not.toHaveBeenCalled();
+
+      const real = await run(false);
+      expect(outcomeOf(real, advanced)?.outcome).toBe('REGISTERED');
+      expect(outcomeOf(real, simple)?.outcome).toBe('REGISTERED');
+      expect(await jobsOf(advanced)).toEqual([
+        expect.objectContaining({ status: 'PENDING', phase: 'VERIFYING_OCSP' }),
+      ]);
+      expect(await jobsOf(simple)).toEqual([
+        expect.objectContaining({
+          status: 'PENDING',
+          phase: 'GENERATING_SEAL',
+          request_object_key: 'doc/snap.json',
+        }),
+      ]);
+
+      const again = await run(false);
+      expect(outcomeOf(again, advanced)).toBeUndefined();
+      expect(outcomeOf(again, simple)).toBeUndefined();
+      expect(await jobsOf(advanced)).toHaveLength(1);
+    });
+
+    it('no toma documentos sin la marca de pendiente ni los que ya tienen constancia', async () => {
+      const unmarked = await historicalDocument({
+        signatureType: 'FIEL',
+        pending: false,
+      });
+      const sealed = await historicalDocument({
+        signatureType: 'FIEL',
+        sealed: true,
+      });
+
+      const summary = await run(false);
+
+      expect(outcomeOf(summary, unmarked)).toBeUndefined();
+      expect(outcomeOf(summary, sealed)).toBeUndefined();
+      expect(await jobsOf(unmarked)).toEqual([]);
+      expect(await jobsOf(sealed)).toEqual([]);
+    });
+
+    it('un documento sin contrato de sellado se informa como no elegible', async () => {
+      const biometric = await historicalDocument({
+        signatureType: 'BIOMETRIC',
+      });
+
+      const summary = await run(false);
+
+      expect(outcomeOf(summary, biometric)).toEqual(
+        expect.objectContaining({
+          outcome: 'NOT_ELIGIBLE',
+          reason: 'NO_SEALING_CONTRACT',
+        }),
+      );
+      expect(await jobsOf(biometric)).toEqual([]);
+    });
+
+    it('una firma simple sin evidencia completa nace en conciliación', async () => {
+      const simple = await historicalDocument({ signatureType: 'SIMPLE' });
+      snapshots.freezeSimpleSignatureRequest.mockRejectedValue(
+        new IncompleteSimpleSignatureDataException('la INE', 'c-1'),
+      );
+
+      const summary = await run(false);
+
+      expect(outcomeOf(summary, simple)).toEqual(
+        expect.objectContaining({
+          outcome: 'REGISTERED_BLOCKED',
+          reason: 'SIMPLE_EVIDENCE_INCOMPLETE',
+        }),
+      );
+      expect(await jobsOf(simple)).toEqual([
+        expect.objectContaining({ status: 'RECONCILIATION_REQUIRED' }),
+      ]);
+    });
   });
 });
