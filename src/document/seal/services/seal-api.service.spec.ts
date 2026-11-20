@@ -3,7 +3,7 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
-import { SealApiService } from './seal-api.service';
+import { parseRetryAfter, SealApiService } from './seal-api.service';
 import { SealDocumentDto } from '../dto/seal-document.dto';
 import { SimpleSignatureDTO } from '../dto/simple-signature.dto';
 import { SealDocumentResponse } from '../interfaces/seal-document-response.interface';
@@ -12,6 +12,9 @@ import {
   SealProviderResponseException,
   SealProviderTimeoutException,
   SealProviderUnavailableException,
+  SealIdempotencyConflictException,
+  SealOperationInProgressException,
+  SealReconciliationRequiredException,
 } from '../exceptions/seal.exceptions';
 
 jest.mock('axios');
@@ -98,11 +101,24 @@ const SIMPLE_DTO: SimpleSignatureDTO = {
 };
 
 /** Reproduce la forma que `axios.isAxiosError` reconoce, sin depender de la red. */
-function axiosError(partial: { status?: number; code?: string } = {}): unknown {
+function axiosError(
+  partial: {
+    status?: number;
+    code?: string;
+    data?: unknown;
+    headers?: Record<string, string>;
+  } = {},
+): unknown {
   return {
     isAxiosError: true,
     code: partial.code,
-    response: partial.status ? { status: partial.status } : undefined,
+    response: partial.status
+      ? {
+          status: partial.status,
+          data: partial.data,
+          headers: partial.headers ?? {},
+        }
+      : undefined,
     message: 'fallo simulado',
   };
 }
@@ -141,7 +157,10 @@ describe('SealApiService', () => {
       'http://seal-service:3002/seal/signature',
       DTO,
       expect.objectContaining({
-        headers: { 'x-api-key': 'api-key-de-prueba' },
+        headers: {
+          'x-api-key': 'api-key-de-prueba',
+          'Idempotency-Key': `signature-server:document:${DTO.documentId}:v1`,
+        },
       }),
     );
     expect(result).toEqual(RESPONSE);
@@ -149,7 +168,7 @@ describe('SealApiService', () => {
 
   describe('firmas simples', () => {
     it('manda el DTO a /seal/simple-signature con la API key', async () => {
-      mockedAxios.post.mockResolvedValue({ data: {} });
+      mockedAxios.post.mockResolvedValue({ status: 200, data: RESPONSE });
 
       await service.sendSimpleSignatures(SIMPLE_DTO);
 
@@ -157,9 +176,35 @@ describe('SealApiService', () => {
         'http://seal-service:3002/seal/simple-signature',
         SIMPLE_DTO,
         expect.objectContaining({
-          headers: { 'x-api-key': 'api-key-de-prueba' },
+          headers: {
+            'x-api-key': 'api-key-de-prueba',
+            'Idempotency-Key': `signature-server:document:${SIMPLE_DTO.documentId}:v1`,
+          },
         }),
       );
+    });
+
+    it('conserva el estado original y el Retry-After de un 429', async () => {
+      mockedAxios.post.mockRejectedValue(
+        axiosError({ status: 429, headers: { 'retry-after': '90' } }),
+      );
+
+      const error = await service
+        .sendSimpleSignatures(SIMPLE_DTO)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SealProviderResponseException);
+      expect(error).toEqual(
+        expect.objectContaining({ upstreamStatus: 429, retryAfterMs: 90_000 }),
+      );
+    });
+
+    it('rechaza una respuesta incompleta, igual que la avanzada', async () => {
+      mockedAxios.post.mockResolvedValue({ status: 200, data: {} });
+
+      await expect(
+        service.sendSimpleSignatures(SIMPLE_DTO),
+      ).rejects.toBeInstanceOf(SealProviderResponseException);
     });
 
     it('sin configuración, falla sin llegar a llamar al proveedor', async () => {
@@ -297,5 +342,137 @@ describe('SealApiService', () => {
     await expect(service.generateDocumentSeals(DTO)).rejects.toBeInstanceOf(
       SealProviderResponseException,
     );
+  });
+  /**
+   * Historia "Implementar idempotencia y recuperación de resultados en Seal Service": cada envío
+   * lleva la clave estable del documento, y el contrato de Seal Service se traduce a excepciones
+   * que distinguen "sigue en proceso", "el payload cambió" y "resultado incierto".
+   */
+  describe('idempotencia', () => {
+    it('repetir el envío usa la misma clave y el mismo payload', async () => {
+      mockedAxios.post.mockResolvedValue({ status: 200, data: RESPONSE });
+
+      await service.generateDocumentSeals(DTO);
+      await service.generateDocumentSeals(DTO);
+
+      const [first, second] = mockedAxios.post.mock.calls;
+      expect(second[1]).toEqual(first[1]);
+      expect(second[2]!.headers).toEqual(first[2]!.headers);
+    });
+
+    it('ordena las firmas de forma estable, sin importar el orden en que llegaron', async () => {
+      mockedAxios.post.mockResolvedValue({ status: 200, data: RESPONSE });
+      const second = {
+        ...DTO.signatures[0],
+        signatureBase64: 'otra-firma',
+        certificate: { ...DTO.signatures[0].certificate, rfc: 'AAAA010101AAA' },
+      };
+
+      await service.generateDocumentSeals({
+        ...DTO,
+        signatures: [DTO.signatures[0], second],
+      });
+      await service.generateDocumentSeals({
+        ...DTO,
+        signatures: [second, DTO.signatures[0]],
+      });
+
+      const [first, again] = mockedAxios.post.mock.calls;
+      expect(again[1]).toEqual(first[1]);
+      expect(
+        (first[1] as SealDocumentDto).signatures.map(
+          ({ certificate }) => certificate.rfc,
+        ),
+      ).toEqual(['AAAA010101AAA', DTO.signatures[0].certificate.rfc]);
+    });
+
+    it('un 202 significa que sigue en proceso, sin otra emisión', async () => {
+      mockedAxios.post.mockResolvedValue({
+        status: 202,
+        data: { status: 'PROCESSING' },
+      });
+
+      await expect(service.generateDocumentSeals(DTO)).rejects.toBeInstanceOf(
+        SealOperationInProgressException,
+      );
+    });
+
+    it('un 409 IDEMPOTENCY_KEY_REUSED es un conflicto: el payload cambió', async () => {
+      mockedAxios.post.mockRejectedValue(
+        axiosError({ status: 409, data: { code: 'IDEMPOTENCY_KEY_REUSED' } }),
+      );
+
+      await expect(
+        service.sendSimpleSignatures(SIMPLE_DTO),
+      ).rejects.toBeInstanceOf(SealIdempotencyConflictException);
+    });
+
+    it('un 409 SEAL_RECONCILIATION_REQUIRED se distingue de un fallo confirmado', async () => {
+      mockedAxios.post.mockRejectedValue(
+        axiosError({
+          status: 409,
+          data: {
+            code: 'SEAL_RECONCILIATION_REQUIRED',
+            reasonCode: 'PSC_UNCERTAIN_RESULT',
+          },
+        }),
+      );
+
+      const error = await service.generateDocumentSeals(DTO).catch((e) => e);
+
+      expect(error).toBeInstanceOf(SealReconciliationRequiredException);
+      expect((error as SealReconciliationRequiredException).reasonCode).toBe(
+        'PSC_UNCERTAIN_RESULT',
+      );
+    });
+
+    it('consulta el resultado por la clave del documento', async () => {
+      const lookup = {
+        idempotencyKey: `signature-server:document:${DTO.documentId}:v1`,
+        status: 'COMPLETED',
+      };
+      mockedAxios.get.mockResolvedValue({ status: 200, data: lookup });
+
+      await expect(service.getSealOperation(DTO.documentId)).resolves.toEqual(
+        lookup,
+      );
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        `http://seal-service:3002/seal/operations/${encodeURIComponent(lookup.idempotencyKey)}`,
+        expect.objectContaining({
+          headers: { 'x-api-key': 'api-key-de-prueba' },
+        }),
+      );
+    });
+
+    it('acepta el 404 de la consulta como NOT_FOUND', async () => {
+      mockedAxios.get.mockResolvedValue({
+        status: 404,
+        data: { status: 'NOT_FOUND' },
+      });
+
+      await expect(service.getSealOperation(DTO.documentId)).resolves.toEqual({
+        status: 'NOT_FOUND',
+      });
+      const [, config] = mockedAxios.get.mock.calls[0];
+      expect(config!.validateStatus!(404)).toBe(true);
+      expect(config!.validateStatus!(500)).toBe(false);
+    });
+  });
+});
+
+describe('parseRetryAfter', () => {
+  const NOW = new Date('2026-11-19T20:00:00.000Z');
+
+  it.each([
+    ['120', 120_000],
+    [['30'], 30_000],
+    ['Thu, 19 Nov 2026 20:01:00 GMT', 60_000],
+    ['Thu, 19 Nov 2026 19:00:00 GMT', 0],
+    ['999999', 12 * 60 * 60 * 1000],
+    [undefined, null],
+    ['', null],
+    ['pronto', null],
+  ])('%p → %p', (header, expected) => {
+    expect(parseRetryAfter(header, NOW)).toBe(expected);
   });
 });
