@@ -11,7 +11,7 @@ export class IntegrationApiSettingsData {
     type: Boolean,
     example: false,
     description:
-      'Si los eventos de firma de los documentos creados con la API generan webhooks. `false` mientras no se haya configurado.',
+      'Tu preferencia de envío de webhooks. Vale `false` hasta que la cambies.',
   })
   webhooksEnabled: boolean;
 }

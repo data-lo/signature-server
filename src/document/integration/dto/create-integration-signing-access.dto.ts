@@ -8,8 +8,9 @@ import { IsEmail, MaxLength } from 'class-validator';
  */
 export class CreateIntegrationSigningAccessDto {
   @ApiProperty({
-    example: 'ana@correo.com',
-    description: 'Correo del firmante',
+    example: 'luis.martinez@correo.example',
+    description:
+      'Correo del firmante, tal como lo enviaste en `participants[].email`. No distingue mayúsculas.',
   })
   @IsEmail({}, { message: 'email debe ser un correo válido' })
   @MaxLength(320)

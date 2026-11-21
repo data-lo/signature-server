@@ -14,7 +14,7 @@ export class UpdateIntegrationApiSettingsDto {
     type: Boolean,
     example: true,
     description:
-      'Si los eventos de firma de los documentos creados con la API generan webhooks hacia tu sistema.',
+      'Tu preferencia de envío de webhooks para los documentos creados con la API.',
   })
   @IsBoolean({ message: 'webhooksEnabled debe ser true o false' })
   webhooksEnabled: boolean;
