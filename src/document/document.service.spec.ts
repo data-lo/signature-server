@@ -23,7 +23,8 @@ import { VerificationCodeService } from './verification-code.service';
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
-import { SendCompletedSimpleSignatureToSealUseCase } from './seal/use-cases/send-completed-simple-signature-to-seal.use-case';
+import { SealingRequestSnapshotService } from './seal/services/sealing-request-snapshot.service';
+import { RegisterDocumentSealingJobUseCase } from './seal/use-cases/register-document-sealing-job.use-case';
 import {} from './summary-document/signature-legal-text';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
 import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
@@ -63,7 +64,6 @@ describe('DocumentService', () => {
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
-  let sendCompletedSimpleSignatureToSeal: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
@@ -205,10 +205,6 @@ describe('DocumentService', () => {
       create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
       findByDocumentId: jest.fn().mockResolvedValue(null),
     };
-    // Devuelve `false` —"este documento no es asunto suyo"— salvo en las pruebas que lo miran.
-    sendCompletedSimpleSignatureToSeal = {
-      execute: jest.fn().mockResolvedValue(false),
-    };
     summaryDocumentService = {
       generateSummaryPdf: jest
         .fn()
@@ -260,8 +256,15 @@ describe('DocumentService', () => {
         { provide: EfirmaService, useValue: efirmaService },
         { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
         {
-          provide: SendCompletedSimpleSignatureToSealUseCase,
-          useValue: sendCompletedSimpleSignatureToSeal,
+          provide: SealingRequestSnapshotService,
+          useValue: {
+            freezeSimpleSignatureRequest: jest.fn(),
+            discard: jest.fn(),
+          },
+        },
+        {
+          provide: RegisterDocumentSealingJobUseCase,
+          useValue: { execute: jest.fn() },
         },
         {
           provide: SummaryDocumentService,

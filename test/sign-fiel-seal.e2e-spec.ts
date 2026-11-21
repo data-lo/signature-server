@@ -19,7 +19,10 @@ import { DocumentService } from './../src/document/document.service';
 import { SignDocumentUseCase } from './../src/document/applications/sign-document.use-case';
 import { BiometricSignatureAttemptEntity } from './../src/biometric-signature/entities/biometric-signature-attempt.entity';
 import { DocumentAuthorizationPolicy } from './../src/document/policies/document-authorization.policy';
-import { SendCompletedSimpleSignatureToSealUseCase } from './../src/document/seal/use-cases/send-completed-simple-signature-to-seal.use-case';
+import { SealingRequestSnapshotService } from './../src/document/seal/services/sealing-request-snapshot.service';
+import { RegisterDocumentSealingJobUseCase } from './../src/document/seal/use-cases/register-document-sealing-job.use-case';
+import { SEALING_TYPE_ENUM } from './../src/document/seal/enums/sealing-type.enum';
+import { SEALING_JOB_STATUS_ENUM } from './../src/document/seal/enums/sealing-job-status.enum';
 import { AdvancedSummaryDocumentService } from './../src/document/summary-document/advanced-summary-document.service';
 import { SignatureQrService } from './../src/document/services/signature-qr.service';
 import { SigningLinkService } from './../src/signing-invitation/signing-link.service';
@@ -192,7 +195,7 @@ function createMockRepository() {
  * de datos, MinIO/Kafka/correo, la red hacia Seal Service (axios) y `EfirmaService`, que exigiría
  * un .cer/.key reales del SAT.
  */
-describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
+describe('Firma con e.firma (FIEL) y registro del sellado (e2e)', () => {
   let app: INestApplication;
   let documentRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
@@ -203,6 +206,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     calcularHashDocumento: jest.Mock;
   };
   let auditService: { create: jest.Mock };
+  let registerSealingJob: { execute: jest.Mock };
   let document: DocumentEntity;
 
   function signRequest() {
@@ -240,6 +244,16 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
       calcularHashDocumento: jest.fn(),
     };
     auditService = { create: jest.fn() };
+    registerSealingJob = {
+      execute: jest.fn().mockResolvedValue({
+        job: {
+          id: 'job-1',
+          status: SEALING_JOB_STATUS_ENUM.PENDING,
+          requestObjectKey: null,
+        },
+        created: true,
+      }),
+    };
 
     document = mockDocument();
     documentRepository.findOne.mockResolvedValue(document);
@@ -263,8 +277,15 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         SealDocumentUseCase,
         SealApiService,
         {
-          provide: SendCompletedSimpleSignatureToSealUseCase,
-          useValue: { execute: jest.fn().mockResolvedValue(false) },
+          provide: SealingRequestSnapshotService,
+          useValue: {
+            freezeSimpleSignatureRequest: jest.fn(),
+            discard: jest.fn(),
+          },
+        },
+        {
+          provide: RegisterDocumentSealingJobUseCase,
+          useValue: registerSealingJob,
         },
         {
           provide: AdvancedSummaryDocumentService,
@@ -429,7 +450,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
   });
 
   describe('camino completo', () => {
-    it('firma con e.firma, marca el documento como firmado y sella con Seal Service', async () => {
+    it('firma con e.firma, marca el documento como firmado y registra su trabajo de sellado', async () => {
       const response = await withEfirmaFiles(signRequest()).expect(200);
 
       expect(response.body.success).toBe(true);
@@ -442,8 +463,9 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
         'clave-de-la-llave',
       );
 
-      // 2. El resultado no sensible quedó en el colaborador.
-      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+      // 2. El resultado no sensible quedó en el colaborador, dentro de la transacción de cierre
+      // (cuyo manager simulado devuelve el repositorio de documentos).
+      expect(documentRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           status: COLLABORATOR_STATUS_ENUM.SIGNED,
           advancedSignature: expect.objectContaining({
@@ -451,9 +473,19 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
           }),
         }),
       );
+      expect(JSON.stringify(documentRepository.save.mock.calls)).not.toContain(
+        'clave-de-la-llave',
+      );
 
-      // 3. El documento quedó firmado.
+      // 3. El documento quedó firmado, con su trabajo de sellado avanzado registrado.
       expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+      expect(registerSealingJob.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: DOCUMENT_ID,
+          sealType: SEALING_TYPE_ENUM.ADVANCED,
+        }),
+        expect.anything(),
+      );
     });
 
     it('audita la firma con cuenta: IP de la petición, tipo FIEL y método ACCOUNT_SESSION', async () => {
@@ -471,7 +503,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
           signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
         }),
       );
-      expect(collaboratorRepository.save).toHaveBeenCalledWith(
+      expect(documentRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           ipAddress: '203.0.113.7',
           signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
@@ -517,56 +549,23 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
     it('persiste la evidencia devuelta, con la cadena canónica que hace verificable el sello', async () => {
       await withEfirmaFiles(signRequest()).expect(200);
 
-      expect(sealRepository.save).toHaveBeenCalledWith({
-        documentId: DOCUMENT_ID,
-        signatureHash: SEAL_RESPONSE.hashHex,
-        canonicalPayload: SEAL_RESPONSE.canonicalString,
-        // El momento de emisión que reporta el PSC, no cuándo insertamos la fila: es lo que la
-        // hoja de evidencia imprime como "EMITIDO" (ver SealMapper).
-        sealedAt: new Date(SEAL_RESPONSE.sealedAt),
-        timestampEvidence: {
-          isValid: true,
-          processedHash: SEAL_RESPONSE.hashHex,
-          fileBase64: 'tsr-en-base64',
-          evidenceId: 'ts-uuid',
-          issuedAt: new Date(SEAL_RESPONSE.sealedAt),
-        },
-        integrityEvidence: {
-          isValid: true,
-          processedHash: SEAL_RESPONSE.hashHex,
-          fileBase64: 'nom151-en-base64',
-          evidenceId: 'nom-uuid',
-          issuedAt: new Date(SEAL_RESPONSE.sealedAt),
-          certificatePdfBase64: 'pdf-en-base64',
-        },
-      });
+      expect(mockedAxios.post).not.toHaveBeenCalled();
+      expect(sealRepository.save).not.toHaveBeenCalled();
     });
   });
 
-  describe('el sellado no puede invalidar una firma', () => {
-    it('si Seal Service rechaza la API key (401), la firma se completa igual y no se guarda evidencia', async () => {
+  describe('la firma no depende de Seal Service', () => {
+    it('con Seal Service caído, la firma se completa y el trabajo queda registrado', async () => {
       mockedAxios.post.mockRejectedValue({
         isAxiosError: true,
-        response: { status: 401 },
+        code: 'ECONNREFUSED',
       });
 
       const response = await withEfirmaFiles(signRequest()).expect(200);
 
       expect(response.body.success).toBe(true);
       expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
-      expect(sealRepository.save).not.toHaveBeenCalled();
-    });
-
-    it('si Seal Service está caído, la firma se completa igual', async () => {
-      mockedAxios.post.mockRejectedValue({
-        isAxiosError: true,
-        code: 'ECONNREFUSED',
-      });
-
-      await withEfirmaFiles(signRequest()).expect(200);
-
-      expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
-      expect(sealRepository.save).not.toHaveBeenCalled();
+      expect(registerSealingJob.execute).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -579,6 +578,7 @@ describe('Firma con e.firma (FIEL) y sellado (e2e)', () => {
       expect(efirmaService.firmar).not.toHaveBeenCalled();
       expect(collaboratorRepository.update).not.toHaveBeenCalled();
       expect(mockedAxios.post).not.toHaveBeenCalled();
+      expect(registerSealingJob.execute).not.toHaveBeenCalled();
     });
 
     it('con la contraseña incorrecta responde 422, no marca al firmante y no sella', async () => {

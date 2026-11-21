@@ -39,7 +39,11 @@ import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
 import { RetryPendingSealUseCase } from '../seal/use-cases/retry-pending-seal.use-case';
-import { SendCompletedSimpleSignatureToSealUseCase } from '../seal/use-cases/send-completed-simple-signature-to-seal.use-case';
+import { SealingRequestSnapshotService } from '../seal/services/sealing-request-snapshot.service';
+import { RegisterDocumentSealingJobUseCase } from '../seal/use-cases/register-document-sealing-job.use-case';
+import { SEALING_TYPE_ENUM } from '../seal/enums/sealing-type.enum';
+import { SEALING_JOB_STATUS_ENUM } from '../seal/enums/sealing-job-status.enum';
+import { IncompleteSimpleSignatureDataException } from '../seal/exceptions/seal.exceptions';
 import { SealEntity } from '../seal/entities/seal.entity';
 import { SEAL_ARTIFACT_ENUM } from '../seal/seal-artifacts';
 import { VERIFICATION_EVENT_ENUM } from '../enum/verification-event.enum';
@@ -134,6 +138,12 @@ function organizationReadAuthorization(
     scopes,
   };
 }
+
+/** Payload de firma simple congelado que devuelven los dobles de `SealingRequestSnapshotService`. */
+const FROZEN_REQUEST = {
+  objectKey: 'doc-1/snapshot.json',
+  hash: 'a'.repeat(64),
+};
 
 function createMockRepository() {
   const repository = {
@@ -231,7 +241,8 @@ describe('casos de uso de documentos', () => {
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
   let retryPendingSeal: { execute: jest.Mock };
-  let sendCompletedSimpleSignatureToSeal: Record<string, jest.Mock>;
+  let sealingRequestSnapshots: Record<string, jest.Mock>;
+  let registerSealingJob: { execute: jest.Mock };
   let summaryDocumentService: Record<string, jest.Mock>;
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
@@ -412,9 +423,22 @@ describe('casos de uso de documentos', () => {
       persistIntegrityCertificateInfo: jest.fn().mockResolvedValue(undefined),
     };
     retryPendingSeal = { execute: jest.fn().mockResolvedValue(false) };
-    // Devuelve `false` —"este documento no es asunto suyo"— salvo en las pruebas que lo miran.
-    sendCompletedSimpleSignatureToSeal = {
-      execute: jest.fn().mockResolvedValue(false),
+    sealingRequestSnapshots = {
+      freezeSimpleSignatureRequest: jest.fn().mockResolvedValue(FROZEN_REQUEST),
+      discard: jest.fn().mockResolvedValue(undefined),
+    };
+    // Devuelve un trabajo recién creado con el payload recibido, salvo en las pruebas que lo cambian.
+    registerSealingJob = {
+      execute: jest.fn().mockImplementation(async (input) => ({
+        job: {
+          id: 'job-1',
+          status: input.blocker
+            ? SEALING_JOB_STATUS_ENUM.RECONCILIATION_REQUIRED
+            : SEALING_JOB_STATUS_ENUM.PENDING,
+          requestObjectKey: input.request?.objectKey ?? null,
+        },
+        created: true,
+      })),
     };
     summaryDocumentService = {
       generateSummaryPdf: jest
@@ -518,8 +542,12 @@ describe('casos de uso de documentos', () => {
           useValue: retryPendingSeal,
         },
         {
-          provide: SendCompletedSimpleSignatureToSealUseCase,
-          useValue: sendCompletedSimpleSignatureToSeal,
+          provide: SealingRequestSnapshotService,
+          useValue: sealingRequestSnapshots,
+        },
+        {
+          provide: RegisterDocumentSealingJobUseCase,
+          useValue: registerSealingJob,
         },
         {
           provide: SummaryDocumentService,
@@ -2383,52 +2411,78 @@ describe('casos de uso de documentos', () => {
     });
 
     /**
-     * Historia "Enviar información de firmantes simples al Seal Service al completar un
-     * documento": el envío se dispara al firmar el último firmante y NO antes, porque el DTO
-     * describe el documento completo.
+     * Historia "Persistir y registrar trabajos de sellado al completar la firma": cerrar el
+     * documento ya no llama a Seal Service. Congela el payload de firma simple y registra un trabajo
+     * persistente en la MISMA transacción que deja el documento en SIGNED.
      */
-    describe('envío de las firmas simples a Seal Service', () => {
-      it('se dispara cuando firma el último firmante', async () => {
+    describe('registro del trabajo de sellado al cerrar el documento', () => {
+      async function signOnlySigner() {
         documentRepository.findOne.mockResolvedValue(mockDocument());
         const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
         collaboratorRepository.find
           .mockResolvedValueOnce([onlySigner])
           .mockResolvedValueOnce([onlySigner]);
 
-        await signDocument.execute(
+        return signDocument.execute(
           'doc-1',
           'user-1',
           undefined,
           TEST_GEOLOCATION,
         );
+      }
 
-        expect(sendCompletedSimpleSignatureToSeal.execute).toHaveBeenCalledWith(
-          'doc-1',
+      it('registra un trabajo SIMPLE con el payload congelado, dentro de la transacción de cierre', async () => {
+        await signOnlySigner();
+
+        expect(
+          sealingRequestSnapshots.freezeSimpleSignatureRequest,
+        ).toHaveBeenCalledWith(
+          expect.objectContaining({ documentId: 'doc-1' }),
+        );
+        expect(registerSealingJob.execute).toHaveBeenCalledTimes(1);
+        expect(registerSealingJob.execute).toHaveBeenCalledWith(
+          {
+            documentId: 'doc-1',
+            sealType: SEALING_TYPE_ENUM.SIMPLE,
+            request: FROZEN_REQUEST,
+            blocker: null,
+          },
+          // El manager de la transacción, no el repositorio global.
+          expect.objectContaining({ getRepository: expect.any(Function) }),
+        );
+
+        const ordenTransaccion =
+          documentRepository.manager.transaction.mock.invocationCallOrder[0];
+        expect(
+          registerSealingJob.execute.mock.invocationCallOrder[0],
+        ).toBeGreaterThan(ordenTransaccion);
+      });
+
+      it('no llama a Seal Service al cerrar el documento', async () => {
+        await signOnlySigner();
+
+        expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
+      });
+
+      it('marca sealing_pending_at y deja el documento SIGNED en el mismo save', async () => {
+        await signOnlySigner();
+
+        expect(documentRepository.save).toHaveBeenCalledWith(
+          expect.objectContaining({
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            sealingPendingAt: expect.any(Date),
+            signedHash: expect.any(String),
+          }),
         );
       });
 
       /**
-       * El caso de uso del sellado RELEE los firmantes de la base, así que sólo ve lo que ya está
-       * escrito. El snapshot de la rúbrica del último firmante se tomaba en memoria y se
-       * persistía en el `save` del final —después del sellado—, de modo que la evidencia enviada
-       * al PSC caía a la firma EN VIVO del perfil mientras el PDF se estampaba con el snapshot.
-       *
-       * Se comprueba el ORDEN y no sólo que el UPDATE ocurra: escribirlo después del sellado deja
-       * el dato igual de guardado y el bug intacto.
+       * El snapshot se congela RELEYENDO a los firmantes de la base: la rúbrica del último firmante
+       * tiene que estar escrita antes, o la evidencia caería a la firma en vivo del perfil mientras
+       * el PDF se estampa con el snapshot.
        */
-      it('persiste el snapshot de la rúbrica ANTES de sellar, no en el save final', async () => {
-        documentRepository.findOne.mockResolvedValue(mockDocument());
-        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
-        collaboratorRepository.find
-          .mockResolvedValueOnce([onlySigner])
-          .mockResolvedValueOnce([onlySigner]);
-
-        await signDocument.execute(
-          'doc-1',
-          'user-1',
-          undefined,
-          TEST_GEOLOCATION,
-        );
+      it('persiste el snapshot de la rúbrica ANTES de congelar el payload', async () => {
+        await signOnlySigner();
 
         const snapshotUpdate =
           collaboratorRepository.update.mock.calls.findIndex(
@@ -2438,21 +2492,17 @@ describe('casos de uso de documentos', () => {
           );
         expect(snapshotUpdate).toBeGreaterThanOrEqual(0);
 
-        const ordenSnapshot =
+        expect(
           collaboratorRepository.update.mock.invocationCallOrder[
             snapshotUpdate
-          ];
-        const ordenSellado =
-          sendCompletedSimpleSignatureToSeal.execute.mock
-            .invocationCallOrder[0];
-        const ordenSaveFinal =
-          collaboratorRepository.save.mock.invocationCallOrder.at(-1)!;
-
-        expect(ordenSnapshot).toBeLessThan(ordenSellado);
-        expect(ordenSellado).toBeLessThan(ordenSaveFinal);
+          ],
+        ).toBeLessThan(
+          sealingRequestSnapshots.freezeSimpleSignatureRequest.mock
+            .invocationCallOrder[0],
+        );
       });
 
-      it('no se dispara mientras queden firmas pendientes', async () => {
+      it('no registra nada mientras queden firmas pendientes', async () => {
         documentRepository.findOne.mockResolvedValue(mockDocument());
         const signerA = buildSigner({ userId: 'user-1', signingOrder: 0 });
         const signerB = buildSigner({
@@ -2471,34 +2521,80 @@ describe('casos de uso de documentos', () => {
         );
 
         expect(
-          sendCompletedSimpleSignatureToSeal.execute,
+          sealingRequestSnapshots.freezeSimpleSignatureRequest,
         ).not.toHaveBeenCalled();
+        expect(registerSealingJob.execute).not.toHaveBeenCalled();
       });
 
       /**
-       * Best-effort, igual que el sellado avanzado: a esta altura la firma ya está registrada y
-       * el PDF ya está en su bucket. Un 500 dejaría al firmante creyendo que su firma no ocurrió,
-       * y su reintento chocaría contra el claim atómico sin poder corregir nada.
+       * Sin CURP, código consumido o INE ningún reintento puede sellar: el documento se cierra igual
+       * y el trabajo nace bloqueado para revisión, en vez de tumbar la firma del último firmante.
        */
-      it('un fallo del envío no invalida la firma ya registrada', async () => {
-        documentRepository.findOne.mockResolvedValue(mockDocument());
-        const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
-        collaboratorRepository.find
-          .mockResolvedValueOnce([onlySigner])
-          .mockResolvedValueOnce([onlySigner]);
-        sendCompletedSimpleSignatureToSeal.execute.mockRejectedValue(
-          new Error('Seal Service no disponible'),
+      it('con evidencia incompleta, cierra el documento y registra el trabajo bloqueado', async () => {
+        sealingRequestSnapshots.freezeSimpleSignatureRequest.mockRejectedValue(
+          new IncompleteSimpleSignatureDataException(
+            'la CURP',
+            'collaborator-1',
+          ),
         );
 
-        const result = await signDocument.execute(
-          'doc-1',
-          'user-1',
-          undefined,
-          TEST_GEOLOCATION,
-        );
+        const result = await signOnlySigner();
 
         expect(result.success).toBe(true);
-        expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
+        expect(registerSealingJob.execute).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sealType: SEALING_TYPE_ENUM.SIMPLE,
+            request: null,
+            blocker: {
+              code: 'SIMPLE_EVIDENCE_INCOMPLETE',
+              message: expect.stringContaining('collaborator-1'),
+            },
+          }),
+          expect.anything(),
+        );
+      });
+
+      it('si MinIO no puede guardar el payload, el documento no se cierra', async () => {
+        sealingRequestSnapshots.freezeSimpleSignatureRequest.mockRejectedValue(
+          new Error('MinIO no disponible'),
+        );
+
+        await expect(signOnlySigner()).rejects.toThrow('MinIO no disponible');
+        expect(documentRepository.manager.transaction).not.toHaveBeenCalled();
+        expect(registerSealingJob.execute).not.toHaveBeenCalled();
+        expect(documentEventsProducer.emitSigned).not.toHaveBeenCalled();
+      });
+
+      it('si la transacción de cierre falla, borra el payload congelado y no emite el cierre', async () => {
+        registerSealingJob.execute.mockRejectedValue(new Error('deadlock'));
+
+        await expect(signOnlySigner()).rejects.toThrow('deadlock');
+        expect(sealingRequestSnapshots.discard).toHaveBeenCalledWith(
+          FROZEN_REQUEST.objectKey,
+        );
+        expect(documentEventsProducer.emitSigned).not.toHaveBeenCalled();
+      });
+
+      it('si el trabajo ya existía con otro payload, lo conserva y borra el nuevo', async () => {
+        registerSealingJob.execute.mockResolvedValue({
+          job: {
+            id: 'job-existente',
+            status: SEALING_JOB_STATUS_ENUM.COMPLETED,
+            requestObjectKey: 'doc-1/anterior.json',
+          },
+          created: false,
+        });
+
+        const result = await signOnlySigner();
+
+        expect(result.success).toBe(true);
+        expect(sealingRequestSnapshots.discard).toHaveBeenCalledWith(
+          FROZEN_REQUEST.objectKey,
+        );
+        // Un trabajo ya completado no vuelve a marcar el documento como pendiente.
+        expect(documentRepository.save).not.toHaveBeenCalledWith(
+          expect.objectContaining({ sealingPendingAt: expect.any(Date) }),
+        );
       });
     });
 
@@ -3288,13 +3384,20 @@ describe('casos de uso de documentos', () => {
           keyFile.buffer,
           'clave-correcta',
         );
-        expect(collaboratorRepository.save).toHaveBeenCalledWith(
+        // Es el último firmante: su evidencia se guarda dentro de la transacción de cierre, cuyo
+        // manager simulado devuelve este mismo repositorio para cualquier entidad.
+        expect(documentRepository.save).toHaveBeenCalledWith(
           expect.objectContaining({
+            id: 'collaborator-1',
             advancedSignature: expect.objectContaining({
               signatureBase64: 'firma-base64',
             }),
           }),
         );
+        // Nunca la llave privada ni la contraseña.
+        expect(
+          JSON.stringify(documentRepository.save.mock.calls),
+        ).not.toContain('clave-correcta');
         // No usa ninguna imagen de rúbrica: la firma FIEL no tiene snapshot. Desde la historia
         // "Generar código QR para firmas avanzadas" sí se estampa algo en su lugar —el código QR
         // de la firma— pero nunca una firma tomada del perfil del usuario.
@@ -3305,7 +3408,12 @@ describe('casos de uso de documentos', () => {
         );
       });
 
-      describe('integración con Seal Service (historia "Completar flujo de firma avanzada")', () => {
+      /**
+       * Historia "Persistir y registrar trabajos de sellado al completar la firma": la firma
+       * avanzada ya no se sella durante la petición. Se registra un trabajo `ADVANCED` que empieza
+       * por completar el OCSP; su payload se congela después, en el worker.
+       */
+      describe('registro del trabajo de sellado avanzado', () => {
         function signWithEfirma(userId: string) {
           return signDocument.execute(
             'doc-1',
@@ -3319,9 +3427,8 @@ describe('casos de uso de documentos', () => {
           );
         }
 
-        it('al completarse el documento, manda el documentId y el arreglo con la información de cada firma', async () => {
-          const document = mockDocument();
-          documentRepository.findOne.mockResolvedValue(document);
+        it('al completarse el documento registra un trabajo ADVANCED sin payload y no llama a Seal Service', async () => {
+          documentRepository.findOne.mockResolvedValue(mockDocument());
           const onlySigner = buildFielSigner({
             userId: 'user-1',
             signingOrder: 0,
@@ -3330,66 +3437,34 @@ describe('casos de uso de documentos', () => {
 
           await signWithEfirma('user-1');
 
-          expect(sealDocumentUseCase.create).toHaveBeenCalledTimes(1);
-          expect(sealDocumentUseCase.create).toHaveBeenCalledWith({
-            documentId: 'doc-1',
-            originalHash: document.originalHash,
-            signatures: [
-              {
-                signatureBase64: 'firma-base64',
-                algorithm: 'sha256',
-                // Normalizado a ISO 8601: el proveedor ordena y canonicaliza por este valor.
-                signedAt: '2026-01-01T00:00:00.000Z',
-                certificate: {
-                  rfc: 'XAXX010101000',
-                  name: 'Firmante Uno',
-                  issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
-                  serialNumber: '00001000000512345678',
-                  certificateNumber: '30001000000400002434',
-                  certificatePem: '-----BEGIN CERTIFICATE-----...',
-                },
-                // También normalizada a ISO 8601, por el mismo motivo que `signedAt`.
-                ocspEvidence: {
-                  status: 'good',
-                  verifiedAt: '2026-01-01T00:00:00.000Z',
-                  ocspResponse: 'respuesta-ocsp-en-base64',
-                  ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
-                },
-              },
-            ],
-          });
+          expect(registerSealingJob.execute).toHaveBeenCalledTimes(1);
+          expect(registerSealingJob.execute).toHaveBeenCalledWith(
+            {
+              documentId: 'doc-1',
+              sealType: SEALING_TYPE_ENUM.ADVANCED,
+              request: null,
+              blocker: null,
+            },
+            expect.objectContaining({ getRepository: expect.any(Function) }),
+          );
+          expect(
+            sealingRequestSnapshots.freezeSimpleSignatureRequest,
+          ).not.toHaveBeenCalled();
+          expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
         });
 
-        it('sella UNA sola vez, con las firmas de TODOS los firmantes, cuando termina el último', async () => {
-          const document = mockDocument();
-          documentRepository.findOne.mockResolvedValue(document);
+        /**
+         * El worker relee la firma del último firmante de la base. Por eso se guarda en la misma
+         * transacción que registra el trabajo, y ANTES de registrarlo.
+         */
+        it('guarda la firma avanzada del último firmante en la misma transacción, antes del trabajo', async () => {
+          documentRepository.findOne.mockResolvedValue(mockDocument());
           const signerA = buildFielSigner({
             id: 'p-a',
             userId: 'user-a',
             signingOrder: 0,
             status: COLLABORATOR_STATUS_ENUM.SIGNED,
-            advancedSignature: {
-              originalHash: 'hash-doc-1',
-              signatureBase64: 'firma-de-a',
-              algorithm: 'sha256',
-              signedAt: '2026-01-01T00:00:00.000Z',
-              certificate: {
-                rfc: 'AAAA010101AAA',
-                name: 'Firmante A',
-                issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
-                serialNumber: '1',
-                certificateNumber: '2',
-                certificatePem: 'pem-a',
-              },
-              // Releída de la columna jsonb: fechas como string, sin tipo fecha.
-              ocspEvidence: {
-                status: 'good',
-                verifiedAt: '2026-01-01T00:00:00.000Z',
-                ocspResponse: 'respuesta-ocsp-de-a',
-                ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
-              },
-            },
-          } as any);
+          });
           const signerB = buildFielSigner({
             id: 'p-b',
             userId: 'user-b',
@@ -3399,20 +3474,31 @@ describe('casos de uso de documentos', () => {
 
           await signWithEfirma('user-b');
 
-          expect(sealDocumentUseCase.create).toHaveBeenCalledTimes(1);
-          const [payload] = sealDocumentUseCase.create.mock.calls[0];
-          expect(payload.signatures).toHaveLength(2);
+          const evidenceSave = documentRepository.save.mock.calls.findIndex(
+            ([entity]) =>
+              (entity as { id?: string; advancedSignature?: unknown }).id ===
+                'p-b' &&
+              (entity as { advancedSignature?: unknown }).advancedSignature,
+          );
+          expect(evidenceSave).toBeGreaterThanOrEqual(0);
           expect(
-            payload.signatures.map(
-              (signature: { signatureBase64: string }) =>
-                signature.signatureBase64,
-            ),
-          ).toEqual(['firma-de-a', 'firma-base64']);
+            documentRepository.save.mock.invocationCallOrder[evidenceSave],
+          ).toBeLessThan(
+            registerSealingJob.execute.mock.invocationCallOrder[0],
+          );
+          expect(
+            documentRepository.manager.transaction.mock.invocationCallOrder[0],
+          ).toBeLessThan(
+            documentRepository.save.mock.invocationCallOrder[evidenceSave],
+          );
+          // Ya no hay un segundo guardado del firmante fuera de la transacción.
+          expect(collaboratorRepository.save).not.toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'p-b' }),
+          );
         });
 
-        it('no sella mientras queden firmantes pendientes: el hash canónico se calcula sobre el conjunto completo', async () => {
-          const document = mockDocument();
-          documentRepository.findOne.mockResolvedValue(document);
+        it('no registra nada mientras queden firmantes pendientes', async () => {
+          documentRepository.findOne.mockResolvedValue(mockDocument());
           const signerA = buildFielSigner({
             id: 'p-a',
             userId: 'user-a',
@@ -3427,45 +3513,21 @@ describe('casos de uso de documentos', () => {
 
           await signWithEfirma('user-a');
 
+          expect(registerSealingJob.execute).not.toHaveBeenCalled();
           expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
         });
 
-        it('un documento de firma simple no se sella: no hay firma criptográfica que sellar', async () => {
-          const document = mockDocument();
-          documentRepository.findOne.mockResolvedValue(document);
-          const onlySigner = buildSigner({ userId: 'user-1', signingOrder: 0 });
-          collaboratorRepository.find
-            .mockResolvedValueOnce([onlySigner])
-            .mockResolvedValueOnce([onlySigner]);
-
-          await signDocument.execute(
-            'doc-1',
-            'user-1',
-            undefined,
-            TEST_GEOLOCATION,
-          );
-
-          expect(sealDocumentUseCase.create).not.toHaveBeenCalled();
-        });
-
-        it('si Seal Service falla, la firma igual queda registrada: el sellado es best-effort', async () => {
-          sealDocumentUseCase.create.mockRejectedValue(
-            new Error('Seal Service caído'),
-          );
-          const document = mockDocument();
-          documentRepository.findOne.mockResolvedValue(document);
+        it('si la transacción de cierre falla, propaga el error y no emite el cierre', async () => {
+          registerSealingJob.execute.mockRejectedValue(new Error('deadlock'));
+          documentRepository.findOne.mockResolvedValue(mockDocument());
           const onlySigner = buildFielSigner({
             userId: 'user-1',
             signingOrder: 0,
           });
           collaboratorRepository.find.mockResolvedValue([onlySigner]);
 
-          const result = await signWithEfirma('user-1');
-
-          expect(result.success).toBe(true);
-          expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
-          expect(collaboratorRepository.save).toHaveBeenCalled();
-          expect(documentEventsProducer.emitSigned).toHaveBeenCalled();
+          await expect(signWithEfirma('user-1')).rejects.toThrow('deadlock');
+          expect(documentEventsProducer.emitSigned).not.toHaveBeenCalled();
         });
       });
 

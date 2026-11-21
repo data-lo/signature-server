@@ -8,6 +8,7 @@ import { OscpService } from 'src/efirma/oscp/oscp.service';
 import { CollaboratorEntity } from '../../entities/collaborator.entity';
 import { DocumentEntity } from '../../entities/document.entity';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
+import { DocumentSealingJobEntity } from '../entities/document-sealing-job.entity';
 
 /**
  * Retoma el sellado de un documento que quedó pendiente porque el SAT no respondió al firmar.
@@ -18,6 +19,12 @@ import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
  * TSA al consultar la vista pública y con el que vencen las sesiones de captura: el trabajo se
  * hace cuando a alguien le importa el resultado. La contrapartida, explícita: un documento que
  * nadie abre no se sella nunca.
+ *
+ * **Sólo para documentos sin trabajo de sellado.** Desde `document_sealing_jobs`, todo documento
+ * que se cierra registra un trabajo y su sellado lo ejecuta un worker. Si este reintento corriera
+ * también sobre ellos, la vista pública sellaría por su cuenta en paralelo con el worker y, en firma
+ * simple, borraría la marca sin haber sellado. Queda para los documentos firmados antes de esa
+ * tabla, que no tienen trabajo.
  *
  * **Sobre la evidencia que se obtiene.** El `verifiedAt` será el del reintento, no el del momento
  * de firmar. La comprobación acredita que el certificado no está revocado AHORA; como la
@@ -33,6 +40,8 @@ export class RetryPendingSealUseCase {
     private readonly documentRepository: Repository<DocumentEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    @InjectRepository(DocumentSealingJobEntity)
+    private readonly sealingJobRepository: Repository<DocumentSealingJobEntity>,
     private readonly efirmaService: EfirmaService,
     private readonly ocspService: OscpService,
   ) {}
@@ -49,6 +58,11 @@ export class RetryPendingSealUseCase {
    */
   async execute(document: DocumentEntity): Promise<boolean> {
     if (!document.sealingPendingAt) {
+      return false;
+    }
+
+    // Su sellado lo ejecuta el worker a partir del trabajo; la marca la limpia él.
+    if (await this.sealingJobRepository.existsBy({ documentId: document.id })) {
       return false;
     }
 

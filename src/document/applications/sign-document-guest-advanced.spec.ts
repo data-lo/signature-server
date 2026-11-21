@@ -168,7 +168,9 @@ describe('SignDocumentUseCase — Firma Avanzada de invitado sin cuenta', () => 
   it('guarda la evidencia (firma avanzada, IP, ubicación, autorización) sin secretos', async () => {
     await useCase.executeGuestAdvanced(request());
 
-    const saved = collaboratorRepository.save.mock.calls[0][0];
+    // Es el último firmante: su evidencia viaja a `finalizeSignedDocument`, que la guarda en la
+    // transacción de cierre junto con el trabajo de sellado.
+    const saved = documentService.finalizeSignedDocument.mock.calls[0][2];
     expect(saved).toEqual(
       expect.objectContaining({
         advancedSignature: EFIRMA_RESULT,
@@ -423,7 +425,11 @@ describe('SignDocumentUseCase — Firma Avanzada de invitado sin cuenta', () => 
         signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
       }),
     );
-    expect(collaboratorRepository.save).toHaveBeenCalledWith(
+    // Es el último firmante: su evidencia viaja a `finalizeSignedDocument`, que la guarda en la
+    // transacción de cierre junto con el trabajo de sellado.
+    expect(documentService.finalizeSignedDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
       expect.objectContaining({ ipAddress: '10.0.0.4' }),
     );
   });

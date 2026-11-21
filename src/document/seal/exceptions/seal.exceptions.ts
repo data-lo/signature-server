@@ -50,12 +50,30 @@ export class SealPersistenceException extends InternalServerErrorException {
 }
 
 /**
- * Falta un dato obligatorio para armar el envío de firma simple a Seal Service.
+ * Falta evidencia de un firmante FIEL para congelar el payload de sellado avanzado: hoy, la
+ * respuesta OCSP que el SAT no devolvió al firmar.
  *
  * El mensaje nombra QUÉ falta y a QUIÉN, pero identifica al firmante por el id de su fila de
- * colaborador —nunca por su correo, su nombre o su CURP—: este texto termina en logs y en
- * respuestas HTTP, y ninguno de los dos es lugar para datos personales. Con ese id, quien opere
- * el incidente llega al firmante consultando la base.
+ * colaborador —nunca por su correo, su nombre, su RFC o su CURP—: este texto termina en logs y en
+ * `document_sealing_jobs.last_error_message`, y ninguno de los dos es lugar para datos personales.
+ */
+export class IncompleteAdvancedSignatureEvidenceException extends UnprocessableEntityException {
+  /**
+   * @param missingData - Qué falta, por ejemplo `la evidencia OCSP`.
+   * @param collaboratorId - Fila de colaborador del firmante; nunca su RFC ni su nombre.
+   */
+  constructor(missingData: string, collaboratorId: string) {
+    super(
+      `No se puede congelar el sellado avanzado: falta ${missingData} del firmante ${collaboratorId}.`,
+    );
+  }
+}
+
+/**
+ * Falta un dato obligatorio para armar el envío de firma simple a Seal Service.
+ *
+ * Mismo criterio de privacidad que `IncompleteAdvancedSignatureEvidenceException`: identifica al
+ * firmante por el id de su fila de colaborador.
  */
 export class IncompleteSimpleSignatureDataException extends UnprocessableEntityException {
   constructor(missingData: string, collaboratorId: string) {

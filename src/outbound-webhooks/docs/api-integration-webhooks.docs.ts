@@ -36,17 +36,24 @@ import {
 } from './webhook-payload-v1.models';
 
 /** Permiso para consultar el endpoint. */
-const READ_PERMISSION_NOTE = '**Permiso requerido:** `WEBHOOK.READ`.';
+const READ_PERMISSION_NOTE = '**Permiso:** `WEBHOOK.READ`.';
 
 /** Permiso para cambiar el endpoint. */
-const MANAGE_PERMISSION_NOTE = '**Permiso requerido:** `WEBHOOK.MANAGE`.';
+const MANAGE_PERMISSION_NOTE = '**Permiso:** `WEBHOOK.MANAGE`.';
 
-/** Lo común a la descripción de cada operación. */
+/**
+ * Une los párrafos de la descripción de una operación.
+ *
+ * @param paragraphs - Párrafos en Markdown.
+ * @returns La descripción, con un párrafo en blanco entre cada uno.
+ *
+ * @example
+ * ```ts
+ * operationDescription('Devuelve la URL…', READ_PERMISSION_NOTE);
+ * ```
+ */
 function operationDescription(...paragraphs: string[]): string {
-  return [
-    ...paragraphs,
-    'La organización sale de la API key (`X-API-Key`): no se envía ningún identificador.',
-  ].join('\n\n');
+  return paragraphs.join('\n\n');
 }
 
 /** Headers de cada entrega, como parámetros de los callbacks. */
@@ -56,7 +63,7 @@ const WEBHOOK_DELIVERY_HEADERS: ParameterObject[] = [
     in: 'header',
     required: true,
     description:
-      'Identificador de la entrega. **No cambia entre reintentos**: deduplica con él o con `id` del payload.',
+      'Identificador de la entrega. Es el mismo en todos sus reintentos: úsalo, o el `id` del cuerpo, para descartar duplicados.',
     schema: { type: 'string', format: 'uuid' },
     example: '3b9d2f61-8c4e-4a7b-9e1d-5f0a2c8b6e43',
   },
@@ -65,7 +72,7 @@ const WEBHOOK_DELIVERY_HEADERS: ParameterObject[] = [
     in: 'header',
     required: true,
     description:
-      'Tipo de evento; repite `type` para enrutar sin parsear el cuerpo.',
+      'Tipo de evento, igual a `type` del cuerpo. Sirve para enrutar la entrega sin leer el JSON.',
     schema: {
       type: 'string',
       enum: Object.values(OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM),
@@ -75,7 +82,7 @@ const WEBHOOK_DELIVERY_HEADERS: ParameterObject[] = [
     name: 'X-Signature-Timestamp',
     in: 'header',
     required: true,
-    description: `Segundos Unix, en decimal, del momento en que se firmó este intento. Rechaza la entrega si difiere más de ${WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS} s de tu reloj.`,
+    description: `Segundos Unix del momento en que se firmó este intento. Rechaza la entrega si difiere más de ${WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS} s de tu reloj.`,
     schema: { type: 'string', pattern: '^[0-9]+$' },
     example: '1794421800',
   },
@@ -84,7 +91,7 @@ const WEBHOOK_DELIVERY_HEADERS: ParameterObject[] = [
     in: 'header',
     required: true,
     description:
-      '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.',
+      '`hex(HMAC-SHA256(secret, timestamp + "." + rawBody))`, en hexadecimal minúsculo. Calcúlalo sobre los bytes exactos del cuerpo y compáralo en tiempo constante.',
     schema: { type: 'string', pattern: '^[0-9a-f]{64}$' },
   },
 ];
@@ -103,7 +110,7 @@ const PAYLOAD_EXAMPLES: Record<OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM, unknown> = {
       },
       participant: {
         id: '77f85c29-0104-4823-8b32-4bc567e88c6a',
-        email: 'firmante@empresa.com',
+        email: 'luis.martinez@correo.example',
         status: 'SIGNED',
         signedAt: '2026-11-11T18:30:00.000Z',
       },
@@ -133,7 +140,7 @@ const PAYLOAD_EXAMPLES: Record<OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM, unknown> = {
       },
       participant: {
         id: '77f85c29-0104-4823-8b32-4bc567e88c6a',
-        email: 'firmante@empresa.com',
+        email: 'luis.martinez@correo.example',
         status: 'REJECTED',
         rejectedAt: '2026-11-11T19:05:00.000Z',
       },
@@ -190,10 +197,10 @@ export const WEBHOOK_EVENT_CALLBACKS: CallbacksObject = Object.fromEntries(
           responses: {
             '2XX': {
               description:
-                'Entrega confirmada. El cuerpo de la respuesta se ignora.',
+                'Confirma la entrega. Firmalo ignora el cuerpo de tu respuesta.',
             },
             default: {
-              description: `Cualquier otra respuesta (incluidas las \`3xx\`), un error de red o ${WEBHOOK_REQUEST_TIMEOUT_MS / 1000} s sin respuesta: se reintenta con el mismo \`X-Signature-Webhook-Id\`.`,
+              description: `Cualquier otra respuesta (también una \`3xx\`), un error de red o ${WEBHOOK_REQUEST_TIMEOUT_MS / 1000} s sin respuesta: Firmalo reintenta con el mismo \`X-Signature-Webhook-Id\`.`,
             },
           },
         },
@@ -219,7 +226,7 @@ const ApiWebhookEndpointNotFound = () =>
   ApiResponse({
     status: 404,
     description:
-      '`WEBHOOK_ENDPOINT_NOT_FOUND`: la organización no tiene un endpoint configurado. Créalo con `PUT`.',
+      '`WEBHOOK_ENDPOINT_NOT_FOUND`: tu organización no tiene un endpoint configurado. Créalo con `PUT /api/v1/integration/webhooks/endpoint`.',
     type: IntegrationErrorResponseDto,
     examples: {
       notFound: integrationErrorExample(
@@ -235,7 +242,7 @@ const ApiWebhookSecretUnavailable = () =>
   ApiResponse({
     status: 503,
     description:
-      '`WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE`: el servidor no puede generar secretos por ahora. Reintenta más tarde; no se guardó nada.',
+      '`WEBHOOK_SECRET_ENCRYPTION_UNAVAILABLE`: Firmalo no puede generar el secreto en este momento. No se guardó nada; reintenta más tarde.',
     type: IntegrationErrorResponseDto,
     examples: {
       unavailable: integrationErrorExample(
@@ -261,14 +268,14 @@ export function ApiGetIntegrationWebhookEndpoint() {
     ApiOperation({
       summary: 'Consultar el endpoint de webhooks',
       description: operationDescription(
-        'Devuelve la URL, el estado, los eventos suscritos y la versión del secreto activo. **Nunca devuelve el secreto.**',
+        'Devuelve la URL, el estado, los eventos suscritos y la versión del secreto activo de tu endpoint. No devuelve el secreto.',
         READ_PERMISSION_NOTE,
       ),
     }),
     ApiIntegrationCommonResponses(),
     ApiResponse({
       status: 200,
-      description: 'Configuración del endpoint, sin secreto.',
+      description: 'Configuración del endpoint.',
       type: IntegrationWebhookEndpointResponse,
     }),
     ApiWebhookEndpointNotFound(),
@@ -291,9 +298,9 @@ export function ApiUpsertIntegrationWebhookEndpoint() {
     ApiOperation({
       summary: 'Crear o actualizar el endpoint de webhooks',
       description: operationDescription(
-        'Si la organización no tiene endpoint, lo crea activo y responde `201` con el **secreto**, que sólo se muestra esta vez. Si ya tiene uno, cambia la URL y los eventos, lo reactiva si estaba desactivado y responde `200` sin secreto: el secreto se conserva.',
-        'Las entregas ya registradas conservan la URL con la que se registraron.',
-        'Los cuerpos de cada evento están en la pestaña **Callbacks**.',
+        'Configura la URL que recibe los eventos de firma y qué eventos quieres recibir.',
+        'La primera vez crea el endpoint activo y responde `201` con el secreto para verificar las firmas; guárdalo, porque no se vuelve a mostrar. Después, cambia la URL y los eventos, reactiva el endpoint si estaba desactivado y responde `200` con el mismo secreto, sin incluirlo.',
+        'Los cuerpos de cada evento están en **Callbacks**.',
         MANAGE_PERMISSION_NOTE,
       ),
       callbacks: WEBHOOK_EVENT_CALLBACKS,
@@ -303,18 +310,18 @@ export function ApiUpsertIntegrationWebhookEndpoint() {
     ApiResponse({
       status: 201,
       description:
-        'Endpoint creado. `data.secret` es el secreto HMAC; guárdalo ahora.',
+        'Endpoint creado. Guarda `data.secret` en el gestor de secretos de tu backend.',
       type: IntegrationWebhookEndpointWithSecretResponse,
     }),
     ApiResponse({
       status: 200,
-      description: 'Endpoint actualizado. No incluye el secreto.',
+      description: 'Endpoint actualizado. El secreto no cambia.',
       type: IntegrationWebhookEndpointResponse,
     }),
     ApiResponse({
       status: 422,
       description:
-        '`WEBHOOK_URL_NOT_ALLOWED` (la URL no es `https://` en el puerto 443, lleva credenciales o apunta a un host privado, reservado o que no resuelve; el motivo va en `details.reason`) o `INVALID_REQUEST` (falta `url`, `events` está vacío, repite un evento o trae uno desconocido).',
+        '`WEBHOOK_URL_NOT_ALLOWED`: usa una URL `https://` pública, en el puerto 443 y sin usuario ni contraseña; `details.reason` dice qué falla. `INVALID_REQUEST`: falta `url`, `events` está vacío, repite un evento o trae uno que no existe.',
       type: IntegrationErrorResponseDto,
       examples: {
         urlNotAllowed: {
@@ -349,14 +356,15 @@ export function ApiRotateIntegrationWebhookSecret() {
     ApiOperation({
       summary: 'Rotar el secreto del webhook',
       description: operationDescription(
-        'Retira el secreto activo y genera el siguiente, que se devuelve **sólo en esta respuesta**. Las entregas nuevas se firman con él; las ya registradas se siguen firmando con el anterior hasta terminar, así que acepta ambos durante 24 h.',
+        'Genera un secreto nuevo y lo devuelve sólo en esta respuesta. Las entregas nuevas se firman con él; las que ya estaban pendientes se siguen firmando con el anterior. Acepta los dos durante 24 horas.',
         MANAGE_PERMISSION_NOTE,
       ),
     }),
     ApiIntegrationCommonResponses(),
     ApiResponse({
       status: 200,
-      description: 'Secreto rotado. `data.secret` es el secreto nuevo.',
+      description:
+        'Secreto rotado. Guarda `data.secret`; `secretVersion` sube en 1.',
       type: IntegrationWebhookEndpointWithSecretResponse,
     }),
     ApiWebhookEndpointNotFound(),
@@ -379,14 +387,14 @@ export function ApiDisableIntegrationWebhookEndpoint() {
     ApiOperation({
       summary: 'Desactivar el endpoint de webhooks',
       description: operationDescription(
-        'Deja de registrar entregas nuevas. Las ya registradas se siguen enviando. No borra la configuración ni el secreto: `PUT` lo reactiva. Repetirlo no cambia nada.',
+        'Deja de generar entregas nuevas; las pendientes se siguen enviando. Conserva la URL, los eventos y el secreto: un `PUT` reactiva el endpoint. Repetirlo no cambia nada.',
         MANAGE_PERMISSION_NOTE,
       ),
     }),
     ApiIntegrationCommonResponses(),
     ApiResponse({
       status: 200,
-      description: 'Endpoint desactivado (`status: DISABLED`).',
+      description: 'Endpoint desactivado, con `status: DISABLED`.',
       type: IntegrationWebhookEndpointResponse,
     }),
     ApiWebhookEndpointNotFound(),

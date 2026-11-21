@@ -39,32 +39,45 @@ export const NOT_RESENDABLE_EXAMPLE = integrationErrorExample(
 export function ApiCreateIntegrationSigningAccess() {
   return applyDecorators(
     ApiOperation({
-      summary: 'Generar un acceso temporal de firma para un firmante',
-      description:
-        'Llamar desde el backend del tercero, nunca desde el navegador. Devuelve una URL `/sign/launch/:token` de un solo uso que vence en 5 minutos. El correo sólo localiza al firmante: al abrir la URL, la plataforma le envía un código a ese correo y no muestra el documento ni permite firmar sin validarlo. Diez accesos cada 10 minutos por firmante.',
+      summary: 'Generar un enlace de firma para tu portal',
+      description: [
+        'Devuelve una URL de un solo uso para que el firmante con ese `email` firme desde tu portal. Redirige al firmante a esa URL en cuanto la recibas: vence en 5 minutos.',
+        'Al abrirla, Firmalo envía un código al correo del firmante y no muestra el documento hasta que lo valida.',
+        'Puedes pedir hasta diez enlaces cada 10 minutos por firmante.',
+        '**Permiso:** `DOCUMENT.CREATE` con alcance `ORGANIZATION`.',
+      ].join('\n\n'),
     }),
     ApiParam({
       name: 'documentId',
       format: 'uuid',
+      description: 'El `id` que devolvió `POST /api/v1/integration/documents`.',
       example: '2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
     }),
     ApiIntegrationCommonResponses(),
     ApiResponse({
       status: 200,
-      description: 'Acceso temporal emitido',
+      description: 'Enlace generado, con su vencimiento.',
       type: IntegrationSigningAccessResponse,
+      example: {
+        success: true,
+        message: 'Acceso temporal de firma generado',
+        data: {
+          url: 'https://app.firmalo.com/sign/launch/EjemploDeTokenNoReal',
+          expiresAt: '2026-10-26T12:05:00.000Z',
+        },
+      },
     }),
     ApiResponse({
       status: 404,
       description:
-        '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o ningún firmante tiene ese correo',
+        '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de tu organización o no tiene un firmante con ese correo.',
       type: IntegrationErrorResponseDto,
       examples: { signerNotFound: SIGNER_NOT_FOUND_EXAMPLE },
     }),
     ApiResponse({
       status: 409,
       description:
-        '`WAITING_FOR_PREVIOUS_SIGNER` (no es su turno), `INTEGRATION_AMBIGUOUS_SIGNER` (más de un firmante con ese correo) o `INTEGRATION_INVITATION_NOT_RESENDABLE` (ya no espera esa firma o firma desde su cuenta)',
+        '`WAITING_FOR_PREVIOUS_SIGNER`: el documento es secuencial y falta la firma de un firmante anterior; pide el enlace cuando sea su turno. `INTEGRATION_INVITATION_NOT_RESENDABLE`: el firmante ya firmó o rechazó, el documento ya no espera firmas, o el firmante firma desde su cuenta de Firmalo. `INTEGRATION_AMBIGUOUS_SIGNER`: más de un firmante tiene ese correo.',
       type: IntegrationErrorResponseDto,
       examples: {
         notInTurn: integrationErrorExample(
@@ -82,7 +95,7 @@ export function ApiCreateIntegrationSigningAccess() {
     }),
     ApiResponse({
       status: 422,
-      description: '`INVALID_REQUEST`: `email` no es un correo válido.',
+      description: '`INVALID_REQUEST`: falta `email` o no es un correo válido.',
       type: IntegrationErrorResponseDto,
       examples: {
         invalidRequest: integrationErrorExample(
@@ -96,7 +109,7 @@ export function ApiCreateIntegrationSigningAccess() {
     ApiResponse({
       status: 429,
       description:
-        '`TOO_MANY_REQUESTS`: se superaron los diez accesos en 10 minutos para ese firmante.',
+        '`TOO_MANY_REQUESTS`: ya pediste diez enlaces para ese firmante en los últimos 10 minutos. Espera antes de pedir otro.',
       type: IntegrationErrorResponseDto,
       examples: { tooManyRequests: TOO_MANY_REQUESTS_EXAMPLE },
     }),

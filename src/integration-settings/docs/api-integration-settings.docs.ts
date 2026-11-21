@@ -35,18 +35,17 @@ export function ApiGetIntegrationSettings() {
   return applyDecorators(
     ApiOperation({
       summary: 'Consultar la configuración de la integración',
-      description:
-        'Devuelve las opciones configurables de la integración de tu organización. Hoy sólo `webhooksEnabled`, que es `false` mientras no se haya configurado. La organización sale de la API key. Requiere `INTEGRATION_SETTINGS.READ`; un permiso de documentos no basta.',
+      description: [
+        'Devuelve la configuración de la integración de tu organización. Hoy sólo incluye `webhooksEnabled`, que vale `false` hasta que lo cambies.',
+        '**Permiso:** `INTEGRATION_SETTINGS.READ`.',
+      ].join('\n\n'),
     }),
     ApiIntegrationCommonResponses({
-      forbiddenNote:
-        'Una llave sin `INTEGRATION_SETTINGS.READ` responde `API_KEY_PERMISSION_DENIED`.',
       forbiddenExamples: permissionDeniedExample('INTEGRATION_SETTINGS.READ'),
     }),
     ApiResponse({
       status: 200,
-      description:
-        'Configuración de la organización, o sus valores por defecto.',
+      description: 'Configuración actual.',
       type: IntegrationApiSettingsResponse,
       example: { success: true, data: { webhooksEnabled: false } },
     }),
@@ -68,9 +67,12 @@ export function ApiGetIntegrationSettings() {
 export function ApiUpdateIntegrationSettings() {
   return applyDecorators(
     ApiOperation({
-      summary: 'Activar o desactivar el envío de webhooks',
-      description:
-        'Fija `webhooksEnabled` para los procesos de firma que tu organización crea con la API; no se configura por documento. Es idempotente: repetir el mismo valor no cambia nada. Rotar o revocar la API key no modifica esta configuración. El cuerpo sólo admite `webhooksEnabled`: la organización sale de la llave, y la URL, el secreto y los eventos se configurarán aparte. Requiere `INTEGRATION_SETTINGS.UPDATE`.',
+      summary: 'Guardar la preferencia de webhooks',
+      description: [
+        'Guarda `webhooksEnabled` para toda la organización. Enviar el mismo valor otra vez no cambia nada, y rotar o revocar la API key no lo modifica.',
+        'Todavía no cambia qué eventos recibes: el envío de webhooks se está habilitando. La URL y los eventos se configuran con `PUT /api/v1/integration/webhooks/endpoint`.',
+        '**Permiso:** `INTEGRATION_SETTINGS.UPDATE`.',
+      ].join('\n\n'),
     }),
     ApiBody({
       type: UpdateIntegrationApiSettingsDto,
@@ -80,8 +82,6 @@ export function ApiUpdateIntegrationSettings() {
       },
     }),
     ApiIntegrationCommonResponses({
-      forbiddenNote:
-        'Una llave sin `INTEGRATION_SETTINGS.UPDATE` responde `API_KEY_PERMISSION_DENIED`.',
       forbiddenExamples: permissionDeniedExample('INTEGRATION_SETTINGS.UPDATE'),
     }),
     ApiResponse({
@@ -93,7 +93,7 @@ export function ApiUpdateIntegrationSettings() {
     ApiResponse({
       status: 422,
       description:
-        '`INVALID_REQUEST`: falta `webhooksEnabled`, no es booleano, o el cuerpo trae otros campos (por ejemplo, una URL o un secreto).',
+        '`INVALID_REQUEST`: falta `webhooksEnabled`, no es `true` ni `false`, o el cuerpo trae otros campos. Envía sólo `{ "webhooksEnabled": true }` o `false`.',
       type: IntegrationErrorResponseDto,
       examples: {
         invalid: integrationErrorExample(

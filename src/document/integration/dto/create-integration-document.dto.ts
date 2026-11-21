@@ -90,9 +90,9 @@ const TAX_ID = coded(
 /** Quién crea el documento. Se identifica SÓLO por su correo. */
 export class IntegrationCreatorDto {
   @ApiProperty({
-    example: 'ana@cliente.com',
+    example: 'ana.lopez@cliente.example',
     description:
-      'Correo del creador. Si no existe en la plataforma, se le da de alta como usuario provisional y miembro de la organización.',
+      'Correo de quien crea el documento. Si no tiene cuenta en Firmalo, se le crea una provisional dentro de tu organización.',
   })
   @Transform(normalizeEmail)
   @IsEmail({}, CREATOR)
@@ -102,7 +102,7 @@ export class IntegrationCreatorDto {
   @ApiProperty({
     example: 'Ana',
     description:
-      'Sólo se usa si el usuario no existe; nunca sobrescribe datos de uno existente.',
+      'Se usa sólo si hay que crear la cuenta del creador; no cambia los datos de una cuenta existente. Igual con `lastName`.',
   })
   @Transform(trimText)
   @IsString(CREATOR)
@@ -120,14 +120,19 @@ export class IntegrationCreatorDto {
 
 /** Opciones del documento. El nombre del archivo es el del PDF recibido. */
 export class IntegrationDocumentOptionsDto {
-  @ApiProperty({ enum: PAYLOAD_SIGNATURE_TYPE_ENUM, example: 'SIMPLE' })
+  @ApiProperty({
+    enum: PAYLOAD_SIGNATURE_TYPE_ENUM,
+    example: 'SIMPLE',
+    description:
+      'Cómo firman todos los firmantes: `SIMPLE` (firma electrónica con código por correo), `ADVANCED` (e.firma del SAT) o `BIOMETRIC` (verificación de identidad). En las respuestas, `ADVANCED` aparece como `FIEL`.',
+  })
   @IsEnum(PAYLOAD_SIGNATURE_TYPE_ENUM, DOCUMENT)
   signatureType: PAYLOAD_SIGNATURE_TYPE_ENUM;
 
   @ApiPropertyOptional({
     default: true,
     description:
-      'Con `true`, o si se omite, los firmantes firman uno a la vez y cada participante con `role: SIGNER` debe incluir `order`. Con `false`, cualquier firmante pendiente puede firmar en cualquier momento y `order` no es obligatorio ni define el orden de firma. Un `WITNESS` nunca requiere `order`.',
+      'Con `true`, o si se omite, los firmantes firman uno a la vez y cada participante con `role: SIGNER` debe incluir `order`. Con `false`, firman en cualquier orden y `order` no es obligatorio. Un `WITNESS` nunca lleva `order`.',
   })
   @IsOptional()
   @IsBoolean(DOCUMENT)
@@ -136,13 +141,17 @@ export class IntegrationDocumentOptionsDto {
   @ApiPropertyOptional({
     default: false,
     description:
-      'Por ahora sólo `false`: la aprobación previa no se admite por integración.',
+      'Sólo acepta `false`. Con `true` la respuesta es `400 INTEGRATION_APPROVAL_NOT_SUPPORTED`.',
   })
   @IsOptional()
   @IsBoolean(DOCUMENT)
   requiresApproval?: boolean;
 
-  @ApiPropertyOptional({ default: true })
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Con `true`, el documento aparece en la Búsqueda Inteligente de Firmalo, salvo que tu organización la tenga desactivada. Envía `false` para excluirlo.',
+  })
   @IsOptional()
   @IsBoolean(DOCUMENT)
   isIndexable?: boolean;
@@ -159,7 +168,7 @@ export class IntegrationParticipantDto {
   @ApiProperty({
     enum: INTEGRATION_PARTICIPANT_ROLE_ENUM,
     description:
-      '`SIGNER` firma el documento: requiere `signaturePositions` y, si el documento es secuencial, `order`. `WITNESS` no requiere `order` ni participa en él, y no admite `signaturePositions`.',
+      '`SIGNER` firma el documento: lleva `signaturePositions` y, si el documento es secuencial, `order`. `WITNESS` es testigo: no lleva `order` ni `signaturePositions`.',
   })
   @IsEnum(INTEGRATION_PARTICIPANT_ROLE_ENUM, ROLE)
   role: INTEGRATION_PARTICIPANT_ROLE_ENUM;
@@ -179,8 +188,9 @@ export class IntegrationParticipantDto {
   lastName: string;
 
   @ApiProperty({
-    example: 'luis@correo.com',
-    description: 'Se compara sin espacios y en minúsculas: no puede repetirse.',
+    example: 'luis.martinez@correo.example',
+    description:
+      'A este correo llega la invitación. No puede repetirse en el documento; se compara sin espacios y sin distinguir mayúsculas.',
   })
   @Transform(normalizeEmail)
   @IsEmail({}, EMAIL)
@@ -192,7 +202,7 @@ export class IntegrationParticipantDto {
     minimum: 1,
     example: 1,
     description:
-      'Posición del firmante en el orden de firma: entero que inicia en 1. Obligatorio para cada `SIGNER` si `document.isSequential` es `true` o se omite. Entre los firmantes debe ser único y consecutivo, sin huecos (1, 2, 3…), y es este valor, no la posición en `participants`, lo que define el orden. Un `WITNESS` no lo requiere y no cuenta en la secuencia; con `isSequential: false` tampoco es obligatorio. Si se envía en esos casos no tiene efecto, pero debe ser un entero mayor o igual a 1.',
+      'Turno del firmante: entero que inicia en 1, único y consecutivo entre firmantes (1, 2, 3…). Define el orden, sin importar la posición en `participants`. Obligatorio para cada `SIGNER` si el documento es secuencial. Un `WITNESS` no lo lleva y no cuenta en la secuencia.',
   })
   @IsOptional()
   @IsInt(ORDER)
@@ -202,7 +212,7 @@ export class IntegrationParticipantDto {
   @ApiPropertyOptional({
     type: [SignaturePositionDto],
     description:
-      'Obligatorio para cada SIGNER (al menos una); prohibido para un WITNESS. Ratios 0-1 de la página.',
+      'Dónde va la firma en el PDF. Cada `SIGNER` lleva al menos una; un `WITNESS` no lleva ninguna. Las posiciones no pueden traslaparse.',
   })
   @IsOptional()
   @IsArray(POSITIONS)
@@ -212,7 +222,7 @@ export class IntegrationParticipantDto {
 
   @ApiPropertyOptional({
     description:
-      'Código de verificación al firmar. En SIMPLE siempre se exige; en ADVANCED y BIOMETRIC, sólo si es true.',
+      'Pide un código por correo antes de firmar. En `SIMPLE` siempre se pide; en `ADVANCED` y `BIOMETRIC`, sólo con `true`.',
   })
   @IsOptional()
   @IsBoolean()
@@ -224,9 +234,9 @@ export class IntegrationParticipantDto {
     maxLength: 13,
     pattern: RFC_FORMAT_PATTERN,
     description: [
-      'RFC mexicano del firmante: 13 caracteres para persona física o 12 para persona moral (3 o 4 letras, fecha AAMMDD y homoclave de 3). Se quitan los espacios y se pasa a mayúsculas.',
-      'Sólo se admite en un participante con `role: SIGNER` de un documento con `document.signatureType: ADVANCED`; en cualquier otro caso la respuesta es `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`, y con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.',
-      'Si viene, el titular del certificado de su e.firma tiene que tener exactamente ese RFC; si no viene, se compara el nombre del colaborador con el del certificado.',
+      'Opcional. RFC del firmante: 13 caracteres para persona física o 12 para persona moral. Sólo para un participante con `role: SIGNER` en un documento con `document.signatureType: ADVANCED`.',
+      'Con `taxId`, el certificado de su e.firma debe ser de ese RFC; sin él, se compara su nombre con el del certificado.',
+      'En otro tipo de participante o de firma la respuesta es `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`; con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.',
     ].join(' '),
   })
   @IsOptional()
@@ -282,7 +292,7 @@ export class CreateIntegrationDocumentDto {
   @ApiProperty({
     type: () => IntegrationDocumentPayloadDto,
     description:
-      'Campo de texto con un JSON con `creator`, `document` y `participants`.',
+      'Datos del documento como texto JSON: `creator`, `document` y `participants`. Si reintentas, envía el mismo texto exacto (ver `Idempotency-Key`).',
     example: EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD,
   })
   @Allow()
@@ -291,7 +301,7 @@ export class CreateIntegrationDocumentDto {
   @ApiProperty({
     type: 'string',
     format: 'binary',
-    description: 'PDF del documento a firmar, como archivo binario.',
+    description: 'PDF que se va a firmar, de hasta 20 MB.',
   })
   file?: unknown;
 }
