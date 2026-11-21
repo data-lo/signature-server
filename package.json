@@ -23,6 +23,8 @@
     "seed:roles": "ts-node -r tsconfig-paths/register src/scripts/seed-roles.ts",
     "seed:static-permissions": "ts-node -r tsconfig-paths/register src/scripts/seed-static-permissions.ts",
     "catalog:sync": "ts-node -r tsconfig-paths/register src/scripts/sync-stripe-catalog.ts",
+    "sealing:backfill": "ts-node -r tsconfig-paths/register src/scripts/backfill-pending-sealing-jobs.ts",
+    "sealing:backfill:prod": "node dist/scripts/backfill-pending-sealing-jobs.js",
     "catalog:sync:prod": "node dist/scripts/sync-stripe-catalog.js",
     "seed:documents:prod": "node dist/scripts/seed-documents.js",
     "seed:roles:prod": "node dist/scripts/seed-roles.js",

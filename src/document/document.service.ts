@@ -74,15 +74,21 @@ import { MAX_EFIRMA_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.con
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
-import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
-import { SendCompletedSimpleSignatureToSealUseCase } from './seal/use-cases/send-completed-simple-signature-to-seal.use-case';
+import { SealingRequestSnapshotService } from './seal/services/sealing-request-snapshot.service';
+import { RegisterDocumentSealingJobUseCase } from './seal/use-cases/register-document-sealing-job.use-case';
+import { toSealSignature } from './seal/mappers/advanced-signature-seal.mapper';
+import { resolveSealingType } from './seal/utils/resolve-sealing-type.util';
+import { SEALING_TYPE_ENUM } from './seal/enums/sealing-type.enum';
+import { ACTIVE_SEALING_JOB_STATUSES } from './seal/enums/sealing-job-status.enum';
+import type { SealingRequestSnapshotReference } from './seal/interfaces/sealing-request-snapshot.interface';
+import type { SealingJobBlocker } from './seal/use-cases/register-document-sealing-job.use-case';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
 import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
 import type { SummaryDocumentSigner } from './summary-document/interfaces/summary-document.interface';
 import type { AdvancedSummaryDocumentSigner } from './summary-document/interfaces/advanced-summary-document.interface';
 import type { SealDocumentDto } from './seal/dto/seal-document.dto';
 import { SealEntity } from './seal/entities/seal.entity';
-import { DocumentAlreadySealedException } from './seal/exceptions/seal.exceptions';
+import { IncompleteSimpleSignatureDataException } from './seal/exceptions/seal.exceptions';
 import { toConservationRecord } from './summary-document/conservation-record.util';
 import {
   ADVANCED_SIGNATURE_BACKING_LABEL,
@@ -126,8 +132,8 @@ function isRatioSignaturePosition(
  *    contra los permisos de la cuenta,
  *  - firmar con e.firma y congelar la rúbrica del momento (`validateAndSignWithEfirma`,
  *    `snapshotSignatureImage`),
- *  - estampar el PDF, anexar la hoja de firmas y sellar con el PSC (`stampSignaturesOnto`,
- *    `attachSignaturesSheet`, `finalizeSignedDocument`, `sealAdvancedSignatures`),
+ *  - estampar el PDF, anexar la hoja de firmas y registrar el trabajo de sellado
+ *    (`stampSignaturesOnto`, `attachSignaturesSheet`, `finalizeSignedDocument`),
  *  - avisar por correo (`notifyNextSigner`, `sendCompletionEmails`).
  *
  * Varias de ellas las usa más de un caso de uso —`findOrLinkMySignerCollaborator` la comparten
@@ -178,8 +184,8 @@ export class DocumentService {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly efirmaService: EfirmaService,
-    private readonly sealDocumentUseCase: SealDocumentUseCase,
-    private readonly sendCompletedSimpleSignatureToSeal: SendCompletedSimpleSignatureToSealUseCase,
+    private readonly sealingRequestSnapshots: SealingRequestSnapshotService,
+    private readonly registerSealingJob: RegisterDocumentSealingJobUseCase,
     private readonly summaryDocumentService: SummaryDocumentService,
     private readonly advancedSummaryDocumentService: AdvancedSummaryDocumentService,
     private readonly signatureQrService: SignatureQrService,
@@ -935,209 +941,22 @@ export class DocumentService {
   }
 
   /**
-   * Manda a Seal Service los datos de los firmantes de un documento de FIRMA SIMPLE recién
-   * completado (ver `SendCompletedSimpleSignatureToSealUseCase`, que decide si el documento
-   * califica y arma el DTO).
+   * Traduce una firma avanzada persistida al contrato de Seal Service. Delegado de
+   * `toSealSignature` (`seal/mappers/advanced-signature-seal.mapper.ts`), que también usa el
+   * snapshot del trabajo de sellado: los dos caminos deben producir el mismo payload.
    *
-   * Se invoca DENTRO de `finalizeSignedDocument`, justo después de persistir `signed_hash` y antes
-   * de armar la hoja de evidencia: es lo único que permite que su tabla NOM-151 salga llena.
+   * @param signature - Firma avanzada persistida en `CollaboratorEntity.advancedSignature`.
+   * @returns La firma con la forma de `SealDocumentDto.signatures[number]`.
    *
-   * **El caso de uso relee TODO de la base**, así que cualquier dato que la evidencia necesite
-   * tiene que estar escrito antes de llegar acá. Son dos: `signed_hash`, que se guarda unas líneas
-   * más arriba, y el snapshot de la rúbrica de cada firmante, que `SignDocumentUseCase` persiste
-   * apenas lo toma —y no en su `save` final, que ocurre después de este punto— precisamente por
-   * esto. Sin ese adelanto, el snapshot del ÚLTIMO firmante llegaba en NULL y la evidencia se
-   * sellaba con la firma en vivo de su perfil mientras el PDF se estampaba con el snapshot.
-   *
-   * Best-effort, con el mismo criterio que el sellado avanzado y los correos de finalización: a
-   * esta altura la firma ya está registrada y el PDF ya está en su bucket. Devolver un 500 al
-   * último firmante por un fallo del proveedor lo dejaría creyendo que su firma no ocurrió, y su
-   * reintento chocaría contra el claim atómico ("ya respondiste") sin poder corregir nada.
-   *
-   * Del error se registra sólo su mensaje, nunca el DTO: lleva CURP, correo y la rúbrica del
-   * firmante.
-   */
-  async sealSimpleSignatures(documentId: string): Promise<SealEntity | null> {
-    try {
-      return await this.sendCompletedSimpleSignatureToSeal.execute(documentId);
-    } catch (error) {
-      this.logger.error(
-        `Error enviando las firmas simples del documento ${documentId} a Seal Service: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return null;
-    }
-  }
-
-  /**
-   * Envía a Seal Service el arreglo con las firmas avanzadas del documento y persiste la
-   * evidencia que devuelve (historia "Completar flujo de firma avanzada e integración con Seal
-   * Service"). Corre una sola vez por documento, cuando el último firmante terminó: el proveedor
-   * calcula UN hash canónico sobre el conjunto completo de firmas, así que sellar antes —firma
-   * por firma— produciría un hash de un conjunto parcial que ya no representa al documento final.
-   *
-   * Un documento sin ninguna firma avanzada (todo firma simple) no se sella: no hay firma
-   * criptográfica de la cual construir la evidencia.
-   *
-   * Best-effort a propósito, igual que los correos de finalización: llegado este punto las firmas
-   * ya están registradas y el PDF ya está en el bucket de firmados. Propagar un fallo del
-   * proveedor devolvería un 500 al último firmante por algo que su firma sí logró, y su reintento
-   * chocaría contra el claim atómico ("ya respondiste") sin poder corregir nada. El error queda
-   * logueado, y el sellado puede reintentarse contra `POST /seal` con el mismo payload.
-   */
-  async sealAdvancedSignatures(
-    document: DocumentEntity,
-    signerCollaborators: CollaboratorEntity[],
-  ): Promise<SealEntity | null> {
-    const advancedSigners = signerCollaborators.filter(
-      (collaborator) =>
-        collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
-        collaborator.advancedSignature !== null &&
-        collaborator.advancedSignature !== undefined,
-    );
-
-    if (advancedSigners.length === 0) {
-      return null;
-    }
-
-    /**
-     * Sin la evidencia OCSP de TODOS los firmantes no se intenta sellar: Seal Service la exige y
-     * respondería 400. El documento se marca como pendiente para poder retomarlo cuando el SAT
-     * vuelva (ver `RetryPendingSealUseCase`) y para poder decírselo al usuario.
-     *
-     * Se comprueba antes de llamar en vez de dejar que el proveedor rechace, porque un 400
-     * previsible no es un fallo del sellado: es una precondición que todavía no se cumple.
-     */
-    const sinEvidenciaOcsp = advancedSigners.some(
-      (collaborator) => !collaborator.advancedSignature?.ocspEvidence,
-    );
-
-    if (sinEvidenciaOcsp) {
-      this.logger.warn(
-        `El documento ${document.id} queda pendiente de sellar: falta la evidencia OCSP de al menos un firmante.`,
-      );
-      await this.markSealingPending(document);
-      return null;
-    }
-
-    // La traducción del payload va DENTRO del try junto con la llamada: si una firma guardada
-    // tuviera una forma inesperada, el error debe tratarse como cualquier otro fallo de sellado
-    // (logueado, sin efecto sobre la firma) y no escaparse como una excepción no controlada al
-    // final de un flujo de firma que ya se completó.
-    try {
-      const sealDocumentDto: SealDocumentDto = {
-        documentId: document.id,
-        originalHash: document.originalHash,
-        signatures: advancedSigners.map((collaborator) =>
-          this.toSealSignature(collaborator.advancedSignature!),
-        ),
-      };
-
-      const seal = await this.sealDocumentUseCase.create(sealDocumentDto);
-      this.logger.log(
-        `Sellos generados para el documento ${document.id} (evidencia ${seal.id}, ${advancedSigners.length} firma(s) avanzada(s)).`,
-      );
-      return seal;
-    } catch (error) {
-      this.logger.error(
-        `Error sellando el documento ${document.id} con Seal Service: ${error}`,
-      );
-
-      // El documento ya estaba sellado: pasa cuando un intento anterior selló pero falló más
-      // adelante y la firma se reintentó. La constancia existe, así que se relee en vez de
-      // perderla y dejar la hoja sin ella.
-      if (error instanceof DocumentAlreadySealedException) {
-        return await this.sealDocumentUseCase
-          .findByDocumentId(document.id)
-          .catch(() => null);
-      }
-
-      return null;
-    }
-  }
-
-  /**
-   * Marca el documento como pendiente de sellar, conservando la marca original si ya la tenía:
-   * lo que interesa es DESDE CUÁNDO espera, no cuándo se comprobó por última vez.
-   *
-   * Best-effort como el resto del sellado: si no se puede escribir la marca, el documento sigue
-   * firmado y válido. Se registra y se sigue, en vez de tumbar un flujo de firma ya completado.
-   */
-  private async markSealingPending(document: DocumentEntity): Promise<void> {
-    if (document.sealingPendingAt) {
-      return;
-    }
-
-    try {
-      document.sealingPendingAt = new Date();
-      await this.documentRepository.update(document.id, {
-        sealingPendingAt: document.sealingPendingAt,
-      });
-    } catch (error) {
-      this.logger.error(
-        `No se pudo marcar el documento ${document.id} como pendiente de sellar: ${error}`,
-      );
-    }
-  }
-
-  /**
-   * Traduce el resultado de `EfirmaService.firmar` (persistido tal cual en
-   * `CollaboratorEntity.advancedSignature`) al contrato que espera Seal Service.
-   *
-   * Toda fecha se normaliza a ISO 8601 pasando por `Date`, y no llamando a `.toISOString()`
-   * directo, porque `advancedSignature` es una columna **jsonb**: el mismo campo llega como `Date`
-   * cuando la firma se acaba de hacer en esta misma petición, y como **string** cuando se releyó
-   * de la base. El proveedor ordena y canonicaliza las firmas por `signedAt`, así que las dos
-   * rutas tienen que producir exactamente el mismo texto.
-   *
-   * Bug corregido: `ocspEvidence.verifiedAt` sí llamaba a `.toISOString()` directo. Como
-   * `sealAdvancedSignatures` relee del repositorio a TODOS los firmantes del documento, las firmas
-   * anteriores a la del último llegaban siempre desde jsonb —con `verifiedAt` como string— y
-   * reventaban con "verifiedAt.toISOString is not a function". El `try/catch` de
-   * `sealAdvancedSignatures` se tragaba el error (el sellado es best-effort), así que el síntoma no
-   * era una excepción sino que **ningún documento FIEL de más de un firmante llegaba a sellarse**:
-   * su hoja de evidencia salía con la tabla NOM-151 vacía y sin descargas.
-   *
-   * `ocspEvidence` se omite cuando la firma no la trae, en vez de reventar: las firmas guardadas
-   * antes de que existiera la verificación OCSP no la tienen, y el proveedor no la usa para
-   * construir el hash (ver `buildSignatureHash` en seal-service, que canonicaliza solo el
-   * certificado, el algoritmo, la firma y la fecha). Sellar sin ella es correcto; no sellar, no.
+   * @example
+   * ```ts
+   * documentService.toSealSignature(collaborator.advancedSignature!);
+   * ```
    */
   toSealSignature(
     signature: SignatureResult,
   ): SealDocumentDto['signatures'][number] {
-    const { ocspEvidence } = signature;
-
-    return {
-      signatureBase64: String(signature.signatureBase64),
-      algorithm: signature.algorithm,
-      signedAt: new Date(signature.signedAt).toISOString(),
-      certificate: {
-        rfc: signature.certificate.rfc,
-        name: signature.certificate.name,
-        issuer: signature.certificate.issuer,
-        serialNumber: signature.certificate.serialNumber,
-        certificateNumber: signature.certificate.certificateNumber,
-        certificatePem: signature.certificate.certificatePem,
-      },
-      // El campo se omite entero cuando la firma no trae evidencia, en vez de mandar un objeto a
-      // medio llenar: `ocspEvidence` es `@IsOptional()` en el DTO del proveedor, pero leer
-      // `.status` sobre `undefined` revienta, y como el sellado es best-effort el `try/catch` se
-      // traga la excepción y el documento se queda sin constancia sin ningún error visible.
-      ...(ocspEvidence && {
-        ocspEvidence: {
-          status: ocspEvidence.status,
-          // Mismo motivo que `signedAt`: recién firmada llega como `Date`, releída de la columna
-          // jsonb llega como string. Llamar `.toISOString()` directo reventaba la segunda ruta —y
-          // con ella el sellado completo— en cuanto un documento tenía más de un firmante FIEL: la
-          // evidencia del que ya había firmado siempre viene de jsonb.
-          verifiedAt: new Date(ocspEvidence.verifiedAt).toISOString(),
-          ocspResponse: ocspEvidence.ocspResponse,
-          ocspUrl: ocspEvidence.ocspUrl,
-        },
-      }),
-    };
+    return toSealSignature(signature);
   }
 
   /**
@@ -1232,20 +1051,53 @@ export class DocumentService {
   }
 
   /**
-   * Estampa las firmas de todos los firmantes (apiladas), mueve el archivo a firmados y notifica
-   * a todos los colaboradores.
+   * Cierra un documento cuando firma el último firmante: estampa las firmas, guarda el PDF firmado
+   * y su versión final con la hoja de evidencia, y deja el sellado registrado como trabajo
+   * persistente en `document_sealing_jobs`.
+   *
+   * **Sin llamadas al SAT ni a Seal Service.** El sellado ya no ocurre durante la firma: lo ejecuta
+   * un worker a partir del trabajo, así que un SAT o un Seal Service caídos, o un reinicio del
+   * servidor, ya no dejan documentos sin constancia. La hoja se arma ahora sin constancia; el
+   * worker la regenera con ella en la fase `UPDATING_EVIDENCE_PDF`.
+   *
+   * **Orden.** Primero todo lo que habla con MinIO (estampado, PDF firmado, versión final y, en
+   * firma simple, el payload congelado), fuera de cualquier transacción. Después, UNA transacción
+   * que guarda juntos:
+   * - la evidencia definitiva del último firmante (geolocalización, IP y, en FIEL, su firma
+   *   avanzada), para que el worker la encuentre en cuanto el trabajo exista;
+   * - el documento en `SIGNED`, con `signed_hash`, `signed_at` y la marca compatible
+   *   `sealing_pending_at` mientras el trabajo esté pendiente;
+   * - el consumo de las reservas biométricas;
+   * - el trabajo de sellado, si el documento tiene contrato (ver `resolveSealingType`).
+   *
+   * Si la transacción falla no queda nada de eso escrito y el payload congelado se borra. Si ya
+   * existía un trabajo para el documento (un cierre reintentado), se conserva tal cual.
    *
    * Lo que se estampa es ÚNICAMENTE la imagen de la firma (historia "Eliminar nombre al estampar
-   * firma simple"): antes cada estampado agregaba también el nombre del firmante como texto
-   * debajo de la imagen, lo que ensuciaba el documento y duplicaba un dato que ya vive en la hoja
-   * de firmas del resumen (ver `SummaryDocumentService.buildSignerBlock`, que sigue imprimiendo
-   * Nombre/RFC/IP/OTP/fecha por firmante) — la identidad del firmante no se pierde, solo deja de
-   * dibujarse encima del contenido del PDF.
+   * firma simple"); la identidad del firmante vive en la hoja de evidencia.
+   *
+   * @param document - Documento en `PENDING_SIGNATURE` cuyo último firmante acaba de firmar.
+   * @param signerCollaborators - Todos los firmantes, con cuenta y usuario cargados.
+   * @param lastSigner - El firmante que cierra el documento, con su evidencia definitiva en memoria.
+   * @returns Nada.
+   *
+   * @throws {Error} Si falla el estampado, MinIO o la transacción de cierre. El documento queda sin
+   *   cerrar y sin trabajo de sellado.
+   *
+   * @example
+   * ```ts
+   * await documentService.finalizeSignedDocument(document, signerCollaborators, myParticipant);
+   * ```
    */
   async finalizeSignedDocument(
     document: DocumentEntity,
     signerCollaborators: CollaboratorEntity[],
+    lastSigner: CollaboratorEntity,
   ): Promise<void> {
+    const sealType = resolveSealingType(signerCollaborators);
+    let frozenRequest: SealingRequestSnapshotReference | null = null;
+    let committed = false;
+
     try {
       const documentBuffer = await this.stampSignaturesOnto(
         document,
@@ -1271,59 +1123,70 @@ export class DocumentService {
         await this.hashService.generateFileHash(documentBuffer);
       document.signedAt = new Date();
 
-      /**
-       * `signed_hash` se persiste ANTES de sellar porque el sellado de firma simple relee el
-       * documento de la base para armar su evidencia, y sin este guardado leería la fila sin
-       * hash y se descartaría a sí mismo. El estado sigue sin tocarse: el documento se marca
-       * SIGNED al final, después de la hoja, para que un fallo al armarla lo deje reintentable.
-       */
-      await this.documentRepository.update(document.id, {
-        signedHash: document.signedHash,
-        signedAt: document.signedAt,
-      });
-
-      /**
-       * Sellado ANTES de armar la hoja, para los DOS tipos de firma: la hoja imprime la constancia
-       * resultante en su tabla NOM-151, así que sellar después la dejaba siempre vacía. Se corrigió
-       * primero para la firma avanzada; la simple seguía sellándose al final de `sign()` y por eso
-       * su tabla nunca se llenaba.
-       *
-       * Best-effort en ambos casos: si el sellado falla, la firma no se ve afectada y la hoja se
-       * arma sin constancia.
-       */
-      const seal =
-        (await this.sealAdvancedSignatures(document, signerCollaborators)) ??
-        (await this.sealSimpleSignatures(document.id));
-
-      // La versión definitiva se arma DESPUÉS de calcular signedHash y ANTES de marcar el
-      // documento como SIGNED: la hoja imprime ese hash, y si el anexado falla el documento no
-      // queda firmado (el flujo de `sign()` deshace la firma y permite reintentar), en vez de
-      // dejar un documento firmado que el usuario no podría ver porque su versión final no existe.
+      // Hoja inicial, sin constancia: la imprime el worker cuando la obtiene. Se arma ANTES de la
+      // transacción porque sube a MinIO, y si falla el documento no se cierra.
       await this.attachSignaturesSheet(
         document,
         signerCollaborators,
         documentBuffer,
         signerNames,
-        seal,
+        null,
       );
 
+      let blocker: SealingJobBlocker | null = null;
+      if (sealType === SEALING_TYPE_ENUM.SIMPLE) {
+        ({ frozenRequest, blocker } =
+          await this.freezeSimpleSealingRequest(document));
+      }
+
       document.status = DOCUMENT_STATUS_ENUM.SIGNED;
-      /**
-       * SIGNED y el consumo de las reservas biométricas en UNA transacción: un documento firmado
-       * no puede quedar con créditos biométricos bloqueados sin cobrar, ni cobrados sin firmar. En
-       * documentos no biométricos no hay reservas y no se consume nada.
-       */
-      await this.documentRepository.manager.transaction(async (manager) => {
-        await manager.getRepository(DocumentEntity).save(document);
-        await this.closeBiometricReservations.execute(
-          {
-            documentId: document.id,
-            closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_SIGNED,
-          },
-          manager,
-        );
-      });
+
+      const job = await this.documentRepository.manager.transaction(
+        async (manager) => {
+          await manager.getRepository(CollaboratorEntity).save(lastSigner);
+
+          const registered = sealType
+            ? await this.registerSealingJob.execute(
+                {
+                  documentId: document.id,
+                  sealType,
+                  request: frozenRequest,
+                  blocker,
+                },
+                manager,
+              )
+            : null;
+
+          if (
+            registered &&
+            ACTIVE_SEALING_JOB_STATUSES.includes(registered.job.status)
+          ) {
+            // Desde cuándo espera su constancia; un cierre reintentado conserva la marca original.
+            document.sealingPendingAt ??= new Date();
+          }
+
+          await manager.getRepository(DocumentEntity).save(document);
+          await this.closeBiometricReservations.execute(
+            {
+              documentId: document.id,
+              closureReason: DOCUMENT_CLOSURE_REASON_ENUM.DOCUMENT_SIGNED,
+            },
+            manager,
+          );
+
+          return registered?.job ?? null;
+        },
+      );
+      committed = true;
+
+      // El trabajo ya existía con su propio payload: el que se acaba de congelar sobra.
+      if (frozenRequest && job?.requestObjectKey !== frozenRequest.objectKey) {
+        await this.sealingRequestSnapshots.discard(frozenRequest.objectKey);
+      }
     } catch (error) {
+      if (frozenRequest && !committed) {
+        await this.sealingRequestSnapshots.discard(frozenRequest.objectKey);
+      }
       this.logger.error(`Error estampando documento: ${error}`);
       throw new Error(`Error estampando el documento: ${error}`);
     }
@@ -1334,6 +1197,50 @@ export class DocumentService {
       this.logger.error(
         `Error enviando correos de finalización del documento ${document.id}: ${error}`,
       );
+    }
+  }
+
+  /**
+   * Congela el payload de firma simple antes de la transacción de cierre.
+   *
+   * Si a algún firmante le falta evidencia (CURP, código consumido, INE…), ningún reintento la va a
+   * conseguir: el documento se cierra igual y el trabajo nace en `RECONCILIATION_REQUIRED` con el
+   * motivo, en vez de tumbar la firma del último firmante. Cualquier otro error (MinIO) se propaga y
+   * el documento no se cierra.
+   *
+   * @param document - Documento con `originalHash` y `signedHash` ya calculados.
+   * @returns El payload congelado, o el motivo por el que no se pudo congelar.
+   *
+   * @throws {Error} Si MinIO no puede guardar el payload.
+   *
+   * @example
+   * ```ts
+   * const { frozenRequest, blocker } = await this.freezeSimpleSealingRequest(document);
+   * ```
+   */
+  private async freezeSimpleSealingRequest(document: DocumentEntity): Promise<{
+    frozenRequest: SealingRequestSnapshotReference | null;
+    blocker: SealingJobBlocker | null;
+  }> {
+    try {
+      const frozenRequest =
+        await this.sealingRequestSnapshots.freezeSimpleSignatureRequest({
+          documentId: document.id,
+          originalHash: document.originalHash,
+          signedHash: document.signedHash,
+        });
+      return { frozenRequest, blocker: null };
+    } catch (error) {
+      if (!(error instanceof IncompleteSimpleSignatureDataException)) {
+        throw error;
+      }
+      this.logger.warn(
+        `El documento ${document.id} se cierra con su sellado en revisión: ${error.message}`,
+      );
+      return {
+        frozenRequest: null,
+        blocker: { code: 'SIMPLE_EVIDENCE_INCOMPLETE', message: error.message },
+      };
     }
   }
 
