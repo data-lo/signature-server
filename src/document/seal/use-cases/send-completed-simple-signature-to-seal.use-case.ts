@@ -91,6 +91,12 @@ export class SendCompletedSimpleSignatureToSealUseCase {
       signatures: [],
     };
 
+    /**
+     * Idempotente por documento: repetir este envío (un timeout, un reinicio o un fallo al guardar
+     * la constancia más abajo) no emite otra constancia. Seal Service compara el payload: si los
+     * datos del firmante cambiaron desde el primer envío, responde conflicto
+     * (`SealIdempotencyConflictException`) en vez de sellar otro contenido.
+     */
     let response: SealDocumentResponse;
     try {
       for (const signer of snapshot.signatures) {

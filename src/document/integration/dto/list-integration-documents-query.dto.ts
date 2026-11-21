@@ -28,14 +28,47 @@ export class ListIntegrationDocumentsQueryDto extends PickType(
 ) {}
 
 /**
+ * Descripciones de los parámetros tal como los ve un cliente de la API de integración. Las de
+ * `GetDocumentsQueryDto` hablan de la bandeja de la plataforma, y su ejemplo de `statuses` usa
+ * valores en minúsculas que el validador rechaza. Se aplican sobre la metadata de Swagger de
+ * `ListIntegrationDocumentsQueryDto` (que `PickType` ya copió), así que no cambian la bandeja ni
+ * la validación: `ApiPropertyOptional` fusiona con lo existente.
+ */
+const INTEGRATION_QUERY_DESCRIPTIONS: Partial<
+  Record<keyof ListIntegrationDocumentsQueryDto, string>
+> = {
+  statuses:
+    'Sólo documentos en estos estados. Repite el parámetro (`?statuses=PENDING_SIGNATURE&statuses=SIGNED`) o sepáralos con comas.',
+  createdFrom:
+    'Creados a partir de esta fecha (ISO 8601, por ejemplo `2026-01-01`).',
+  createdTo: 'Creados hasta esta fecha (ISO 8601).',
+  signedFrom:
+    'Firmados a partir de esta fecha (ISO 8601). Excluye los que aún no se firman.',
+  signedTo: 'Firmados hasta esta fecha (ISO 8601).',
+  sortBy: 'Campo por el que se ordena.',
+  sortDirection: '`DESC` (por omisión) o `ASC`.',
+  page: 'Número de página, desde 1.',
+  limit: 'Documentos por página, de 1 a 100.',
+};
+
+for (const [property, description] of Object.entries(
+  INTEGRATION_QUERY_DESCRIPTIONS,
+)) {
+  ApiPropertyOptional({ description })(
+    ListIntegrationDocumentsQueryDto.prototype,
+    property,
+  );
+}
+
+/**
  * Query de `GET /integration/users/documents`: la del listado más el correo, obligatorio, del
  * miembro de la organización cuyos documentos se piden. El id interno nunca entra ni sale.
  */
 export class ListIntegrationUserDocumentsQueryDto extends ListIntegrationDocumentsQueryDto {
   @ApiProperty({
-    example: 'ana@acme.mx',
+    example: 'ana.lopez@cliente.example',
     description:
-      'Correo del usuario, miembro activo de la organización de la API key. No distingue mayúsculas.',
+      'Correo del miembro de tu organización cuyos documentos quieres ver. No distingue mayúsculas.',
   })
   @IsEmail({}, { message: 'email debe ser un correo válido' })
   @MaxLength(320)
@@ -49,9 +82,9 @@ export class ListIntegrationUserDocumentsQueryDto extends ListIntegrationDocumen
  */
 export class ListIntegrationDocumentsByCreatorQueryDto extends ListIntegrationDocumentsQueryDto {
   @ApiPropertyOptional({
-    example: 'ana@acme.mx',
+    example: 'ana.lopez@cliente.example',
     description:
-      'Correo del creador. Sólo documentos que creó ese miembro de la organización de la API key.',
+      'Opcional. Sólo los documentos que creó el miembro de tu organización con este correo.',
   })
   @IsOptional()
   @IsEmail({}, { message: 'creatorEmail debe ser un correo válido' })

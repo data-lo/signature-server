@@ -18,8 +18,7 @@ export class WebhookPayloadDocument {
   @ApiProperty({
     format: 'uuid',
     example: '8f25e9d5-8998-4ec5-9a0e-1421ad48f743',
-    description:
-      'Identificador del documento; el mismo que devuelve la API de integración.',
+    description: 'El `id` que devolvió `POST /api/v1/integration/documents`.',
   })
   id: string;
 
@@ -37,11 +36,11 @@ export class WebhookPayloadSignedParticipant {
     format: 'uuid',
     example: '77f85c29-0104-4823-8b32-4bc567e88c6a',
     description:
-      'Identificador del participante; el mismo que devuelve la API de integración.',
+      'Identificador del participante en Firmalo. Para relacionarlo con tus datos, usa `email`.',
   })
   id: string;
 
-  @ApiProperty({ example: 'firmante@empresa.com' })
+  @ApiProperty({ example: 'luis.martinez@correo.example' })
   email: string;
 
   @ApiProperty({ enum: ['SIGNED'], example: 'SIGNED' })
@@ -57,11 +56,11 @@ export class WebhookPayloadRejectedParticipant {
     format: 'uuid',
     example: '77f85c29-0104-4823-8b32-4bc567e88c6a',
     description:
-      'Identificador del participante; el mismo que devuelve la API de integración.',
+      'Identificador del participante en Firmalo. Para relacionarlo con tus datos, usa `email`.',
   })
   id: string;
 
-  @ApiProperty({ example: 'firmante@empresa.com' })
+  @ApiProperty({ example: 'luis.martinez@correo.example' })
   email: string;
 
   @ApiProperty({ enum: ['REJECTED'], example: 'REJECTED' })

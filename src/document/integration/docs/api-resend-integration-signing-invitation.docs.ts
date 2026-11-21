@@ -29,33 +29,47 @@ import {
 export function ApiResendIntegrationSigningInvitation() {
   return applyDecorators(
     ApiOperation({
-      summary: 'Reenviar la invitación de firma a un firmante',
-      description:
-        'Emite una invitación nueva (`/sign/:token`) y la envía al correo del firmante; la anterior deja de servir. El enlace nunca se devuelve. A lo sumo una cada 10 minutos y diez por día por firmante. El correo sólo localiza al firmante dentro del documento. Reemplaza a `POST /documents/{documentId}/collaborators/{collaboratorId}/resend-invitation`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.',
+      summary: 'Reenviar la invitación a un firmante',
+      description: [
+        'Envía un enlace de firma nuevo al correo del firmante con ese `email`. El enlace anterior deja de servir. La respuesta no incluye el enlace.',
+        'Puedes reenviar una vez cada 10 minutos y hasta diez veces al día por firmante.',
+        '**Permiso:** `DOCUMENT.CREATE` con alcance `ORGANIZATION`.',
+        'Sustituye a `POST /documents/{documentId}/collaborators/{collaboratorId}/resend-invitation`, que ahora responde `410 INTEGRATION_ENDPOINT_RETIRED`.',
+      ].join('\n\n'),
     }),
     ApiParam({
       name: 'documentId',
       format: 'uuid',
+      description: 'El `id` que devolvió `POST /api/v1/integration/documents`.',
       example: '2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
     }),
     ApiIntegrationCommonResponses(),
     ApiResponse({
       status: 200,
       description:
-        'Invitación emitida. Con `emailDelivered: false` la invitación existe pero el correo no salió; se puede reintentar.',
+        'Invitación nueva emitida. Si `emailDelivered` es `false`, el correo no salió: vuelve a intentarlo pasados 10 minutos.',
       type: IntegrationResentInvitationResponse,
+      example: {
+        success: true,
+        message: 'Invitación reenviada al correo del firmante',
+        data: {
+          email: 'luis.martinez@correo.example',
+          invitationExpiresAt: '2026-11-02T12:00:00.000Z',
+          emailDelivered: true,
+        },
+      },
     }),
     ApiResponse({
       status: 404,
       description:
-        '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de la organización o ningún firmante tiene ese correo',
+        '`INTEGRATION_SIGNER_NOT_FOUND`: el documento no es de tu organización o no tiene un firmante con ese correo.',
       type: IntegrationErrorResponseDto,
       examples: { signerNotFound: SIGNER_NOT_FOUND_EXAMPLE },
     }),
     ApiResponse({
       status: 409,
       description:
-        '`INTEGRATION_AMBIGUOUS_SIGNER` (más de un firmante con ese correo) o `INTEGRATION_INVITATION_NOT_RESENDABLE` (el documento ya no espera esa firma, no es su turno o firma desde su cuenta)',
+        '`INTEGRATION_INVITATION_NOT_RESENDABLE`: el firmante ya firmó o rechazó, el documento ya no espera firmas, todavía no es su turno o firma desde su cuenta de Firmalo. `INTEGRATION_AMBIGUOUS_SIGNER`: más de un firmante tiene ese correo.',
       type: IntegrationErrorResponseDto,
       examples: {
         ambiguous: integrationErrorExample(
@@ -87,7 +101,7 @@ export function ApiResendIntegrationSigningInvitation() {
     ApiResponse({
       status: 429,
       description:
-        '`TOO_MANY_REQUESTS`: ya se reenvió en los últimos 10 minutos o se alcanzaron diez reenvíos en el día.',
+        '`TOO_MANY_REQUESTS`: ya reenviaste la invitación en los últimos 10 minutos o llegaste a diez reenvíos en el día. Espera antes de volver a intentarlo.',
       type: IntegrationErrorResponseDto,
       examples: { tooManyRequests: TOO_MANY_REQUESTS_EXAMPLE },
     }),
