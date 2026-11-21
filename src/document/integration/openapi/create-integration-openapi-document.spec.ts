@@ -175,9 +175,8 @@ describe('createIntegrationOpenApiDocument', () => {
     expect(leaked).toEqual([]);
   });
 
-  it('se titula Firmalo Integration API y describe el formato fma_live_*', () => {
+  it('se titula Firmalo Integration API y el esquema X-API-Key describe el formato fma_live_*', () => {
     expect(integration.info.title).toBe('Firmalo Integration API');
-    expect(integration.info.description).toContain('fma_live_');
     expect(
       integration.components!.securitySchemes![INTEGRATION_API_KEY_SECURITY],
     ).toEqual(
@@ -337,8 +336,8 @@ describe('createIntegrationOpenApiDocument', () => {
         'cuerpo **crudo**',
         'tiempo constante',
         '8 intentos',
-        '**Al menos una vez.**',
-        'Deduplica por `id`',
+        'repetida o fuera de orden',
+        'descarta duplicados por el `id`',
         'sólo al crear el endpoint y al rotarlo',
       ]) {
         expect(description).toContain(text);
@@ -434,7 +433,6 @@ describe('createIntegrationOpenApiDocument', () => {
           { [INTEGRATION_API_KEY_SECURITY]: [] },
         ]);
         expect(operation.description).toContain(permission);
-        expect(operation.description).toContain('`X-API-Key`');
       },
     );
   });
@@ -446,7 +444,6 @@ describe('createIntegrationOpenApiDocument', () => {
     expect(operation.security).toEqual([
       { [INTEGRATION_API_KEY_SECURITY]: [] },
     ]);
-    expect(operation.description).toContain('`X-API-Key`');
     expect(operation.description).toContain(
       '`DOCUMENT.READ` con alcance `ORGANIZATION`',
     );
@@ -645,19 +642,13 @@ describe('createIntegrationOpenApiDocument', () => {
       );
     });
 
-    it('la operación muestra el ejemplo secuencial y el no secuencial', () => {
+    it('la operación muestra el ejemplo secuencial y explica cómo quitar el orden', () => {
       const description = createOperation().description!;
 
       expect(description).toContain(
         JSON.stringify(EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD, null, 2),
       );
-      expect(description).toContain(
-        JSON.stringify(
-          EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
-          null,
-          2,
-        ),
-      );
+      expect(description).toContain('`isSequential: false` y quita `order`');
     });
 
     it('el cuerpo multipart publica los tres ejemplos', () => {
@@ -668,6 +659,16 @@ describe('createIntegrationOpenApiDocument', () => {
       expect(
         Object.keys(body.content['multipart/form-data'].examples ?? {}),
       ).toEqual(['sequential', 'nonSequential', 'advanced']);
+      const examples = body.content['multipart/form-data'].examples as Record<
+        string,
+        { value: { payload: unknown } }
+      >;
+      expect(examples.nonSequential.value.payload).toEqual(
+        EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
+      );
+      expect(examples.advanced.value.payload).toEqual(
+        EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD,
+      );
     });
   });
 
@@ -699,13 +700,11 @@ describe('createIntegrationOpenApiDocument', () => {
       );
     });
 
-    it('la operación muestra el ejemplo de firma avanzada y los códigos 422 de taxId', () => {
+    it('la operación explica la firma avanzada y documenta los códigos 422 de taxId', () => {
       const operation = createOperation();
 
-      expect(operation.description).toContain(
-        JSON.stringify(EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD, null, 2),
-      );
-      expect(operation.description).toContain('"taxId":"MAGL800101AB1"');
+      expect(operation.description).toContain('`ADVANCED`');
+      expect(operation.description).toContain('`taxId`');
       expect(
         (operation.responses['422'] as { description: string }).description,
       ).toEqual(
@@ -946,6 +945,76 @@ describe('createIntegrationOpenApiDocument', () => {
     for (const key of keys) {
       expect(key).toContain('EjemploNoReal');
     }
+  });
+
+  describe('ejemplos coherentes con el contrato', () => {
+    it.each([
+      '/api/v1/integration/documents',
+      '/api/v1/integration/users/documents',
+    ])('el ejemplo de statuses de %s sólo usa estados válidos', (path) => {
+      const statuses = (
+        integration.paths[path].get!.parameters as {
+          name: string;
+          description: string;
+          schema: { items: { enum: string[] } };
+        }[]
+      ).find(({ name }) => name === 'statuses')!;
+      const mentioned = [
+        ...statuses.description.matchAll(/statuses=([A-Za-z_]+)/g),
+      ].map(([, value]) => value);
+
+      expect(mentioned.length).toBeGreaterThan(0);
+      for (const value of mentioned) {
+        expect(statuses.schema.items.enum).toContain(value);
+      }
+    });
+
+    it('la respuesta de ejemplo del alta corresponde al payload de ejemplo', () => {
+      const created = (
+        integration.paths['/api/v1/integration/documents'].post!.responses[
+          '201'
+        ] as unknown as {
+          content: {
+            'application/json': {
+              example: {
+                data: {
+                  participantsCount: number;
+                  creator: { email: string };
+                  participants: { email: string; order: number }[];
+                };
+              };
+            };
+          };
+        }
+      ).content['application/json'].example.data;
+      const { creator, participants } = EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD;
+      const signers = participants.filter(({ role }) => role === 'SIGNER');
+
+      expect(created.creator.email).toBe(creator.email);
+      expect(created.participantsCount).toBe(participants.length);
+      expect(
+        created.participants.map(({ email, order }) => [email, order]),
+      ).toEqual(signers.map(({ email, order }) => [email, order]));
+    });
+  });
+
+  describe('servers', () => {
+    it('sin serverUrl no declara servers: Swagger UI usa el host desde el que se abre', () => {
+      expect(integration).not.toHaveProperty('servers');
+    });
+
+    it('con serverUrl declara sólo ese host y conserva rutas y seguridad', () => {
+      const withServer = createIntegrationOpenApiDocument(general, {
+        serverUrl: 'https://signature.api.staging.data-lo.online',
+      });
+
+      expect(withServer.servers).toEqual([
+        { url: 'https://signature.api.staging.data-lo.online' },
+      ]);
+      expect(operationsOf(withServer)).toEqual(operationsOf(integration));
+      expect(withServer.security).toEqual(integration.security);
+      expect(withServer.components).toEqual(integration.components);
+    });
   });
 
   it('no modifica el documento general', () => {

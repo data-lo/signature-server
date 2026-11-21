@@ -294,36 +294,70 @@ export function parseJson<T>(cls: new () => T) {
  */
 export class SignaturePositionDto {
   /** Generado por el cliente (para poder mover/borrar una firma específica en la UI); si no llega, el backend genera uno. */
-  @ApiPropertyOptional({ example: 'sig_loc_01' })
+  @ApiPropertyOptional({
+    example: 'sig_loc_01',
+    description:
+      'Opcional. Tu identificador de esta posición; si falta, Firmalo genera uno.',
+  })
   @IsOptional()
   @IsString()
   signatureId?: string;
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    example: 1,
+    minimum: 1,
+    description: 'Página del PDF, desde 1.',
+  })
   @IsInt()
   @Min(1)
   page: number;
 
-  @ApiProperty({ example: 0.65 })
+  @ApiProperty({
+    example: 0.65,
+    minimum: 0,
+    maximum: 1,
+    description:
+      'Distancia del borde izquierdo de la página a la esquina superior izquierda de la firma, como fracción del ancho (0 a 1).',
+  })
   @IsNumber()
   @Min(0)
   @Max(1)
   xRatio: number;
 
-  @ApiProperty({ example: 0.8 })
+  @ApiProperty({
+    example: 0.8,
+    minimum: 0,
+    maximum: 1,
+    description:
+      'Distancia del borde superior de la página a la esquina superior izquierda de la firma, como fracción del alto (0 a 1).',
+  })
   @IsNumber()
   @Min(0)
   @Max(1)
   yRatio: number;
 
   /** Mayor que cero: una caja sin ancho no es una posición de firma, aunque esté en rango. */
-  @ApiProperty({ example: 0.2 })
+  @ApiProperty({
+    example: 0.2,
+    exclusiveMinimum: true,
+    minimum: 0,
+    maximum: 1,
+    description:
+      'Ancho de la firma como fracción del ancho de la página. `xRatio + widthRatio` no puede pasar de 1.',
+  })
   @IsNumber()
   @IsPositive({ message: 'widthRatio debe ser mayor que 0' })
   @Max(1)
   widthRatio: number;
 
-  @ApiProperty({ example: 0.08 })
+  @ApiProperty({
+    example: 0.08,
+    exclusiveMinimum: true,
+    minimum: 0,
+    maximum: 1,
+    description:
+      'Alto de la firma como fracción del alto de la página. `yRatio + heightRatio` no puede pasar de 1.',
+  })
   @IsNumber()
   @IsPositive({ message: 'heightRatio debe ser mayor que 0' })
   @Max(1)

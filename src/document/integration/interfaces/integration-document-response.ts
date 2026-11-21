@@ -30,7 +30,7 @@ export class IntegrationDocumentData {
     nullable: true,
     example: SIGNATURE_TYPE_ENUM.SIMPLE,
     description:
-      '`FIEL` es la firma avanzada; `null` en documentos antiguos sin un tipo único',
+      'Tipo de firma. `FIEL` corresponde a `ADVANCED` en la petición. Puede ser `null` en documentos antiguos.',
   })
   signatureType: SIGNATURE_TYPE_ENUM | null;
 
@@ -42,7 +42,7 @@ export class IntegrationDocumentData {
     type: Date,
     example: null,
     description:
-      'Momento en que la última firma cerró el documento; `null` mientras tanto',
+      'Cuándo firmó el último firmante; `null` mientras falten firmas.',
   })
   signedAt: Date | null;
 }
@@ -53,11 +53,14 @@ export class IntegrationDocumentsPagination {
 
   @ApiProperty({
     example: 25,
-    description: 'Tamaño de página aplicado (máximo 100)',
+    description: 'Documentos por página.',
   })
   limit: number;
 
-  @ApiProperty({ example: 42 })
+  @ApiProperty({
+    example: 42,
+    description: 'Documentos que cumplen los filtros.',
+  })
   total: number;
 
   @ApiProperty({ example: 2 })
@@ -79,20 +82,23 @@ export class IntegrationDocumentsPageResponse extends BaseResponse<IntegrationDo
 
 /** Creador del documento, tal como se identificó en el payload. */
 export class IntegrationDocumentCreatorData {
-  @ApiProperty({ example: 'ana@cliente.com' })
+  @ApiProperty({
+    example: 'ana.lopez@cliente.example',
+    description: 'El `creator.email` que enviaste.',
+  })
   email: string;
 }
 
 /** Un firmante del documento creado. Sin ids internos ni URLs de firma. */
 export class IntegrationDocumentParticipantData {
-  @ApiProperty({ example: 'ana@correo.com' })
+  @ApiProperty({ example: 'luis.martinez@correo.example' })
   email: string;
 
   @ApiProperty({
     enum: ['PENDING', 'WAITING_FOR_PREVIOUS_SIGNER', 'SIGNED', 'REJECTED'],
     example: 'PENDING',
     description:
-      '`PENDING` si puede firmar ya; `WAITING_FOR_PREVIOUS_SIGNER` si el documento es secuencial y falta la firma de un firmante anterior',
+      '`PENDING`: ya puede firmar. `WAITING_FOR_PREVIOUS_SIGNER`: el documento es secuencial y falta la firma de alguien antes. `SIGNED` o `REJECTED`: ya respondió.',
   })
   status: string;
 
@@ -103,7 +109,7 @@ export class IntegrationDocumentParticipantData {
   })
   signatureType: SIGNATURE_TYPE_ENUM | null;
 
-  @ApiProperty({ example: 1, description: 'Orden de firma, desde 1' })
+  @ApiProperty({ example: 1, description: 'Turno de firma, desde 1.' })
   order: number;
 
   @ApiProperty({
@@ -111,7 +117,7 @@ export class IntegrationDocumentParticipantData {
     nullable: true,
     example: null,
     description:
-      'RFC registrado para el firmante. Sólo de un firmante `FIEL` que lo tenga; `null` en cualquier otro caso',
+      'El `taxId` que enviaste para el firmante. `null` si no lo enviaste o si la firma no es `FIEL`.',
   })
   taxId: string | null;
 }
@@ -134,7 +140,8 @@ export class IntegrationCreatedDocumentData {
     enum: SIGNATURE_TYPE_ENUM,
     nullable: true,
     example: SIGNATURE_TYPE_ENUM.SIMPLE,
-    description: '`FIEL` es la firma avanzada',
+    description:
+      'Tipo de firma. `FIEL` corresponde a `ADVANCED` en la petición.',
   })
   signatureType: SIGNATURE_TYPE_ENUM | null;
 
@@ -149,21 +156,21 @@ export class IntegrationCreatedDocumentData {
 
   @ApiProperty({
     example: 1,
-    description: 'Firmantes y testigos del documento',
+    description: 'Total de firmantes y testigos.',
   })
   participantsCount: number;
 
   @ApiProperty({
     example:
       'https://app.firmalo.com/public/documents/2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
-    description: 'URL pública de consulta del documento (`PUBLIC_WEB_APP_URL`)',
+    description: 'Página pública de consulta del documento.',
   })
   publicUrl: string;
 
   @ApiProperty({
     type: [IntegrationDocumentParticipantData],
     description:
-      'Firmantes en orden de firma. No incluye URLs de firma: cada uno recibe su invitación por correo, y el portal pide un acceso temporal con `POST /integration/documents/:documentId/signing-access`.',
+      'Sólo los firmantes, en orden de firma; los testigos no aparecen. Cada uno recibe su invitación por correo. Para que firme desde tu portal, pide un enlace con `POST /api/v1/integration/documents/{documentId}/signing-access`.',
   })
   participants: IntegrationDocumentParticipantData[];
 }
@@ -178,21 +185,25 @@ export class IntegrationErrorData {
   @ApiProperty({
     example: 'DUPLICATE_PARTICIPANT_EMAIL',
     description:
-      'Código estable del error (p. ej. `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED`, `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`, `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`, `INVALID_PARTICIPANT_TAX_ID`, `PARTICIPANT_TAX_ID_NOT_ALLOWED`, `UNSUPPORTED_PARTICIPANT_FIELD`, `API_KEY_INVALID`, `INTERNAL_ERROR`)',
+      'Código estable del error. Decide qué hacer según este valor; cada endpoint lista los suyos en sus respuestas.',
   })
   code: string;
 
   @ApiProperty({
     example: 'Un colaborador sólo puede participar una vez en el documento.',
+    description: 'Explicación legible. Puede cambiar: no la uses para decidir.',
   })
   message: string;
 
   @ApiProperty({
     required: false,
     type: Object,
-    example: { field: 'participants[2].email', email: 'ana@correo.com' },
+    example: {
+      field: 'participants[2].email',
+      email: 'luis.martinez@correo.example',
+    },
     description:
-      'Datos del error: `field` con la ruta del campo afectado cuando aplica, y los valores que lo explican (`limit`, `received`, `page`, `totalPages`…).',
+      'Opcional. En errores de validación, `field` señala el campo que debes corregir; puede traer otros datos que explican el error.',
   })
   details?: Record<string, unknown>;
 }
@@ -210,14 +221,13 @@ export class IntegrationErrorResponseDto {
 export class IntegrationSigningAccessData {
   @ApiProperty({
     example: 'https://app.firmalo.com/sign/launch/EjemploDeTokenNoReal',
-    description:
-      'URL `/sign/launch/:token` de un solo uso para abrir desde tu portal. Al abrirla, la plataforma envía un código al correo del firmante.',
+    description: 'Enlace de un solo uso. Redirige al firmante a esta URL.',
   })
   url: string;
 
   @ApiProperty({
     example: '2026-10-26T12:05:00.000Z',
-    description: 'Vencimiento de la URL: cinco minutos después de emitirla',
+    description: 'Cuándo vence el enlace: 5 minutos después de generarlo.',
   })
   expiresAt: Date;
 }
@@ -233,21 +243,21 @@ export class IntegrationSigningAccessResponse extends BaseResponse<IntegrationSi
 /** Resultado de `POST …/collaborators/resend-invitation`. Nunca trae el enlace ni ids internos. */
 export class IntegrationResentInvitationData {
   @ApiProperty({
-    example: 'ana@correo.com',
-    description: 'Correo del firmante al que se reenvió la invitación',
+    example: 'luis.martinez@correo.example',
+    description: 'Correo al que se envió la invitación.',
   })
   email: string;
 
   @ApiProperty({
     example: '2026-11-02T12:00:00.000Z',
-    description: 'Vencimiento de la invitación nueva',
+    description: 'Cuándo vence el enlace de la invitación nueva.',
   })
   invitationExpiresAt: Date;
 
   @ApiProperty({
     example: true,
     description:
-      '`false` si la invitación se emitió pero el correo no se pudo entregar; se puede reintentar más tarde',
+      '`false` si no se pudo enviar el correo. La invitación existe; vuelve a reenviarla pasados 10 minutos.',
   })
   emailDelivered: boolean;
 }

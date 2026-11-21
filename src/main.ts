@@ -22,6 +22,7 @@ import {
   createIntegrationOpenApiDocument,
   INTEGRATION_OPENAPI_TITLE,
 } from './document/integration/openapi/create-integration-openapi-document';
+import { integrationApiPublicUrl } from './document/integration/openapi/integration-api-public-url';
 import { MulterExceptionFilter } from './common/filters/multer-exception.filter';
 import { applyDiditWebhookBodyParser } from './webhooks/didit/didit-webhook-body-parser';
 import { frontendBaseUrl } from './common/utils/frontend-url.util';
@@ -137,10 +138,14 @@ async function bootstrap() {
   // `X-API-Key` (ver `createIntegrationOpenApiDocument`). Sale del documento general para que los
   // DTOs y respuestas sean los mismos; Swagger publica además el JSON en `.../integration/docs-json`.
   // Como `/api/v1/docs`, lo sirve el adaptador HTTP y no pasa por los guards: no pide sesión.
+  // `servers` sale de `INTEGRATION_API_PUBLIC_URL` (sólo staging): es el host al que el playground
+  // de Mintlify manda las peticiones. Una URL mal escrita detiene el arranque aquí.
   SwaggerModule.setup(
     `${GLOBAL_API_PREFIX}/integration/docs`,
     app,
-    createIntegrationOpenApiDocument(publicDocument),
+    createIntegrationOpenApiDocument(publicDocument, {
+      serverUrl: integrationApiPublicUrl(),
+    }),
     { customSiteTitle: INTEGRATION_OPENAPI_TITLE },
   );
 
