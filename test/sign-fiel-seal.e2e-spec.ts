@@ -511,7 +511,42 @@ describe('Firma con e.firma (FIEL) y registro del sellado (e2e)', () => {
       );
     });
 
-    it('no llama a Seal Service durante la firma: el sellado lo hace el worker', async () => {
+    it('manda a Seal Service el documentId, el arreglo de firmas y la API key', async () => {
+      await withEfirmaFiles(signRequest()).expect(200);
+
+      expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+      const [url, body, config] = mockedAxios.post.mock.calls[0];
+
+      expect(url).toBe(`${SEAL_SERVICE_URL}/seal/signature`);
+      expect(config).toEqual(
+        expect.objectContaining({
+          headers: {
+            'x-api-key': SEAL_API_KEY,
+            'Idempotency-Key': `signature-server:document:${DOCUMENT_ID}:v1`,
+          },
+        }),
+      );
+      expect(body).toEqual({
+        documentId: DOCUMENT_ID,
+        originalHash: 'hash-original-del-documento',
+        signatures: [
+          {
+            signatureBase64: 'firma-criptografica-en-base64',
+            algorithm: 'sha256',
+            signedAt: '2026-08-13T18:45:56.000Z',
+            certificate: EFIRMA_RESULT.certificate,
+            ocspEvidence: {
+              status: OCSP_EVIDENCE.status,
+              verifiedAt: OCSP_EVIDENCE.verifiedAt.toISOString(),
+              ocspResponse: OCSP_EVIDENCE.ocspResponse,
+              ocspUrl: OCSP_EVIDENCE.ocspUrl,
+            },
+          },
+        ],
+      });
+    });
+
+    it('persiste la evidencia devuelta, con la cadena canónica que hace verificable el sello', async () => {
       await withEfirmaFiles(signRequest()).expect(200);
 
       expect(mockedAxios.post).not.toHaveBeenCalled();

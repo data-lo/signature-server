@@ -453,7 +453,187 @@ describe('Integración: cierre y sellado de la firma avanzada (FIEL)', () => {
     }).compile();
 
     signDocument = module.get(SignDocumentUseCase);
-    documentService = module.get(DocumentService);
+  });
+
+  it('el último firmante FIEL dispara UNA petición a Seal Service con el documentId, el arreglo de firmas y la API key', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    const result = await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
+
+    expect(result.success).toBe(true);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+
+    const [url, , config] = mockedAxios.post.mock.calls[0];
+    expect(url).toBe('http://seal-service:3000/seal/signature');
+    expect(config).toEqual(
+      expect.objectContaining({
+        headers: {
+          'x-api-key': 'api-key-de-prueba',
+          // La misma clave en cada ejecución del sellado de este documento.
+          'Idempotency-Key': 'signature-server:document:doc-1:v1',
+        },
+      }),
+    );
+    expect(sentPayload()).toEqual({
+      documentId: 'doc-1',
+      originalHash: 'hash-original',
+      signatures: [
+        {
+          signatureBase64: 'firma-de-user-1',
+          algorithm: 'sha256',
+          signedAt: '2026-08-13T18:45:56.000Z',
+          certificate: {
+            rfc: 'PEAJ800101XXX',
+            name: 'JUAN PEREZ',
+            issuer: 'SERVICIO DE ADMINISTRACION TRIBUTARIA',
+            serialNumber: '00001000000512345678',
+            certificateNumber: '30001000000500003416',
+            certificatePem:
+              '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
+          },
+          // La evidencia OCSP sale hacia el proveedor con `verifiedAt` ya en ISO 8601, igual que
+          // `signedAt`: el PSC canonicaliza el payload como texto.
+          ocspEvidence: {
+            status: 'good',
+            verifiedAt: '2026-08-13T18:45:56.000Z',
+            ocspResponse: 'respuesta-ocsp-en-base64',
+            ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+          },
+        },
+      ],
+    });
+  });
+
+  it('no manda estas firmas por la ruta de firma simple: son FIEL', async () => {
+    documentRepository.findOne.mockResolvedValue(mockDocument());
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
+
+    const rutas = mockedAxios.post.mock.calls.map(([url]) => url);
+    expect(rutas).toEqual(['http://seal-service:3000/seal/signature']);
+  });
+
+  it('persiste la evidencia que devuelve Seal Service en document_seals', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
+
+    expect(sealRepository.save).toHaveBeenCalledWith({
+      documentId: 'doc-1',
+      signatureHash: 'f00dcafe',
+      // La preimagen del hash, tal como la devolvió el proveedor.
+      canonicalPayload: 'v1||13:hash-original|5:doc-1||...',
+      // El momento de emisión que reporta el PSC: se persiste porque la respuesta es la única
+      // oportunidad de guardarlo, y es lo que la hoja de evidencia imprime como "EMITIDO".
+      sealedAt: new Date('2026-08-13T19:00:00.000Z'),
+      timestampEvidence: {
+        isValid: true,
+        processedHash: 'f00dcafe',
+        fileBase64: 'tsr-en-base64',
+        evidenceId: 'ts-uuid',
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
+      },
+      integrityEvidence: {
+        isValid: true,
+        processedHash: 'f00dcafe',
+        fileBase64: 'nom151-en-base64',
+        evidenceId: 'nom-uuid',
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
+        certificatePdfBase64: 'pdf-en-base64',
+      },
+    });
+    expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
+  });
+
+  /**
+   * El sellado corre ANTES de armar la hoja de evidencia. Antes era al revés, y por eso la tabla
+   * "Información de la Constancia de Conservación (NOM-151)" salía siempre vacía: al imprimirla
+   * todavía no existía la constancia.
+   */
+  it('sella antes de armar la hoja, y la hoja recibe la constancia emitida', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+
+    const orden: string[] = [];
+    sealRepository.save.mockImplementation(async (data: object) => {
+      orden.push('sellado');
+      return { id: 'seal-1', ...data };
+    });
+    advancedSummaryDocumentService.generateAdvancedSummaryPdf.mockImplementation(
+      async () => {
+        orden.push('hoja');
+        return Buffer.from('hoja');
+      },
+    );
+
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
+
+    expect(orden).toEqual(['sellado', 'hoja']);
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toEqual(
+      expect.objectContaining({
+        issuedAt: new Date('2026-08-13T19:00:00.000Z'),
+      }),
+    );
+  });
+
+  // El sellado es best-effort: si falla, la firma se completa igual y la hoja se arma sin
+  // constancia, exactamente como antes de que existiera este orden.
+  it('si el sellado falla, la hoja se arma sin constancia y el documento igual queda firmado', async () => {
+    const document = mockDocument();
+    documentRepository.findOne.mockResolvedValue(document);
+    collaboratorRepository.find.mockResolvedValue([
+      buildFielSigner({ userId: 'user-1' }),
+    ]);
+    mockedAxios.post.mockRejectedValue(new Error('proveedor caído'));
+
+    await signDocument.execute(
+      'doc-1',
+      'user-1',
+      EFIRMA_INPUT,
+      TEST_GEOLOCATION,
+    );
+
+    const [info] =
+      advancedSummaryDocumentService.generateAdvancedSummaryPdf.mock.calls[0];
+    expect(info.conservationRecord).toBeNull();
+    expect(document.status).toBe(DOCUMENT_STATUS_ENUM.SIGNED);
   });
 
   /**
