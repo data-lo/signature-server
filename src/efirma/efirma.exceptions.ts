@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -79,5 +80,25 @@ export class OCSPNotAvailableException extends ServiceUnavailableException {
       'No fue posible validar tu certificado ante el SAT porque su servicio no respondió. ' +
         'Vuelve a intentarlo en unos minutos.',
     );
+  }
+}
+
+/**
+ * El SAT respondió la consulta OCSP, pero la respuesta no sirve como evidencia de revocación: no
+ * trae la respuesta firmada (`rawResponse`) o reporta un estado que no es `good`, `unknown` ni
+ * `revoked`.
+ *
+ * Se separa de `OCSPNotAvailableException` porque no es una caída del SAT: repetir la consulta en
+ * unos minutos no garantiza otra respuesta, y sellar con ella dejaría una constancia sin la prueba
+ * que debe sostener. 502: el problema está en lo que contestó el tercero, no en la petición.
+ *
+ * El detalle técnico va al log; el mensaje no incluye datos del certificado.
+ */
+export class OCSPInvalidResponseException extends BadGatewayException {
+  constructor(readonly reason: string) {
+    super(
+      'El SAT respondió la validación de tu certificado con una respuesta que no se puede usar como evidencia.',
+    );
+    this.name = 'OCSPInvalidResponseException';
   }
 }

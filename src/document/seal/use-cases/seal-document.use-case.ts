@@ -21,6 +21,28 @@ export class SealDocumentUseCase {
     private readonly sealRepository: Repository<SealEntity>,
   ) {}
 
+  /**
+   * Sella las firmas avanzadas de un documento en Seal Service y guarda la constancia.
+   *
+   * El envío es idempotente por documento (`Idempotency-Key: signature-server:document:<id>:v1`):
+   * si el guardado local falla después de la emisión, el siguiente intento recibe de Seal Service
+   * la evidencia ya emitida en vez de pedir otra constancia al PSC.
+   *
+   * @param sealDocumentDto - Documento y firmas avanzadas.
+   * @returns La constancia guardada.
+   *
+   * @throws {DocumentAlreadySealedException} Si el documento ya tenía constancia local.
+   * @throws {SealPersistenceException} Si no se pudo guardar; repetir recupera la misma evidencia.
+   * @throws {SealOperationInProgressException} Si Seal Service la sigue emitiendo.
+   * @throws {SealIdempotencyConflictException} Si el payload cambió después del primer envío.
+   * @throws {SealReconciliationRequiredException} Si el resultado ante el PSC es incierto.
+   * @throws {Error} Los errores de transporte de `SealApiService`.
+   *
+   * @example
+   * ```ts
+   * const seal = await sealDocumentUseCase.create(dto);
+   * ```
+   */
   async create(sealDocumentDto: SealDocumentDto): Promise<SealEntity> {
     const response =
       await this.sealApiService.generateDocumentSeals(sealDocumentDto);
@@ -47,9 +69,16 @@ export class SealDocumentUseCase {
   /**
    * Sello ya emitido para un documento, o `null` si no tiene.
    *
-   * Lo usa el flujo de finalización cuando el sellado responde "ya sellado": pasa si un intento
-   * anterior selló pero falló más adelante (al armar la hoja, por ejemplo) y la firma se reintentó.
-   * Sin esto, el reintento perdería la constancia que sí existe y la hoja saldría sin ella.
+   * Lo usa `ProcessDocumentSealingJobUseCase` cuando el guardado responde "ya sellado": otro
+   * intento guardó la constancia primero. Sin esto, el trabajo perdería la constancia que sí existe.
+   *
+   * @param documentId - Documento.
+   * @returns La constancia, o `null`.
+   *
+   * @example
+   * ```ts
+   * const seal = await sealDocumentUseCase.findByDocumentId(documentId);
+   * ```
    */
   async findByDocumentId(documentId: string): Promise<SealEntity | null> {
     return this.sealRepository.findOne({ where: { documentId } });
