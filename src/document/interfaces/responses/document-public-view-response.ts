@@ -279,7 +279,7 @@ export class DocumentPublicViewData {
   @ApiProperty({
     example: false,
     description:
-      'true mientras el documento firmado espera su constancia NOM-151 porque el respondedor OCSP del SAT no contestó al firmar. El documento es válido; la constancia se emite en cuanto la evidencia de revocación se completa (ver `documents.sealing_pending_at`).',
+      'true mientras el documento firmado espera su constancia NOM-151: el sellado corre después de la firma, como trabajo persistente (`document_sealing_jobs`), y puede demorar si el SAT o el proveedor de sellado no responden. El documento es válido mientras tanto (ver `documents.sealing_pending_at`).',
   })
   sealingPending: boolean;
 
