@@ -5,148 +5,156 @@ import { X509Certificate } from 'node:crypto';
 
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { OscpService } from 'src/efirma/oscp/oscp.service';
+import { OCSPEvidence } from 'src/efirma/interfaces/OCSPEvidence.interface';
 import { CollaboratorEntity } from '../../entities/collaborator.entity';
-import { DocumentEntity } from '../../entities/document.entity';
+import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
 import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
-import { DocumentSealingJobEntity } from '../entities/document-sealing-job.entity';
+import { IncompleteAdvancedSignatureEvidenceException } from '../exceptions/seal.exceptions';
 
 /**
- * Retoma el sellado de un documento que quedó pendiente porque el SAT no respondió al firmar.
+ * Completa la evidencia OCSP que el SAT no devolvió al firmar, con el certificado público que quedó
+ * guardado en cada firma avanzada. Es la fase `VERIFYING_OCSP` de
+ * `ProcessDocumentSealingJobUseCase`.
  *
- * **Por qué el reintento es perezoso.** No hay planificador en el proyecto, y añadirlo por esto
- * sería una pieza en movimiento nueva para un caso que se resuelve solo en cuanto alguien vuelve
- * a mirar el documento. Es el mismo criterio con el que se reintenta la extracción del certificado
- * TSA al consultar la vista pública y con el que vencen las sesiones de captura: el trabajo se
- * hace cuando a alguien le importa el resultado. La contrapartida, explícita: un documento que
- * nadie abre no se sella nunca.
+ * Ya no se llama desde la vista pública ni limpia `documents.sealing_pending_at`: la marca la
+ * limpia el procesador al cerrar el trabajo, cuando el PDF final ya muestra la constancia. Un
+ * reintento que completa el OCSP pero falla después no deja el documento como si estuviera sellado.
  *
- * **Sólo para documentos sin trabajo de sellado.** Desde `document_sealing_jobs`, todo documento
- * que se cierra registra un trabajo y su sellado lo ejecuta un worker. Si este reintento corriera
- * también sobre ellos, la vista pública sellaría por su cuenta en paralelo con el worker y, en firma
- * simple, borraría la marca sin haber sellado. Queda para los documentos firmados antes de esa
- * tabla, que no tienen trabajo.
+ * **Los errores se propagan tipados**, para que el worker decida:
+ * - `OCSPNotAvailableException`: el SAT no respondió; se reintenta.
+ * - `CertificadoRevocadoException`: el certificado está revocado; el documento no se sella.
+ * - `OCSPInvalidResponseException`, `CadenaConfianzaInvalidaException` o
+ *   `IncompleteAdvancedSignatureEvidenceException`: la evidencia no sirve; requiere revisión.
  *
- * **Sobre la evidencia que se obtiene.** El `verifiedAt` será el del reintento, no el del momento
- * de firmar. La comprobación acredita que el certificado no está revocado AHORA; como la
- * revocación no se deshace, un certificado vigente hoy también lo estaba al firmar, que es lo que
- * la evidencia necesita sostener. Queda registrado en el propio `verifiedAt`, no se disimula.
+ * Un resultado `unknown` NO es un error aquí: se guarda tal cual, como cualquier evidencia, y es el
+ * procesador quien decide que no basta para sellar (ver `assertSealableOcspEvidence`).
+ *
+ * **Sobre `verifiedAt`.** Es el momento de la consulta de este reintento, no el de la firma, que
+ * sigue en `advancedSignature.signedAt`. La consulta acredita que el certificado no está revocado
+ * AHORA; como una revocación no se deshace, un certificado vigente hoy también lo estaba al firmar.
+ * Queda registrado en el propio `verifiedAt`, no se disimula.
  */
 @Injectable()
 export class RetryPendingSealUseCase {
   private readonly logger = new Logger(RetryPendingSealUseCase.name);
 
   constructor(
-    @InjectRepository(DocumentEntity)
-    private readonly documentRepository: Repository<DocumentEntity>,
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
-    @InjectRepository(DocumentSealingJobEntity)
-    private readonly sealingJobRepository: Repository<DocumentSealingJobEntity>,
     private readonly efirmaService: EfirmaService,
     private readonly ocspService: OscpService,
   ) {}
 
   /**
-   * Intenta completar la evidencia que falta y devuelve si el documento quedó listo para sellar.
+   * Consulta el OCSP de cada firmante FIEL que no tiene evidencia, guarda cada respuesta en cuanto
+   * llega y devuelve los firmantes releídos de la base.
    *
-   * NO sella por sí mismo: rellena las evidencias y limpia la marca, para que el llamador —que es
-   * quien tiene el contexto del documento— dispare el sellado por su camino de siempre. Así este
-   * caso de uso no duplica la orquestación de `sealAdvancedSignatures`.
+   * Los firmantes se procesan uno por uno, en orden de firma: si el tercero falla, la evidencia de
+   * los dos primeros ya está guardada y el siguiente intento sólo pregunta por los que faltan.
    *
-   * Nunca lanza: se invoca desde lecturas (abrir un documento, su vista pública) y un fallo del
-   * SAT no puede tumbar esas pantallas. Devuelve `false` y el documento sigue pendiente.
+   * @param documentId - Documento de firma avanzada.
+   * @returns Los firmantes (sólo rol `SIGNER`) con su evidencia actual, recargados de la base.
+   *
+   * @throws {OCSPNotAvailableException} Si el SAT no responde.
+   * @throws {CertificadoRevocadoException} Si un certificado está revocado.
+   * @throws {OCSPInvalidResponseException} Si la respuesta del SAT no sirve como evidencia.
+   * @throws {CadenaConfianzaInvalidaException} Si el certificado guardado no encadena al SAT.
+   * @throws {IncompleteAdvancedSignatureEvidenceException} Si el certificado guardado no se puede leer.
+   *
+   * @example
+   * ```ts
+   * const signers = await retryPendingSeal.execute(job.documentId);
+   * ```
    */
-  async execute(document: DocumentEntity): Promise<boolean> {
-    if (!document.sealingPendingAt) {
-      return false;
-    }
+  async execute(documentId: string): Promise<CollaboratorEntity[]> {
+    const signers = await this.findSigners(documentId);
 
-    // Su sellado lo ejecuta el worker a partir del trabajo; la marca la limpia él.
-    if (await this.sealingJobRepository.existsBy({ documentId: document.id })) {
-      return false;
-    }
-
-    const signers = await this.collaboratorRepository.find({
-      where: { documentId: document.id },
-    });
-
-    const faltantes = signers.filter(
+    const missing = signers.filter(
       (collaborator) =>
         collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
         collaborator.advancedSignature &&
         !collaborator.advancedSignature.ocspEvidence,
     );
 
-    if (faltantes.length === 0) {
-      // Ya no falta nada: la marca quedó obsoleta (otro reintento se adelantó, o se completó por
-      // otra vía). Limpiarla evita reintentar en cada lectura para siempre.
-      await this.clearPending(document);
-      return true;
+    if (missing.length === 0) {
+      return signers;
     }
 
-    for (const collaborator of faltantes) {
-      const evidencia = await this.obtainOcspEvidence(collaborator);
+    for (const collaborator of missing) {
+      const ocspEvidence = await this.obtainOcspEvidence(collaborator);
 
-      if (!evidencia) {
-        this.logger.warn(
-          `El documento ${document.id} sigue pendiente de sellar: el SAT no respondió por el firmante ${collaborator.id}.`,
-        );
-        return false;
-      }
-
-      collaborator.advancedSignature = {
-        ...collaborator.advancedSignature,
-        ocspEvidence: evidencia,
-      };
-
+      // `jsonb` se reescribe entero: el `update` reemplaza la columna, no la mezcla.
       await this.collaboratorRepository.update(collaborator.id, {
-        advancedSignature: collaborator.advancedSignature,
+        advancedSignature: {
+          ...collaborator.advancedSignature,
+          ocspEvidence,
+        },
       });
+
+      this.logger.log(
+        `Evidencia OCSP (${ocspEvidence.status}) guardada para el firmante ${collaborator.id} del documento ${documentId}.`,
+      );
     }
 
-    await this.clearPending(document);
-    this.logger.log(
-      `Evidencia OCSP completada para el documento ${document.id}: ya puede sellarse.`,
-    );
+    // Se relee para que quien selle use exactamente lo que quedó persistido.
+    return this.findSigners(documentId);
+  }
 
-    return true;
+  /**
+   * Firmantes del documento, sin testigos ni revisores, en orden de firma.
+   *
+   * @param documentId - Documento.
+   * @returns Los colaboradores con rol `SIGNER`.
+   *
+   * @example
+   * ```ts
+   * const signers = await this.findSigners(documentId);
+   * ```
+   */
+  private findSigners(documentId: string): Promise<CollaboratorEntity[]> {
+    return this.collaboratorRepository.find({
+      where: { documentId, colaboratorType: COLABORATOR_TYPE_ENUM.SIGNER },
+      order: { signingOrder: 'ASC', createdAt: 'ASC' },
+    });
   }
 
   /**
    * Vuelve a consultar el estado de revocación con el certificado que quedó guardado en la firma.
    *
-   * El PEM se persiste íntegro en `advancedSignature.certificate`, así que no hace falta que el
-   * firmante vuelva a subir su e.firma: la comprobación de revocación sólo necesita el
-   * certificado público, nunca la llave privada.
+   * El PEM se persiste íntegro en `advancedSignature.certificate`, así que el firmante no vuelve a
+   * subir su e.firma: la consulta sólo necesita el certificado público, nunca la llave privada.
+   *
+   * @param collaborator - Firmante FIEL con `advancedSignature`.
+   * @returns La evidencia de la consulta.
+   *
+   * @throws {IncompleteAdvancedSignatureEvidenceException} Si el PEM guardado no se puede leer.
+   * @throws {CadenaConfianzaInvalidaException} Si no encadena al SAT.
+   * @throws {OCSPNotAvailableException | CertificadoRevocadoException | OCSPInvalidResponseException}
+   *   Según responda el SAT.
+   *
+   * @example
+   * ```ts
+   * const evidence = await this.obtainOcspEvidence(collaborator);
+   * ```
    */
-  private async obtainOcspEvidence(collaborator: CollaboratorEntity) {
+  private async obtainOcspEvidence(
+    collaborator: CollaboratorEntity,
+  ): Promise<OCSPEvidence> {
+    let certificate: X509Certificate;
     try {
-      const certificado = new X509Certificate(
+      certificate = new X509Certificate(
         collaborator.advancedSignature.certificate.certificatePem,
       );
-      const cerBuffer = Buffer.from(certificado.raw);
-      const emisor = this.efirmaService.validarCadenaConfianza(cerBuffer);
-
-      return await this.ocspService.verifyRevokedOCSP(cerBuffer, emisor);
-    } catch (error) {
-      /**
-       * Se traga cualquier error, no sólo la indisponibilidad del SAT: un certificado revocado o
-       * una cadena de confianza rota tampoco deben tumbar la pantalla desde la que se reintentó.
-       * El documento se queda pendiente y el motivo queda en el log.
-       */
-      this.logger.warn(
-        `No se pudo completar la evidencia OCSP del firmante ${collaborator.id}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+    } catch {
+      throw new IncompleteAdvancedSignatureEvidenceException(
+        'un certificado legible',
+        collaborator.id,
       );
-      return null;
     }
-  }
 
-  private async clearPending(document: DocumentEntity): Promise<void> {
-    document.sealingPendingAt = null;
-    await this.documentRepository.update(document.id, {
-      sealingPendingAt: null,
-    });
+    const cerBuffer = Buffer.from(certificate.raw);
+    const issuer = this.efirmaService.validarCadenaConfianza(cerBuffer);
+
+    return this.ocspService.verifyRevokedOCSP(cerBuffer, issuer);
   }
 }

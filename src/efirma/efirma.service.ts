@@ -14,6 +14,7 @@ import {
   CertificadoInvalidoException,
   LLaveNoCorrespondeCertificadoException,
   LLavePrivadaInvalidException,
+  OCSPInvalidResponseException,
   OCSPNotAvailableException,
 } from './efirma.exceptions';
 import { join } from 'node:path';
@@ -242,7 +243,15 @@ export class EfirmaService implements OnModuleInit {
         emisorInmediato,
       );
     } catch (err) {
-      if (!(err instanceof OCSPNotAvailableException)) {
+      /**
+       * Una respuesta que no sirve como evidencia se trata igual que la ausencia de respuesta: se
+       * firma sin `ocspEvidence` y el worker de sellado vuelve a consultar. No es culpa del
+       * firmante y no prueba nada sobre su certificado.
+       */
+      if (
+        !(err instanceof OCSPNotAvailableException) &&
+        !(err instanceof OCSPInvalidResponseException)
+      ) {
         throw err;
       }
 

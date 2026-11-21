@@ -5,6 +5,7 @@ import { SEALING_TYPE_ENUM } from '../enums/sealing-type.enum';
 import {
   IncompleteAdvancedSignatureEvidenceException,
   IncompleteSimpleSignatureDataException,
+  SealingRequestSnapshotMismatchException,
 } from '../exceptions/seal.exceptions';
 import {
   AdvancedSealingRequestSnapshot,
@@ -219,7 +220,7 @@ describe('SealingRequestSnapshotService', () => {
       stored.set(reference.objectKey, Buffer.from('{"alterado":true}'));
 
       await expect(service.load(reference)).rejects.toThrow(
-        'no coincide con el hash registrado',
+        SealingRequestSnapshotMismatchException,
       );
     });
 

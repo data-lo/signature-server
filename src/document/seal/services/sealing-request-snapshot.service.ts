@@ -16,6 +16,7 @@ import { SEALING_TYPE_ENUM } from '../enums/sealing-type.enum';
 import {
   IncompleteAdvancedSignatureEvidenceException,
   IncompleteSimpleSignatureDataException,
+  SealingRequestSnapshotMismatchException,
 } from '../exceptions/seal.exceptions';
 import {
   AdvancedSealingRequestSnapshot,
@@ -191,7 +192,8 @@ export class SealingRequestSnapshotService {
    * @param reference - Llave y hash guardados en el trabajo.
    * @returns El payload congelado.
    *
-   * @throws {Error} Si el objeto no existe, no es JSON o su hash no coincide.
+   * @throws {SealingRequestSnapshotMismatchException} Si sus bytes no tienen el hash registrado.
+   * @throws {Error} Si el objeto no existe o MinIO no responde.
    *
    * @example
    * ```ts
@@ -207,9 +209,7 @@ export class SealingRequestSnapshotService {
     );
 
     if (sha256Hex(content) !== reference.hash) {
-      throw new Error(
-        'El payload de sellado congelado no coincide con el hash registrado.',
-      );
+      throw new SealingRequestSnapshotMismatchException();
     }
 
     return JSON.parse(content.toString('utf8')) as SealingRequestSnapshot;

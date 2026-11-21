@@ -159,7 +159,7 @@ describe('SealApiService', () => {
 
   describe('firmas simples', () => {
     it('manda el DTO a /seal/simple-signature con la API key', async () => {
-      mockedAxios.post.mockResolvedValue({ data: {} });
+      mockedAxios.post.mockResolvedValue({ status: 200, data: RESPONSE });
 
       await service.sendSimpleSignatures(SIMPLE_DTO);
 
@@ -173,6 +173,14 @@ describe('SealApiService', () => {
           },
         }),
       );
+    });
+
+    it('rechaza una respuesta incompleta, igual que la avanzada', async () => {
+      mockedAxios.post.mockResolvedValue({ status: 200, data: {} });
+
+      await expect(
+        service.sendSimpleSignatures(SIMPLE_DTO),
+      ).rejects.toBeInstanceOf(SealProviderResponseException);
     });
 
     it('sin configuración, falla sin llegar a llamar al proveedor', async () => {

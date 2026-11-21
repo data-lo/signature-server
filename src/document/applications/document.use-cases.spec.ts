@@ -38,7 +38,8 @@ import { DocumentTransactionService } from '../document-transaction.service';
 import { collaboratorDisplayName } from '../utils/collaborator-display.util';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
-import { RetryPendingSealUseCase } from '../seal/use-cases/retry-pending-seal.use-case';
+import { DocumentSealingJobEntity } from '../seal/entities/document-sealing-job.entity';
+import { PUBLIC_SEALING_STATUS_ENUM } from '../interfaces/responses/document-public-view-response';
 import { SealingRequestSnapshotService } from '../seal/services/sealing-request-snapshot.service';
 import { RegisterDocumentSealingJobUseCase } from '../seal/use-cases/register-document-sealing-job.use-case';
 import { SEALING_TYPE_ENUM } from '../seal/enums/sealing-type.enum';
@@ -240,7 +241,7 @@ describe('casos de uso de documentos', () => {
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
-  let retryPendingSeal: { execute: jest.Mock };
+  let sealingJobRepository: { findOne: jest.Mock };
   let sealingRequestSnapshots: Record<string, jest.Mock>;
   let registerSealingJob: { execute: jest.Mock };
   let summaryDocumentService: Record<string, jest.Mock>;
@@ -422,7 +423,7 @@ describe('casos de uso de documentos', () => {
       findByDocumentId: jest.fn().mockResolvedValue(null),
       persistIntegrityCertificateInfo: jest.fn().mockResolvedValue(undefined),
     };
-    retryPendingSeal = { execute: jest.fn().mockResolvedValue(false) };
+    sealingJobRepository = { findOne: jest.fn().mockResolvedValue(null) };
     sealingRequestSnapshots = {
       freezeSimpleSignatureRequest: jest.fn().mockResolvedValue(FROZEN_REQUEST),
       discard: jest.fn().mockResolvedValue(undefined),
@@ -534,12 +535,12 @@ describe('casos de uso de documentos', () => {
         { provide: EfirmaService, useValue: efirmaService },
         { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
         /**
-         * Reintento del sellado pendiente: por defecto no hay nada que reintentar (`false`), que
-         * es el caso de todos estos escenarios. Las pruebas que sí lo ejercitan lo sobrescriben.
+         * La vista pública sólo LEE el trabajo de sellado: por defecto el documento no tiene. Ya no
+         * hay reintento OCSP en la lista de providers: abrir la vista no puede llamar al SAT.
          */
         {
-          provide: RetryPendingSealUseCase,
-          useValue: retryPendingSeal,
+          provide: getRepositoryToken(DocumentSealingJobEntity),
+          useValue: sealingJobRepository,
         },
         {
           provide: SealingRequestSnapshotService,
@@ -4433,6 +4434,7 @@ describe('casos de uso de documentos', () => {
           isCompleted: false,
           // Un documento sin completar no espera constancia: no hay nada que sellar todavía.
           sealingPending: false,
+          sealingStatus: PUBLIC_SEALING_STATUS_ENUM.NOT_REQUIRED,
           secureUrl: null,
           expiresIn: null,
           hash: null,
@@ -4575,8 +4577,7 @@ describe('casos de uso de documentos', () => {
         });
 
         /**
-         * Solo se sellan los documentos con firma AVANZADA (`sealAdvancedSignatures`) y el sellado
-         * es best-effort: un documento de firma simple se completa sin constancia, y la vista
+         * Mientras el worker no termina, el documento firmado se muestra sin constancia: la vista
          * pública tiene que poder mostrarse igual.
          */
         it('sin sello: constancia en null y ninguna descarga habilitada', async () => {
@@ -4595,6 +4596,59 @@ describe('casos de uso de documentos', () => {
             timestampFileBase64: null,
             integrityFileBase64: null,
           });
+        });
+
+        it.each([
+          [SEALING_JOB_STATUS_ENUM.PENDING, PUBLIC_SEALING_STATUS_ENUM.PENDING],
+          [
+            SEALING_JOB_STATUS_ENUM.RETRY_SCHEDULED,
+            PUBLIC_SEALING_STATUS_ENUM.PENDING,
+          ],
+          [
+            SEALING_JOB_STATUS_ENUM.PROCESSING,
+            PUBLIC_SEALING_STATUS_ENUM.PROCESSING,
+          ],
+          [SEALING_JOB_STATUS_ENUM.DEAD, PUBLIC_SEALING_STATUS_ENUM.FAILED],
+          [
+            SEALING_JOB_STATUS_ENUM.RECONCILIATION_REQUIRED,
+            PUBLIC_SEALING_STATUS_ENUM.RECONCILIATION_REQUIRED,
+          ],
+        ])(
+          'trabajo %s: sealingStatus %s, sin procesar nada al abrir la vista',
+          async (jobStatus, expected) => {
+            documentRepository.findOne.mockResolvedValue(
+              signedDocument({
+                sealingPendingAt: new Date('2026-11-19T17:00:00.000Z'),
+              }),
+            );
+            sealDocumentUseCase.findByDocumentId.mockResolvedValue(null);
+            sealingJobRepository.findOne.mockResolvedValue({
+              id: 'job-1',
+              status: jobStatus,
+            });
+
+            const result = await getPublicDocument.execute('doc-1');
+
+            expect(result.data.sealingStatus).toBe(expected);
+            expect(result.data.sealingPending).toBe(true);
+            // Sólo lectura: ninguna escritura sobre el documento ni sus firmantes.
+            expect(documentRepository.update).not.toHaveBeenCalled();
+            expect(collaboratorRepository.update).not.toHaveBeenCalled();
+            // Nada del trabajo sale a la respuesta: ni código ni mensaje de error.
+            expect(JSON.stringify(result.data)).not.toContain('job-1');
+          },
+        );
+
+        it('documento sellado sin trabajo (anterior a los trabajos): COMPLETED', async () => {
+          documentRepository.findOne.mockResolvedValue(signedDocument());
+          sealDocumentUseCase.findByDocumentId.mockResolvedValue(SEAL);
+          sealingJobRepository.findOne.mockResolvedValue(null);
+
+          const result = await getPublicDocument.execute('doc-1');
+
+          expect(result.data.sealingStatus).toBe(
+            PUBLIC_SEALING_STATUS_ENUM.COMPLETED,
+          );
         });
 
         it('habilita solo las descargas cuyo artefacto realmente vino en la respuesta del PSC', async () => {

@@ -69,9 +69,16 @@ export class SealDocumentUseCase {
   /**
    * Sello ya emitido para un documento, o `null` si no tiene.
    *
-   * Lo usa el flujo de finalización cuando el sellado responde "ya sellado": pasa si un intento
-   * anterior selló pero falló más adelante (al armar la hoja, por ejemplo) y la firma se reintentó.
-   * Sin esto, el reintento perdería la constancia que sí existe y la hoja saldría sin ella.
+   * Lo usa `ProcessDocumentSealingJobUseCase` cuando el guardado responde "ya sellado": otro
+   * intento guardó la constancia primero. Sin esto, el trabajo perdería la constancia que sí existe.
+   *
+   * @param documentId - Documento.
+   * @returns La constancia, o `null`.
+   *
+   * @example
+   * ```ts
+   * const seal = await sealDocumentUseCase.findByDocumentId(documentId);
+   * ```
    */
   async findByDocumentId(documentId: string): Promise<SealEntity | null> {
     return this.sealRepository.findOne({ where: { documentId } });

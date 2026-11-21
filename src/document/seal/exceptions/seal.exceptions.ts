@@ -7,6 +7,8 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 
+import type { SealingFailure } from '../interfaces/sealing-failure.interface';
+
 /** El servidor no tiene la configuración necesaria para llamar al proveedor. */
 export class SealProviderConfigurationException extends InternalServerErrorException {
   constructor() {
@@ -28,9 +30,14 @@ export class SealProviderUnavailableException extends ServiceUnavailableExceptio
   }
 }
 
-/** El proveedor contestó un error HTTP o un cuerpo que no respeta su contrato. */
+/**
+ * El proveedor contestó un error HTTP o un cuerpo que no respeta su contrato.
+ *
+ * `upstreamStatus` es el estado HTTP que devolvió Seal Service (`null` si respondió `200` con un
+ * cuerpo incompleto): el worker distingue con él un `5xx`, que se reintenta, de un `4xx`, que no.
+ */
 export class SealProviderResponseException extends BadGatewayException {
-  constructor() {
+  constructor(readonly upstreamStatus: number | null = null) {
     super('El servicio de sellado devolvió una respuesta no válida.');
   }
 }
@@ -115,6 +122,70 @@ export class SealReconciliationRequiredException extends ConflictException {
   constructor(readonly reasonCode: string | null) {
     super(
       'El servicio de sellado requiere conciliación antes de volver a emitir la evidencia de este documento.',
+    );
+  }
+}
+
+/**
+ * Un intento de `ProcessDocumentSealingJobUseCase` falló. Lleva el fallo ya clasificado
+ * (`SealingFailure`) para que el worker decida, sin interpretar mensajes, si reprograma el trabajo,
+ * lo manda a conciliación o lo da por muerto. La causa original queda en `cause`, sólo para logs.
+ */
+export class DocumentSealingJobFailedException extends Error {
+  constructor(
+    readonly failure: SealingFailure,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      `El trabajo de sellado falló en ${failure.phase}: ${failure.code}.`,
+      options,
+    );
+    this.name = 'DocumentSealingJobFailedException';
+  }
+}
+
+/**
+ * El trabajo ya no pertenece a quien lo está procesando: no está en `PROCESSING`, su
+ * `lease_token` cambió o el reclamo venció. Quien lo recibe deja de escribir; no es un fallo del
+ * trabajo y no se registra en él, porque ahora lo tiene otro worker.
+ */
+export class SealingJobLeaseLostException extends Error {
+  constructor(readonly jobId: string) {
+    super(`El trabajo de sellado ${jobId} ya no pertenece a este worker.`);
+    this.name = 'SealingJobLeaseLostException';
+  }
+}
+
+/**
+ * No se pudo regenerar o publicar el PDF final con la constancia (MinIO o la generación de la
+ * hoja). La constancia ya está guardada: repetir sólo vuelve a esta fase, sin otro sello.
+ */
+export class SealedEvidencePdfUpdateException extends InternalServerErrorException {
+  constructor() {
+    super('No fue posible actualizar la hoja de evidencia del documento.');
+  }
+}
+
+/**
+ * El PDF firmado de `signed_documents` ya no produce el `signedHash` registrado. No se le anexa
+ * nada: la hoja certificaría un archivo distinto del que se firmó.
+ */
+export class SignedPdfIntegrityException extends ConflictException {
+  constructor() {
+    super(
+      'El PDF firmado almacenado no coincide con el hash registrado del documento.',
+    );
+  }
+}
+
+/**
+ * El payload congelado de un trabajo no coincide con lo que el trabajo registró: sus bytes no dan
+ * `request_hash`, es de otro documento o de otro contrato. No se envía: sellaría otro contenido.
+ */
+export class SealingRequestSnapshotMismatchException extends ConflictException {
+  constructor() {
+    super(
+      'El payload de sellado congelado no coincide con el registrado en el trabajo.',
     );
   }
 }

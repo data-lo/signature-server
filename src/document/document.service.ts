@@ -74,7 +74,6 @@ import { MAX_EFIRMA_FILE_SIZE_BYTES } from 'src/common/constants/file-upload.con
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import type { SignatureResult } from 'src/efirma/interfaces/signature-result.interface';
-import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
 import { SealingRequestSnapshotService } from './seal/services/sealing-request-snapshot.service';
 import { RegisterDocumentSealingJobUseCase } from './seal/use-cases/register-document-sealing-job.use-case';
 import { toSealSignature } from './seal/mappers/advanced-signature-seal.mapper';
@@ -89,10 +88,7 @@ import type { SummaryDocumentSigner } from './summary-document/interfaces/summar
 import type { AdvancedSummaryDocumentSigner } from './summary-document/interfaces/advanced-summary-document.interface';
 import type { SealDocumentDto } from './seal/dto/seal-document.dto';
 import { SealEntity } from './seal/entities/seal.entity';
-import {
-  DocumentAlreadySealedException,
-  IncompleteSimpleSignatureDataException,
-} from './seal/exceptions/seal.exceptions';
+import { IncompleteSimpleSignatureDataException } from './seal/exceptions/seal.exceptions';
 import { toConservationRecord } from './summary-document/conservation-record.util';
 import {
   ADVANCED_SIGNATURE_BACKING_LABEL,
@@ -136,8 +132,8 @@ function isRatioSignaturePosition(
  *    contra los permisos de la cuenta,
  *  - firmar con e.firma y congelar la rúbrica del momento (`validateAndSignWithEfirma`,
  *    `snapshotSignatureImage`),
- *  - estampar el PDF, anexar la hoja de firmas y sellar con el PSC (`stampSignaturesOnto`,
- *    `attachSignaturesSheet`, `finalizeSignedDocument`, `sealAdvancedSignatures`),
+ *  - estampar el PDF, anexar la hoja de firmas y registrar el trabajo de sellado
+ *    (`stampSignaturesOnto`, `attachSignaturesSheet`, `finalizeSignedDocument`),
  *  - avisar por correo (`notifyNextSigner`, `sendCompletionEmails`).
  *
  * Varias de ellas las usa más de un caso de uso —`findOrLinkMySignerCollaborator` la comparten
@@ -188,7 +184,6 @@ export class DocumentService {
     private readonly verificationCodeService: VerificationCodeService,
     private readonly documentTransactionService: DocumentTransactionService,
     private readonly efirmaService: EfirmaService,
-    private readonly sealDocumentUseCase: SealDocumentUseCase,
     private readonly sealingRequestSnapshots: SealingRequestSnapshotService,
     private readonly registerSealingJob: RegisterDocumentSealingJobUseCase,
     private readonly summaryDocumentService: SummaryDocumentService,
@@ -943,117 +938,6 @@ export class DocumentService {
     }
 
     return myParticipant;
-  }
-
-  /**
-   * Envía a Seal Service el arreglo con las firmas avanzadas del documento y persiste la
-   * evidencia que devuelve (historia "Completar flujo de firma avanzada e integración con Seal
-   * Service"). Sólo sobre documentos completos: el proveedor calcula UN hash canónico sobre el
-   * conjunto de firmas, así que sellar antes produciría el hash de un conjunto parcial.
-   *
-   * Ya no se llama al cerrar el documento: desde `document_sealing_jobs`, el cierre registra un
-   * trabajo y lo sella un worker. Queda para la vista pública, que sella de forma oportunista los
-   * documentos firmados antes de esa tabla (ver `RetryPendingSealUseCase`).
-   *
-   * Un documento sin ninguna firma avanzada (todo firma simple) no se sella: no hay firma
-   * criptográfica de la cual construir la evidencia.
-   *
-   * Best-effort: nunca lanza. Un fallo del proveedor queda en el log y la vista pública se muestra
-   * igual.
-   */
-  async sealAdvancedSignatures(
-    document: DocumentEntity,
-    signerCollaborators: CollaboratorEntity[],
-  ): Promise<SealEntity | null> {
-    const advancedSigners = signerCollaborators.filter(
-      (collaborator) =>
-        collaborator.signatureType === SIGNATURE_TYPE_ENUM.FIEL &&
-        collaborator.advancedSignature !== null &&
-        collaborator.advancedSignature !== undefined,
-    );
-
-    if (advancedSigners.length === 0) {
-      return null;
-    }
-
-    /**
-     * Sin la evidencia OCSP de TODOS los firmantes no se intenta sellar: Seal Service la exige y
-     * respondería 400. El documento se marca como pendiente para poder retomarlo cuando el SAT
-     * vuelva (ver `RetryPendingSealUseCase`) y para poder decírselo al usuario.
-     *
-     * Se comprueba antes de llamar en vez de dejar que el proveedor rechace, porque un 400
-     * previsible no es un fallo del sellado: es una precondición que todavía no se cumple.
-     */
-    const sinEvidenciaOcsp = advancedSigners.some(
-      (collaborator) => !collaborator.advancedSignature?.ocspEvidence,
-    );
-
-    if (sinEvidenciaOcsp) {
-      this.logger.warn(
-        `El documento ${document.id} queda pendiente de sellar: falta la evidencia OCSP de al menos un firmante.`,
-      );
-      await this.markSealingPending(document);
-      return null;
-    }
-
-    // La traducción del payload va DENTRO del try junto con la llamada: si una firma guardada
-    // tuviera una forma inesperada, el error debe tratarse como cualquier otro fallo de sellado
-    // (logueado, sin efecto sobre la firma) y no escaparse como una excepción no controlada al
-    // final de un flujo de firma que ya se completó.
-    try {
-      const sealDocumentDto: SealDocumentDto = {
-        documentId: document.id,
-        originalHash: document.originalHash,
-        signatures: advancedSigners.map((collaborator) =>
-          this.toSealSignature(collaborator.advancedSignature!),
-        ),
-      };
-
-      const seal = await this.sealDocumentUseCase.create(sealDocumentDto);
-      this.logger.log(
-        `Sellos generados para el documento ${document.id} (evidencia ${seal.id}, ${advancedSigners.length} firma(s) avanzada(s)).`,
-      );
-      return seal;
-    } catch (error) {
-      this.logger.error(
-        `Error sellando el documento ${document.id} con Seal Service: ${error}`,
-      );
-
-      // El documento ya estaba sellado: pasa cuando un intento anterior selló pero falló más
-      // adelante y la firma se reintentó. La constancia existe, así que se relee en vez de
-      // perderla y dejar la hoja sin ella.
-      if (error instanceof DocumentAlreadySealedException) {
-        return await this.sealDocumentUseCase
-          .findByDocumentId(document.id)
-          .catch(() => null);
-      }
-
-      return null;
-    }
-  }
-
-  /**
-   * Marca el documento como pendiente de sellar, conservando la marca original si ya la tenía:
-   * lo que interesa es DESDE CUÁNDO espera, no cuándo se comprobó por última vez.
-   *
-   * Best-effort como el resto del sellado: si no se puede escribir la marca, el documento sigue
-   * firmado y válido. Se registra y se sigue, en vez de tumbar un flujo de firma ya completado.
-   */
-  private async markSealingPending(document: DocumentEntity): Promise<void> {
-    if (document.sealingPendingAt) {
-      return;
-    }
-
-    try {
-      document.sealingPendingAt = new Date();
-      await this.documentRepository.update(document.id, {
-        sealingPendingAt: document.sealingPendingAt,
-      });
-    } catch (error) {
-      this.logger.error(
-        `No se pudo marcar el documento ${document.id} como pendiente de sellar: ${error}`,
-      );
-    }
   }
 
   /**

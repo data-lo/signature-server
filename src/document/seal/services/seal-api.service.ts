@@ -116,7 +116,7 @@ export class SealApiService {
    * @throws {SealOperationInProgressException} Si otra petición la está emitiendo.
    * @throws {SealIdempotencyConflictException} Si el payload cambió después del primer envío.
    * @throws {SealReconciliationRequiredException} Si el resultado ante el PSC es incierto.
-   * @throws {SealProviderResponseException} Si responde otro error.
+   * @throws {SealProviderResponseException} Si responde otro error o una respuesta incompleta.
    * @throws {SealProviderTimeoutException} Si no responde a tiempo; repetir es seguro.
    * @throws {SealProviderUnavailableException} Si no se puede conectar.
    *
@@ -128,11 +128,13 @@ export class SealApiService {
   async sendSimpleSignatures(
     dto: SimpleSignatureDTO,
   ): Promise<SealDocumentResponse> {
-    return this.postSeal(
+    const response = await this.postSeal(
       SIMPLE_SIGNATURE_PATH,
       fingerprintSimpleSealRequest(dto),
       'las firmas simples',
     );
+    // Misma comprobación que la avanzada: la constancia termina en columnas NOT NULL.
+    return this.assertUsableResponse(response, dto.documentId);
   }
 
   /**
@@ -295,7 +297,7 @@ export class SealApiService {
       this.logger.error(
         `Seal Service respondió HTTP ${upstreamStatus} al recibir ${description} del documento ${documentId}${body?.code ? ` (${body.code})` : ''}.`,
       );
-      return new SealProviderResponseException();
+      return new SealProviderResponseException(upstreamStatus);
     }
 
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {

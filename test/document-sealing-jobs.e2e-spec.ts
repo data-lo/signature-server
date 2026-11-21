@@ -10,6 +10,18 @@ import { SEALING_JOB_STATUS_ENUM } from './../src/document/seal/enums/sealing-jo
 import { SEALING_PHASE_ENUM } from './../src/document/seal/enums/sealing-phase.enum';
 import { SEALING_TYPE_ENUM } from './../src/document/seal/enums/sealing-type.enum';
 import { RegisterDocumentSealingJobUseCase } from './../src/document/seal/use-cases/register-document-sealing-job.use-case';
+import { DocumentEntity } from './../src/document/entities/document.entity';
+import { VerificationCodeEntity } from './../src/document/entities/verification-code.entity';
+import { SealEntity } from './../src/document/seal/entities/seal.entity';
+import {
+  DocumentSealingJobFailedException,
+  SealedEvidencePdfUpdateException,
+  SealingJobLeaseLostException,
+} from './../src/document/seal/exceptions/seal.exceptions';
+import { SealingRequestSnapshotService } from './../src/document/seal/services/sealing-request-snapshot.service';
+import { ProcessDocumentSealingJobUseCase } from './../src/document/seal/use-cases/process-document-sealing-job.use-case';
+import { RetryPendingSealUseCase } from './../src/document/seal/use-cases/retry-pending-seal.use-case';
+import { SealDocumentUseCase } from './../src/document/seal/use-cases/seal-document.use-case';
 
 config();
 
@@ -385,6 +397,215 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
       ]);
 
       expect(await jobsOf(documentId)).toEqual([]);
+    });
+  });
+
+  /**
+   * El procesador contra la base real: lo que los dobles no prueban es que los `UPDATE`
+   * condicionados al `lease_token` y la transacción de cierre funcionen en Postgres. Sólo se
+   * simulan la consulta al SAT, Seal Service, MinIO y la hoja del PDF.
+   */
+  describe('procesador de trabajos', () => {
+    const LEASE = randomUUID();
+    const OCSP_EVIDENCE = {
+      status: 'good' as const,
+      verifiedAt: new Date('2026-11-19T19:00:00.000Z'),
+      ocspResponse: 'respuesta-ocsp',
+      ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+    };
+    const SEAL_RESPONSE = {
+      documentId: 'ignorado',
+      hashHex: 'f00d',
+      hashAlgorithm: 'sha256',
+      hashVersion: 'v1',
+      canonicalString: 'v1||canonica',
+      sealedAt: '2026-11-19T19:05:00.000Z',
+      timeStamp: {
+        status: true,
+        hashProcessed: 'f00d',
+        fileBase64: 'tsr',
+        uuid: 'ts',
+      },
+      nom151: {
+        status: true,
+        hashProcessed: 'f00d',
+        file: 'nom',
+        uuid: 'nom',
+        pdfFile: 'pdf',
+      },
+    };
+
+    let sealApi: { generateDocumentSeals: jest.Mock };
+    let refresher: { refresh: jest.Mock };
+    let processor: ProcessDocumentSealingJobUseCase;
+
+    beforeEach(() => {
+      const stored = new Map<string, Buffer>();
+      const minio = {
+        putSensitiveObject: async (_: unknown, key: string, content: Buffer) =>
+          void stored.set(key, Buffer.from(content)),
+        getSensitiveObject: async (_: unknown, key: string) => stored.get(key)!,
+        removeSensitiveObject: async (_: unknown, key: string) =>
+          void stored.delete(key),
+      };
+      const collaborators = dataSource.getRepository(CollaboratorEntity);
+      const retryPendingSeal = new RetryPendingSealUseCase(
+        collaborators,
+        {} as never,
+        {} as never,
+      );
+      // Sólo la consulta al SAT es doble: guardar y recargar la evidencia es real.
+      jest
+        .spyOn(retryPendingSeal as never, 'obtainOcspEvidence' as never)
+        .mockResolvedValue(OCSP_EVIDENCE as never);
+
+      sealApi = {
+        generateDocumentSeals: jest.fn().mockResolvedValue(SEAL_RESPONSE),
+      };
+      refresher = { refresh: jest.fn().mockResolvedValue(undefined) };
+      processor = new ProcessDocumentSealingJobUseCase(
+        dataSource.getRepository(DocumentSealingJobEntity),
+        dataSource.getRepository(DocumentEntity),
+        dataSource.getRepository(SealEntity),
+        retryPendingSeal,
+        new SealingRequestSnapshotService(
+          dataSource.getRepository(DocumentEntity),
+          collaborators,
+          dataSource.getRepository(VerificationCodeEntity),
+          minio as never,
+        ),
+        new SealDocumentUseCase(
+          sealApi as never,
+          dataSource.getRepository(SealEntity),
+        ),
+        {} as never,
+        // El de firma simple no participa en estos casos.
+      );
+      processor.useEvidenceRefresher(refresher);
+    });
+
+    /** Documento cerrado con su trabajo, reclamado con `LEASE`. */
+    async function claimedJob(): Promise<{
+      documentId: string;
+      collaboratorId: string;
+      jobId: string;
+    }> {
+      const { documentId, collaboratorId } =
+        await createDocumentWithFielSigner();
+      await dataSource.query(
+        `UPDATE documents SET signed_hash = 'hash-firmado' WHERE id = $1`,
+        [documentId],
+      );
+      const { job } = await dataSource.transaction((manager) =>
+        closeDocument(manager, documentId, collaboratorId),
+      );
+      await dataSource.query(
+        `UPDATE document_sealing_jobs SET status = 'PROCESSING', lease_token = $2, lease_expires_at = now() + interval '5 minutes', attempt_count = 1 WHERE id = $1`,
+        [job.id, LEASE],
+      );
+      return { documentId, collaboratorId, jobId: job.id };
+    }
+
+    async function stateOf(documentId: string) {
+      const [row] = await dataSource.query(
+        `SELECT j.status, j.phase, j.lease_token, j.lease_expires_at, j.completed_at, j.request_object_key, j.request_hash,
+                d.sealing_pending_at, d.signed_hash, c.advanced_signature,
+                (SELECT count(*)::int FROM document_seals s WHERE s.document_id = d.id) AS seals
+           FROM document_sealing_jobs j
+           JOIN documents d ON d.id = j.document_id
+           JOIN collaborators c ON c.document_id = d.id
+          WHERE j.document_id = $1`,
+        [documentId],
+      );
+      return row;
+    }
+
+    it('completa OCSP, sella con lo persistido y cierra trabajo y pendiente en una transacción', async () => {
+      const { documentId, jobId } = await claimedJob();
+
+      await processor.execute(jobId, LEASE);
+
+      const state = await stateOf(documentId);
+      expect(state).toEqual(
+        expect.objectContaining({
+          status: SEALING_JOB_STATUS_ENUM.COMPLETED,
+          phase: SEALING_PHASE_ENUM.UPDATING_EVIDENCE_PDF,
+          lease_token: null,
+          lease_expires_at: null,
+          completed_at: expect.any(Date),
+          request_object_key: expect.stringContaining(`${documentId}/`),
+          request_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          sealing_pending_at: null,
+          // Nada vuelve a firmar ni cambia el hash firmado.
+          signed_hash: 'hash-firmado',
+          seals: 1,
+        }),
+      );
+      // La evidencia recién guardada es la que viajó, y la fecha de firma no cambió.
+      expect(state.advanced_signature.signedAt).toBe(
+        ADVANCED_SIGNATURE.signedAt,
+      );
+      expect(state.advanced_signature.ocspEvidence.verifiedAt).toBe(
+        OCSP_EVIDENCE.verifiedAt.toISOString(),
+      );
+      const [sent] = sealApi.generateDocumentSeals.mock.calls[0];
+      expect(sent.signatures[0].ocspEvidence).toEqual({
+        status: 'good',
+        verifiedAt: OCSP_EVIDENCE.verifiedAt.toISOString(),
+        ocspResponse: 'respuesta-ocsp',
+        ocspUrl: 'https://cfdi.sat.gob.mx/edofiel',
+      });
+      expect(refresher.refresh).toHaveBeenCalledWith(
+        documentId,
+        expect.objectContaining({ documentId, signatureHash: 'f00d' }),
+      );
+    });
+
+    it('un fallo del PDF deja el trabajo en esa fase con el pendiente, y el reintento no vuelve a sellar', async () => {
+      const { documentId, jobId } = await claimedJob();
+      refresher.refresh
+        .mockRejectedValueOnce(new SealedEvidencePdfUpdateException())
+        .mockResolvedValueOnce(undefined);
+
+      await expect(processor.execute(jobId, LEASE)).rejects.toBeInstanceOf(
+        DocumentSealingJobFailedException,
+      );
+      expect(await stateOf(documentId)).toEqual(
+        expect.objectContaining({
+          status: SEALING_JOB_STATUS_ENUM.PROCESSING,
+          phase: SEALING_PHASE_ENUM.UPDATING_EVIDENCE_PDF,
+          sealing_pending_at: expect.any(Date),
+          seals: 1,
+        }),
+      );
+
+      await processor.execute(jobId, LEASE);
+
+      expect(sealApi.generateDocumentSeals).toHaveBeenCalledTimes(1);
+      expect((await stateOf(documentId)).status).toBe(
+        SEALING_JOB_STATUS_ENUM.COMPLETED,
+      );
+    });
+
+    it('si otro worker recuperó el trabajo, no escribe nada', async () => {
+      const { documentId, jobId } = await claimedJob();
+      await dataSource.query(
+        `UPDATE document_sealing_jobs SET lease_token = $2 WHERE id = $1`,
+        [jobId, randomUUID()],
+      );
+
+      await expect(processor.execute(jobId, LEASE)).rejects.toBeInstanceOf(
+        SealingJobLeaseLostException,
+      );
+      expect(await stateOf(documentId)).toEqual(
+        expect.objectContaining({
+          status: SEALING_JOB_STATUS_ENUM.PROCESSING,
+          phase: SEALING_PHASE_ENUM.VERIFYING_OCSP,
+          sealing_pending_at: expect.any(Date),
+          seals: 0,
+        }),
+      );
+      expect(sealApi.generateDocumentSeals).not.toHaveBeenCalled();
     });
   });
 
