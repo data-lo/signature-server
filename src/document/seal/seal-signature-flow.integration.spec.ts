@@ -186,6 +186,7 @@ jest.setTimeout(30_000);
 
 describe('Integración: cierre y sellado de la firma avanzada (FIEL)', () => {
   let signDocument: SignDocumentUseCase;
+  let efirmaService: { firmar: jest.Mock };
   let registerSealingJob: { execute: jest.Mock };
   let documentRepository: ReturnType<typeof createMockRepository>;
   let collaboratorRepository: ReturnType<typeof createMockRepository>;
@@ -445,6 +446,7 @@ describe('Integración: cierre y sellado de la firma avanzada (FIEL)', () => {
     }).compile();
 
     signDocument = module.get(SignDocumentUseCase);
+    efirmaService = module.get(EfirmaService);
   });
 
   /**
@@ -524,6 +526,50 @@ describe('Integración: cierre y sellado de la firma avanzada (FIEL)', () => {
           }),
         }),
       );
+    });
+
+    /**
+     * El SAT no respondió al firmar: la firma se guarda sin `ocspEvidence` y el trabajo nace en
+     * `VERIFYING_OCSP` sin payload. El worker completa el OCSP con el certificado público que
+     * quedó guardado: nada de la e.firma (llave, contraseña) se conserva para después.
+     */
+    it('si el SAT no respondió al firmar, cierra igual y deja el OCSP al worker sin guardar credenciales', async () => {
+      const withoutOcsp = { ...efirmaService.firmar() };
+      delete withoutOcsp.ocspEvidence;
+      efirmaService.firmar.mockReturnValue(withoutOcsp);
+      const document = mockDocument();
+      documentRepository.findOne.mockResolvedValue(document);
+      collaboratorRepository.find.mockResolvedValue([
+        buildFielSigner({ userId: 'user-1' }),
+      ]);
+
+      const result = await signDocument.execute(
+        'doc-1',
+        'user-1',
+        EFIRMA_INPUT,
+        TEST_GEOLOCATION,
+      );
+
+      expect(result.success).toBe(true);
+      expect(registerSealingJob.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sealType: SEALING_TYPE_ENUM.ADVANCED,
+          request: null,
+        }),
+        expect.anything(),
+      );
+      const saved = documentRepository.save.mock.calls
+        .map(([entity]) => entity)
+        .find((entity) => entity?.advancedSignature);
+      expect(saved.advancedSignature.ocspEvidence).toBeUndefined();
+      expect(saved.advancedSignature.certificate.certificatePem).toContain(
+        'BEGIN CERTIFICATE',
+      );
+      expect(JSON.stringify(saved.advancedSignature)).not.toMatch(
+        /privateKey|password/i,
+      );
+      expect(document.sealingPendingAt).toEqual(expect.any(Date));
+      expect(mockedAxios.post).not.toHaveBeenCalled();
     });
 
     it('mientras falte un firmante, no registra trabajo ni llama a Seal Service', async () => {

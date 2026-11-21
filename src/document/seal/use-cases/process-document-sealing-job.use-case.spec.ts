@@ -22,7 +22,10 @@ import {
   SEALING_FAILURE_CODE_ENUM,
   SEALING_FAILURE_KIND_ENUM,
 } from '../interfaces/sealing-failure.interface';
-import { ProcessDocumentSealingJobUseCase } from './process-document-sealing-job.use-case';
+import {
+  findUnsealableOcspSigners,
+  ProcessDocumentSealingJobUseCase,
+} from './process-document-sealing-job.use-case';
 
 const LEASE = '11111111-1111-4111-8111-111111111111';
 const SNAPSHOT_REF = { objectKey: 'doc-1/snap.json', hash: 'h'.repeat(64) };
@@ -613,5 +616,46 @@ describe('ProcessDocumentSealingJobUseCase', () => {
       expect(failure.code).toBe(SEALING_FAILURE_CODE_ENUM.DOCUMENT_NOT_SIGNED);
       expect(retryPendingSeal.execute).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('findUnsealableOcspSigners', () => {
+  const signer = (
+    id: string,
+    signatureType: SIGNATURE_TYPE_ENUM,
+    status?: 'good' | 'unknown',
+  ) =>
+    ({
+      id,
+      signatureType,
+      advancedSignature:
+        signatureType === SIGNATURE_TYPE_ENUM.FIEL
+          ? { ...(status && { ocspEvidence: { status } }) }
+          : null,
+    }) as unknown as CollaboratorEntity;
+
+  it('sólo good permite sellar; unknown nunca cuenta como validación positiva', () => {
+    expect(
+      findUnsealableOcspSigners([
+        signer('c-1', SIGNATURE_TYPE_ENUM.FIEL, 'good'),
+        signer('c-2', SIGNATURE_TYPE_ENUM.FIEL, 'unknown'),
+        signer('c-3', SIGNATURE_TYPE_ENUM.FIEL),
+      ]),
+    ).toEqual({ missing: ['c-3'], unknown: ['c-2'] });
+  });
+
+  it('todos good: nada que impida sellar', () => {
+    expect(
+      findUnsealableOcspSigners([
+        signer('c-1', SIGNATURE_TYPE_ENUM.FIEL, 'good'),
+        signer('c-2', SIGNATURE_TYPE_ENUM.FIEL, 'good'),
+      ]),
+    ).toEqual({ missing: [], unknown: [] });
+  });
+
+  it('los firmantes que no son FIEL no llevan OCSP', () => {
+    expect(
+      findUnsealableOcspSigners([signer('c-1', SIGNATURE_TYPE_ENUM.SIMPLE)]),
+    ).toEqual({ missing: [], unknown: [] });
   });
 });
