@@ -123,6 +123,7 @@ describe('ProcessDocumentSealingJobUseCase', () => {
   let sealDocument: { create: jest.Mock; findByDocumentId: jest.Mock };
   let sealSimple: { execute: jest.Mock };
   let refresher: { refresh: jest.Mock };
+  let sealApi: { getSealOperation: jest.Mock };
   let processor: ProcessDocumentSealingJobUseCase;
 
   const ADVANCED_REQUEST = {
@@ -168,6 +169,7 @@ describe('ProcessDocumentSealingJobUseCase', () => {
       snapshots as never,
       sealDocument as never,
       sealSimple as never,
+      sealApi as never,
     );
     processor.useEvidenceRefresher(refresher);
   }
@@ -204,6 +206,9 @@ describe('ProcessDocumentSealingJobUseCase', () => {
     };
     sealSimple = { execute: jest.fn().mockResolvedValue(SEAL) };
     refresher = { refresh: jest.fn().mockResolvedValue(undefined) };
+    sealApi = {
+      getSealOperation: jest.fn().mockResolvedValue({ status: 'NOT_FOUND' }),
+    };
   });
 
   /** Lo que lanzó el intento, con su fallo tipado. */
@@ -290,7 +295,7 @@ describe('ProcessDocumentSealingJobUseCase', () => {
       expect(sealDocument.create).not.toHaveBeenCalled();
     });
 
-    it('respuesta unknown: se conserva pero no se sella como good', async () => {
+    it('respuesta unknown: reintento acotado, nunca se sella como good', async () => {
       build(claimedJob());
       retryPendingSeal.execute.mockResolvedValue([
         fielSigner('c-1', 'good'),
@@ -301,8 +306,9 @@ describe('ProcessDocumentSealingJobUseCase', () => {
 
       expect(failure).toEqual(
         expect.objectContaining({
-          kind: SEALING_FAILURE_KIND_ENUM.RECONCILIATION_REQUIRED,
+          kind: SEALING_FAILURE_KIND_ENUM.RETRYABLE,
           code: SEALING_FAILURE_CODE_ENUM.OCSP_STATUS_UNKNOWN,
+          maxAttempts: 3,
         }),
       );
       expect(failure.message).toContain('c-2');
@@ -362,6 +368,70 @@ describe('ProcessDocumentSealingJobUseCase', () => {
       expect(sealDocument.create).toHaveBeenCalledTimes(2);
       expect(sealDocument.create.mock.calls[1][0]).toBe(ADVANCED_REQUEST);
       expect(table.row.status).toBe(SEALING_JOB_STATUS_ENUM.COMPLETED);
+    });
+
+    describe('reintento con una solicitud que pudo quedar en curso', () => {
+      const retriedJob = () =>
+        claimedJob({
+          attemptCount: 2,
+          phase: SEALING_PHASE_ENUM.GENERATING_SEAL,
+          requestObjectKey: SNAPSHOT_REF.objectKey,
+          requestHash: SNAPSHOT_REF.hash,
+        });
+
+      it('primer intento: no consulta, envía directo', async () => {
+        build(
+          claimedJob({
+            phase: SEALING_PHASE_ENUM.GENERATING_SEAL,
+            requestObjectKey: SNAPSHOT_REF.objectKey,
+            requestHash: SNAPSHOT_REF.hash,
+          }),
+        );
+
+        await processor.execute('job-1', LEASE);
+
+        expect(sealApi.getSealOperation).not.toHaveBeenCalled();
+      });
+
+      it('si Seal Service la sigue emitiendo, no reenvía: reintenta después', async () => {
+        build(retriedJob());
+        sealApi.getSealOperation.mockResolvedValue({ status: 'PROCESSING' });
+
+        const failure = await failureOf(processor.execute('job-1', LEASE));
+
+        expect(sealApi.getSealOperation).toHaveBeenCalledWith('doc-1');
+        expect(failure.kind).toBe(SEALING_FAILURE_KIND_ENUM.RETRYABLE);
+        expect(failure.code).toBe(SEALING_FAILURE_CODE_ENUM.SEAL_IN_PROGRESS);
+        expect(sealDocument.create).not.toHaveBeenCalled();
+      });
+
+      it('si requiere conciliación, no reenvía', async () => {
+        build(retriedJob());
+        sealApi.getSealOperation.mockResolvedValue({
+          status: 'RECONCILIATION_REQUIRED',
+          error: { code: 'STALE_IN_FLIGHT_STEP' },
+        });
+
+        const failure = await failureOf(processor.execute('job-1', LEASE));
+
+        expect(failure.kind).toBe(
+          SEALING_FAILURE_KIND_ENUM.RECONCILIATION_REQUIRED,
+        );
+        expect(failure.message).toContain('STALE_IN_FLIGHT_STEP');
+        expect(sealDocument.create).not.toHaveBeenCalled();
+      });
+
+      it.each(['COMPLETED', 'FAILED', 'NOT_FOUND'])(
+        'operación %s: reenvía el mismo payload con la misma clave',
+        async (status) => {
+          build(retriedJob());
+          sealApi.getSealOperation.mockResolvedValue({ status });
+
+          await processor.execute('job-1', LEASE);
+
+          expect(sealDocument.create).toHaveBeenCalledWith(ADVANCED_REQUEST);
+        },
+      );
     });
 
     it('si otro intento guardó primero (unicidad), usa esa constancia', async () => {
@@ -492,6 +562,22 @@ describe('ProcessDocumentSealingJobUseCase', () => {
   });
 
   describe('propiedad del trabajo', () => {
+    it('si el heartbeat perdió el lease, no empieza la fase siguiente', async () => {
+      build(claimedJob());
+      const ownership = new AbortController();
+      retryPendingSeal.execute.mockImplementation(async () => {
+        ownership.abort();
+        return [fielSigner('c-1', 'good')];
+      });
+
+      await expect(
+        processor.execute('job-1', LEASE, ownership.signal),
+      ).rejects.toBeInstanceOf(SealingJobLeaseLostException);
+      // Congelar sí ocurrió dentro de la fase OCSP; sellar, no.
+      expect(sealDocument.create).not.toHaveBeenCalled();
+      expect(refresher.refresh).not.toHaveBeenCalled();
+    });
+
     it.each([
       [
         'otro token',

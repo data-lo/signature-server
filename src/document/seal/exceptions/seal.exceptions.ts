@@ -35,9 +35,13 @@ export class SealProviderUnavailableException extends ServiceUnavailableExceptio
  *
  * `upstreamStatus` es el estado HTTP que devolvió Seal Service (`null` si respondió `200` con un
  * cuerpo incompleto): el worker distingue con él un `5xx`, que se reintenta, de un `4xx`, que no.
+ * `retryAfterMs` es el `Retry-After` de un `429`/`503`, si vino y se pudo leer.
  */
 export class SealProviderResponseException extends BadGatewayException {
-  constructor(readonly upstreamStatus: number | null = null) {
+  constructor(
+    readonly upstreamStatus: number | null = null,
+    readonly retryAfterMs: number | null = null,
+  ) {
     super('El servicio de sellado devolvió una respuesta no válida.');
   }
 }

@@ -297,7 +297,10 @@ export class SealApiService {
       this.logger.error(
         `Seal Service respondió HTTP ${upstreamStatus} al recibir ${description} del documento ${documentId}${body?.code ? ` (${body.code})` : ''}.`,
       );
-      return new SealProviderResponseException(upstreamStatus);
+      return new SealProviderResponseException(
+        upstreamStatus,
+        parseRetryAfter(error.response?.headers?.['retry-after']),
+      );
     }
 
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
@@ -359,4 +362,47 @@ export class SealApiService {
 
     return response!;
   }
+}
+
+/** Tope de un `Retry-After`: más allá, el backoff del worker decide. */
+const MAX_RETRY_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Lee un `Retry-After` en segundos o como fecha HTTP.
+ *
+ * @param header - Valor del header, si vino.
+ * @param now - Momento de referencia para una fecha HTTP.
+ * @returns Los milisegundos a esperar (entre 0 y 12 h), o `null` si no vino o no se entiende.
+ *
+ * @example
+ * ```ts
+ * parseRetryAfter('120'); // 120000
+ * parseRetryAfter('Wed, 19 Nov 2026 20:00:00 GMT', new Date('2026-11-19T19:59:00Z')); // 60000
+ * ```
+ */
+export function parseRetryAfter(
+  header: unknown,
+  now: Date = new Date(),
+): number | null {
+  const value = Array.isArray(header) ? header[0] : header;
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
+  const text = String(value).trim();
+  if (text === '') {
+    return null;
+  }
+
+  let ms: number;
+  if (/^\d+$/.test(text)) {
+    ms = Number(text) * 1000;
+  } else {
+    const date = Date.parse(text);
+    if (Number.isNaN(date)) {
+      return null;
+    }
+    ms = date - now.getTime();
+  }
+
+  return Math.min(Math.max(ms, 0), MAX_RETRY_AFTER_MS);
 }

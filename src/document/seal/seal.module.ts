@@ -15,6 +15,10 @@ import { DocumentSealingJobEntity } from './entities/document-sealing-job.entity
 import { SealingRequestSnapshotService } from './services/sealing-request-snapshot.service';
 import { RegisterDocumentSealingJobUseCase } from './use-cases/register-document-sealing-job.use-case';
 import { ProcessDocumentSealingJobUseCase } from './use-cases/process-document-sealing-job.use-case';
+import { SealingWorkerConfig } from './config/sealing-worker.config';
+import { SealingRetryPolicy } from './policies/sealing-retry.policy';
+import { SealingJobLeaseService } from './services/sealing-job-lease.service';
+import { ClaimDueSealingJobsUseCase } from './use-cases/claim-due-sealing-jobs.use-case';
 
 /**
  * Sellado de documentos contra Seal Service (sello de tiempo RFC 3161 + constancia NOM-151).
@@ -61,6 +65,10 @@ import { ProcessDocumentSealingJobUseCase } from './use-cases/process-document-s
     SealingRequestSnapshotService,
     RegisterDocumentSealingJobUseCase,
     ProcessDocumentSealingJobUseCase,
+    SealingWorkerConfig,
+    SealingRetryPolicy,
+    SealingJobLeaseService,
+    ClaimDueSealingJobsUseCase,
   ],
   exports: [
     SealDocumentUseCase,
@@ -69,6 +77,10 @@ import { ProcessDocumentSealingJobUseCase } from './use-cases/process-document-s
     SealingRequestSnapshotService,
     RegisterDocumentSealingJobUseCase,
     ProcessDocumentSealingJobUseCase,
+    SealingWorkerConfig,
+    SealingRetryPolicy,
+    SealingJobLeaseService,
+    ClaimDueSealingJobsUseCase,
   ],
 })
 export class SealModule {}

@@ -3,7 +3,7 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
-import { SealApiService } from './seal-api.service';
+import { parseRetryAfter, SealApiService } from './seal-api.service';
 import { SealDocumentDto } from '../dto/seal-document.dto';
 import { SimpleSignatureDTO } from '../dto/simple-signature.dto';
 import { SealDocumentResponse } from '../interfaces/seal-document-response.interface';
@@ -102,13 +102,22 @@ const SIMPLE_DTO: SimpleSignatureDTO = {
 
 /** Reproduce la forma que `axios.isAxiosError` reconoce, sin depender de la red. */
 function axiosError(
-  partial: { status?: number; code?: string; data?: unknown } = {},
+  partial: {
+    status?: number;
+    code?: string;
+    data?: unknown;
+    headers?: Record<string, string>;
+  } = {},
 ): unknown {
   return {
     isAxiosError: true,
     code: partial.code,
     response: partial.status
-      ? { status: partial.status, data: partial.data }
+      ? {
+          status: partial.status,
+          data: partial.data,
+          headers: partial.headers ?? {},
+        }
       : undefined,
     message: 'fallo simulado',
   };
@@ -172,6 +181,21 @@ describe('SealApiService', () => {
             'Idempotency-Key': `signature-server:document:${SIMPLE_DTO.documentId}:v1`,
           },
         }),
+      );
+    });
+
+    it('conserva el estado original y el Retry-After de un 429', async () => {
+      mockedAxios.post.mockRejectedValue(
+        axiosError({ status: 429, headers: { 'retry-after': '90' } }),
+      );
+
+      const error = await service
+        .sendSimpleSignatures(SIMPLE_DTO)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SealProviderResponseException);
+      expect(error).toEqual(
+        expect.objectContaining({ upstreamStatus: 429, retryAfterMs: 90_000 }),
       );
     });
 
@@ -433,5 +457,22 @@ describe('SealApiService', () => {
       expect(config!.validateStatus!(404)).toBe(true);
       expect(config!.validateStatus!(500)).toBe(false);
     });
+  });
+});
+
+describe('parseRetryAfter', () => {
+  const NOW = new Date('2026-11-19T20:00:00.000Z');
+
+  it.each([
+    ['120', 120_000],
+    [['30'], 30_000],
+    ['Thu, 19 Nov 2026 20:01:00 GMT', 60_000],
+    ['Thu, 19 Nov 2026 19:00:00 GMT', 0],
+    ['999999', 12 * 60 * 60 * 1000],
+    [undefined, null],
+    ['', null],
+    ['pronto', null],
+  ])('%p → %p', (header, expected) => {
+    expect(parseRetryAfter(header, NOW)).toBe(expected);
   });
 });

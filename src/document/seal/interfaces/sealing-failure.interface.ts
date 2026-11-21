@@ -9,8 +9,8 @@ import type { SEALING_PHASE_ENUM } from '../enums/sealing-phase.enum';
  * - `RECONCILIATION_REQUIRED`: repetir a ciegas no cambia el resultado o podría duplicar una
  *   constancia (evidencia incompleta o inválida, OCSP `unknown`, payload distinto, resultado
  *   incierto ante el PSC). Lo resuelve una persona.
- * - `TERMINAL`: el documento no se va a poder sellar nunca, por ejemplo un certificado revocado.
- *   Pasa a `DEAD`.
+ * - `TERMINAL`: repetir no lo arregla sin intervención: certificado revocado o cadena inválida,
+ *   payload rechazado (`400`/`422`) o credenciales y configuración inválidas. Pasa a `DEAD`.
  */
 export enum SEALING_FAILURE_KIND_ENUM {
   RETRYABLE = 'RETRYABLE',
@@ -76,4 +76,11 @@ export interface SealingFailure {
   phase: SEALING_PHASE_ENUM;
   /** Estado HTTP de Seal Service, si llegó a responder (`last_upstream_status`). */
   upstreamStatus: number | null;
+  /** Espera mínima que pidió el proveedor (`Retry-After`), si la pidió. */
+  retryAfterMs: number | null;
+  /**
+   * Tope propio de ejecuciones para este fallo, más bajo que el general (por ejemplo, OCSP
+   * `unknown`). `null` usa `SEALING_MAX_ATTEMPTS`.
+   */
+  maxAttempts: number | null;
 }

@@ -75,6 +75,7 @@ import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity
 import { DocumentIndexingJobEntity } from './entities/document-indexing-job.entity';
 import { DocumentSealingJobEntity } from './seal/entities/document-sealing-job.entity';
 import { RefreshSealedDocumentEvidenceService } from './services/refresh-sealed-document-evidence.service';
+import { ProcessPendingSealingJobsJob } from './seal/jobs/process-pending-sealing-jobs.job';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
@@ -104,6 +105,11 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
      * `ProcessDocumentSealingJobUseCase` (de `SealModule`), que no puede importar este módulo.
      */
     RefreshSealedDocumentEvidenceService,
+    /**
+     * Worker de sellado (cron cada minuto, apagado por omisión con `SEALING_WORKER_ENABLED`). Vive
+     * aquí, junto a la fase del PDF, para que el procesador siempre tenga su implementación.
+     */
+    ProcessPendingSealingJobsJob,
     VerificationCodeService,
     SignatureQrService,
     /**

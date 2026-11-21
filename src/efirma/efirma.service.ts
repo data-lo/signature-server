@@ -264,11 +264,9 @@ export class EfirmaService implements OnModuleInit {
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
     this.validarParCertificadoLlave(cerBuffer, privateKey);
     const signatureBase64 = this.firmarDocumento(document, privateKey);
+    // Sólo el certificado y el estado OCSP: ni el RFC ni la respuesta OCSP completa van al log.
     this.logger.log(
-      `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`,
-    );
-    this.logger.log(
-      `Desde efirma, OCSPEvidence ${JSON.stringify(ocspEvidence)}`,
+      `Documento firmado con el certificado ${infoCertificado.numeroCertificado} (OCSP: ${ocspEvidence?.status ?? 'sin respuesta'}).`,
     );
     return {
       signatureBase64,
