@@ -4,6 +4,27 @@ import { DOCUMENT_STATUS_ENUM } from 'src/document/enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from 'src/document/enum/signature-type.enum';
 
 /**
+ * Estado público del sellado de un documento firmado (constancia NOM-151 y PDF final con ella).
+ *
+ * - `NOT_REQUIRED`: el documento no se sella (no está firmado, o su tipo de firma no tiene contrato).
+ * - `PENDING`: espera su turno, o se reprogramó tras una falla transitoria (SAT o proveedor caídos).
+ * - `PROCESSING`: un worker lo está sellando.
+ * - `COMPLETED`: tiene constancia.
+ * - `FAILED`: no se pudo sellar y ya no se reintenta.
+ * - `RECONCILIATION_REQUIRED`: el resultado requiere revisión antes de reintentar.
+ *
+ * No se expone por qué falló: el código y el mensaje quedan en el trabajo de sellado.
+ */
+export enum PUBLIC_SEALING_STATUS_ENUM {
+  NOT_REQUIRED = 'NOT_REQUIRED',
+  PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+  RECONCILIATION_REQUIRED = 'RECONCILIATION_REQUIRED',
+}
+
+/**
  * Constancia de conservación NOM-151 emitida por el PSC. Los mismos tres renglones que imprime la
  * hoja de evidencia anexada al PDF (ver `ConservationRecordInfo`).
  */
@@ -271,18 +292,26 @@ export class DocumentPublicViewData {
   createdBy: string | null;
 
   @ApiProperty({
-    type: PublicConservationRecordData,
-    description:
-      'Constancia NOM-151 del PSC. null cuando el documento no está completado, y también cuando sí lo está pero no tiene sello: solo se sellan los documentos con firma AVANZADA (ver `sealAdvancedSignatures`), y el sellado es best-effort.',
-    nullable: true,
-  })
-  @ApiProperty({
     example: false,
     description:
-      'true mientras el documento firmado espera su constancia NOM-151 porque el respondedor OCSP del SAT no contestó al firmar. El documento es válido; la constancia se emite en cuanto la evidencia de revocación se completa (ver `documents.sealing_pending_at`).',
+      'true mientras el documento firmado espera su constancia NOM-151: el sellado corre después de la firma, como trabajo persistente (`document_sealing_jobs`), y puede demorar si el SAT o el proveedor de sellado no responden. El documento es válido mientras tanto (ver `documents.sealing_pending_at`).',
   })
   sealingPending: boolean;
 
+  @ApiProperty({
+    enum: PUBLIC_SEALING_STATUS_ENUM,
+    example: PUBLIC_SEALING_STATUS_ENUM.PENDING,
+    description:
+      'Estado del sellado. Distingue lo que `sealingPending` no puede: un sellado en curso de uno que falló (`FAILED`) o que espera revisión (`RECONCILIATION_REQUIRED`). Abrir la vista pública no dispara el sellado.',
+  })
+  sealingStatus: PUBLIC_SEALING_STATUS_ENUM;
+
+  @ApiProperty({
+    type: PublicConservationRecordData,
+    description:
+      'Constancia NOM-151 del PSC. null cuando el documento no está completado, y también cuando sí lo está pero todavía no tiene sello (ver `sealingStatus`).',
+    nullable: true,
+  })
   conservationRecord: PublicConservationRecordData | null;
 
   @ApiProperty({

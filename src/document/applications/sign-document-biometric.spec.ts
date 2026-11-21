@@ -116,9 +116,14 @@ describe('SignDocumentUseCase — firma biométrica', () => {
         signingAuthorization: SIGNING_AUTHORIZATION_ENUM.ACCOUNT_SESSION,
       }),
     );
-    expect(collaboratorRepository.save).toHaveBeenCalledWith(
+    // Es el último firmante: su evidencia viaja a `finalizeSignedDocument`, que la guarda en la
+    // transacción de cierre junto con el trabajo de sellado.
+    expect(documentService.finalizeSignedDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
       expect.objectContaining({ geolocation: GEO, ipAddress: '10.0.0.7' }),
     );
+    expect(collaboratorRepository.save).not.toHaveBeenCalled();
     expect(documentService.snapshotSignatureImage).not.toHaveBeenCalled();
     expect(producer.emitCollaboratorSigned).toHaveBeenCalledWith(
       expect.objectContaining({ actorUserId: 'u-1', collaboratorId: 'c-1' }),

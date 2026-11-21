@@ -214,8 +214,20 @@ scrape_configs:
 | `npm run seed:roles` | Puebla el catálogo RBAC. Idempotente. |
 | `npm run seed:static-permissions` | Carga el catálogo de permisos estáticos de organización (7 permisos + matriz ADMIN/MEMBER). Idempotente y aditivo. Acepta `-- --prune-superseded`. |
 | `npm run seed:documents` | Documentos de prueba, uno por estatus, para ejercitar los filtros del frontend. Necesita el usuario fixture `PRIMARY_TEST_EMAIL` con su cuenta PERSONAL. |
+| `npm run sealing:backfill -- --dry-run` | Registra el trabajo de sellado de documentos firmados antes de `document_sealing_jobs` que siguen esperando constancia. Sin `--dry-run` escribe; acepta `--limit=N`. Ver [docs/document-sealing.md](docs/document-sealing.md). |
 
-Los seeds y el baseline tienen variante `:prod` (`seed:roles:prod`, `seed:static-permissions:prod`, `migration:baseline:prod`) que corre el `.js` compilado sin `ts-node`, para usarlas dentro de la imagen de producción.
+Los seeds, el baseline y la recuperación histórica tienen variante `:prod` (`seed:roles:prod`, `seed:static-permissions:prod`, `migration:baseline:prod`, `sealing:backfill:prod`) que corre el `.js` compilado sin `ts-node`, para usarlas dentro de la imagen de producción.
+
+### Sellado de documentos
+
+El sello de tiempo y la constancia NOM-151 los obtiene un worker (cron cada minuto) a partir de `document_sealing_jobs`, fuera de la petición de firma. Está **apagado por omisión** (`SEALING_WORKER_ENABLED=false`) y sólo debe activarse cuando Seal Service ya tenga el contrato idempotente. Estados, configuración, activación, consultas de diagnóstico, reactivación y conciliación: [docs/document-sealing.md](docs/document-sealing.md).
+
+Las pruebas del flujo completo no dependen del SAT ni del PSC (usan un servidor de prueba y un adaptador OCSP) y crean su propia base aislada:
+
+```bash
+npm test -- --runInBand --watchman=false src/document/seal
+npm run test:e2e -- --runInBand --watchman=false test/document-sealing.e2e-spec.ts test/document-sealing-concurrency.e2e-spec.ts
+```
 
 **Sobre `npm run lint`:** hoy no sirve como filtro. El repositorio está guardado con CRLF y la configuración de Prettier espera LF, así que ESLint reporta unos **31 400 errores**, de los cuales **31 360 son `Delete ␍`** y sólo 33 son problemas de formato reales. Con ese ruido, un error auténtico es indistinguible. En CI pasa porque el checkout de Linux usa LF. Arreglarlo es añadir un `.gitattributes` con `* text eol=lf` y correr un `--fix` de una sola pasada.
 

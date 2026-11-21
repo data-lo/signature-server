@@ -1057,11 +1057,11 @@ export class SignDocumentUseCase {
         );
 
       /**
-       * Se escribe ya, y no en el `save` del final: el sellado corre dentro de
-       * `finalizeSignedDocument` y RELEE los firmantes de la base para armar la evidencia del
-       * PSC. Sin esta escritura, el snapshot del último firmante llegaba en NULL y la evidencia
-       * se sellaba con su firma en vivo mientras el PDF se estampaba con el snapshot — las dos
-       * rúbricas que el snapshot existe para garantizar que sean la misma.
+       * Se escribe ya, y no en el `save` del final: `finalizeSignedDocument` congela la evidencia
+       * de firma simple RELEYENDO los firmantes de la base, antes de su transacción de cierre. Sin
+       * esta escritura, el snapshot del último firmante llegaba en NULL y la evidencia se congelaba
+       * con su firma en vivo mientras el PDF se estampaba con el snapshot — las dos rúbricas que
+       * el snapshot existe para garantizar que sean la misma.
        *
        * Un UPDATE puntual y no adelantar el `save` completo, que persiste además cosas ajenas.
        */
@@ -1079,10 +1079,16 @@ export class SignDocumentUseCase {
     document.completedSignersCount = (document.completedSignersCount ?? 0) + 1;
 
     if (remainingSigners.length === 0) {
-      // Sella antes de armar la hoja de evidencia, para que la constancia NOM-151 quepa en ella.
+      /**
+       * Cierra el documento y registra su trabajo de sellado. La evidencia definitiva de este
+       * firmante (geolocalización, IP y, en FIEL, su firma avanzada) se guarda DENTRO de esa
+       * transacción, junto con el documento en SIGNED y el trabajo: el worker de sellado tiene que
+       * encontrarla en cuanto el trabajo exista. Antes se guardaba después de finalizar.
+       */
       await this.documentService.finalizeSignedDocument(
         document,
         signerCollaborators,
+        myParticipant,
       );
       // Documento completo: ningún acceso de invitado a él tiene ya sentido.
       await this.revokeGuestAccessesQuietly(() =>
@@ -1110,9 +1116,11 @@ export class SignDocumentUseCase {
 
     // Lo que este save persiste, a esta altura, es la geolocalización —y la IP en biométrica— y en
     // firma avanzada la firma electrónica. El claim atómico ya escribió status/signedAt y el
-    // snapshot de la rúbrica se escribió apenas se tomó (ver arriba, lo necesita el sellado);
-    // re-escribirlos con el mismo valor no tiene efecto.
-    await this.collaboratorRepository.save(myParticipant);
+    // snapshot de la rúbrica se escribió apenas se tomó; re-escribirlos no tiene efecto. Cuando
+    // firma el último, esto ya lo guardó la transacción de cierre de `finalizeSignedDocument`.
+    if (remainingSigners.length > 0) {
+      await this.collaboratorRepository.save(myParticipant);
+    }
 
     // Bug corregido: este evento alimenta el encadenamiento de DocumentTransaction y del ledger
     // global de auditoría (ver Kafka -> DocumentEventsConsumer) — se dispara AQUÍ, después de

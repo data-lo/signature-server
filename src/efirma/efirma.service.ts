@@ -14,6 +14,7 @@ import {
   CertificadoInvalidoException,
   LLaveNoCorrespondeCertificadoException,
   LLavePrivadaInvalidException,
+  OCSPInvalidResponseException,
   OCSPNotAvailableException,
 } from './efirma.exceptions';
 import { join } from 'node:path';
@@ -242,7 +243,15 @@ export class EfirmaService implements OnModuleInit {
         emisorInmediato,
       );
     } catch (err) {
-      if (!(err instanceof OCSPNotAvailableException)) {
+      /**
+       * Una respuesta que no sirve como evidencia se trata igual que la ausencia de respuesta: se
+       * firma sin `ocspEvidence` y el worker de sellado vuelve a consultar. No es culpa del
+       * firmante y no prueba nada sobre su certificado.
+       */
+      if (
+        !(err instanceof OCSPNotAvailableException) &&
+        !(err instanceof OCSPInvalidResponseException)
+      ) {
         throw err;
       }
 
@@ -255,11 +264,9 @@ export class EfirmaService implements OnModuleInit {
     const privateKey = this.descifrarLlavePrivada(keyBuffer, password);
     this.validarParCertificadoLlave(cerBuffer, privateKey);
     const signatureBase64 = this.firmarDocumento(document, privateKey);
+    // Sólo el certificado y el estado OCSP: ni el RFC ni la respuesta OCSP completa van al log.
     this.logger.log(
-      `Documento firmado por RFC ${infoCertificado.rfc}, cert ${infoCertificado.numeroCertificado}`,
-    );
-    this.logger.log(
-      `Desde efirma, OCSPEvidence ${JSON.stringify(ocspEvidence)}`,
+      `Documento firmado con el certificado ${infoCertificado.numeroCertificado} (OCSP: ${ocspEvidence?.status ?? 'sin respuesta'}).`,
     );
     return {
       signatureBase64,
