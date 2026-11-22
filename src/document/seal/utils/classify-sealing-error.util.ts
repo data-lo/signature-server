@@ -22,6 +22,7 @@ import {
   SealReconciliationRequiredException,
   SealingRequestSnapshotMismatchException,
   SignedPdfIntegrityException,
+  VerificationRecordDigestException,
 } from '../exceptions/seal.exceptions';
 import {
   SEALING_FAILURE_CODE_ENUM,
@@ -253,6 +254,14 @@ export function classifySealingError(
       RETRYABLE,
       CODE.EVIDENCE_PDF_UPDATE_FAILED,
       'No se pudo actualizar la hoja de evidencia del PDF final.',
+      phase,
+    );
+  }
+  if (error instanceof VerificationRecordDigestException) {
+    return sealingFailure(
+      RETRYABLE,
+      CODE.VERIFICATION_RECORD_DIGEST_FAILED,
+      'No se pudo registrar el digest del XML de auditoría.',
       phase,
     );
   }

@@ -171,6 +171,19 @@ export class SealedEvidencePdfUpdateException extends InternalServerErrorExcepti
 }
 
 /**
+ * No se pudo armar el XML de auditoría del documento ya sellado, o guardar su SHA-256 en
+ * `document_seals.verification_record_digest`. La constancia y el PDF final ya existen; repetir la
+ * fase `UPDATING_EVIDENCE_PDF` vuelve a calcularlo.
+ */
+export class VerificationRecordDigestException extends InternalServerErrorException {
+  constructor() {
+    super(
+      'No fue posible registrar la huella del XML de auditoría del documento.',
+    );
+  }
+}
+
+/**
  * El PDF firmado de `signed_documents` ya no produce el `signedHash` registrado. No se le anexa
  * nada: la hoja certificaría un archivo distinto del que se firmó.
  */

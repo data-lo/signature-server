@@ -6,6 +6,7 @@ import { HashService } from 'src/common/hash/hash.service';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { MinioService } from 'src/common/minio/minio.service';
 
+import { RecordVerificationRecordDigestUseCase } from '../audit-xml/record-verification-record-digest.use-case';
 import { DocumentService } from '../document.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
@@ -51,6 +52,7 @@ export class RefreshSealedDocumentEvidenceService
     private readonly minioService: MinioService,
     private readonly hashService: HashService,
     private readonly processor: ProcessDocumentSealingJobUseCase,
+    private readonly recordVerificationRecordDigest: RecordVerificationRecordDigestUseCase,
   ) {}
 
   /**
@@ -69,15 +71,17 @@ export class RefreshSealedDocumentEvidenceService
   }
 
   /**
-   * Arma la hoja con la constancia y publica el PDF final.
+   * Arma la hoja con la constancia, publica el PDF final y guarda el digest del XML de auditoría.
    *
    * @param documentId - Documento en `SIGNED`.
    * @param seal - Constancia persistida.
-   * @returns Nada, cuando el PDF final ya está publicado.
+   * @returns Nada, cuando el PDF final ya está publicado y `verification_record_digest` guardado.
    *
    * @throws {SignedPdfIntegrityException} Si el PDF firmado ya no tiene el `signedHash` registrado.
    * @throws {SealedEvidencePdfUpdateException} Si MinIO o la generación de la hoja fallan; repetir
    *   sólo vuelve a esta fase.
+   * @throws {VerificationRecordDigestException} Si el XML de auditoría no se pudo armar o su digest
+   *   no se pudo guardar; repetir vuelve a esta fase.
    * @throws {NotFoundException} Si el documento no existe.
    *
    * @example
@@ -134,6 +138,10 @@ export class RefreshSealedDocumentEvidenceService
     this.logger.log(
       `PDF final del documento ${documentId} actualizado con su constancia.`,
     );
+
+    // Con la constancia y el PDF final publicados la evidencia está completa: se guarda la huella
+    // del XML de auditoría. Va después del PDF porque el XML lo incluye.
+    await this.recordVerificationRecordDigest.execute(documentId, seal);
   }
 }
 

@@ -231,13 +231,29 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
       ).rejects.toThrow(/CHK_document_sealing_jobs_phase/);
     });
 
-    it('la migración se revierte y se vuelve a aplicar', async () => {
-      const [last] = await dataSource.query(
-        `SELECT name FROM migrations ORDER BY id DESC LIMIT 1`,
-      );
-      expect(last.name).toBe('CreateDocumentSealingJobs1784300000099');
+    /**
+     * Revierte migraciones desde la última hasta `name` incluida, sin suponer que sea la última:
+     * las que vengan después se revierten primero, como lo haría un rollback real.
+     */
+    async function undoMigrationsThrough(name: string): Promise<void> {
+      for (;;) {
+        const [last] = await dataSource.query(
+          `SELECT name FROM migrations ORDER BY id DESC LIMIT 1`,
+        );
+        await dataSource.undoLastMigration({ transaction: 'each' });
+        if (last.name === name) {
+          return;
+        }
+      }
+    }
 
-      await dataSource.undoLastMigration({ transaction: 'each' });
+    it('la migración se revierte y se vuelve a aplicar', async () => {
+      const applied = await dataSource.query(
+        `SELECT name FROM migrations WHERE name = 'CreateDocumentSealingJobs1784300000099'`,
+      );
+      expect(applied).toHaveLength(1);
+
+      await undoMigrationsThrough('CreateDocumentSealingJobs1784300000099');
       const [{ exists }] = await dataSource.query(
         `SELECT to_regclass('public.document_sealing_jobs') IS NOT NULL AS exists`,
       );
@@ -245,6 +261,48 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
 
       await dataSource.runMigrations({ transaction: 'each' });
       expect(await jobsOf(randomUUID())).toEqual([]);
+    });
+
+    it('verification_record_digest sólo acepta un SHA-256 hex y su migración se revierte', async () => {
+      const { documentId } = await createDocumentWithFielSigner();
+      await dataSource.query(
+        `INSERT INTO document_seals (document_id, signature_hash, canonical_payload, timestamp_evidence, integrity_evidence)
+         VALUES ($1, 'hash', 'cadena', '{}', '{}')`,
+        [documentId],
+      );
+      const setDigest = (value: string | null) =>
+        dataSource.query(
+          `UPDATE document_seals SET verification_record_digest = $2 WHERE document_id = $1`,
+          [documentId, value],
+        );
+
+      await expect(setDigest('a'.repeat(64))).resolves.toBeDefined();
+      await expect(setDigest(null)).resolves.toBeDefined();
+      for (const invalid of ['A'.repeat(64), 'a'.repeat(63), 'g'.repeat(64)]) {
+        await expect(setDigest(invalid)).rejects.toThrow(
+          /CHK_document_seals_verification_record_digest/,
+        );
+      }
+
+      await undoMigrationsThrough(
+        'AddVerificationRecordDigestToDocumentSeals1784300000100',
+      );
+      const columnsAfterUndo = await dataSource.query(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_name = 'document_seals' AND column_name = 'verification_record_digest'`,
+      );
+      expect(columnsAfterUndo).toEqual([]);
+
+      await dataSource.runMigrations({ transaction: 'each' });
+      const [column] = await dataSource.query(
+        `SELECT data_type, character_maximum_length, is_nullable FROM information_schema.columns
+          WHERE table_name = 'document_seals' AND column_name = 'verification_record_digest'`,
+      );
+      expect(column).toEqual({
+        data_type: 'character varying',
+        character_maximum_length: 64,
+        is_nullable: 'YES',
+      });
     });
   });
 

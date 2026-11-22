@@ -14,7 +14,9 @@ import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
 import { SIGNATURE_TYPE_ENUM } from '../enum/signature-type.enum';
 import { COLLABORATOR_STATUS_ENUM } from '../enum/collaborator-status.enum';
+import { SealEntity } from '../seal/entities/seal.entity';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
+import { DocumentAuditXmlService } from '../audit-xml/document-audit-xml.service';
 import { GetPublicDocumentAuditXmlUseCase } from './get-public-document-audit-xml.use-case';
 
 const DOCUMENT_ID = 'doc-1';
@@ -136,6 +138,7 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         GetPublicDocumentAuditXmlUseCase,
+        DocumentAuditXmlService,
         {
           provide: getRepositoryToken(CollaboratorEntity),
           useValue: collaboratorRepository,
@@ -448,5 +451,70 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
       'collaborator.createdAt',
       'ASC',
     );
+    // Orden total: dos firmantes con el mismo `created_at` no pueden cambiar de lugar.
+    expect(signersQuery.addOrderBy).toHaveBeenLastCalledWith(
+      'collaborator.id',
+      'ASC',
+    );
+  });
+
+  describe('registro de verificación (DocumentAuditXmlService.build sin generatedAt)', () => {
+    let auditXml: DocumentAuditXmlService;
+    const seal = {
+      id: 'seal-1',
+      signatureHash: 'hash-sello',
+      timestampEvidence: { fileBase64: 'VFNS' },
+      integrityEvidence: {
+        fileBase64: 'Tk9NMTUx',
+        certificatePdfBase64: 'UERG',
+      },
+      sealedAt: new Date('2026-01-14T09:05:00.000Z'),
+      createdAt: new Date('2026-01-14T09:05:01.000Z'),
+      updatedAt: new Date('2026-01-14T09:05:02.000Z'),
+    } as unknown as SealEntity;
+
+    beforeEach(() => {
+      auditXml = new DocumentAuditXmlService(
+        collaboratorRepository as never,
+        documentService as never,
+        minioService as never,
+        sealDocument as never,
+      );
+      signers = [simpleSigner()];
+    });
+
+    it('no lleva generatedAt, createdAt ni updatedAt', async () => {
+      const xml = await auditXml.build(DOCUMENT_ID, { seal });
+
+      expect(xml).not.toContain('generatedAt');
+      expect(xml).not.toContain('createdAt');
+      expect(xml).not.toContain('updatedAt');
+      expect(xml).not.toContain('2026-01-14T09:05:01');
+    });
+
+    it('produce el mismo texto byte a byte al armarse otra vez con la misma evidencia', async () => {
+      const first = await auditXml.build(DOCUMENT_ID, { seal });
+      const second = await auditXml.build(DOCUMENT_ID, { seal });
+
+      expect(second).toBe(first);
+    });
+
+    it('es la descarga sin su atributo generatedAt', async () => {
+      const record = await auditXml.build(DOCUMENT_ID, { seal });
+      sealDocument.findByDocumentId.mockResolvedValue(seal);
+      const download = (await useCase.execute(DOCUMENT_ID)).content.toString(
+        'utf-8',
+      );
+
+      expect(download).toMatch(/ generatedAt="[^"]+"/);
+      expect(download.replace(/ generatedAt="[^"]+"/, '')).toBe(record);
+    });
+
+    it('usa la constancia recibida sin volver a consultarla', async () => {
+      const xml = await auditXml.build(DOCUMENT_ID, { seal });
+
+      expect(sealDocument.findByDocumentId).not.toHaveBeenCalled();
+      expect(xml).toContain('<seal available="true">');
+    });
   });
 });
