@@ -7,6 +7,8 @@ import { BUCKET_TYPES_ENUM } from './../src/common/minio/enums/bucket-types.enum
 import { PdfSignatureService } from './../src/common/document-signing/document-signing.service';
 import { GetPublicDocumentUseCase } from './../src/document/applications/get-public-document.use-case';
 import { DocumentService } from './../src/document/document.service';
+import { DocumentAuditXmlService } from './../src/document/audit-xml/document-audit-xml.service';
+import { RecordVerificationRecordDigestUseCase } from './../src/document/audit-xml/record-verification-record-digest.use-case';
 import { CollaboratorEntity } from './../src/document/entities/collaborator.entity';
 import { DocumentEntity } from './../src/document/entities/document.entity';
 import { VerificationCodeEntity } from './../src/document/entities/verification-code.entity';
@@ -58,6 +60,9 @@ import {
  * procesador, cliente HTTP, snapshots, mapper y la hoja de evidencia real (pdfmake + pdf-lib).
  * El "paso del tiempo" entre reintentos se simula adelantando `next_attempt_at`.
  */
+/** PDF original sin firmar que el XML de auditoría incluye; su contenido no importa al sellado. */
+const ORIGINAL_PDF = Buffer.from('%PDF-1.7 original');
+
 describe('Sellado de documentos: recuperación con proveedores controlados (e2e)', () => {
   const db = new SealingTestDatabase('signature_sealing_e2e');
   let provider: SealProviderStub;
@@ -145,6 +150,7 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
       minio as never,
       new HashService(),
       processor,
+      digestRecorderFor(dataSource, new SealDocumentUseCase(sealApi, seals)),
     ).onModuleInit();
 
     const worker = new ProcessPendingSealingJobsJob(
@@ -155,6 +161,81 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
       new SealingRetryPolicy(config),
     );
     return { worker, processor, config };
+  }
+
+  /**
+   * `RecordVerificationRecordDigestUseCase` real: arma el XML de auditoría desde la base y el MinIO
+   * en memoria y guarda su digest en `document_seals`.
+   */
+  function digestRecorderFor(
+    dataSource: DataSource,
+    sealDocument: SealDocumentUseCase,
+  ) {
+    return new RecordVerificationRecordDigestUseCase(
+      auditXmlFor(dataSource, sealDocument),
+      sealDocument,
+    );
+  }
+
+  function auditXmlFor(
+    dataSource: DataSource,
+    sealDocument: SealDocumentUseCase,
+  ) {
+    return new DocumentAuditXmlService(
+      dataSource.getRepository(CollaboratorEntity),
+      documentServiceFor(dataSource),
+      minio as never,
+      sealDocument,
+    );
+  }
+
+  /** Digest guardado y el que da volver a armar el XML con la evidencia actual. */
+  async function verificationRecordDigests(documentId: string) {
+    const seals = db.dataSource.getRepository(SealEntity);
+    const seal = await seals.findOneByOrFail({ documentId });
+    const rebuilt = await auditXmlFor(
+      db.dataSource,
+      new SealDocumentUseCase({} as never, seals),
+    ).build(documentId, { seal });
+    return {
+      stored: seal.verificationRecordDigest,
+      rebuilt: sha256(Buffer.from(rebuilt, 'utf8')),
+    };
+  }
+
+  /**
+   * Las dos huellas de verificación contra los archivos almacenados: el SHA-256 del PDF final de
+   * `finalized_documents` debe ser `final_document_digest`, y el del XML de auditoría rearmado,
+   * `verification_record_digest`. Además, un byte cambiado en cualquiera de los dos da otro hash.
+   */
+  async function expectVerificationDigestsMatchStoredFiles(
+    documentId: string,
+    objectKey: string,
+  ) {
+    const [{ final_document_digest: finalDigest }] = await db.dataSource.query(
+      `SELECT final_document_digest FROM documents WHERE id = $1`,
+      [documentId],
+    );
+    const finalPdf = minio.read(
+      BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
+      objectKey,
+    )!;
+    expect(finalDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(sha256(finalPdf)).toBe(finalDigest);
+    // No es el hash del PDF antes de la hoja.
+    const [{ signed_hash: signedHash }] = await db.dataSource.query(
+      `SELECT signed_hash FROM documents WHERE id = $1`,
+      [documentId],
+    );
+    expect(finalDigest).not.toBe(signedHash);
+
+    const xml = await verificationRecordDigests(documentId);
+    expect(xml.stored).toMatch(/^[0-9a-f]{64}$/);
+    expect(xml.rebuilt).toBe(xml.stored);
+
+    const tamperedPdf = Buffer.from(finalPdf);
+    tamperedPdf[Math.floor(tamperedPdf.length / 2)] ^= 0x01;
+    expect(sha256(tamperedPdf)).not.toBe(finalDigest);
   }
 
   /** `DocumentService` real sólo en lo que usa la hoja: generadores y PDF reales, MinIO en memoria. */
@@ -251,6 +332,8 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
     const pdf = await signedPdf();
     const objectKey = `${randomUUID()}.pdf`;
     minio.write(BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS, objectKey, pdf);
+    // El original sin firmar: el XML de auditoría (y su digest) lo exige.
+    minio.write(BUCKET_TYPES_ENUM.CREATED_DOCUMENTS, objectKey, ORIGINAL_PDF);
     const documentId = await db.insertDocument({
       objectKey,
       signedHash: sha256(pdf),
@@ -321,7 +404,7 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
   describe('OCSP con el adaptador controlado', () => {
     it('SAT falla y después responde: guarda el OCSP y continúa el sellado', async () => {
       const { worker } = buildWorker();
-      const { documentId, jobId } = await advancedDocument([
+      const { documentId, jobId, objectKey } = await advancedDocument([
         { pem: TEST_CERTIFICATE_PEM_1, withOcsp: true },
         { pem: TEST_CERTIFICATE_PEM_2, withOcsp: false },
       ]);
@@ -378,6 +461,9 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
         /privateKey|password|\.key/i,
       );
       expect(Object.keys(controlledEfirma)).toEqual(['validarCadenaConfianza']);
+      // Firma avanzada: al completar, las huellas del PDF final y del XML quedan guardadas y
+      // coinciden con los archivos almacenados.
+      await expectVerificationDigestsMatchStoredFiles(documentId, objectKey);
     });
 
     it('un firmante sigue sin evidencia: no se emite el sello', async () => {
@@ -673,6 +759,13 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
         minio as never,
         new HashService(),
         { useEvidenceRefresher: () => undefined } as never,
+        digestRecorderFor(
+          db.dataSource,
+          new SealDocumentUseCase(
+            {} as never,
+            db.dataSource.getRepository(SealEntity),
+          ),
+        ),
       );
       await refresher.refresh(documentId, seal);
       await refresher.refresh(documentId, seal);
@@ -808,6 +901,7 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
       const pdf = await signedPdf();
       const objectKey = `${randomUUID()}.pdf`;
       minio.write(BUCKET_TYPES_ENUM.SIGNED_DOCUMENTS, objectKey, pdf);
+      minio.write(BUCKET_TYPES_ENUM.CREATED_DOCUMENTS, objectKey, ORIGINAL_PDF);
       minio.write(BUCKET_TYPES_ENUM.SIGNATURE_IMAGES, 'snap/rubrica.png', PNG);
       minio.write(BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS, 'ine/front', JPEG);
       minio.write(BUCKET_TYPES_ENUM.IDENTITY_DOCUMENTS, 'ine/back', JPEG);
@@ -882,6 +976,61 @@ describe('Sellado de documentos: recuperación con proveedores controlados (e2e)
           },
         }),
       ]);
+      expect(provider.emissions).toBe(1);
+      // Firma simple: mismas huellas que la avanzada, contra los archivos almacenados.
+      await expectVerificationDigestsMatchStoredFiles(documentId, objectKey);
+    });
+  });
+
+  describe('huellas de verificación', () => {
+    it('si el XML de auditoría no se puede armar, el trabajo no se completa y se recupera después', async () => {
+      const { worker } = buildWorker();
+      const { documentId, jobId, objectKey } = await advancedDocument([
+        { pem: TEST_CERTIFICATE_PEM_1, withOcsp: true },
+      ]);
+      // Sin el PDF original no hay XML de auditoría completo.
+      const original = minio.read(
+        BUCKET_TYPES_ENUM.CREATED_DOCUMENTS,
+        objectKey,
+      )!;
+      minio.objects.delete(
+        `${BUCKET_TYPES_ENUM.CREATED_DOCUMENTS}/${objectKey}`,
+      );
+
+      await worker.drain();
+
+      expect(await jobRow(jobId)).toEqual(
+        expect.objectContaining({
+          status: 'RETRY_SCHEDULED',
+          phase: 'UPDATING_EVIDENCE_PDF',
+          last_error_code: 'VERIFICATION_RECORD_DIGEST_FAILED',
+          // No se marca como sellado con evidencia incompleta.
+          sealing_pending_at: expect.any(Date),
+        }),
+      );
+      const [row] = await db.dataSource.query(
+        `SELECT d.final_document_digest, s.verification_record_digest
+           FROM documents d JOIN document_seals s ON s.document_id = d.id
+          WHERE d.id = $1`,
+        [documentId],
+      );
+      expect(row.verification_record_digest).toBeNull();
+      // El PDF final ya se reemplazó, así que su huella también: describe el objeto almacenado.
+      expect(row.final_document_digest).toBe(
+        sha256(minio.read(BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS, objectKey)!),
+      );
+
+      minio.write(BUCKET_TYPES_ENUM.CREATED_DOCUMENTS, objectKey, original);
+      await elapse();
+      await worker.drain();
+
+      expect(await jobRow(jobId)).toEqual(
+        expect.objectContaining({
+          status: 'COMPLETED',
+          sealing_pending_at: null,
+        }),
+      );
+      await expectVerificationDigestsMatchStoredFiles(documentId, objectKey);
       expect(provider.emissions).toBe(1);
     });
   });

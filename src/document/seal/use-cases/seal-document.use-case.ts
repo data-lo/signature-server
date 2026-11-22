@@ -112,6 +112,38 @@ export class SealDocumentUseCase {
     });
   }
 
+  /**
+   * Guarda el SHA-256 del registro de verificación (XML de auditoría sin `generatedAt`) en la
+   * constancia.
+   *
+   * Sobrescribe el valor anterior: la fase que lo calcula se puede repetir, y el digest vigente es
+   * el del último PDF final publicado.
+   *
+   * @param sealId - Constancia del documento.
+   * @param digest - SHA-256 en hexadecimal minúsculo (64 caracteres).
+   * @returns Nada.
+   *
+   * @throws {SealPersistenceException} Si la constancia ya no existe.
+   * @throws {QueryFailedError} Si el valor no cumple el `CHECK` de la columna o falla la base.
+   *
+   * @example
+   * ```ts
+   * await sealDocumentUseCase.persistVerificationRecordDigest(seal.id, digest);
+   * ```
+   */
+  async persistVerificationRecordDigest(
+    sealId: string,
+    digest: string,
+  ): Promise<void> {
+    const result = await this.sealRepository.update(sealId, {
+      verificationRecordDigest: digest,
+    });
+
+    if (!result.affected) {
+      throw new SealPersistenceException();
+    }
+  }
+
   private isDocumentAlreadySealedError(error: unknown): boolean {
     if (!(error instanceof QueryFailedError)) {
       return false;

@@ -48,6 +48,25 @@ export class SealEntity {
   @Column({ name: 'sealed_at', type: 'timestamptz', nullable: true })
   sealedAt: Date | null;
 
+  /**
+   * SHA-256 (hex, 64 caracteres) del XML de auditoría del documento armado SIN `generatedAt`, con
+   * toda la evidencia ya completa: la constancia y el PDF final con su hoja actualizada.
+   *
+   * Lo escribe la fase `UPDATING_EVIDENCE_PDF` del trabajo de sellado
+   * (`RecordVerificationRecordDigestUseCase`). Es la huella del expediente: si se vuelve a armar
+   * con la misma evidencia, el digest coincide; si cambió un byte, no.
+   *
+   * Nullable: entre que se guarda la constancia y se termina el PDF final todavía no existe, y los
+   * sellos anteriores a esta columna no lo tienen.
+   */
+  @Column({
+    name: 'verification_record_digest',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  verificationRecordDigest: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

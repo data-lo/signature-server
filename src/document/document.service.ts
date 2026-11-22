@@ -48,6 +48,7 @@ import { AuditService } from 'src/audit/audit.service';
 import { DocumentEventsProducer } from 'src/kafka/document-events.producer';
 import { PublicSignerData } from './interfaces/responses/document-public-view-response';
 import { AccountMemberService } from 'src/account/account-member.service';
+import { computeFinalDocumentDigest } from './utils/final-document-digest.util';
 import { getNextPendingSigner } from './utils/next-signer.util';
 import { sendToEachAddress } from './utils/send-to-each-address.util';
 import {
@@ -1065,7 +1066,8 @@ export class DocumentService {
    * que guarda juntos:
    * - la evidencia definitiva del último firmante (geolocalización, IP y, en FIEL, su firma
    *   avanzada), para que el worker la encuentre en cuanto el trabajo exista;
-   * - el documento en `SIGNED`, con `signed_hash`, `signed_at` y la marca compatible
+   * - el documento en `SIGNED`, con `signed_hash`, `final_document_digest` (SHA-256 del PDF final
+   *   publicado), `signed_at` y la marca compatible
    *   `sealing_pending_at` mientras el trabajo esté pendiente;
    * - el consumo de las reservas biométricas;
    * - el trabajo de sellado, si el documento tiene contrato (ver `resolveSealingType`).
@@ -1124,8 +1126,10 @@ export class DocumentService {
       document.signedAt = new Date();
 
       // Hoja inicial, sin constancia: la imprime el worker cuando la obtiene. Se arma ANTES de la
-      // transacción porque sube a MinIO, y si falla el documento no se cierra.
-      await this.attachSignaturesSheet(
+      // transacción porque sube a MinIO, y si falla el documento no se cierra. Su SHA-256 se guarda
+      // en la misma transacción que pasa el documento a SIGNED: no hay documento cerrado sin la
+      // huella del PDF final que se publicó.
+      document.finalDocumentDigest = await this.attachSignaturesSheet(
         document,
         signerCollaborators,
         documentBuffer,
@@ -1434,6 +1438,24 @@ export class DocumentService {
    * Nada de lo que entra se modifica: el original sigue intacto en `created_documents` y el
    * documento firmado en `signed_documents` —que es el insumo con el que se calculó `signedHash`,
    * y por eso no puede llevar la hoja encima—. Esto solo escribe una tercera copia.
+   *
+   * Devuelve el SHA-256 de esa copia, calculado sobre los MISMOS bytes que se suben: quien publica
+   * el PDF final es quien persiste `final_document_digest`, para que siempre corresponda al objeto
+   * almacenado.
+   *
+   * @param document - Documento con `signedHash` ya calculado.
+   * @param signerCollaborators - Firmantes, en el orden de la hoja.
+   * @param signedDocument - PDF firmado de `signed_documents` (sin hoja).
+   * @param signerNames - Nombres para los metadatos del objeto.
+   * @param seal - Constancia que la hoja debe mostrar, o `null` si todavía no existe.
+   * @returns El SHA-256 hex (64 caracteres) del PDF final publicado.
+   *
+   * @throws {InternalServerErrorException} Si la hoja no se puede generar o MinIO rechaza la subida.
+   *
+   * @example
+   * ```ts
+   * document.finalDocumentDigest = await this.attachSignaturesSheet(document, signers, pdf, names);
+   * ```
    */
   async attachSignaturesSheet(
     document: DocumentEntity,
@@ -1441,7 +1463,7 @@ export class DocumentService {
     signedDocument: Buffer,
     signerNames: string,
     seal: SealEntity | null = null,
-  ): Promise<void> {
+  ): Promise<string> {
     const creator = await this.userService.findOne(document.createdBy);
 
     const sheetDocumentInfo = {
@@ -1490,6 +1512,42 @@ export class DocumentService {
       signerNames,
       document.objectKey,
     );
+
+    return computeFinalDocumentDigest(finalizedDocument);
+  }
+
+  /**
+   * Guarda el SHA-256 del PDF final recién publicado.
+   *
+   * Lo usa la fase `UPDATING_EVIDENCE_PDF` del sellado, que vuelve a publicar el PDF final con la
+   * constancia (el cierre lo guarda en su propia transacción, ver `finalizeSignedDocument`).
+   *
+   * @param documentId - Documento.
+   * @param digest - SHA-256 hex que devolvió `attachSignaturesSheet`.
+   * @returns Nada.
+   *
+   * @throws {NotFoundException} Si el documento ya no existe.
+   * @throws {QueryFailedError} Si el valor no cumple el `CHECK` o falla la base.
+   *
+   * @example
+   * ```ts
+   * await documentService.persistFinalDocumentDigest(document.id, digest);
+   * ```
+   */
+  async persistFinalDocumentDigest(
+    documentId: string,
+    digest: string,
+  ): Promise<void> {
+    const result = await this.documentRepository.update(
+      { id: documentId },
+      { finalDocumentDigest: digest },
+    );
+
+    if (!result.affected) {
+      throw new NotFoundException(
+        `El documento con id ${documentId} no se encuentra`,
+      );
+    }
   }
 
   /** Traduce un colaborador firmante a un renglón de la sección "Firmas" de la hoja. */

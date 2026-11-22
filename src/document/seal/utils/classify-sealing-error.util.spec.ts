@@ -9,6 +9,7 @@ import { SEALING_PHASE_ENUM } from '../enums/sealing-phase.enum';
 import {
   IncompleteSimpleSignatureDataException,
   SealedEvidencePdfUpdateException,
+  VerificationRecordDigestException,
   SealIdempotencyConflictException,
   SealingRequestSnapshotMismatchException,
   SealOperationInProgressException,
@@ -162,6 +163,12 @@ describe('classifySealingError', () => {
       new SealedEvidencePdfUpdateException(),
       KIND.RETRYABLE,
       CODE.EVIDENCE_PDF_UPDATE_FAILED,
+    ],
+    [
+      'digest del XML de auditoría',
+      new VerificationRecordDigestException(),
+      KIND.RETRYABLE,
+      CODE.VERIFICATION_RECORD_DIGEST_FAILED,
     ],
   ])('%s → %s', (_, error, kind, code) => {
     expect(classifySealingError(error, PHASE)).toEqual(

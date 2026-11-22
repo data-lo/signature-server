@@ -6,6 +6,7 @@ import { HashService } from 'src/common/hash/hash.service';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
 import { MinioService } from 'src/common/minio/minio.service';
 
+import { RecordVerificationRecordDigestUseCase } from '../audit-xml/record-verification-record-digest.use-case';
 import { DocumentService } from '../document.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
@@ -51,6 +52,7 @@ export class RefreshSealedDocumentEvidenceService
     private readonly minioService: MinioService,
     private readonly hashService: HashService,
     private readonly processor: ProcessDocumentSealingJobUseCase,
+    private readonly recordVerificationRecordDigest: RecordVerificationRecordDigestUseCase,
   ) {}
 
   /**
@@ -69,15 +71,22 @@ export class RefreshSealedDocumentEvidenceService
   }
 
   /**
-   * Arma la hoja con la constancia y publica el PDF final.
+   * Arma la hoja con la constancia, publica el PDF final y guarda las dos huellas de verificación,
+   * en este orden: SHA-256 del PDF final (`documents.final_document_digest`) y SHA-256 del XML de
+   * auditoría (`document_seals.verification_record_digest`), que incluye ese PDF.
+   *
+   * Si cualquiera falla, lanza y el trabajo no se completa: el documento sigue con
+   * `sealing_pending_at` y nunca queda como sellado con evidencia incompleta.
    *
    * @param documentId - Documento en `SIGNED`.
    * @param seal - Constancia persistida.
-   * @returns Nada, cuando el PDF final ya está publicado.
+   * @returns Nada, cuando el PDF final está publicado y sus dos huellas guardadas.
    *
    * @throws {SignedPdfIntegrityException} Si el PDF firmado ya no tiene el `signedHash` registrado.
-   * @throws {SealedEvidencePdfUpdateException} Si MinIO o la generación de la hoja fallan; repetir
-   *   sólo vuelve a esta fase.
+   * @throws {SealedEvidencePdfUpdateException} Si MinIO, la generación de la hoja o el guardado de
+   *   `final_document_digest` fallan; repetir sólo vuelve a esta fase.
+   * @throws {VerificationRecordDigestException} Si el XML de auditoría no se pudo armar o su digest
+   *   no se pudo guardar; repetir vuelve a esta fase.
    * @throws {NotFoundException} Si el documento no existe.
    *
    * @example
@@ -117,12 +126,20 @@ export class RefreshSealedDocumentEvidenceService
     }
 
     try {
-      await this.documentService.attachSignaturesSheet(
-        document,
-        signers,
-        signedPdf,
-        signers.map(collaboratorDisplayName).join(', '),
-        seal,
+      const finalDocumentDigest =
+        await this.documentService.attachSignaturesSheet(
+          document,
+          signers,
+          signedPdf,
+          signers.map(collaboratorDisplayName).join(', '),
+          seal,
+        );
+      // En cuanto se reemplaza el PDF final se reemplaza su huella: `final_document_digest` tiene
+      // que describir siempre el objeto almacenado, aunque el XML falle después. Si esto falla, la
+      // fase se repite completa y vuelve a publicar el mismo PDF.
+      await this.documentService.persistFinalDocumentDigest(
+        documentId,
+        finalDocumentDigest,
       );
     } catch (error) {
       this.logger.error(
@@ -134,6 +151,10 @@ export class RefreshSealedDocumentEvidenceService
     this.logger.log(
       `PDF final del documento ${documentId} actualizado con su constancia.`,
     );
+
+    // Con la constancia y el PDF final publicados la evidencia está completa: se guarda la huella
+    // del XML de auditoría. Va después del PDF porque el XML lo incluye.
+    await this.recordVerificationRecordDigest.execute(documentId, seal);
   }
 }
 
