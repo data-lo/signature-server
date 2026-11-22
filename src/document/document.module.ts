@@ -43,6 +43,10 @@ import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
 import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
+import { PublicDocumentVerificationController } from './public-verification/public-document-verification.controller';
+import { VerifyPublicDocumentUseCase } from './public-verification/verify-public-document.use-case';
+import { DocumentAuditXmlService } from './audit-xml/document-audit-xml.service';
+import { RecordVerificationRecordDigestUseCase } from './audit-xml/record-verification-record-digest.use-case';
 import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
 import { CreateDocumentUseCase } from './applications/create-document.use-case';
 import { GetDocumentsUseCase } from './applications/get-documents.use-case';
@@ -91,6 +95,8 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
     DocumentController,
     DocumentSignaturesController,
     PublicSigningController,
+    // Verificación pública por archivo (`POST /document/public/verify`), sin sesión.
+    PublicDocumentVerificationController,
     /**
      * API de integración para sistemas externos (`/integration/...`), autenticada con la API key
      * de la organización en vez de JWT. Reutiliza los casos de uso de este módulo.
@@ -128,6 +134,9 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
     GetPublicDocumentUseCase,
     GetPublicSealArtifactUseCase,
     GetPublicDocumentAuditXmlUseCase,
+    VerifyPublicDocumentUseCase,
+    DocumentAuditXmlService,
+    RecordVerificationRecordDigestUseCase,
     GetPublicAdvancedSignatureUseCase,
     CreateDocumentUseCase,
     GetDocumentsUseCase,
