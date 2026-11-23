@@ -15,7 +15,12 @@ const SIGNED_HASH = createHash('sha256').update(SIGNED_PDF).digest('hex');
 const SEAL = { id: 'seal-1', documentId: 'doc-1' };
 
 describe('RefreshSealedDocumentEvidenceService', () => {
-  let documentService: { findOne: jest.Mock; attachSignaturesSheet: jest.Mock };
+  let documentService: {
+    findOne: jest.Mock;
+    attachSignaturesSheet: jest.Mock;
+    persistFinalDocumentDigest: jest.Mock;
+  };
+  const FINAL_DIGEST = 'f'.repeat(64);
   let collaboratorRepository: { find: jest.Mock };
   let minioService: { getFileInBytesFormat: jest.Mock };
   let processor: { useEvidenceRefresher: jest.Mock };
@@ -34,7 +39,8 @@ describe('RefreshSealedDocumentEvidenceService', () => {
   beforeEach(() => {
     documentService = {
       findOne: jest.fn().mockResolvedValue({ ...document }),
-      attachSignaturesSheet: jest.fn().mockResolvedValue(undefined),
+      attachSignaturesSheet: jest.fn().mockResolvedValue(FINAL_DIGEST),
+      persistFinalDocumentDigest: jest.fn().mockResolvedValue(undefined),
     };
     collaboratorRepository = { find: jest.fn().mockResolvedValue(signers) };
     minioService = {
@@ -85,6 +91,37 @@ describe('RefreshSealedDocumentEvidenceService', () => {
     );
   });
 
+  it('guarda el SHA-256 del PDF final que devolvió la publicación de la hoja', async () => {
+    await service.refresh('doc-1', SEAL as never);
+
+    expect(documentService.persistFinalDocumentDigest).toHaveBeenCalledWith(
+      'doc-1',
+      FINAL_DIGEST,
+    );
+  });
+
+  it('orden: PDF final → su digest → digest del XML', async () => {
+    await service.refresh('doc-1', SEAL as never);
+
+    const order = [
+      documentService.attachSignaturesSheet.mock.invocationCallOrder[0],
+      documentService.persistFinalDocumentDigest.mock.invocationCallOrder[0],
+      recordDigest.execute.mock.invocationCallOrder[0],
+    ];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it('si no se puede guardar el digest del PDF final, falla la fase y no calcula el del XML', async () => {
+    documentService.persistFinalDocumentDigest.mockRejectedValue(
+      new Error('db caída'),
+    );
+
+    await expect(service.refresh('doc-1', SEAL as never)).rejects.toThrow(
+      SealedEvidencePdfUpdateException,
+    );
+    expect(recordDigest.execute).not.toHaveBeenCalled();
+  });
+
   it('guarda el digest del XML de auditoría después de publicar el PDF final', async () => {
     await service.refresh('doc-1', SEAL as never);
 
@@ -100,6 +137,7 @@ describe('RefreshSealedDocumentEvidenceService', () => {
     await expect(service.refresh('doc-1', SEAL as never)).rejects.toThrow(
       SealedEvidencePdfUpdateException,
     );
+    expect(documentService.persistFinalDocumentDigest).not.toHaveBeenCalled();
     expect(recordDigest.execute).not.toHaveBeenCalled();
   });
 

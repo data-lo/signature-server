@@ -172,6 +172,22 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
     await adminQuery(`DROP DATABASE IF EXISTS "${DATABASE_NAME}"`);
   });
 
+  /**
+   * Revierte migraciones desde la última hasta `name` incluida, sin suponer que sea la última:
+   * las que vengan después se revierten primero, como lo haría un rollback real.
+   */
+  async function undoMigrationsThrough(name: string): Promise<void> {
+    for (;;) {
+      const [last] = await dataSource.query(
+        `SELECT name FROM migrations ORDER BY id DESC LIMIT 1`,
+      );
+      await dataSource.undoLastMigration({ transaction: 'each' });
+      if (last.name === name) {
+        return;
+      }
+    }
+  }
+
   describe('esquema', () => {
     it('la entidad y la migración coinciden: el esquema no propone cambios para la tabla', async () => {
       const { upQueries } = await dataSource.driver.createSchemaBuilder().log();
@@ -297,6 +313,83 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
       const [column] = await dataSource.query(
         `SELECT data_type, character_maximum_length, is_nullable FROM information_schema.columns
           WHERE table_name = 'document_seals' AND column_name = 'verification_record_digest'`,
+      );
+      expect(column).toEqual({
+        data_type: 'character varying',
+        character_maximum_length: 64,
+        is_nullable: 'YES',
+      });
+    });
+  });
+
+  describe('huellas de verificación (migración 101)', () => {
+    it('final_document_digest sólo acepta un SHA-256 hex y ambos digests tienen índice parcial', async () => {
+      const { documentId } = await createDocumentWithFielSigner();
+      const setDigest = (value: string | null) =>
+        dataSource.query(
+          `UPDATE documents SET final_document_digest = $2 WHERE id = $1`,
+          [documentId, value],
+        );
+
+      await expect(setDigest('c'.repeat(64))).resolves.toBeDefined();
+      await expect(setDigest(null)).resolves.toBeDefined();
+      for (const invalid of ['C'.repeat(64), 'c'.repeat(63), 'z'.repeat(64)]) {
+        await expect(setDigest(invalid)).rejects.toThrow(
+          /CHK_documents_final_document_digest/,
+        );
+      }
+
+      const indexes: { indexname: string; indexdef: string }[] =
+        await dataSource.query(
+          `SELECT indexname, indexdef FROM pg_indexes
+            WHERE indexname IN ('IDX_documents_final_document_digest', 'IDX_document_seals_verification_record_digest')`,
+        );
+      const byName = Object.fromEntries(
+        indexes.map(({ indexname, indexdef }) => [indexname, indexdef]),
+      );
+      expect(byName.IDX_documents_final_document_digest).toContain(
+        'WHERE (final_document_digest IS NOT NULL)',
+      );
+      expect(byName.IDX_document_seals_verification_record_digest).toContain(
+        'WHERE (verification_record_digest IS NOT NULL)',
+      );
+    });
+
+    it('la búsqueda por digest usa el índice parcial', async () => {
+      // Con la tabla casi vacía Postgres preferiría un seq scan; se desactiva para comprobar que el
+      // índice parcial SIRVE para esta consulta (`final_document_digest = $1` implica IS NOT NULL).
+      await dataSource.query('SET enable_seqscan = off');
+      try {
+        const [{ 'QUERY PLAN': forced }] = await dataSource.query(
+          `EXPLAIN (FORMAT JSON) SELECT id FROM documents WHERE final_document_digest = $1`,
+          ['d'.repeat(64)],
+        );
+        expect(JSON.stringify(forced)).toContain(
+          'IDX_documents_final_document_digest',
+        );
+      } finally {
+        await dataSource.query('SET enable_seqscan = on');
+      }
+    });
+
+    it('la migración se revierte y se vuelve a aplicar', async () => {
+      await undoMigrationsThrough(
+        'AddFinalDocumentDigestAndVerificationIndexes1784300000101',
+      );
+      const [{ count }] = await dataSource.query(
+        `SELECT count(*)::int AS count FROM information_schema.columns
+          WHERE table_name = 'documents' AND column_name = 'final_document_digest'`,
+      );
+      expect(count).toBe(0);
+      const remaining = await dataSource.query(
+        `SELECT indexname FROM pg_indexes WHERE indexname = 'IDX_document_seals_verification_record_digest'`,
+      );
+      expect(remaining).toEqual([]);
+
+      await dataSource.runMigrations({ transaction: 'each' });
+      const [column] = await dataSource.query(
+        `SELECT data_type, character_maximum_length, is_nullable FROM information_schema.columns
+          WHERE table_name = 'documents' AND column_name = 'final_document_digest'`,
       );
       expect(column).toEqual({
         data_type: 'character varying',

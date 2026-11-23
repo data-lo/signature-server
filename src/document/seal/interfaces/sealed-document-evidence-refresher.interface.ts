@@ -10,9 +10,10 @@ import type { SealEntity } from '../entities/seal.entity';
  * `ProcessDocumentSealingJobUseCase.useEvidenceRefresher`.
  *
  * Toda implementación debe ser repetible sin efectos acumulados: parte del PDF firmado de
- * `signed_documents`, nunca del final, y reemplaza el objeto de `finalized_documents`. Al terminar
- * guarda `document_seals.verification_record_digest`, el SHA-256 del XML de auditoría ya con el PDF
- * final, porque es el último punto en que toda la evidencia existe.
+ * `signed_documents`, nunca del final, y reemplaza el objeto de `finalized_documents`. Al publicarlo
+ * guarda su SHA-256 en `documents.final_document_digest`, y al terminar
+ * `document_seals.verification_record_digest`, el SHA-256 del XML de auditoría ya con el PDF final,
+ * porque es el último punto en que toda la evidencia existe.
  */
 export interface SealedDocumentEvidenceRefresher {
   /**

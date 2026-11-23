@@ -71,15 +71,20 @@ export class RefreshSealedDocumentEvidenceService
   }
 
   /**
-   * Arma la hoja con la constancia, publica el PDF final y guarda el digest del XML de auditoría.
+   * Arma la hoja con la constancia, publica el PDF final y guarda las dos huellas de verificación,
+   * en este orden: SHA-256 del PDF final (`documents.final_document_digest`) y SHA-256 del XML de
+   * auditoría (`document_seals.verification_record_digest`), que incluye ese PDF.
+   *
+   * Si cualquiera falla, lanza y el trabajo no se completa: el documento sigue con
+   * `sealing_pending_at` y nunca queda como sellado con evidencia incompleta.
    *
    * @param documentId - Documento en `SIGNED`.
    * @param seal - Constancia persistida.
-   * @returns Nada, cuando el PDF final ya está publicado y `verification_record_digest` guardado.
+   * @returns Nada, cuando el PDF final está publicado y sus dos huellas guardadas.
    *
    * @throws {SignedPdfIntegrityException} Si el PDF firmado ya no tiene el `signedHash` registrado.
-   * @throws {SealedEvidencePdfUpdateException} Si MinIO o la generación de la hoja fallan; repetir
-   *   sólo vuelve a esta fase.
+   * @throws {SealedEvidencePdfUpdateException} Si MinIO, la generación de la hoja o el guardado de
+   *   `final_document_digest` fallan; repetir sólo vuelve a esta fase.
    * @throws {VerificationRecordDigestException} Si el XML de auditoría no se pudo armar o su digest
    *   no se pudo guardar; repetir vuelve a esta fase.
    * @throws {NotFoundException} Si el documento no existe.
@@ -121,12 +126,20 @@ export class RefreshSealedDocumentEvidenceService
     }
 
     try {
-      await this.documentService.attachSignaturesSheet(
-        document,
-        signers,
-        signedPdf,
-        signers.map(collaboratorDisplayName).join(', '),
-        seal,
+      const finalDocumentDigest =
+        await this.documentService.attachSignaturesSheet(
+          document,
+          signers,
+          signedPdf,
+          signers.map(collaboratorDisplayName).join(', '),
+          seal,
+        );
+      // En cuanto se reemplaza el PDF final se reemplaza su huella: `final_document_digest` tiene
+      // que describir siempre el objeto almacenado, aunque el XML falle después. Si esto falla, la
+      // fase se repite completa y vuelve a publicar el mismo PDF.
+      await this.documentService.persistFinalDocumentDigest(
+        documentId,
+        finalDocumentDigest,
       );
     } catch (error) {
       this.logger.error(
