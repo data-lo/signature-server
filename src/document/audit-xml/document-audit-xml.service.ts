@@ -28,11 +28,6 @@ import type {
 /** Opciones del armado del XML de auditoría. */
 export interface BuildDocumentAuditXmlOptions {
   /**
-   * ISO 8601 del momento de la descarga, para el atributo `generatedAt` de la raíz. Sin él el
-   * atributo no se emite: es lo que hace reproducible el registro de verificación.
-   */
-  generatedAt?: string;
-  /**
    * Constancia ya cargada. Si se pasa (también `null`), no se vuelve a consultar; si se omite, se
    * busca por el documento y su ausencia se anota en el XML.
    */
@@ -43,13 +38,14 @@ export interface BuildDocumentAuditXmlOptions {
  * Arma el XML de auditoría de un documento firmado a partir de lo que ya está guardado: sus tres
  * PDFs, la evidencia del sello y la acreditación de cada firmante.
  *
- * Lo usan dos caminos con el mismo contenido:
- * - La descarga pública (`GetPublicDocumentAuditXmlUseCase`), con `generatedAt`.
- * - El registro de verificación (`RecordVerificationRecordDigestUseCase`), sin `generatedAt`, para
- *   guardar su SHA-256 en `document_seals.verification_record_digest`.
+ * Lo usan dos caminos que producen EL MISMO texto:
+ * - La descarga pública (`GetPublicDocumentAuditXmlUseCase`).
+ * - El registro de verificación (`RecordVerificationRecordDigestUseCase`), que guarda su SHA-256 en
+ *   `document_seals.verification_record_digest`.
  *
- * Como ambos pasan por aquí, quitar el atributo `generatedAt` de una descarga deja exactamente el
- * texto cuyo digest se guardó (mientras la evidencia no cambie).
+ * No lleva `generatedAt` ni ningún valor del momento del armado: mientras la evidencia no cambie,
+ * el archivo descargado es byte a byte el registro cuya huella se guardó, y así lo reconoce
+ * `POST /document/public/verify`.
  *
  * No escribe nada: ni en PostgreSQL ni en MinIO.
  */
@@ -69,7 +65,7 @@ export class DocumentAuditXmlService {
    * Arma el XML de auditoría de un documento en `SIGNED`.
    *
    * @param documentId - Documento a auditar.
-   * @param options - `generatedAt` para la descarga y, si ya se tiene, la constancia.
+   * @param options - La constancia, si ya se tiene.
    * @returns El texto del XML, en UTF-8.
    *
    * @throws {NotFoundException} Si el documento no existe o todavía no está en `SIGNED`.
@@ -78,9 +74,7 @@ export class DocumentAuditXmlService {
    *
    * @example
    * ```ts
-   * // Descarga: lleva el momento en que se generó.
-   * const xml = await auditXml.build(documentId, { generatedAt: new Date().toISOString() });
-   * // Registro de verificación: reproducible, sin generatedAt.
+   * const xml = await auditXml.build(documentId);
    * const record = await auditXml.build(documentId, { seal });
    * ```
    */
@@ -120,7 +114,6 @@ export class DocumentAuditXmlService {
     ]);
 
     return buildDocumentAuditXml({
-      generatedAt: options.generatedAt,
       document: {
         id: document.id,
         fileName: document.fileName,

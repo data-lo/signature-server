@@ -24,9 +24,13 @@ const AUDIT_XML_CONTENT_TYPE = 'application/xml';
  * devuelve como un XML descargable.
  *
  * **No persiste nada.** Ni en PostgreSQL ni en MinIO: se lee lo que ya existe, se serializa en
- * memoria y se responde. Dos descargas del mismo documento producen el mismo contenido salvo el
- * `generatedAt` del encabezado; sin ese atributo, el texto es el registro de verificación cuyo
- * SHA-256 guarda `document_seals.verification_record_digest` (ver `DocumentAuditXmlService`).
+ * memoria y se responde.
+ *
+ * **Es el registro de verificación, byte a byte.** No lleva `generatedAt` ni ningún otro valor del
+ * momento de la descarga: dos descargas con la misma evidencia son el mismo archivo, y su SHA-256
+ * es el que guarda `document_seals.verification_record_digest`. Por eso la consulta pública
+ * `POST /document/public/verify` puede reconocerlo (antes llevaba `generatedAt` y ningún XML
+ * descargado coincidía con su huella).
  *
  * Pública como el resto de la vista pública (ver `GetPublicSealArtifactUseCase`): es el mismo
  * material de verificación que ya sirven los botones de esa pantalla, reunido en un solo archivo.
@@ -53,9 +57,7 @@ export class GetPublicDocumentAuditXmlUseCase {
    * ```
    */
   async execute(documentId: string): Promise<PublicDocumentAuditXml> {
-    const xml = await this.auditXml.build(documentId, {
-      generatedAt: new Date().toISOString(),
-    });
+    const xml = await this.auditXml.build(documentId);
 
     return {
       content: Buffer.from(xml, 'utf-8'),

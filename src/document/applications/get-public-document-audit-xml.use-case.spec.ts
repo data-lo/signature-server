@@ -499,15 +499,20 @@ describe('GetPublicDocumentAuditXmlUseCase', () => {
       expect(second).toBe(first);
     });
 
-    it('es la descarga sin su atributo generatedAt', async () => {
+    it('la descarga pública es el registro de verificación byte a byte', async () => {
       const record = await auditXml.build(DOCUMENT_ID, { seal });
       sealDocument.findByDocumentId.mockResolvedValue(seal);
-      const download = (await useCase.execute(DOCUMENT_ID)).content.toString(
-        'utf-8',
-      );
+      const download = (await useCase.execute(DOCUMENT_ID)).content;
 
-      expect(download).toMatch(/ generatedAt="[^"]+"/);
-      expect(download.replace(/ generatedAt="[^"]+"/, '')).toBe(record);
+      expect(download.toString('utf-8')).not.toContain('generatedAt');
+      expect(download.equals(Buffer.from(record, 'utf-8'))).toBe(true);
+    });
+
+    it('dos descargas con la misma evidencia son el mismo archivo', async () => {
+      const first = (await useCase.execute(DOCUMENT_ID)).content;
+      const second = (await useCase.execute(DOCUMENT_ID)).content;
+
+      expect(second.equals(first)).toBe(true);
     });
 
     it('usa la constancia recibida sin volver a consultarla', async () => {
