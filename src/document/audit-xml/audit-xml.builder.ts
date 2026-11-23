@@ -47,12 +47,28 @@ interface XmlNode {
 /** Nombre de elemento XML válido, con el subconjunto de caracteres que realmente emitimos. */
 const VALID_XML_NAME = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
+/**
+ * Serializa el expediente de auditoría.
+ *
+ * Determinista: el mismo `data` produce siempre el mismo texto. El único valor que depende del
+ * momento es `generatedAt`; sin él (el registro de verificación) el atributo no se emite y el
+ * resultado sólo depende de la evidencia.
+ *
+ * @param data - Evidencia ya resuelta.
+ * @returns El XML con declaración y salto de línea final.
+ *
+ * @example
+ * ```ts
+ * buildDocumentAuditXml({ document, files, seal, signers }); // sin generatedAt
+ * ```
+ */
 export function buildDocumentAuditXml(data: DocumentAuditXmlData): string {
   const root: XmlNode = {
     name: 'documentAudit',
     attributes: {
       version: AUDIT_XML_VERSION,
       documentId: data.document.id,
+      // `undefined` no se emite (ver `renderAttributes`).
       generatedAt: data.generatedAt,
     },
     children: [

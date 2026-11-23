@@ -55,6 +55,8 @@ export enum SEALING_FAILURE_CODE_ENUM {
   SEAL_PERSISTENCE_FAILED = 'SEAL_PERSISTENCE_FAILED',
   /** MinIO o la generación de la hoja fallaron al actualizar el PDF final. */
   EVIDENCE_PDF_UPDATE_FAILED = 'EVIDENCE_PDF_UPDATE_FAILED',
+  /** No se pudo armar el XML de auditoría o guardar su digest (`verification_record_digest`). */
+  VERIFICATION_RECORD_DIGEST_FAILED = 'VERIFICATION_RECORD_DIGEST_FAILED',
   /** El PDF firmado de `signed_documents` ya no tiene el `signedHash` registrado. */
   SIGNED_PDF_INTEGRITY_MISMATCH = 'SIGNED_PDF_INTEGRITY_MISMATCH',
   /** Error no clasificado. */

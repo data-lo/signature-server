@@ -100,8 +100,11 @@ export interface AuditXmlSigner {
 
 /** Todo lo que el XML de auditoría de un documento contiene. */
 export interface DocumentAuditXmlData {
-  /** ISO 8601 del momento en que se generó el archivo. */
-  generatedAt: string;
+  /**
+   * ISO 8601 del momento en que se generó el archivo. Sólo lo lleva la descarga: el registro de
+   * verificación lo omite para que la misma evidencia produzca siempre el mismo texto (y digest).
+   */
+  generatedAt?: string;
   document: {
     id: string;
     fileName: string;
