@@ -247,6 +247,22 @@ describe('Trabajos de sellado de documentos (e2e)', () => {
       ).rejects.toThrow(/CHK_document_sealing_jobs_phase/);
     });
 
+    /**
+     * Revierte migraciones desde la última hasta `name` incluida, sin suponer que sea la última:
+     * las que vengan después se revierten primero, como lo haría un rollback real.
+     */
+    async function undoMigrationsThrough(name: string): Promise<void> {
+      for (;;) {
+        const [last] = await dataSource.query(
+          `SELECT name FROM migrations ORDER BY id DESC LIMIT 1`,
+        );
+        await dataSource.undoLastMigration({ transaction: 'each' });
+        if (last.name === name) {
+          return;
+        }
+      }
+    }
+
     it('la migración se revierte y se vuelve a aplicar', async () => {
       const applied = await dataSource.query(
         `SELECT name FROM migrations WHERE name = 'CreateDocumentSealingJobs1784300000099'`,
