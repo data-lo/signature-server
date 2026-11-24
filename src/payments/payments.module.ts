@@ -1,4 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { PlanEntity } from 'src/billing/catalog/plan.entity';
 import { BillingModule } from 'src/billing/billing.module';
 import { StripePaymentService } from './stripe/stripe-payment.service';
 import { StripeWebhookService } from './stripe/stripe-webhook.service';
@@ -25,10 +27,10 @@ import { SharedModule } from 'src/common/shared.module';
 @Module({
   imports: [
     /**
-     * Sin `TypeOrmModule.forFeature`: ningún proveedor de este módulo inyecta repositorios. El
-     * último era `AccountSubscriptionEntity` (modelo de suscripción anterior a
-     * `billing_profiles`), eliminado junto con su tabla.
+     * `PlanEntity` sólo para leer `plans.descriptions` al responder el catálogo público (ver
+     * `GetPublicStripePlansUseCase`); este módulo nunca escribe en `plans`.
      */
+    TypeOrmModule.forFeature([PlanEntity]),
     // `forwardRef`: billing necesita el adaptador de Stripe de este módulo para abrir el
     // checkout, y este módulo necesita los handlers de billing en su router de webhooks.
     forwardRef(() => BillingModule),

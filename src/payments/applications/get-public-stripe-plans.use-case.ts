@@ -1,4 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
+import { PlanEntity } from 'src/billing/catalog/plan.entity';
 import { RedisService } from 'src/common/redis/redis.service';
 import { PaymentService } from '../interfaces/payment-service.interface';
 import { PaymentServiceResponse } from '../interfaces/payment-service-response.interface';
@@ -47,9 +50,35 @@ export class GetPublicStripePlansUseCase {
   constructor(
     private readonly paymentService: StripePaymentService,
     private readonly redisService: RedisService,
+    @InjectRepository(PlanEntity)
+    private readonly planRepository: Repository<PlanEntity>,
   ) {}
 
+  /**
+   * Devuelve el catálogo público, con las descripciones de cada plan.
+   *
+   * @returns Las tarjetas del catálogo, cada una con su `descriptions` (vacío si no tiene).
+   * @throws Lo que traduzca `StripePaymentService` cuando Stripe no responde y no hay caché.
+   *
+   * @example
+   * ```ts
+   * const plans = await useCase.execute();
+   * plans[0].descriptions; // ['Hasta 10 documentos', 'Firma electrónica']
+   * ```
+   */
   async execute(): Promise<PaymentServiceResponse[]> {
+    const catalog = await this.readCatalog();
+    return this.withDescriptions(catalog);
+  }
+
+  /**
+   * Lo que viene de Stripe, desde Redis si sigue vigente. Lo cacheado NO lleva las descripciones:
+   * son nuestras, se editan con `PATCH /platform/plans/:planType/descriptions` y deben verse en
+   * cuanto se guardan, no cuando caduque el TTL.
+   */
+  private async readCatalog(): Promise<
+    Omit<PaymentServiceResponse, 'descriptions'>[]
+  > {
     const cached = await this.readCache();
     if (cached) {
       return cached;
@@ -86,10 +115,66 @@ export class GetPublicStripePlansUseCase {
    * sigue con Stripe. Lo contrario convertiría una caída del caché en una caída del catálogo,
    * que es peor que la situación previa a tenerlo.
    */
-  private async readCache(): Promise<PaymentServiceResponse[] | null> {
+  /**
+   * Agrega a cada tarjeta las descripciones de su fila en `plans`, casadas por `planType`.
+   *
+   * Una tarjeta sin `planType`, o cuyo plan no existe localmente, recibe `[]`. Si la consulta
+   * falla, el catálogo se responde igual con listas vacías: las descripciones adornan la
+   * tarjeta, y perderlas es mejor que dejar la pantalla de planes sin nada que comprar.
+   *
+   * @param catalog - Tarjetas ya normalizadas desde Stripe o desde la caché.
+   * @returns Las mismas tarjetas, en el mismo orden, con `descriptions`.
+   * @throws Nunca lanza.
+   *
+   * @example
+   * ```ts
+   * await this.withDescriptions([{ planType: 'plus', ... }]);
+   * // [{ planType: 'plus', ..., descriptions: ['Hasta 10 documentos'] }]
+   * ```
+   */
+  private async withDescriptions(
+    catalog: Omit<PaymentServiceResponse, 'descriptions'>[],
+  ): Promise<PaymentServiceResponse[]> {
+    const planTypes = [
+      ...new Set(
+        catalog
+          .map((plan) => plan.planType)
+          .filter((planType): planType is string => Boolean(planType)),
+      ),
+    ];
+
+    const descriptionsByPlan = new Map<string, string[]>();
+    if (planTypes.length) {
+      try {
+        const plans = await this.planRepository.find({
+          where: { planType: In(planTypes) },
+          select: { planType: true, descriptions: true },
+        });
+        for (const plan of plans) {
+          descriptionsByPlan.set(plan.planType, plan.descriptions ?? []);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `No se pudieron leer las descripciones de los planes, se responde sin ellas: ${this.describe(error)}`,
+        );
+      }
+    }
+
+    return catalog.map((plan) => ({
+      ...plan,
+      descriptions:
+        (plan.planType && descriptionsByPlan.get(plan.planType)) || [],
+    }));
+  }
+
+  private async readCache(): Promise<
+    Omit<PaymentServiceResponse, 'descriptions'>[] | null
+  > {
     try {
       const raw = await this.redisService.get(PUBLIC_STRIPE_PLANS_CACHE_KEY);
-      return raw ? (JSON.parse(raw) as PaymentServiceResponse[]) : null;
+      return raw
+        ? (JSON.parse(raw) as Omit<PaymentServiceResponse, 'descriptions'>[])
+        : null;
     } catch (error) {
       this.logger.warn(
         `No se pudo leer el catálogo de planes desde Redis, se consulta a Stripe: ${this.describe(error)}`,
@@ -98,7 +183,9 @@ export class GetPublicStripePlansUseCase {
     }
   }
 
-  private async writeCache(plans: PaymentServiceResponse[]): Promise<void> {
+  private async writeCache(
+    plans: Omit<PaymentServiceResponse, 'descriptions'>[],
+  ): Promise<void> {
     try {
       await this.redisService.set(
         PUBLIC_STRIPE_PLANS_CACHE_KEY,
@@ -120,7 +207,9 @@ export class GetPublicStripePlansUseCase {
    * pedir el checkout. Se normaliza ANTES de cachear, así lo guardado es exactamente lo que se
    * responde y un cache hit no tiene que volver a mapear nada.
    */
-  private toResponse(plan: PaymentService): PaymentServiceResponse {
+  private toResponse(
+    plan: PaymentService,
+  ): Omit<PaymentServiceResponse, 'descriptions'> {
     return {
       priceId: plan.priceId,
       planType: plan.planType,
