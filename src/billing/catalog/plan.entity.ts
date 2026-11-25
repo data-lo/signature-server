@@ -13,6 +13,7 @@ import { CatalogItemEntity } from './catalog-item.entity';
 
 @Entity('plans')
 @Check('CHK_plans_documents_included', '"documents_included" > 0')
+@Check('CHK_plans_descriptions_array', `jsonb_typeof("descriptions") = 'array'`)
 export class PlanEntity {
   @PrimaryColumn({ name: 'plan_type', type: 'varchar', length: 64 })
   planType: string;
@@ -59,6 +60,14 @@ export class PlanEntity {
 
   @Column({ name: 'documents_included', type: 'integer' })
   documentsIncluded: number;
+
+  /**
+   * Beneficios del plan, en el orden en que se muestran en su tarjeta. Cero o más; nunca nulo
+   * (`DEFAULT '[]'`). Sólo lo escribe `UpdatePlanDescriptionsUseCase`: ni la sincronización con
+   * Stripe ni el aprovisionamiento lo tocan.
+   */
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  descriptions: string[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

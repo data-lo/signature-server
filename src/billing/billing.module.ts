@@ -14,6 +14,8 @@ import { CreditLotEntity } from './credits/credit-lot.entity';
 import { DocumentCreditConsumptionEntity } from './credits/document-credit-consumption.entity';
 import { CatalogSyncService } from './catalog/catalog-sync.service';
 import { BillingCatalogService } from './catalog/billing-catalog.service';
+import { InternalPlanDescriptionsController } from './catalog/internal-plan-descriptions.controller';
+import { UpdatePlanDescriptionsUseCase } from './catalog/update-plan-descriptions.use-case';
 import { CheckoutOrderService } from './checkout/checkout-order.service';
 import { CreateSubscriptionCheckoutUseCase } from './checkout/create-subscription-checkout.use-case';
 import { CreateDocumentCreditCheckoutUseCase } from './checkout/create-document-credit-checkout.use-case';
@@ -87,10 +89,14 @@ import { ReleaseExpiredCreditReservationsJob } from './credits/release-expired-c
      */
     BillingEntitlementsModule,
   ],
-  controllers: [InternalSubscriptionBillingController],
+  controllers: [
+    InternalSubscriptionBillingController,
+    InternalPlanDescriptionsController,
+  ],
   providers: [
     CatalogSyncService,
     BillingCatalogService,
+    UpdatePlanDescriptionsUseCase,
     StripeCustomerService,
     CheckoutOrderService,
     CreateSubscriptionCheckoutUseCase,
