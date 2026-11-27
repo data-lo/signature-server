@@ -8,6 +8,7 @@ import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verificat
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
 import { UpdateSigningCredentialStatusUseCase } from './update-signing-credential-status.use-case';
 import { StoreVerifiedIdentityImagesUseCase } from './store-verified-identity-images.use-case';
+import { DiditApiService } from '../didit/didit-api.service';
 
 /**
  * Traducción del vocabulario de Didit al del dominio.
@@ -95,6 +96,7 @@ export class ProcessDiditVerificationResultUseCase {
     private readonly userRepository: Repository<UserEntity>,
     private readonly updateSigningCredentialStatus: UpdateSigningCredentialStatusUseCase,
     private readonly storeVerifiedIdentityImages: StoreVerifiedIdentityImagesUseCase,
+    private readonly diditApiService: DiditApiService,
   ) {}
 
   async execute(payload: Record<string, unknown>): Promise<void> {
@@ -162,15 +164,20 @@ export class ProcessDiditVerificationResultUseCase {
 
     /**
      * Las imágenes de la INE se guardan ANTES de marcar nada como aprobado: una identidad no queda
-     * completada si faltan las imágenes que la acreditan. Si esto falla, lanza sin haber tocado el
-     * intento ni la credencial; la entrega queda en FAILED y el reintento de Didit vuelve a correr
-     * completo. Es idempotente: un intento ya guardado no se descarga otra vez.
+     * completada si faltan las imágenes que la acreditan. Las URLs que llegan en el webhook pueden
+     * haber caducado cuando lo procesamos; por eso la decisión se consulta de nuevo a Didit y ésa
+     * es la única fuente que se usa para descargarlas. Si la consulta o el guardado fallan, lanza
+     * sin haber tocado el intento ni la credencial; la entrega queda en FAILED y el reintento de
+     * Didit vuelve a correr completo. Es idempotente: un intento ya guardado no se descarga otra vez.
      */
     if (status === IDENTITY_VERIFICATION_STATUS_ENUM.APPROVED) {
+      const decisionWithFreshMediaUrls =
+        await this.diditApiService.getSessionDecision(sessionId);
+
       await this.storeVerifiedIdentityImages.execute({
         userId: attempt.userId,
         verificationId: attempt.id,
-        decision: this.asObject(payload.decision),
+        decision: decisionWithFreshMediaUrls,
       });
     }
 
