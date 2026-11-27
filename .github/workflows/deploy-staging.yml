@@ -5,16 +5,6 @@ on:
     branches:
       - development
 
-permissions:
-  contents: read
-
-concurrency:
-  group: deploy-staging
-  cancel-in-progress: false
-
-env:
-  IMAGE_NAME: dataloplatforms/signature-server
-
 jobs:
   test:
     name: Test and build application
@@ -35,9 +25,6 @@ jobs:
       - name: Run linter
         run: npm run lint
 
-      # - name: Run tests
-      #   run: npm test -- --runInBand --no-watchman
-
       - name: Build application
         run: npm run build
 
@@ -47,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: staging
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -60,7 +48,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and publish the image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -68,8 +56,8 @@ jobs:
           platforms: linux/amd64
           no-cache: false
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            dataloplatforms/signature-server:staging
+            dataloplatforms/signature-server:staging-${{ github.sha }}
 
       - name: Trigger Dokploy deployment
         env:
