@@ -43,6 +43,10 @@ import { GetDocumentFileUrlUseCase } from './applications/get-document-file-url.
 import { GetPublicDocumentUseCase } from './applications/get-public-document.use-case';
 import { GetPublicSealArtifactUseCase } from './applications/get-public-seal-artifact.use-case';
 import { GetPublicDocumentAuditXmlUseCase } from './applications/get-public-document-audit-xml.use-case';
+import { PublicDocumentVerificationController } from './public-verification/public-document-verification.controller';
+import { VerifyPublicDocumentUseCase } from './public-verification/verify-public-document.use-case';
+import { DocumentAuditXmlService } from './audit-xml/document-audit-xml.service';
+import { RecordVerificationRecordDigestUseCase } from './audit-xml/record-verification-record-digest.use-case';
 import { GetPublicAdvancedSignatureUseCase } from './applications/get-public-advanced-signature.use-case';
 import { CreateDocumentUseCase } from './applications/create-document.use-case';
 import { GetDocumentsUseCase } from './applications/get-documents.use-case';
@@ -73,6 +77,9 @@ import { PublicSigningController } from './public-signing.controller';
 import { GetPublicSigningInvitationUseCase } from './applications/get-public-signing-invitation.use-case';
 import { GuestSigningAccessEntity } from './entities/guest-signing-access.entity';
 import { DocumentIndexingJobEntity } from './entities/document-indexing-job.entity';
+import { DocumentSealingJobEntity } from './seal/entities/document-sealing-job.entity';
+import { RefreshSealedDocumentEvidenceService } from './services/refresh-sealed-document-evidence.service';
+import { ProcessPendingSealingJobsJob } from './seal/jobs/process-pending-sealing-jobs.job';
 import { GuestSigningAccessService } from './services/guest-signing-access.service';
 import { SigningInvitationModule } from 'src/signing-invitation/signing-invitation.module';
 
@@ -88,6 +95,8 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
     DocumentController,
     DocumentSignaturesController,
     PublicSigningController,
+    // Verificación pública por archivo (`POST /document/public/verify`), sin sesión.
+    PublicDocumentVerificationController,
     /**
      * API de integración para sistemas externos (`/integration/...`), autenticada con la API key
      * de la organización en vez de JWT. Reutiliza los casos de uso de este módulo.
@@ -97,6 +106,16 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
   ],
   providers: [
     DocumentService,
+    /**
+     * Fase `UPDATING_EVIDENCE_PDF` del trabajo de sellado: se registra al arrancar en
+     * `ProcessDocumentSealingJobUseCase` (de `SealModule`), que no puede importar este módulo.
+     */
+    RefreshSealedDocumentEvidenceService,
+    /**
+     * Worker de sellado (cron cada minuto, apagado por omisión con `SEALING_WORKER_ENABLED`). Vive
+     * aquí, junto a la fase del PDF, para que el procesador siempre tenga su implementación.
+     */
+    ProcessPendingSealingJobsJob,
     VerificationCodeService,
     SignatureQrService,
     /**
@@ -115,6 +134,9 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
     GetPublicDocumentUseCase,
     GetPublicSealArtifactUseCase,
     GetPublicDocumentAuditXmlUseCase,
+    VerifyPublicDocumentUseCase,
+    DocumentAuditXmlService,
+    RecordVerificationRecordDigestUseCase,
     GetPublicAdvancedSignatureUseCase,
     CreateDocumentUseCase,
     GetDocumentsUseCase,
@@ -183,6 +205,8 @@ import { BillingProfileEntity } from 'src/billing/profiles/billing-profile.entit
       GuestSigningAccessEntity,
       // Trabajos de indexación: estado técnico del envío al indexador, aparte de `DocumentEntity`.
       DocumentIndexingJobEntity,
+      // La vista pública lee el estado del trabajo de sellado; no lo procesa.
+      DocumentSealingJobEntity,
       IntegrationIdempotencyKeyEntity,
       // La consulta `ListUserIntegrationDocumentsUseCase` para validar la membresía del usuario
       // pedido dentro de la organización de la API key.

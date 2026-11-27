@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -9,13 +9,16 @@ import { UserService } from 'src/user/user.service';
 import { CollaboratorEntity } from '../entities/collaborator.entity';
 import { COLABORATOR_TYPE_ENUM } from '../enum/colaborator-type.enum';
 import { DOCUMENT_STATUS_ENUM } from '../enum/document-status.enum';
-import { DocumentEntity } from '../entities/document.entity';
-import { DocumentPublicViewResponse } from '../interfaces/responses/document-public-view-response';
+import {
+  DocumentPublicViewResponse,
+  PUBLIC_SEALING_STATUS_ENUM,
+} from '../interfaces/responses/document-public-view-response';
 import { toConservationRecord } from '../summary-document/conservation-record.util';
 import { toIsoStringOrNull } from '../utils/iso-date.util';
 import { SealDocumentUseCase } from '../seal/use-cases/seal-document.use-case';
-import { RetryPendingSealUseCase } from '../seal/use-cases/retry-pending-seal.use-case';
 import { SealEntity } from '../seal/entities/seal.entity';
+import { DocumentSealingJobEntity } from '../seal/entities/document-sealing-job.entity';
+import { SEALING_JOB_STATUS_ENUM } from '../seal/enums/sealing-job-status.enum';
 import { extractTsaCertificateInfo } from '../seal/utils/tsa-certificate.util';
 import { DocumentService } from '../document.service';
 
@@ -30,14 +33,13 @@ export class GetPublicDocumentUseCase {
   constructor(
     @InjectRepository(CollaboratorEntity)
     private readonly collaboratorRepository: Repository<CollaboratorEntity>,
+    @InjectRepository(DocumentSealingJobEntity)
+    private readonly sealingJobRepository: Repository<DocumentSealingJobEntity>,
     private readonly minioService: MinioService,
     private readonly userService: UserService,
     private readonly sealDocumentUseCase: SealDocumentUseCase,
     private readonly documentService: DocumentService,
-    private readonly retryPendingSeal: RetryPendingSealUseCase,
   ) {}
-
-  private readonly logger = new Logger(GetPublicDocumentUseCase.name);
 
   /**
    * Vista pública (sin autenticación) de un documento — ver historia "Visualización pública de
@@ -49,6 +51,22 @@ export class GetPublicDocumentUseCase {
    * firmado, ni se resuelve el bucket ni se llama a `minioService.getFile` (que es lo único que
    * genera la URL prefirmada), evitando exponer el archivo de un documento pendiente, rechazado,
    * cancelado o expirado.
+   *
+   * **Sólo lectura.** Abrir la vista no llama al SAT ni a Seal Service: el sellado lo ejecuta el
+   * worker de `document_sealing_jobs`. Aquí sólo se consulta el estado del trabajo y la constancia
+   * persistida. Lo único que puede escribir es la serie del certificado TSA, que se extrae de la
+   * evidencia ya guardada, sin red.
+   *
+   * @param documentId - Documento.
+   * @returns La vista pública.
+   *
+   * @throws {NotFoundException} Si el documento no existe.
+   *
+   * @example
+   * ```ts
+   * const view = await getPublicDocument.execute(documentId);
+   * view.data.sealingStatus; // 'PENDING'
+   * ```
    */
   async execute(documentId: string): Promise<DocumentPublicViewResponse> {
     const document = await this.documentService.findOne(documentId);
@@ -83,6 +101,7 @@ export class GetPublicDocumentUseCase {
           createdBy: null,
           // Un documento sin completar no espera constancia: todavía no hay nada que sellar.
           sealingPending: false,
+          sealingStatus: PUBLIC_SEALING_STATUS_ENUM.NOT_REQUIRED,
           conservationRecord: null,
           signers: signerCollaborators.map((collaborator) =>
             this.documentService.toPendingPublicSigner(collaborator),
@@ -103,23 +122,22 @@ export class GetPublicDocumentUseCase {
       BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS,
     );
 
-    /**
-     * Reintento perezoso del sellado pendiente: si el documento se firmó mientras el SAT estaba
-     * caído, esta visita es la oportunidad de completar la evidencia y sellarlo. Se hace ANTES de
-     * leer el sello para que la misma respuesta ya incluya la constancia recién emitida, en vez
-     * de mostrarla como pendiente una visita más.
-     *
-     * Best-effort y silencioso: si el SAT sigue sin responder, el documento se muestra igual con
-     * su marca de pendiente. Ninguna consulta pública puede fallar por esto.
-     */
-    await this.completePendingSealIfDue(document, signerCollaborators);
-
-    // Solo se sellan los documentos con firma AVANZADA (ver `sealAdvancedSignatures`) y el sellado
-    // es best-effort: un documento de firma simple, o uno cuyo sellado falló, se completa sin
-    // constancia. La vista pública tiene que poder mostrarse igual en ese caso.
+    // Un documento sin contrato de sellado (biométrico), o cuyo sellado sigue pendiente o falló, se
+    // muestra sin constancia. La vista pública tiene que poder mostrarse igual en ese caso.
     const seal = await this.sealDocumentUseCase
       .findByDocumentId(document.id)
       .catch(() => null);
+    const sealingJob = await this.sealingJobRepository
+      .findOne({
+        where: { documentId: document.id },
+        select: { id: true, status: true },
+      })
+      .catch(() => null);
+    const sealingStatus = resolvePublicSealingStatus(
+      sealingJob?.status ?? null,
+      Boolean(seal),
+      Boolean(document.sealingPendingAt),
+    );
 
     const creator = await this.userService
       .findOne(document.createdBy)
@@ -151,11 +169,11 @@ export class GetPublicDocumentUseCase {
         // documento no digan cosas distintas sobre quién lo creó.
         createdBy: creator?.email ?? null,
         /**
-         * `true` mientras el documento espera su constancia porque el SAT no respondió al firmar.
-         * La vista lo dice en vez de mostrar la sección vacía sin explicación: el documento está
-         * firmado y es válido, sólo le falta la constancia — y va a llegar.
+         * `true` mientras el documento espera su constancia. Se conserva por compatibilidad;
+         * `sealingStatus` distingue además los fallos que ya no se resuelven solos.
          */
         sealingPending: document.sealingPendingAt !== null,
+        sealingStatus,
         conservationRecord: conservationRecord
           ? {
               tsaCertificate: conservationRecord.tsaCertificate ?? null,
@@ -191,42 +209,15 @@ export class GetPublicDocumentUseCase {
    * funciona, la persiste (best-effort: si el guardado falla, igual se muestra lo recién extraído,
    * y la próxima consulta simplemente lo reintenta) para no reprocesar en cada visita futura. Si no
    * se puede extraer, devuelve `null` y el frontend no pinta el componente.
-   */
-  /**
-   * Completa la evidencia que faltaba y sella, si el documento estaba esperando.
    *
-   * Se traga cualquier error a propósito: esto es una mejora oportunista dentro de una consulta de
-   * lectura, y ni el SAT ni el proveedor de sellado pueden impedir que la vista pública se
-   * muestre. Si algo falla, el documento sigue marcado como pendiente y el próximo visitante lo
-   * reintenta.
+   * @param seal - Constancia del documento, o `null`.
+   * @returns Serie y fecha del certificado TSA, o `null`.
+   *
+   * @example
+   * ```ts
+   * const tsa = await this.resolveIntegrityTsaCertificate(seal);
+   * ```
    */
-  private async completePendingSealIfDue(
-    document: DocumentEntity,
-    signerCollaborators: CollaboratorEntity[],
-  ): Promise<void> {
-    if (!document.sealingPendingAt) {
-      return;
-    }
-
-    try {
-      const listo = await this.retryPendingSeal.execute(document);
-      if (!listo) {
-        return;
-      }
-
-      await this.documentService.sealAdvancedSignatures(
-        document,
-        signerCollaborators,
-      );
-    } catch (error) {
-      this.logger.warn(
-        `No se pudo completar el sellado pendiente del documento ${document.id}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
   private async resolveIntegrityTsaCertificate(
     seal: SealEntity | null,
   ): Promise<PublicIntegrityTsaCertificate | null> {
@@ -258,5 +249,53 @@ export class GetPublicDocumentUseCase {
       serialNumber: extracted.serialNumber,
       issuedAt: extracted.issuedAt.toISOString(),
     };
+  }
+}
+
+/**
+ * Estado público del sellado de un documento firmado, a partir de su trabajo y su constancia.
+ *
+ * - Con trabajo: `PENDING` (pendiente o reprogramado), `PROCESSING`, `COMPLETED`, `FAILED`
+ *   (`DEAD`) o `RECONCILIATION_REQUIRED`.
+ * - Sin trabajo (documentos cerrados antes de `document_sealing_jobs`, o biométricos):
+ *   `COMPLETED` si tiene constancia, `PENDING` si conserva la marca `sealing_pending_at`, y
+ *   `NOT_REQUIRED` en otro caso.
+ *
+ * No expone el código ni el mensaje del fallo: eso queda en el trabajo.
+ *
+ * @param jobStatus - Estado del trabajo, o `null` si no tiene.
+ * @param hasSeal - Si el documento tiene constancia en `document_seals`.
+ * @param pendingMark - Si conserva `sealing_pending_at`.
+ * @returns El estado público.
+ *
+ * @example
+ * ```ts
+ * resolvePublicSealingStatus(SEALING_JOB_STATUS_ENUM.RETRY_SCHEDULED, false, true); // 'PENDING'
+ * ```
+ */
+export function resolvePublicSealingStatus(
+  jobStatus: SEALING_JOB_STATUS_ENUM | null,
+  hasSeal: boolean,
+  pendingMark: boolean,
+): PUBLIC_SEALING_STATUS_ENUM {
+  switch (jobStatus) {
+    case SEALING_JOB_STATUS_ENUM.PENDING:
+    case SEALING_JOB_STATUS_ENUM.RETRY_SCHEDULED:
+      return PUBLIC_SEALING_STATUS_ENUM.PENDING;
+    case SEALING_JOB_STATUS_ENUM.PROCESSING:
+      return PUBLIC_SEALING_STATUS_ENUM.PROCESSING;
+    case SEALING_JOB_STATUS_ENUM.COMPLETED:
+      return PUBLIC_SEALING_STATUS_ENUM.COMPLETED;
+    case SEALING_JOB_STATUS_ENUM.DEAD:
+      return PUBLIC_SEALING_STATUS_ENUM.FAILED;
+    case SEALING_JOB_STATUS_ENUM.RECONCILIATION_REQUIRED:
+      return PUBLIC_SEALING_STATUS_ENUM.RECONCILIATION_REQUIRED;
+    default:
+      if (hasSeal) {
+        return PUBLIC_SEALING_STATUS_ENUM.COMPLETED;
+      }
+      return pendingMark
+        ? PUBLIC_SEALING_STATUS_ENUM.PENDING
+        : PUBLIC_SEALING_STATUS_ENUM.NOT_REQUIRED;
   }
 }

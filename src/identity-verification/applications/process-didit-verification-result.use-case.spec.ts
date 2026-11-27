@@ -13,6 +13,7 @@ import { IDENTITY_VERIFICATION_PROVIDER_ENUM } from '../enums/identity-verificat
 import { IDENTITY_VERIFICATION_STATUS_ENUM } from '../enums/identity-verification-status.enum';
 import { StoreVerifiedIdentityImagesUseCase } from './store-verified-identity-images.use-case';
 import { IdentityDocumentImagesProcessingException } from '../exceptions/identity-verification.exceptions';
+import { DiditApiService } from '../didit/didit-api.service';
 
 const SESSION_ID = 'ses_1';
 const USER_ID = 'user-1';
@@ -24,6 +25,7 @@ describe('ProcessDiditVerificationResultUseCase', () => {
   let userRepository: { update: jest.Mock; findOne: jest.Mock };
   let updateSigningCredentialStatus: { applyIfAllowed: jest.Mock };
   let storeVerifiedIdentityImages: { execute: jest.Mock };
+  let diditApiService: { getSessionDecision: jest.Mock };
 
   function givenAttempt(
     status = IDENTITY_VERIFICATION_STATUS_ENUM.IN_PROGRESS,
@@ -50,6 +52,16 @@ describe('ProcessDiditVerificationResultUseCase', () => {
     storeVerifiedIdentityImages = {
       execute: jest.fn().mockResolvedValue(undefined),
     };
+    diditApiService = {
+      getSessionDecision: jest.fn().mockResolvedValue({
+        id_verifications: [
+          {
+            front_image: 'https://media.didit.me/fresh-front.jpg',
+            back_image: 'https://media.didit.me/fresh-back.jpg',
+          },
+        ],
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -67,6 +79,7 @@ describe('ProcessDiditVerificationResultUseCase', () => {
           provide: StoreVerifiedIdentityImagesUseCase,
           useValue: storeVerifiedIdentityImages,
         },
+        { provide: DiditApiService, useValue: diditApiService },
       ],
     }).compile();
 
@@ -87,8 +100,18 @@ describe('ProcessDiditVerificationResultUseCase', () => {
       ],
     };
 
-    it('guarda las imágenes del intento aprobado antes de marcarlo como aprobado', async () => {
+    it('recupera URLs de media recién firmadas y guarda las imágenes antes de aprobar', async () => {
       givenAttempt();
+
+      const freshDecision = {
+        id_verifications: [
+          {
+            front_image: 'https://media.didit.me/fresh-front.jpg',
+            back_image: 'https://media.didit.me/fresh-back.jpg',
+          },
+        ],
+      };
+      diditApiService.getSessionDecision.mockResolvedValue(freshDecision);
 
       await useCase.execute({
         session_id: SESSION_ID,
@@ -99,8 +122,9 @@ describe('ProcessDiditVerificationResultUseCase', () => {
       expect(storeVerifiedIdentityImages.execute).toHaveBeenCalledWith({
         userId: USER_ID,
         verificationId: ATTEMPT_ID,
-        decision,
+        decision: freshDecision,
       });
+      expect(diditApiService.getSessionDecision).toHaveBeenCalledWith(SESSION_ID);
       expect(
         storeVerifiedIdentityImages.execute.mock.invocationCallOrder[0],
       ).toBeLessThan(
@@ -145,12 +169,13 @@ describe('ProcessDiditVerificationResultUseCase', () => {
     });
 
     it.each(['Declined', 'In Review', 'Expired', 'Abandoned'])(
-      'no descarga imágenes con un resultado %s',
+      'no recupera ni descarga imágenes con un resultado %s',
       async (status) => {
         givenAttempt();
 
         await useCase.execute({ session_id: SESSION_ID, status });
 
+        expect(diditApiService.getSessionDecision).not.toHaveBeenCalled();
         expect(storeVerifiedIdentityImages.execute).not.toHaveBeenCalled();
       },
     );

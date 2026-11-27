@@ -13,14 +13,14 @@ export class IntegrationWebhookEndpointData {
   })
   id: string;
 
-  @ApiProperty({ example: 'https://erp.cliente.com/webhooks/firmalo' })
+  @ApiProperty({ example: 'https://erp.cliente.example/webhooks/firmalo' })
   url: string;
 
   @ApiProperty({
     enum: WEBHOOK_ENDPOINT_STATUS_ENUM,
     example: WEBHOOK_ENDPOINT_STATUS_ENUM.ACTIVE,
     description:
-      '`ACTIVE` registra entregas para los eventos suscritos. `DISABLED` no registra entregas nuevas; las ya registradas se siguen enviando.',
+      '`ACTIVE`: recibe los eventos suscritos. `DISABLED`: no genera entregas nuevas; las pendientes se siguen enviando.',
   })
   status: WEBHOOK_ENDPOINT_STATUS_ENUM;
 
@@ -33,8 +33,7 @@ export class IntegrationWebhookEndpointData {
 
   @ApiProperty({
     example: 1,
-    description:
-      'Versión del secreto activo. Sube en 1 con cada rotación; el secreto nunca se vuelve a mostrar.',
+    description: 'Versión del secreto activo. Sube en 1 cada vez que lo rotas.',
   })
   secretVersion: number;
 
@@ -49,7 +48,7 @@ export class IntegrationWebhookEndpointData {
     format: 'date-time',
     nullable: true,
     example: null,
-    description: 'Cuándo se desactivó; `null` mientras está `ACTIVE`.',
+    description: 'Cuándo se desactivó; `null` si está `ACTIVE`.',
   })
   disabledAt: string | null;
 }
@@ -59,7 +58,7 @@ export class IntegrationWebhookEndpointWithSecretData extends IntegrationWebhook
   @ApiProperty({
     example: 'whsec_ZXhhbXBsZS1ub3QtYS1yZWFsLXNlY3JldC0xMjM0NTY3ODk',
     description:
-      'Secreto HMAC completo (`whsec_` incluido). **Sólo se entrega en esta respuesta**: guárdalo en el gestor de secretos de tu backend. Si se pierde, rótalo.',
+      'Secreto para verificar las firmas, con su prefijo `whsec_`. Sólo aparece en esta respuesta: guárdalo en el gestor de secretos de tu backend. Si lo pierdes, rótalo.',
   })
   secret: string;
 }

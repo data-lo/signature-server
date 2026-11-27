@@ -30,12 +30,16 @@ import {
 const IDEMPOTENT_REPLAYED_RESPONSE_HEADER = {
   'Idempotent-Replayed': {
     description:
-      '`false` si se creó el documento; `true` si es la respuesta de una petición anterior con el mismo `Idempotency-Key`',
+      '`true` si la respuesta es la de una petición anterior con la misma `Idempotency-Key`; `false` si se acaba de crear el documento.',
     schema: { type: 'boolean' as const, example: false },
   },
 };
 
-/** Ejemplo de la respuesta exitosa del alta. */
+/**
+ * Respuesta exitosa del alta de `EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD`: tres participantes (dos
+ * firmantes y un testigo) y, en `participants`, sólo los firmantes. Marta espera a Luis porque el
+ * flujo es secuencial.
+ */
 const CREATED_DOCUMENT_EXAMPLE = {
   success: true,
   message: 'Documento y flujo de firmas creados correctamente',
@@ -46,7 +50,7 @@ const CREATED_DOCUMENT_EXAMPLE = {
     fileName: 'contrato.pdf',
     createdAt: '2026-10-26T12:00:00.000Z',
     creator: { email: 'ana.lopez@cliente.example' },
-    participantsCount: 2,
+    participantsCount: 3,
     publicUrl:
       'https://app.firmalo.com/public/documents/2be3b9d7-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
     participants: [
@@ -57,13 +61,20 @@ const CREATED_DOCUMENT_EXAMPLE = {
         order: 1,
         taxId: null,
       },
+      {
+        email: 'marta.gomez@correo.example',
+        status: 'WAITING_FOR_PREVIOUS_SIGNER',
+        signatureType: 'SIMPLE',
+        order: 2,
+        taxId: null,
+      },
     ],
   },
 };
 
 /**
- * Bloque Markdown con un payload de ejemplo. Los ejemplos van también en la descripción porque
- * Swagger UI no ofrece el selector de `examples` en un cuerpo `multipart/form-data`.
+ * Bloque Markdown con un payload de ejemplo. Va en la descripción porque Swagger UI no muestra el
+ * selector de `examples` en un cuerpo `multipart/form-data`.
  *
  * @param payload - Payload de ejemplo.
  * @returns El payload como bloque de código JSON.
@@ -90,57 +101,19 @@ function payloadExampleBlock(payload: unknown): string {
 export function ApiCreateIntegrationDocument() {
   return applyDecorators(
     ApiOperation({
-      summary: 'Crear un documento PDF con su flujo de firmas',
+      summary: 'Crear un documento para firma',
       description: [
-        'Es `multipart/form-data` con dos campos: `file` (el PDF, binario) y `payload` (texto con un JSON con `creator`, `document` y `participants`; su estructura es `IntegrationDocumentPayloadDto`).',
-        'La organización sale de la API key. El creador se identifica por su correo: si es miembro de la organización se usa su cuenta; si existe sin membresía, se le crea una con el rol `INTEGRATION_DOCUMENT_CREATOR`; si no existe, se crea como usuario provisional (sin contraseña). Sus datos nunca se sobrescriben.',
-        'Cada documento creado consume un crédito de la organización. Los participantes se invitan por correo.',
+        'Crea un documento a partir de un PDF, invita por correo a sus participantes y devuelve el `id` para consultar su estado. Cada documento consume un crédito de la organización.',
+        'Envía `multipart/form-data` con dos campos: el PDF en `file` y los datos del documento en `payload`, como texto JSON con `creator`, `document` y `participants`.',
         [
-          '**Orden de firma.** `document.isSequential` decide si `participants[].order` es obligatorio:',
-          '',
-          '| `document.isSequential` | `SIGNER` | `WITNESS` |',
-          '| --- | --- | --- |',
-          '| `true` o se omite | `order` obligatorio: firman uno a la vez | No requiere `order` ni participa en él |',
-          '| `false` | `order` no es obligatorio: firman en cualquier momento | No requiere `order` ni participa en él |',
-          '',
-          'En un documento secuencial, `order` es un entero que inicia en `1` y debe ser único y consecutivo entre firmantes (`1`, `2`, `3`…). Es este valor, no la posición en `participants`, lo que define el orden. Si no se cumple, la respuesta es `422` con `INVALID_SIGNING_ORDER` o `DUPLICATE_SIGNING_ORDER`.',
+          '- **Creador.** Se identifica por `creator.email`. Si no es miembro de la organización, se le agrega; si no tiene cuenta, se le crea una provisional. Nunca se cambian los datos de un usuario existente.',
+          '- **Orden de firma.** Con `document.isSequential` en `true` (o sin enviarlo), cada `SIGNER` lleva `order` y firman uno a la vez. Con `false`, firman en cualquier orden y `order` no hace falta.',
+          '- **Firma avanzada.** Con `document.signatureType: ADVANCED`, cada firmante firma con su e.firma. Envía su RFC en `taxId` para exigir que el certificado sea de ese RFC; sin `taxId`, se compara su nombre con el del certificado.',
+          '- **Firma biométrica.** `BIOMETRIC` requiere que el plan la incluya y un crédito biométrico por firmante.',
         ].join('\n'),
-        [
-          '**RFC del firmante (`participants[].taxId`).** Sólo aplica a un `SIGNER` de un documento con `document.signatureType: ADVANCED` y es opcional:',
-          '',
-          '- Formato: RFC mexicano de 13 caracteres (persona física) o 12 (persona moral): 3 o 4 letras, fecha `AAMMDD` y homoclave de 3, p. ej. `MAGL800101AB1`. Se recortan los espacios y se pasa a mayúsculas.',
-          '- Si viene, el titular del certificado de la e.firma con que firme tiene que tener exactamente ese RFC; si no viene, se compara el nombre del participante con el del certificado.',
-          '- En un `WITNESS` o en un documento `SIMPLE` o `BIOMETRIC` se rechaza con `422 PARTICIPANT_TAX_ID_NOT_ALLOWED`; con un formato inválido, `422 INVALID_PARTICIPANT_TAX_ID`.',
-          '- El campo anterior, `rfc`, ya no forma parte del contrato: enviarlo responde `422 UNSUPPORTED_PARTICIPANT_FIELD`.',
-        ].join('\n'),
-        '**Ejemplo de `payload`: flujo secuencial** (dos firmantes y un testigo):',
+        '**Ejemplo de `payload`** (flujo secuencial con dos firmantes y un testigo):',
         payloadExampleBlock(EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD),
-        '**Ejemplo de `payload`: flujo no secuencial** (sin `order`):',
-        payloadExampleBlock(
-          EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
-        ),
-        '**Ejemplo de `payload`: firma avanzada** (el primer firmante con `taxId`):',
-        payloadExampleBlock(EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD),
-        'Ejemplo con curl:',
-        [
-          '```bash',
-          'curl -X POST https://<host>/api/v1/integration/documents \\',
-          '  -H "X-API-Key: $FIRMALO_API_KEY" \\',
-          `  -H "Idempotency-Key: ${EXAMPLE_IDEMPOTENCY_KEY}" \\`,
-          '  -F "file=@contrato.pdf;type=application/pdf" \\',
-          '  -F \'payload={"creator":{"email":"ana.lopez@cliente.example","firstName":"Ana","lastName":"López"},"document":{"signatureType":"SIMPLE","isSequential":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis.martinez@correo.example","order":1,"signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.8,"widthRatio":0.25,"heightRatio":0.08}]}]}\'',
-          '```',
-        ].join('\n'),
-        'Ejemplo con curl, firma avanzada con el RFC del firmante:',
-        [
-          '```bash',
-          'curl -X POST https://<host>/api/v1/integration/documents \\',
-          '  -H "X-API-Key: $FIRMALO_API_KEY" \\',
-          '  -H "Idempotency-Key: erp-contrato-2026-000185" \\',
-          '  -F "file=@contrato.pdf;type=application/pdf" \\',
-          '  -F \'payload={"creator":{"email":"ana.lopez@cliente.example","firstName":"Ana","lastName":"López"},"document":{"signatureType":"ADVANCED","isSequential":true},"participants":[{"role":"SIGNER","firstName":"Luis","lastName":"Martínez","email":"luis.martinez@correo.example","order":1,"taxId":"MAGL800101AB1","signaturePositions":[{"page":1,"xRatio":0.1,"yRatio":0.8,"widthRatio":0.25,"heightRatio":0.08}]}]}\'',
-          '```',
-        ].join('\n'),
+        'Para un flujo sin orden, envía `isSequential: false` y quita `order`. Para firma avanzada, cambia `signatureType` a `ADVANCED` y agrega `taxId` al firmante que corresponda.',
       ].join('\n\n'),
     }),
     ApiConsumes('multipart/form-data'),
@@ -149,17 +122,17 @@ export function ApiCreateIntegrationDocument() {
       type: CreateIntegrationDocumentDto,
       examples: {
         sequential: {
-          summary: 'Flujo secuencial: dos firmantes y un testigo',
+          summary: 'Secuencial: dos firmantes y un testigo',
           value: { payload: EXAMPLE_INTEGRATION_DOCUMENT_PAYLOAD },
         },
         nonSequential: {
-          summary: 'Flujo no secuencial: sin `order`',
+          summary: 'Sin orden de firma',
           value: {
             payload: EXAMPLE_INTEGRATION_NON_SEQUENTIAL_DOCUMENT_PAYLOAD,
           },
         },
         advanced: {
-          summary: 'Firma avanzada: RFC del firmante en `taxId`',
+          summary: 'Firma avanzada con el RFC del firmante',
           value: { payload: EXAMPLE_INTEGRATION_ADVANCED_DOCUMENT_PAYLOAD },
         },
       },
@@ -169,7 +142,7 @@ export function ApiCreateIntegrationDocument() {
       required: true,
       schema: { type: 'string', example: EXAMPLE_IDEMPOTENCY_KEY },
       description:
-        'Valor único elegido por ti para este documento (1 a 255 caracteres ASCII visibles), por API key, durante 24 horas. Repetir la petición con la misma clave y el mismo contenido devuelve el documento original sin subir, crear, cobrar ni notificar nada.',
+        'Usa una clave nueva por documento, como el folio de tu sistema (1 a 255 caracteres ASCII visibles). Repetir la misma clave con el mismo contenido en las siguientes 24 horas devuelve el documento original sin crear ni cobrar otro.',
     }),
     ApiIntegrationCommonResponses({
       badRequestExamples: {
@@ -184,10 +157,20 @@ export function ApiCreateIntegrationDocument() {
           'La API de integración todavía no admite documentos con aprobación previa (requiresApproval: true)',
         ),
       },
+      forbiddenNote:
+        '`FORBIDDEN`: el plan no incluye firma biométrica (`signatureType: BIOMETRIC`).',
+      forbiddenExamples: {
+        biometricNotIncluded: integrationErrorExample(
+          'Plan sin firma biométrica',
+          'FORBIDDEN',
+          'Tu plan actual no incluye esta funcionalidad.',
+        ),
+      },
     }),
     ApiResponse({
       status: 201,
-      description: 'Documento creado, con su URL pública de consulta',
+      description:
+        'Documento creado. Guarda `data.id` para consultarlo; `publicUrl` es la página pública de consulta.',
       type: IntegrationCreatedDocumentResponse,
       headers: IDEMPOTENT_REPLAYED_RESPONSE_HEADER,
       example: CREATED_DOCUMENT_EXAMPLE,
@@ -195,7 +178,7 @@ export function ApiCreateIntegrationDocument() {
     ApiResponse({
       status: 200,
       description:
-        'Repetición de una petición anterior con el mismo `Idempotency-Key`: el documento original (`Idempotent-Replayed: true`)',
+        'Ya existía un documento con esta `Idempotency-Key` y el mismo contenido: se devuelve el original, con `Idempotent-Replayed: true`.',
       type: IntegrationCreatedDocumentResponse,
       headers: IDEMPOTENT_REPLAYED_RESPONSE_HEADER,
       example: {
@@ -206,20 +189,26 @@ export function ApiCreateIntegrationDocument() {
     ApiResponse({
       status: 402,
       description:
-        '`INSUFFICIENT_DOCUMENT_CREDITS`: la organización no tiene créditos de documento disponibles. No se crea nada y la `Idempotency-Key` queda libre para reintentar.',
+        '`INSUFFICIENT_DOCUMENT_CREDITS`: la organización no tiene créditos de documento. `INSUFFICIENT_BIOMETRIC_CREDITS`: faltan créditos biométricos para todos los firmantes; `details` dice cuántos se necesitan (`required`) y cuántos hay (`available`). No se crea nada: recarga saldo y reintenta con la misma `Idempotency-Key`.',
       type: IntegrationErrorResponseDto,
       examples: {
         noCredits: integrationErrorExample(
-          'Sin créditos',
+          'Sin créditos de documento',
           'INSUFFICIENT_DOCUMENT_CREDITS',
           'No tienes documentos disponibles. Compra más o espera a tu próximo periodo.',
+        ),
+        noBiometricCredits: integrationErrorExample(
+          'Sin créditos biométricos suficientes',
+          'INSUFFICIENT_BIOMETRIC_CREDITS',
+          'Saldo insuficiente para firmas biométricas.',
+          { required: 2, available: 1, biometricSigners: 2 },
         ),
       },
     }),
     ApiResponse({
       status: 409,
       description:
-        '`INTEGRATION_IDEMPOTENCY_KEY_MISMATCH` (la clave ya se usó con otro archivo o datos) o `INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS` (otra petición con la misma clave sigue en curso).',
+        '`INTEGRATION_IDEMPOTENCY_KEY_MISMATCH`: la clave ya se usó con otro PDF u otro `payload`; usa una clave nueva. `INTEGRATION_IDEMPOTENCY_KEY_IN_PROGRESS`: otra petición con la misma clave sigue en curso; espera unos segundos y repite.',
       type: IntegrationErrorResponseDto,
       examples: {
         mismatch: integrationErrorExample(
@@ -237,14 +226,15 @@ export function ApiCreateIntegrationDocument() {
     ApiResponse({
       status: 422,
       description: [
-        'Validación del payload o del archivo, con `error.details.field` apuntando al campo (p. ej. `participants[2].email`). Se valida antes de subir el archivo, aprovisionar al creador o reservar la `Idempotency-Key`:',
-        '`INVALID_PAYLOAD`, `INVALID_CREATOR`, `INVALID_DOCUMENT_OPTIONS`, `INVALID_DOCUMENT_FILE` (no es un PDF legible o pesa de más);',
-        '`PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED` (50 por omisión), `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_NAME`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL` (sin espacios y en minúsculas, aunque cambie el rol);',
-        '`SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `MAX_SIGNATURE_POSITIONS_EXCEEDED`, `INVALID_SIGNING_ORDER` / `DUPLICATE_SIGNING_ORDER` (con `isSequential`, `order` único y consecutivo desde 1 entre firmantes);',
-        '`INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`;',
-        '`INVALID_PARTICIPANT_TAX_ID` (`taxId` no es un RFC de 12 o 13 caracteres), `PARTICIPANT_TAX_ID_NOT_ALLOWED` (`taxId` fuera de un `SIGNER` de un documento `ADVANCED`), `UNSUPPORTED_PARTICIPANT_FIELD` (un campo retirado del contrato, como `rfc`; `details.replacedBy` dice cuál usar);',
-        'y `INTEGRATION_CREATOR_UNAVAILABLE` / `INTEGRATION_CREATOR_MEMBERSHIP_REVOKED` para el creador.',
-      ].join(' '),
+        'El PDF o el `payload` no son válidos. `error.details.field` señala el campo que debes corregir (por ejemplo, `participants[2].email`). Ninguno de estos errores consume la `Idempotency-Key`.',
+        '',
+        '- Archivo y estructura: `INVALID_DOCUMENT_FILE` (no es un PDF legible o pesa más de 20 MB), `INVALID_PAYLOAD`, `INVALID_CREATOR`, `INVALID_DOCUMENT_OPTIONS`.',
+        '- Participantes: `PARTICIPANTS_REQUIRED`, `SIGNER_REQUIRED`, `MAX_PARTICIPANTS_EXCEEDED` (50 por omisión), `INVALID_PARTICIPANT_ROLE`, `INVALID_PARTICIPANT_NAME`, `INVALID_PARTICIPANT_EMAIL`, `DUPLICATE_PARTICIPANT_EMAIL`.',
+        '- Orden: `INVALID_SIGNING_ORDER`, `DUPLICATE_SIGNING_ORDER`.',
+        '- Posiciones de firma: `SIGNER_SIGNATURE_POSITION_REQUIRED`, `WITNESS_SIGNATURE_POSITION_NOT_ALLOWED`, `MAX_SIGNATURE_POSITIONS_EXCEEDED`, `INVALID_SIGNATURE_POSITION`, `SIGNATURE_POSITION_PAGE_OUT_OF_RANGE`, `SIGNATURE_POSITION_OVERLAP`.',
+        '- RFC: `INVALID_PARTICIPANT_TAX_ID`, `PARTICIPANT_TAX_ID_NOT_ALLOWED`, `UNSUPPORTED_PARTICIPANT_FIELD` (envías `rfc`; `details.replacedBy` indica el campo nuevo).',
+        '- Creador: `INTEGRATION_CREATOR_UNAVAILABLE`, `INTEGRATION_CREATOR_MEMBERSHIP_REVOKED`.',
+      ].join('\n'),
       type: IntegrationErrorResponseDto,
       examples: {
         duplicateParticipant: integrationErrorExample(

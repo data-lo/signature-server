@@ -55,6 +55,23 @@ export class DocumentEntity {
   @Column({ name: 'signed_at', nullable: true })
   signedAt: Date;
 
+  /**
+   * SHA-256 (hex, 64 caracteres) del PDF final de `finalized_documents`: el firmado CON la hoja de
+   * firmas y evidencia. Es lo que la consulta pública `/verify` busca al recibir un PDF.
+   *
+   * No es `signedHash` (el PDF antes de la hoja). Se escribe cada vez que se publica el PDF final:
+   * al cerrar el documento (hoja sin constancia) y al terminar el sellado (hoja con constancia), así
+   * que siempre corresponde al objeto almacenado. `null` en documentos sin firmar y en los firmados
+   * antes de existir la columna.
+   */
+  @Column({
+    name: 'final_document_digest',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  finalDocumentDigest: string | null;
+
   @Column({ name: 'cancelled_at', nullable: true })
   cancelledAt: Date;
 

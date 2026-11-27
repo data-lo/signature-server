@@ -14,10 +14,10 @@ import { WEBHOOK_URL_MAX_LENGTH } from '../services/webhook-endpoint-url-policy.
 /** Cuerpo de `PUT /integration/webhooks/endpoint`. */
 export class UpsertWebhookEndpointDto {
   @ApiProperty({
-    example: 'https://erp.cliente.com/webhooks/firmalo',
+    example: 'https://erp.cliente.example/webhooks/firmalo',
     maxLength: WEBHOOK_URL_MAX_LENGTH,
     description:
-      'URL que recibe los `POST`. Sólo `https://` en el puerto 443, sin usuario ni contraseña, a un host público: se rechazan IPs privadas, loopback, link-local y metadatos de nube.',
+      'URL de tu sistema que recibe los eventos. Usa `https://` en el puerto 443, sin usuario ni contraseña, y un host público: no se aceptan IPs privadas, `localhost` ni direcciones internas de nube.',
   })
   @IsString()
   @MaxLength(WEBHOOK_URL_MAX_LENGTH)
@@ -29,7 +29,7 @@ export class UpsertWebhookEndpointDto {
     minItems: 1,
     uniqueItems: true,
     example: Object.values(OUTBOUND_WEBHOOK_EVENT_TYPE_ENUM),
-    description: 'Eventos que se notifican; al menos uno, sin repetir.',
+    description: 'Eventos que quieres recibir: al menos uno, sin repetir.',
   })
   @IsArray()
   @ArrayNotEmpty()

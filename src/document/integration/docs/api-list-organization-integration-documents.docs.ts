@@ -66,38 +66,41 @@ export function ApiListOrganizationIntegrationDocuments() {
   return applyDecorators(
     ApiOperation({
       summary: 'Listar los documentos de la organización',
-      description:
-        'Devuelve una página (de 1 a 100, 25 por omisión) de documentos de la organización de la API key. Con `creatorEmail`, devuelve sólo los documentos creados por ese miembro. Filtrable por estatus y fechas. No incluye la URL del archivo ni datos de colaboradores.',
+      description: [
+        'Devuelve una página con el estado de los documentos de tu organización; por omisión, los más recientes primero. Filtra por `statuses` y por fechas de creación o de firma; con `creatorEmail`, sólo los que creó ese miembro.',
+        'Cada documento trae su `id`, nombre de archivo, estado, tipo de firma y fechas; no incluye el PDF ni los participantes.',
+        '**Permiso:** `DOCUMENT.READ` con alcance `ORGANIZATION`. Con alcance `OWN` sólo puedes pedir tus propios documentos, enviando tu correo en `creatorEmail`.',
+      ].join('\n\n'),
     }),
     ApiIntegrationCommonResponses({
       forbiddenNote:
-        'También puede devolver `INTEGRATION_SCOPE_DENIED` si la llave no tiene acceso a los documentos solicitados.',
+        '`INTEGRATION_SCOPE_DENIED`: la llave tiene alcance `OWN` y `creatorEmail` no es el de quien la emitió.',
       forbiddenExamples: { scopeDenied: SCOPE_DENIED_EXAMPLE },
     }),
     ApiResponse({
       status: 200,
-      description: 'Página de documentos',
+      description: 'Página de documentos y datos de paginación.',
       type: IntegrationDocumentsPageResponse,
       example: DOCUMENTS_PAGE_EXAMPLE,
     }),
     ApiResponse({
       status: 404,
       description:
-        '`INTEGRATION_USER_NOT_FOUND`: `creatorEmail` no es de un miembro activo de la organización',
+        '`INTEGRATION_USER_NOT_FOUND`: `creatorEmail` no es de un miembro activo de la organización. Revisa el correo.',
       type: IntegrationErrorResponseDto,
       examples: { userNotFound: USER_NOT_FOUND_EXAMPLE },
     }),
     ApiResponse({
       status: 409,
       description:
-        '`INTEGRATION_AMBIGUOUS_USER`: `creatorEmail` corresponde a más de un miembro de la organización',
+        '`INTEGRATION_AMBIGUOUS_USER`: `creatorEmail` corresponde a más de un miembro de la organización. Pide a un administrador que corrija los correos duplicados.',
       type: IntegrationErrorResponseDto,
       examples: { ambiguousUser: AMBIGUOUS_USER_EXAMPLE },
     }),
     ApiResponse({
       status: 422,
       description:
-        '`INVALID_REQUEST`: algún filtro es inválido (`page`, `limit` mayor que 100, estatus o fechas).',
+        '`INVALID_REQUEST`: algún parámetro no es válido, por ejemplo `limit` mayor que 100, un estado que no existe o una fecha que no es ISO 8601. `details.errors` lista cada problema.',
       type: IntegrationErrorResponseDto,
       examples: { invalidRequest: INVALID_REQUEST_EXAMPLE },
     }),

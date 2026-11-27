@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { NotFoundException } from '@nestjs/common';
 import { CloseBiometricReservationsUseCase } from 'src/billing/credits/close-biometric-reservations.use-case';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -23,7 +24,8 @@ import { VerificationCodeService } from './verification-code.service';
 import { DocumentTransactionService } from './document-transaction.service';
 import { EfirmaService } from 'src/efirma/efirma.service';
 import { SealDocumentUseCase } from './seal/use-cases/seal-document.use-case';
-import { SendCompletedSimpleSignatureToSealUseCase } from './seal/use-cases/send-completed-simple-signature-to-seal.use-case';
+import { SealingRequestSnapshotService } from './seal/services/sealing-request-snapshot.service';
+import { RegisterDocumentSealingJobUseCase } from './seal/use-cases/register-document-sealing-job.use-case';
 import {} from './summary-document/signature-legal-text';
 import { SummaryDocumentService } from './summary-document/summary-document.service';
 import { AdvancedSummaryDocumentService } from './summary-document/advanced-summary-document.service';
@@ -63,7 +65,6 @@ describe('DocumentService', () => {
   let documentTransactionService: Record<string, jest.Mock>;
   let efirmaService: Record<string, jest.Mock>;
   let sealDocumentUseCase: Record<string, jest.Mock>;
-  let sendCompletedSimpleSignatureToSeal: Record<string, jest.Mock>;
   let summaryDocumentService: Record<string, jest.Mock>;
   let advancedSummaryDocumentService: Record<string, jest.Mock>;
   let signatureQrService: Record<string, jest.Mock>;
@@ -205,10 +206,6 @@ describe('DocumentService', () => {
       create: jest.fn().mockResolvedValue({ id: 'seal-1' }),
       findByDocumentId: jest.fn().mockResolvedValue(null),
     };
-    // Devuelve `false` —"este documento no es asunto suyo"— salvo en las pruebas que lo miran.
-    sendCompletedSimpleSignatureToSeal = {
-      execute: jest.fn().mockResolvedValue(false),
-    };
     summaryDocumentService = {
       generateSummaryPdf: jest
         .fn()
@@ -260,8 +257,15 @@ describe('DocumentService', () => {
         { provide: EfirmaService, useValue: efirmaService },
         { provide: SealDocumentUseCase, useValue: sealDocumentUseCase },
         {
-          provide: SendCompletedSimpleSignatureToSealUseCase,
-          useValue: sendCompletedSimpleSignatureToSeal,
+          provide: SealingRequestSnapshotService,
+          useValue: {
+            freezeSimpleSignatureRequest: jest.fn(),
+            discard: jest.fn(),
+          },
+        },
+        {
+          provide: RegisterDocumentSealingJobUseCase,
+          useValue: { execute: jest.fn() },
         },
         {
           provide: SummaryDocumentService,
@@ -515,6 +519,158 @@ describe('DocumentService', () => {
         'object-key-1',
         BUCKET_TYPES_ENUM.PARTIALLY_SIGNED_DOCUMENTS,
       );
+    });
+  });
+  describe('huella del PDF final (final_document_digest)', () => {
+    const FINAL_PDF = Buffer.from('pdf-con-hoja-anexada');
+    const FINAL_DIGEST = createHash('sha256').update(FINAL_PDF).digest('hex');
+
+    function signedDocumentEntity() {
+      return {
+        id: 'doc-1',
+        objectKey: 'doc-1.pdf',
+        fileName: 'contrato.pdf',
+        createdBy: 'creator-1',
+        totalPages: 3,
+        status: DOCUMENT_STATUS_ENUM.PENDING_SIGNATURE,
+        sealingPendingAt: null,
+      } as unknown as DocumentEntity;
+    }
+
+    function signer(signatureType: SIGNATURE_TYPE_ENUM) {
+      return {
+        id: `col-${signatureType}`,
+        colaboratorType: 'SIGNER',
+        signatureType,
+        status: COLLABORATOR_STATUS_ENUM.SIGNED,
+        advancedSignature: null,
+      } as unknown as CollaboratorEntity;
+    }
+
+    /** Transacción simulada que registra lo que se guardó con cada repositorio. */
+    function mockCloseTransaction() {
+      const saved: { entity: unknown; value: any }[] = [];
+      const manager = {
+        getRepository: (entity: unknown) => ({
+          save: jest.fn(async (value: any) => {
+            // Copia: la prueba mira el documento TAL COMO se guardó.
+            saved.push({ entity, value: { ...value } });
+            return value;
+          }),
+        }),
+      };
+      (documentRepository as any).manager = {
+        transaction: jest.fn(async (work: (m: unknown) => unknown) =>
+          work(manager),
+        ),
+      };
+      return saved;
+    }
+
+    beforeEach(() => {
+      jest
+        .spyOn(service, 'stampSignaturesOnto')
+        .mockResolvedValue(Buffer.from('pdf-firmado'));
+      jest.spyOn(service, 'sendCompletionEmails').mockResolvedValue(undefined);
+      jest
+        .spyOn(service as any, 'freezeSimpleSealingRequest')
+        .mockResolvedValue({ frozenRequest: null, blocker: null });
+      (service as any).registerSealingJob.execute.mockResolvedValue({
+        job: { status: 'PENDING', requestObjectKey: null },
+      });
+    });
+
+    it('attachSignaturesSheet devuelve el SHA-256 de los bytes que sube a finalized_documents', async () => {
+      const digest = await service.attachSignaturesSheet(
+        signedDocumentEntity(),
+        [signer(SIGNATURE_TYPE_ENUM.SIMPLE)],
+        Buffer.from('pdf-firmado'),
+        'Firmante',
+      );
+
+      const [uploaded] = minioService.uploadPdfAObject.mock.calls[0];
+      expect(digest).toBe(
+        createHash('sha256').update(uploaded.file).digest('hex'),
+      );
+      expect(digest).toBe(FINAL_DIGEST);
+      expect(digest).toMatch(/^[0-9a-f]{64}$/);
+      // No es el hash del PDF antes de la hoja.
+      expect(digest).not.toBe(
+        createHash('sha256').update(Buffer.from('pdf-firmado')).digest('hex'),
+      );
+    });
+
+    it('un byte distinto en el PDF final da otro digest', async () => {
+      documentSigningService.appendPdfPages.mockResolvedValue(
+        Buffer.from('pdf-con-hoja-anexadA'),
+      );
+
+      const digest = await service.attachSignaturesSheet(
+        signedDocumentEntity(),
+        [signer(SIGNATURE_TYPE_ENUM.SIMPLE)],
+        Buffer.from('pdf-firmado'),
+        'Firmante',
+      );
+
+      expect(digest).not.toBe(FINAL_DIGEST);
+    });
+
+    it.each([
+      ['firma avanzada', SIGNATURE_TYPE_ENUM.FIEL],
+      ['firma simple', SIGNATURE_TYPE_ENUM.SIMPLE],
+    ])(
+      '%s: el cierre guarda el digest del PDF final junto con SIGNED, en la misma transacción',
+      async (_, signatureType) => {
+        const saved = mockCloseTransaction();
+        const document = signedDocumentEntity();
+        const last = signer(signatureType);
+
+        await service.finalizeSignedDocument(document, [last], last);
+
+        const savedDocument = saved.find(
+          ({ entity }) => entity === DocumentEntity,
+        )?.value;
+        expect(savedDocument).toEqual(
+          expect.objectContaining({
+            status: DOCUMENT_STATUS_ENUM.SIGNED,
+            finalDocumentDigest: FINAL_DIGEST,
+          }),
+        );
+      },
+    );
+
+    it('si la hoja o su digest no se generan, el documento no se cierra', async () => {
+      const saved = mockCloseTransaction();
+      minioService.uploadPdfAObject.mockImplementation(
+        async (_file: unknown, bucket: BUCKET_TYPES_ENUM) => {
+          if (bucket === BUCKET_TYPES_ENUM.FINALIZED_DOCUMENTS) {
+            throw new Error('minio caído');
+          }
+        },
+      );
+      const document = signedDocumentEntity();
+      const last = signer(SIGNATURE_TYPE_ENUM.FIEL);
+
+      await expect(
+        service.finalizeSignedDocument(document, [last], last),
+      ).rejects.toThrow();
+      expect(saved).toEqual([]);
+      expect(
+        (documentRepository as any).manager.transaction,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('persistFinalDocumentDigest guarda el digest y falla si el documento no existe', async () => {
+      await service.persistFinalDocumentDigest('doc-1', FINAL_DIGEST);
+      expect(documentRepository.update).toHaveBeenCalledWith(
+        { id: 'doc-1' },
+        { finalDocumentDigest: FINAL_DIGEST },
+      );
+
+      documentRepository.update.mockResolvedValue({ affected: 0 });
+      await expect(
+        service.persistFinalDocumentDigest('doc-1', FINAL_DIGEST),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

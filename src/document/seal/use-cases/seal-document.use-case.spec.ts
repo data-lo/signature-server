@@ -150,4 +150,25 @@ describe('SealDocumentUseCase', () => {
       SealPersistenceException,
     );
   });
+  describe('persistVerificationRecordDigest', () => {
+    const DIGEST = 'b'.repeat(64);
+
+    it('guarda el digest en verification_record_digest de la constancia', async () => {
+      sealRepository.update = jest.fn().mockResolvedValue({ affected: 1 });
+
+      await useCase.persistVerificationRecordDigest('seal-1', DIGEST);
+
+      expect(sealRepository.update).toHaveBeenCalledWith('seal-1', {
+        verificationRecordDigest: DIGEST,
+      });
+    });
+
+    it('falla si la constancia ya no existe', async () => {
+      sealRepository.update = jest.fn().mockResolvedValue({ affected: 0 });
+
+      await expect(
+        useCase.persistVerificationRecordDigest('seal-1', DIGEST),
+      ).rejects.toBeInstanceOf(SealPersistenceException);
+    });
+  });
 });

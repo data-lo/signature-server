@@ -31,4 +31,9 @@ export interface PaymentServiceResponse {
   interval: string | null;
   intervalCount: number | null;
   imageUrl: string | null;
+  /**
+   * Beneficios del plan, en el orden en que se muestran (`plans.descriptions`). Vacío cuando el
+   * plan no tiene, no declara `planType` o no existe en el catálogo local.
+   */
+  descriptions: string[];
 }

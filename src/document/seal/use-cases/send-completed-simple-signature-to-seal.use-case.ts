@@ -1,26 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { MinioService } from 'src/common/minio/minio.service';
 import { BUCKET_TYPES_ENUM } from 'src/common/minio/enums/bucket-types.enum';
-import { DocumentEntity } from '../../entities/document.entity';
-import { CollaboratorEntity } from '../../entities/collaborator.entity';
-import { VerificationCodeEntity } from '../../entities/verification-code.entity';
-import { COLABORATOR_TYPE_ENUM } from '../../enum/colaborator-type.enum';
-import { SIGNATURE_TYPE_ENUM } from '../../enum/signature-type.enum';
-import { COLLABORATOR_STATUS_ENUM } from '../../enum/collaborator-status.enum';
-import { VERIFICATION_EVENT_ENUM } from '../../enum/verification-event.enum';
 import { detectImageContentType } from 'src/common/utils/image-content-type.util';
 import {
   SimpleSignatureDTO,
-  SimpleSignatureMedia,
   SimpleSignerSignature,
 } from '../dto/simple-signature.dto';
-import { IncompleteSimpleSignatureDataException } from '../exceptions/seal.exceptions';
+import {
+  IncompleteSimpleSignatureDataException,
+  SealPersistenceException,
+} from '../exceptions/seal.exceptions';
 import { SealApiService } from '../services/seal-api.service';
 import { SealEntity } from '../entities/seal.entity';
 import { SealMapper } from '../mappers/seal.mapper';
 import { SealDocumentResponse } from '../interfaces/seal-document-response.interface';
+import {
+  FrozenSimpleSignerEvidence,
+  SimpleSealingRequestSnapshot,
+} from '../interfaces/sealing-request-snapshot.interface';
 
 /**
  * Firma de archivo PNG (89 50 4E 47 0D 0A 1A 0A). Se compara contra los primeros bytes del objeto
@@ -31,27 +30,24 @@ const PNG_MAGIC_NUMBER = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
 
-/**
- * Único canal por el que hoy se entrega un código de verificación de firma (ver
- * `DocumentService.requestVerificationCode` -> `EmailService.sendVerificationCodeNotification`).
- *
- * Es una constante y no una columna porque `verification_codes` no registra el canal: mientras el
- * correo sea el único, derivarlo acá es exacto. El día que exista un segundo (SMS, push), este
- * valor tiene que salir de la fila y no de este archivo.
- */
-const EMAIL_OTP_VERIFICATION_METHOD = 'EMAIL_OTP';
+/** Código de Postgres de una violación de unicidad. */
+const UNIQUE_VIOLATION = '23505';
 
 /**
- * Manda a Seal Service la evidencia de un documento de FIRMA SIMPLE que quedó firmado por todos.
+ * Sella en Seal Service un documento de FIRMA SIMPLE a partir de su payload congelado y guarda la
+ * constancia. Es la fase `GENERATING_SEAL` de `ProcessDocumentSealingJobUseCase` para el contrato
+ * `SIMPLE`.
  *
- * Es el hermano de `SealDocumentUseCase`, que hace lo propio para la firma avanzada, y la
- * separación no es cosmética: en firma avanzada la evidencia es criptográfica —el certificado del
- * SAT prueba quién firmó—, mientras que en firma simple la prueba de identidad son justamente
- * estos datos (quién es la persona, con qué código de un solo uso se acreditó y qué rúbrica
- * estampó), que sin este envío sólo existen en nuestra base.
+ * Es el hermano de `SealDocumentUseCase`, que hace lo propio para la firma avanzada: en la avanzada
+ * la evidencia es criptográfica —el certificado del SAT prueba quién firmó—, mientras que en la
+ * simple la prueba de identidad son estos datos (quién es la persona, con qué código de un solo uso
+ * se acreditó, qué rúbrica estampó y su INE verificada).
  *
- * Corre una sola vez por documento, cuando el último firmante terminó: antes de eso el conjunto
- * está incompleto y mandarlo describiría un documento que todavía no existe.
+ * **Del snapshot, no del perfil.** La identidad, el código y las fechas se congelaron al cerrar el
+ * documento (`SealingRequestSnapshotService.freezeSimpleSignatureRequest`); aquí sólo se descargan
+ * los bytes de la rúbrica y la INE por las llaves inmutables que se congelaron. Si el usuario
+ * cambia su perfil entre un intento y otro, cada reintento sigue mandando exactamente lo mismo, y
+ * Seal Service reconoce el envío por su clave idempotente.
  */
 @Injectable()
 export class SendCompletedSimpleSignatureToSealUseCase {
@@ -60,10 +56,6 @@ export class SendCompletedSimpleSignatureToSealUseCase {
   );
 
   constructor(
-    @InjectRepository(DocumentEntity)
-    private readonly documentRepository: Repository<DocumentEntity>,
-    @InjectRepository(VerificationCodeEntity)
-    private readonly verificationCodeRepository: Repository<VerificationCodeEntity>,
     @InjectRepository(SealEntity)
     private readonly sealRepository: Repository<SealEntity>,
     private readonly minioService: MinioService,
@@ -71,285 +63,174 @@ export class SendCompletedSimpleSignatureToSealUseCase {
   ) {}
 
   /**
-   * @returns La constancia persistida, o `null` si el documento no califica para este flujo
-   *   (firma avanzada, firmas pendientes, o sin hashes todavía).
-   * @throws {IncompleteSimpleSignatureDataException} Si el documento sí califica pero a algún
-   *   firmante le falta un dato obligatorio. Se lanza ANTES de llamar al proveedor: un envío a
-   *   medias es peor que ninguno, porque queda del otro lado como la evidencia completa del
-   *   documento.
+   * Arma el envío desde el snapshot, lo manda a Seal Service y guarda la constancia.
+   *
+   * El envío es idempotente por documento (`Idempotency-Key: signature-server:document:<id>:v1`):
+   * si el guardado local falla después de la emisión, el siguiente intento recibe la evidencia ya
+   * emitida en vez de pedir otra constancia al PSC.
+   *
+   * @param snapshot - Payload congelado de firma simple.
+   * @returns La constancia guardada, o la que ya existía si otro intento la guardó primero.
+   *
+   * @throws {IncompleteSimpleSignatureDataException} Si una imagen congelada ya no es válida (la
+   *   rúbrica no es PNG o la INE no es imagen). Se lanza ANTES de llamar al proveedor.
+   * @throws {SealPersistenceException} Si la constancia no se pudo guardar por otra causa que un
+   *   duplicado; repetir recupera la misma evidencia.
+   * @throws {Error} Si MinIO no entrega una imagen, o los errores tipados de `SealApiService`.
+   *
+   * @example
+   * ```ts
+   * const seal = await sendSimpleSignatures.execute(snapshot);
+   * ```
    */
-  async execute(documentId: string): Promise<SealEntity | null> {
-    const document = await this.findDocumentWithSigners(documentId);
-
-    if (!document || !this.isCompletedSimpleSignature(document)) {
-      return null;
-    }
-
-    const signers = this.signerCollaborators(document);
+  async execute(snapshot: SimpleSealingRequestSnapshot): Promise<SealEntity> {
     const dto: SimpleSignatureDTO = {
-      documentId: document.id,
-      originalHash: document.originalHash,
-      signedHash: document.signedHash,
-      signatures: await Promise.all(
-        signers.map((signer) => this.toSignerSignature(document.id, signer)),
-      ),
+      documentId: snapshot.documentId,
+      originalHash: snapshot.originalHash,
+      signedHash: snapshot.signedHash,
+      signatures: [],
     };
 
+    /**
+     * Idempotente por documento: repetir este envío (un timeout, un reinicio o un fallo al guardar
+     * la constancia más abajo) no emite otra constancia. Seal Service compara el payload: si los
+     * datos del firmante cambiaron desde el primer envío, responde conflicto
+     * (`SealIdempotencyConflictException`) en vez de sellar otro contenido.
+     */
     let response: SealDocumentResponse;
     try {
+      for (const signer of snapshot.signatures) {
+        dto.signatures.push(await this.toSignerSignature(signer));
+      }
       response = await this.sealApiService.sendSimpleSignatures(dto);
     } finally {
       // Las imágenes de la INE no se conservan más allá del envío, salga bien o mal.
       this.releaseIdentityDocumentImages(dto);
     }
 
-    // Sólo el documento, el número de firmantes y el resultado: nada del contenido del DTO.
+    // Sólo el documento y el número de firmantes: nada del contenido del DTO.
     this.logger.log(
-      `Firmas simples del documento ${document.id} enviadas a Seal Service (${dto.signatures.length} firmante(s)).`,
+      `Firmas simples del documento ${dto.documentId} selladas en Seal Service (${dto.signatures.length} firmante(s)).`,
     );
 
-    /**
-     * La constancia se persiste con el MISMO mapper que la avanzada: la respuesta del proveedor
-     * tiene idéntica forma, así que interpretarla dos veces sólo abriría la puerta a que las dos
-     * lecturas se separaran. De aquí sale lo que la hoja imprime en su tabla NOM-151.
-     */
-    return this.persistSeal(dto, response);
+    return this.persistSeal(dto.documentId, response);
   }
 
   /**
-   * Guarda la constancia, tolerando que ya exista.
+   * Guarda la constancia con el MISMO mapper que la avanzada: la respuesta tiene idéntica forma.
    *
-   * Un documento se sella una sola vez, pero el flujo de firma puede reintentarse tras un fallo
-   * posterior al sellado; en ese caso el índice único de `document_id` salta y lo correcto es
-   * releer la fila que ya está, no perder la constancia ni tumbar la firma.
+   * Sólo una violación de unicidad de `document_seals.document_id` se trata como duplicado: otro
+   * intento guardó la constancia primero, y se relee. Cualquier otro error (base caída, columna
+   * inválida) se propaga: tragarlo y releer devolvería `null` y el trabajo avanzaría sin constancia.
+   *
+   * @param documentId - Documento.
+   * @param response - Respuesta de Seal Service.
+   * @returns La constancia guardada o la existente.
+   *
+   * @throws {SealPersistenceException} Si no se pudo guardar por otra causa, o si el duplicado no
+   *   se encuentra al releer.
+   *
+   * @example
+   * ```ts
+   * return this.persistSeal(documentId, response);
+   * ```
    */
   private async persistSeal(
-    dto: SimpleSignatureDTO,
+    documentId: string,
     response: SealDocumentResponse,
-  ): Promise<SealEntity | null> {
+  ): Promise<SealEntity> {
     try {
       return await this.sealRepository.save(
         this.sealRepository.create(
-          SealMapper.toEntity({ documentId: dto.documentId }, response),
+          SealMapper.toEntity({ documentId }, response),
         ),
       );
     } catch (error) {
-      this.logger.warn(
-        `No se pudo persistir la constancia del documento ${dto.documentId}; se relee la existente: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+      if (isUniqueViolation(error)) {
+        const existing = await this.sealRepository.findOneBy({ documentId });
+        if (existing) {
+          this.logger.warn(
+            `El documento ${documentId} ya tenía constancia; se conserva la existente.`,
+          );
+          return existing;
+        }
+      }
+
+      this.logger.error(
+        `No se pudo guardar la constancia del documento ${documentId}.`,
+        error instanceof Error ? error.stack : undefined,
       );
-
-      return this.sealRepository.findOneBy({ documentId: dto.documentId });
+      throw new SealPersistenceException();
     }
   }
 
   /**
-   * Trae el documento con todo lo que el DTO necesita en una sola consulta: sus colaboradores, la
-   * cuenta de cada uno, el usuario de esa cuenta, su información personal y su firma vigente.
+   * Traduce la evidencia congelada de un firmante al contrato de Seal Service, descargando la
+   * rúbrica y la INE por sus llaves.
    *
-   * El filtro por rol va en el `ON` del join y no en un `WHERE`: con el filtro en el `WHERE`, un
-   * documento que además tuviera testigos se descartaría entero en vez de devolverse sin
-   * ellos.
-   */
-  private findDocumentWithSigners(
-    documentId: string,
-  ): Promise<DocumentEntity | null> {
-    return (
-      this.documentRepository
-        .createQueryBuilder('document')
-        .leftJoinAndSelect(
-          'document.collaborators',
-          'collaborator',
-          'collaborator.colaborator_type = :signerType',
-          { signerType: COLABORATOR_TYPE_ENUM.SIGNER },
-        )
-        .leftJoinAndSelect('collaborator.account', 'account')
-        .leftJoinAndSelect('account.user', 'user')
-        .leftJoinAndSelect('user.personalInformation', 'personalInformation')
-        /**
-         * Las llaves de la INE son `select: false` en la entidad: no viajan con la relación salvo que
-         * se pidan, y éste es uno de los pocos lugares que las piden (ver `PersonalInformationEntity`).
-         */
-        .addSelect([
-          'personalInformation.frontImageKey',
-          'personalInformation.backImageKey',
-        ])
-        .leftJoinAndSelect('user.signature', 'signature')
-        .where('document.id = :documentId', { documentId })
-        .getOne()
-    );
-  }
-
-  /**
-   * Las condiciones del disparador, en el orden en que descartan más rápido.
+   * @param signer - Evidencia congelada.
+   * @returns La firma lista para enviar.
    *
-   * Ninguna es un error: un documento de firma avanzada, uno a medio firmar o uno que todavía no
-   * tiene `signedHash` simplemente no son asunto de este flujo. Se distinguen así de los datos
-   * faltantes, que sí lo son y por eso lanzan.
+   * @throws {IncompleteSimpleSignatureDataException} Si una imagen no es válida.
+   * @throws {Error} Si MinIO no puede entregarla.
+   *
+   * @example
+   * ```ts
+   * const signature = await this.toSignerSignature(snapshot.signatures[0]);
+   * ```
    */
-  private isCompletedSimpleSignature(document: DocumentEntity): boolean {
-    const signers = this.signerCollaborators(document);
-
-    if (signers.length === 0) {
-      return false;
-    }
-
-    /**
-     * `!== FIEL` y no `=== SIMPLE`: `signature_type` es nullable y las filas anteriores a que
-     * existiera la firma avanzada lo tienen en NULL siendo firma simple. Es el mismo criterio con
-     * el que `DocumentService.sign` decide por qué rama firmar, y los dos tienen que coincidir o
-     * habría documentos que se firman como simples y no se envían como tales.
-     */
-    const isSimpleSignature = signers.every(
-      (signer) => signer.signatureType !== SIGNATURE_TYPE_ENUM.FIEL,
-    );
-
-    const allSigned = signers.every(
-      (signer) => signer.status === COLLABORATOR_STATUS_ENUM.SIGNED,
-    );
-
-    return (
-      isSimpleSignature &&
-      allSigned &&
-      Boolean(document.originalHash) &&
-      Boolean(document.signedHash)
-    );
-  }
-
-  private signerCollaborators(document: DocumentEntity): CollaboratorEntity[] {
-    return (document.collaborators ?? []).filter(
-      (collaborator) =>
-        collaborator.colaboratorType === COLABORATOR_TYPE_ENUM.SIGNER,
-    );
-  }
-
   private async toSignerSignature(
-    documentId: string,
-    signer: CollaboratorEntity,
+    signer: FrozenSimpleSignerEvidence,
   ): Promise<SimpleSignerSignature> {
-    const user = signer.account?.user;
-
-    if (!user) {
-      throw new IncompleteSimpleSignatureDataException(
-        'la cuenta de plataforma',
-        signer.id,
-      );
-    }
-
-    /**
-     * La CURP, el nombre y el apellido salen de `personal_information` —la información personal
-     * canónica— y no de las copias que `users` guarda del registro. Se cae a esas copias sólo si
-     * la canónica falta, para no perder un envío por una fila incompleta.
-     */
-    const personalInformation = user.personalInformation;
-    const curp = personalInformation?.curp || user.nationalId;
-    const name = personalInformation?.name || user.firstName;
-    const lastName = personalInformation?.lastName || user.lastName;
-
-    this.assertPresent(curp, 'la CURP', signer.id);
-    this.assertPresent(user.email, 'el correo', signer.id);
-    this.assertPresent(name, 'el nombre', signer.id);
-    this.assertPresent(lastName, 'el apellido', signer.id);
-
-    if (!signer.resolvedAt) {
-      throw new IncompleteSimpleSignatureDataException(
-        'la fecha de firma',
-        signer.id,
-      );
-    }
-
     return {
-      curp,
-      email: user.email,
-      name,
-      lastName,
-      /**
-       * Pasa por `new Date(...)` en vez de llamar a `.toISOString()` directo porque el mismo
-       * campo llega como `Date` cuando la fila se acaba de escribir en esta petición y como
-       * string cuando se releyó de la base. Mismo criterio que el sellado de firma avanzada.
-       */
-      signedAt: new Date(signer.resolvedAt).toISOString(),
-      verificationData: await this.resolveVerificationData(documentId, signer),
+      curp: signer.curp,
+      email: signer.email,
+      name: signer.name,
+      lastName: signer.lastName,
+      signedAt: signer.signedAt,
+      verificationData: { ...signer.verificationData },
       signatureMedia: {
-        signatureImage: await this.resolveSignatureImage(signer),
-        ...(await this.resolveIdentityDocumentImages(signer)),
+        signatureImage: await this.readSignatureImage(signer),
+        identityDocumentFrontImage: await this.readIdentityDocumentImage(
+          signer.identityDocumentFrontImageKey,
+          'frontal',
+          signer.collaboratorId,
+        ),
+        identityDocumentBackImage: await this.readIdentityDocumentImage(
+          signer.identityDocumentBackImageKey,
+          'trasera',
+          signer.collaboratorId,
+        ),
       },
     };
   }
 
   /**
-   * Código de un solo uso que este firmante consumió para firmar ESTE documento.
+   * Descarga la rúbrica congelada (el snapshot inmutable que se estampó) y la devuelve en Base64.
    *
-   * Se toma el más reciente por `used_at`: un firmante puede haber pedido varios códigos —y
-   * consumido más de uno si un intento anterior no completó la firma—, y el que sustenta la firma
-   * registrada es el último. Mismo criterio que `VerificationCodeService.findConsumedCode`, que
-   * alimenta la vista pública de verificación; si los dos difirieran, la evidencia que enviamos y
-   * la que mostramos no serían la misma.
-   */
-  private async resolveVerificationData(
-    documentId: string,
-    signer: CollaboratorEntity,
-  ): Promise<SimpleSignerSignature['verificationData']> {
-    const consumedCode = await this.verificationCodeRepository
-      .createQueryBuilder('verificationCode')
-      .where('verificationCode.document_id = :documentId', { documentId })
-      .andWhere('verificationCode.signer_id = :signerId', {
-        signerId: signer.id,
-      })
-      .andWhere('verificationCode.event = :event', {
-        event: VERIFICATION_EVENT_ENUM.SIGN_DOCUMENT,
-      })
-      .andWhere('verificationCode.is_used = true')
-      .orderBy('verificationCode.used_at', 'DESC')
-      .getOne();
-
-    if (!consumedCode?.usedAt) {
-      throw new IncompleteSimpleSignatureDataException(
-        'el código de verificación consumido',
-        signer.id,
-      );
-    }
-
-    return {
-      code: consumedCode.code,
-      verificationMethod: EMAIL_OTP_VERIFICATION_METHOD,
-      usedAt: new Date(consumedCode.usedAt).toISOString(),
-    };
-  }
-
-  /**
-   * Descarga de MinIO la rúbrica del firmante y la devuelve en Base64.
+   * @param signer - Evidencia congelada.
+   * @returns La rúbrica en Base64.
    *
-   * Se prefiere `signatureSnapshotObjectKey` —la copia inmutable tomada en el instante de firmar—
-   * sobre la firma en vivo del perfil: si el usuario reemplazó o desactivó su firma después de
-   * firmar, la evidencia que mandamos tiene que ser la que realmente se estampó en el PDF, no la
-   * que tenga hoy. La firma en vivo queda como respaldo para las filas anteriores a que existiera
-   * el snapshot.
+   * @throws {IncompleteSimpleSignatureDataException} Si lo almacenado no es un PNG.
+   * @throws {Error} Si MinIO no puede entregarla.
+   *
+   * @example
+   * ```ts
+   * const image = await this.readSignatureImage(signer);
+   * ```
    */
-  private async resolveSignatureImage(
-    signer: CollaboratorEntity,
+  private async readSignatureImage(
+    signer: FrozenSimpleSignerEvidence,
   ): Promise<string> {
-    const objectKey =
-      signer.signatureSnapshotObjectKey ??
-      signer.account?.user?.signature?.signatureObjectKey;
-
-    if (!objectKey) {
-      throw new IncompleteSimpleSignatureDataException(
-        'la imagen de firma PNG',
-        signer.id,
-      );
-    }
-
     const image = await this.minioService.getFileInBytesFormat(
-      objectKey,
+      signer.signatureImageObjectKey,
       BUCKET_TYPES_ENUM.SIGNATURE_IMAGES,
     );
 
-    if (!this.isPng(image)) {
+    if (!isPng(image)) {
       throw new IncompleteSimpleSignatureDataException(
         'una imagen de firma en formato PNG (el archivo almacenado no lo es)',
-        signer.id,
+        signer.collaboratorId,
       );
     }
 
@@ -358,69 +239,8 @@ export class SendCompletedSimpleSignatureToSealUseCase {
   }
 
   /**
-   * Baja de MinIO el anverso y el reverso de la INE verificada del firmante y los devuelve en Base64.
-   *
-   * Salen del bucket privado `identity-documents`, por las llaves que guardó el webhook de Didit.
-   * **Nunca se usa la URL del proveedor ni se manda una URL de MinIO**: Seal Service recibe el
-   * contenido, en Base64 sin prefijo `data:` —su contrato, igual que `signatureImage`—.
-   *
-   * Si falta alguna de las dos llaves, no se manda nada: una INE a medias no puede viajar como si
-   * fuera la evidencia completa del firmante.
-   *
-   * @param signer - Colaborador firmante, con `account.user.personalInformation` cargado.
-   * @returns Las dos imágenes en Base64, listas para `signatureMedia`.
-   *
-   * @throws {IncompleteSimpleSignatureDataException} Si falta la llave frontal o la trasera, o si lo
-   *   almacenado no es una imagen.
-   * @throws {Error} Si MinIO no puede entregar alguno de los dos archivos.
-   *
-   * @example
-   * ```ts
-   * const images = await this.resolveIdentityDocumentImages(signer);
-   * images.identityDocumentFrontImage; // '/9j/4AAQ...'
-   * ```
-   */
-  private async resolveIdentityDocumentImages(
-    signer: CollaboratorEntity,
-  ): Promise<
-    Pick<
-      SimpleSignatureMedia,
-      'identityDocumentFrontImage' | 'identityDocumentBackImage'
-    >
-  > {
-    const personalInformation = signer.account?.user?.personalInformation;
-
-    if (!personalInformation?.frontImageKey) {
-      throw new IncompleteSimpleSignatureDataException(
-        'la imagen frontal de la INE verificada',
-        signer.id,
-      );
-    }
-
-    if (!personalInformation.backImageKey) {
-      throw new IncompleteSimpleSignatureDataException(
-        'la imagen trasera de la INE verificada',
-        signer.id,
-      );
-    }
-
-    return {
-      identityDocumentFrontImage: await this.readIdentityDocumentImage(
-        personalInformation.frontImageKey,
-        'frontal',
-        signer.id,
-      ),
-      identityDocumentBackImage: await this.readIdentityDocumentImage(
-        personalInformation.backImageKey,
-        'trasera',
-        signer.id,
-      ),
-    };
-  }
-
-  /**
    * Lee una cara de la INE del bucket privado, comprueba que sea una imagen y la convierte a Base64
-   * en memoria, borrando los bytes en cuanto ya no hacen falta.
+   * en memoria, borrando los bytes en cuanto ya no hacen falta. Nunca se manda una URL.
    *
    * @param objectKey - Llave interna del objeto en `identity-documents`.
    * @param side - Cara de la INE, para el mensaje de error.
@@ -432,7 +252,7 @@ export class SendCompletedSimpleSignatureToSealUseCase {
    *
    * @example
    * ```ts
-   * const front = await this.readIdentityDocumentImage(key, 'frontal', signer.id);
+   * const front = await this.readIdentityDocumentImage(key, 'frontal', signer.collaboratorId);
    * ```
    */
   private async readIdentityDocumentImage(
@@ -477,24 +297,41 @@ export class SendCompletedSimpleSignatureToSealUseCase {
       signature.signatureMedia.identityDocumentBackImage = '';
     }
   }
+}
 
-  private isPng(image: Buffer): boolean {
-    return (
-      image.length > PNG_MAGIC_NUMBER.length &&
-      image.subarray(0, PNG_MAGIC_NUMBER.length).equals(PNG_MAGIC_NUMBER)
-    );
-  }
+/**
+ * Indica si los bytes empiezan con la firma de un PNG.
+ *
+ * @param image - Bytes descargados.
+ * @returns `true` si es PNG.
+ *
+ * @example
+ * ```ts
+ * isPng(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])); // true
+ * ```
+ */
+function isPng(image: Buffer): boolean {
+  return (
+    image.length > PNG_MAGIC_NUMBER.length &&
+    image.subarray(0, PNG_MAGIC_NUMBER.length).equals(PNG_MAGIC_NUMBER)
+  );
+}
 
-  private assertPresent(
-    value: string | null | undefined,
-    missingData: string,
-    collaboratorId: string,
-  ): asserts value is string {
-    if (!value) {
-      throw new IncompleteSimpleSignatureDataException(
-        missingData,
-        collaboratorId,
-      );
-    }
+/**
+ * Indica si un error de TypeORM es una violación de unicidad de Postgres.
+ *
+ * @param error - Error del guardado.
+ * @returns `true` sólo para `23505`.
+ *
+ * @example
+ * ```ts
+ * if (isUniqueViolation(error)) { … }
+ * ```
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof QueryFailedError)) {
+    return false;
   }
+  const driverError = error.driverError as { code?: string } | undefined;
+  return driverError?.code === UNIQUE_VIOLATION;
 }
